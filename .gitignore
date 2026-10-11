@@ -133,3 +133,16 @@ AGENTS.md
 .blocksds
 packaging/dreamcast/disc/*
 CLAUDE.md
+
+# Original game assets must never be committed
+*.gob
+*.GOB
+*.goo
+*.GOO
+*.smk
+*.SMK
+*.cd
+MUSIC/
+episode/
+player/
+wasm_out/
