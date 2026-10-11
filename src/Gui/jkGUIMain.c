@@ -30,9 +30,11 @@
 #include "Main/sithCvar.h"
 #include "stdPlatform.h"
 
-// Added: the browser build is multiplayer-only, so its main menu hides Single Player.
+// Added: the browser build is multiplayer-only, so its main menu hides Single Player,
+// View Cutscenes and Expansions & Mods.
 #if defined(ARCH_WASM)
 #define JKGUIMAIN_HIDE_SINGLEPLAYER
+#define JKGUIMAIN_HIDE_CUTSCENES_AND_MODS
 #endif
 
 // Added
@@ -131,6 +133,15 @@ void jkGuiMain_Show()
     jkGuiMain_elements[2].rect.y -= 30;
 #endif
 
+#ifdef JKGUIMAIN_HIDE_CUTSCENES_AND_MODS
+    // Added: Expansions & Mods is hidden the same way (View Cutscenes further down,
+    // where its visibility is set). Credits moves into the View Cutscenes slot, so
+    // Choose Player, Credits and Setup share one evenly spaced, centered row.
+    jkGuiMain_elements[7].bIsVisible = 0;
+    jkGuiMain_elements[6].rect.x = 245;
+    jkGuiMain_elements[6].rect.y = jkGuiMain_elements[3].rect.y;
+#endif
+
 #ifdef JKGUI_SMOL_SCREEN
     for (int i = 0; i < 11; i++) {
         jkGuiMain_elements[i].rect.y -= 60;
@@ -166,6 +177,9 @@ void jkGuiMain_Show()
         else {
             jkGuiMain_elements[4].bIsVisible = 1;
         }
+#ifdef JKGUIMAIN_HIDE_CUTSCENES_AND_MODS
+        jkGuiMain_elements[4].bIsVisible = 0; // Added: View Cutscenes, see above
+#endif
 
         do
         {
