@@ -55,7 +55,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ## Good to know
 
-- **Desktop only.** ...unless you can get the files needed onto mobile devices! Use a current Chrome or Firefox on a computer with WebGL 2.
+- **Desktop only** ...unless you can get the files needed onto mobile devices! Use a current Chrome or Firefox on a computer with WebGL 2.
 - **No music or cutscenes.** OpenJKDF2's browser build turns off the soundtrack and skips cutscenes.
 - **Game passwords aren't private.** A game's password is sent along with the game list and checked in the joining player's browser, as in OpenJKDF2's desktop networking. Don't use a password you use anywhere else.
 - **IP addresses are shared.** A direct WebRTC link means the host and each player who joins learn each other's IP address.
