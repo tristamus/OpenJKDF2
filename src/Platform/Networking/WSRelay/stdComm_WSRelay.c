@@ -17,7 +17,7 @@
 //
 // Text frames are relay control lines, binary frames are game packets:
 //   us -> relay   list | host <entry> | update <entry> | join <room>
-//                 welcome <id> <entry> | leave | signal <id> <data>
+//                 welcome <id> <entry> | leave | signal <id> <data> | ping
 //   relay -> us   list (<room> <players> <entry>)* | hosted <room>
 //                 peer-joined <id> | peer-left <id> | welcome <id> <entry>
 //                 host-left | error <code> | signal <id> <data> | ice <data>
@@ -214,8 +214,18 @@ EM_JS(void, wsrelay_js_connect, (), {
         return;
     }
     ws.binaryType = 'arraybuffer';
-    ws.onopen = function() { net.state = 1; console.log('OpenJKDF2: connected to relay ' + url); };
-    ws.onclose = function() { if (net.ws === ws) net.state = 2; };
+    var keepalive = null;
+    ws.onopen = function() {
+        net.state = 1;
+        console.log('OpenJKDF2: connected to relay ' + url);
+        /* With game packets on WebRTC, the socket can sit idle for a whole
+           match, and proxies drop idle WebSockets. */
+        keepalive = setInterval(function() { if (ws.readyState === 1) ws.send('ping'); }, 25000);
+    };
+    ws.onclose = function() {
+        if (keepalive) clearInterval(keepalive);
+        if (net.ws === ws) net.state = 2;
+    };
     ws.onerror = function() {
         console.error('OpenJKDF2: relay connection error (' + url + ')');
         // Browsers follow up with onclose, but don't wait on it to give up.
