@@ -13,6 +13,8 @@ macro(plat_initialize)
     set(TARGET_BUILD_TESTS FALSE)
     set(TARGET_FIND_OPENAL FALSE)
     set(TARGET_USE_GAMENETWORKINGSOCKETS FALSE)
+    # Browsers can't open UDP sockets; players talk through a WebSocket relay.
+    set(TARGET_USE_WSRELAY TRUE)
     set(SDL2_COMMON_LIBS "")
 
     set(TARGET_WASM TRUE)

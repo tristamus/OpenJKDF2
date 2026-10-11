@@ -23,6 +23,9 @@ int stdComm_Startup()
 #ifdef PLATFORM_NOSOCKETS
     stdComm_None_Startup();
 #endif
+#ifdef PLATFORM_WSRELAY
+    stdComm_WSRelay_Startup();
+#endif
     stdComm_bInitted = 1;
 
     return 1;
@@ -37,6 +40,9 @@ void stdComm_Shutdown()
     }
 #ifdef PLATFORM_GNS
     stdComm_GNS_Shutdown();
+#endif
+#ifdef PLATFORM_WSRELAY
+    stdComm_WSRelay_Shutdown();
 #endif
 }
 
