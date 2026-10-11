@@ -1,19 +1,30 @@
-// WebSocket relay backend for the browser build.
+// Network backend for the browser build: a WebSocket relay for the lobby and
+// signaling, and WebRTC data channels for game packets.
 //
 // The browser can't open UDP sockets, so every player keeps one WebSocket to a
-// relay (jkdf2mp-bb-server/relay) and the relay passes packets between them.
+// relay (jkdf2mp-bb-server/relay). The relay lists games, lets players join
+// them and passes WebRTC signaling between a host and its clients. Once a
+// client's data channel to the host is open, game packets go over it
+// (unordered, no retransmits, like the UDP the game was written for: sithComm
+// resends what has to arrive). Until then, or if WebRTC can't connect, packets
+// go through the relay instead.
+//
 // The game side mirrors the GNS backend: a star with the host as id 1, clients
-// get ids 2..64, and every packet carries an 8-byte idFrom/idTo header. The
-// relay delivers each packet to the player named in idTo (the host for 0 or 1),
-// which is where GNSServer::Receive would have forwarded it.
+// get ids 2..64, and every packet carries an 8-byte idFrom/idTo header. A
+// client sends everything to the host, and the host forwards packets meant for
+// another client, which is what GNSServer::Receive does. Through the relay,
+// packets go straight to the player named in idTo (the host for 0 or 1).
 //
 // Text frames are relay control lines, binary frames are game packets:
 //   us -> relay   list | host <entry> | update <entry> | join <room>
-//                 welcome <id> <entry> | leave
+//                 welcome <id> <entry> | leave | signal <id> <data>
 //   relay -> us   list (<room> <players> <entry>)* | hosted <room>
 //                 peer-joined <id> | peer-left <id> | welcome <id> <entry>
-//                 host-left | error <code>
-// <entry> is a hex-encoded jkMultiEntry.
+//                 host-left | error <code> | signal <id> <data> | ice <data>
+// <entry> is a hex-encoded jkMultiEntry. <data> is base64 JSON: an SDP offer or
+// answer ({"d": ...}) or an ICE candidate ({"c": ...}) for signal, and the
+// RTCPeerConnection iceServers list for ice. The JS below handles signal and
+// ice itself; the engine never sees them.
 
 #include "stdComm_WSRelay.h"
 
@@ -47,12 +58,144 @@
 
 extern int Main_bVerboseNetworking;
 
-// The socket and its inbound queue live in JS. The engine polls the queue,
-// so nothing calls back into the wasm module while Asyncify has it unwound.
+// The socket, the peer connections and the inbound queue live in JS. The
+// engine polls the queue, so nothing calls back into the wasm module while
+// Asyncify has it unwound.
 EM_JS_DEPS(stdComm_WSRelay, "$UTF8ToString,$stringToUTF8,$lengthBytesUTF8");
 
 EM_JS(void, wsrelay_js_connect, (), {
-    var net = Module.jkNet = Module.jkNet || { state: 2, queue: [] };
+    var net = Module.jkNet;
+    if (!net) {
+        net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null,
+                               stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0 } };
+
+        net.rtcEnabled = function() {
+            return Module['jkUseWebRTC'] !== false && typeof RTCPeerConnection !== 'undefined';
+        };
+
+        net.signal = function(id, obj) {
+            if (net.state === 1) net.ws.send('signal ' + id + ' ' + btoa(JSON.stringify(obj)));
+        };
+
+        net.peer = function(id) {
+            var p = net.peers[id];
+            if (p) return p;
+            var pc = new RTCPeerConnection({ iceServers: net.ice || Module['jkIceServers'] || [] });
+            var dc = pc.createDataChannel('jk', { negotiated: true, id: 0, ordered: false, maxRetransmits: 0 });
+            dc.binaryType = 'arraybuffer';
+            p = net.peers[id] = { pc: pc, dc: dc, open: false };
+            var update = function() {
+                if (net.peers[id] !== p) return;
+                var was = p.open;
+                var cs = pc.connectionState;
+                p.open = dc.readyState === 'open' && cs !== 'disconnected' && cs !== 'failed' && cs !== 'closed';
+                if (p.open && !was) console.log('OpenJKDF2: direct WebRTC link to player ' + id + ' is up');
+                if (!p.open && was) console.log('OpenJKDF2: direct link to player ' + id + ' is down, using the relay');
+            };
+            dc.onopen = update;
+            dc.onclose = update;
+            pc.onconnectionstatechange = update;
+            dc.onmessage = function(ev) { if (net.peers[id] === p) net.onPeerPacket(id, ev.data); };
+            pc.onicecandidate = function(ev) { if (ev.candidate && net.peers[id] === p) net.signal(id, { c: ev.candidate.toJSON() }); };
+            return p;
+        };
+
+        net.closePeer = function(id) {
+            var p = net.peers[id];
+            if (!p) return;
+            delete net.peers[id];
+            p.open = false;
+            try { p.dc.close(); } catch (e) {}
+            try { p.pc.close(); } catch (e) {}
+        };
+
+        net.closeAll = function() {
+            for (var id in net.peers) net.closePeer(id);
+        };
+
+        net.offer = function(id) {
+            var p = net.peer(id);
+            p.pc.createOffer()
+                .then(function(o) { return p.pc.setLocalDescription(o); })
+                .then(function() { if (net.peers[id] === p) net.signal(id, { d: p.pc.localDescription.toJSON() }); })
+                .catch(function(e) { console.warn('OpenJKDF2: WebRTC offer to player ' + id + ' failed, using the relay: ' + e); });
+        };
+
+        net.onSignal = function(from, obj) {
+            if (!net.rtcEnabled()) return;
+            var p;
+            if (obj.d && obj.d.type === 'offer') {
+                if (!net.isHost) return;
+                net.closePeer(from);
+                p = net.peer(from);
+                p.pc.setRemoteDescription(obj.d)
+                    .then(function() { return p.pc.createAnswer(); })
+                    .then(function(a) { return p.pc.setLocalDescription(a); })
+                    .then(function() { if (net.peers[from] === p) net.signal(from, { d: p.pc.localDescription.toJSON() }); })
+                    .catch(function(e) { console.warn('OpenJKDF2: WebRTC answer to player ' + from + ' failed, using the relay: ' + e); });
+            } else if (obj.d) {
+                p = net.peers[from];
+                if (p) p.pc.setRemoteDescription(obj.d).catch(function(e) { console.warn('OpenJKDF2: WebRTC answer from player ' + from + ' rejected: ' + e); });
+            } else if (obj.c) {
+                p = net.peers[from];
+                if (p) p.pc.addIceCandidate(obj.c).catch(function() {});
+            }
+        };
+
+        /* Packets from a data channel. The host knows who is on the other end,
+           so it stamps idFrom itself and forwards anything meant for another
+           client. */
+        net.onPeerPacket = function(id, data) {
+            if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
+            net.stats.dcRecv++;
+            if (net.isHost) {
+                var dv = new DataView(data);
+                dv.setUint32(0, id, true);
+                var to = dv.getUint32(4, true);
+                if (to > 1) {
+                    net.sendPacket(new Uint8Array(data), to);
+                    return;
+                }
+            }
+            net.queue.push(data);
+        };
+
+        net.sendPacket = function(bytes, id) {
+            var p = net.peers[id];
+            if (p && p.open) {
+                try {
+                    p.dc.send(bytes);
+                    net.stats.dcSent++;
+                    return 1;
+                } catch (e) {}
+            }
+            if (net.state !== 1) return 0;
+            net.ws.send(bytes);
+            net.stats.wsSent++;
+            return 1;
+        };
+
+        /* Returns true for the lines JS handles itself. */
+        net.onText = function(text) {
+            var sp = text.indexOf(' ');
+            var op = sp < 0 ? text : text.substring(0, sp);
+            if (op === 'ice') {
+                try { net.ice = JSON.parse(atob(text.substring(sp + 1))); } catch (e) {}
+                return true;
+            }
+            if (op === 'signal') {
+                var parts = text.split(' ');
+                var obj = null;
+                try { obj = JSON.parse(atob(parts[2])); } catch (e) {}
+                if (obj) net.onSignal(parseInt(parts[1], 10), obj);
+                return true;
+            }
+            if (op === 'peer-left') net.closePeer(parseInt(text.substring(sp + 1), 10));
+            if (op === 'host-left') net.closeAll();
+            return false;
+        };
+    }
+
     if (net.ws && net.state !== 2) return;
     if (net.ws) {
         try { net.ws.close(); } catch (e) {}
@@ -78,7 +221,15 @@ EM_JS(void, wsrelay_js_connect, (), {
         // Browsers follow up with onclose, but don't wait on it to give up.
         if (net.ws === ws && net.state === 0) net.state = 2;
     };
-    ws.onmessage = function(ev) { if (net.ws === ws) net.queue.push(ev.data); };
+    ws.onmessage = function(ev) {
+        if (net.ws !== ws) return;
+        if (typeof ev.data === 'string') {
+            if (net.onText(ev.data)) return;
+        } else {
+            net.stats.wsRecv++;
+        }
+        net.queue.push(ev.data);
+    };
     net.ws = ws;
 });
 
@@ -94,11 +245,29 @@ EM_JS(int, wsrelay_js_send_text, (const char* pText), {
     return 1;
 });
 
-EM_JS(int, wsrelay_js_send_binary, (const void* pData, int len), {
+// Sends a game packet over the data channel to player routeId if it's open,
+// else through the relay.
+EM_JS(int, wsrelay_js_send_packet, (const void* pData, int len, int routeId), {
     var net = Module.jkNet;
-    if (!net || net.state !== 1) return 0;
-    net.ws.send(HEAPU8.slice(pData, pData + len));
-    return 1;
+    if (!net) return 0;
+    return net.sendPacket(HEAPU8.slice(pData, pData + len), routeId);
+});
+
+// Starts a session's WebRTC side: a client offers a data channel to the host,
+// and a host answers the offers its clients send.
+EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
+    var net = Module.jkNet;
+    if (!net) return;
+    net.closeAll();
+    net.isHost = !!isHost;
+    if (!isHost && net.rtcEnabled()) net.offer(1);
+});
+
+EM_JS(void, wsrelay_js_rtc_end, (), {
+    var net = Module.jkNet;
+    if (!net) return;
+    net.closeAll();
+    net.isHost = false;
 });
 
 // Pops one queued message into pOut. Returns its length, or -1 if the queue is
@@ -215,6 +384,7 @@ static void wsrelay_ResetSession()
     wsrelay_room = -1;
     wsrelay_id = 0xFFFFFFFF;
     wsrelay_numDisconnected = 0;
+    wsrelay_js_rtc_end();
 }
 
 // Same count GNSServer::RealConnectedPlayers reports to joining clients.
@@ -331,6 +501,7 @@ static void wsrelay_HandleText(char* pText)
             wsrelay_room = atoi(pRoom);
             wsrelay_bHostPending = 0;
             wsrelay_bHosting = 1;
+            wsrelay_js_rtc_begin(1);
             stdPlatform_Printf("OpenJKDF2: Hosting room %d on the relay\n", wsrelay_room);
         }
     }
@@ -569,7 +740,8 @@ BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)
 
     wsrelay_verbosePrintf("Sent %x bytes to %x (%s, %x)\n", dwDataSize+8, idTo, sithDSS_IdToStr(*(uint32_t*)lpData & 0xFF), *(uint32_t*)lpData);
 
-    int ret = wsrelay_js_send_binary(wsrelay_sendBuf, dwDataSize+8);
+    // Clients only have a data channel to the host, which forwards for them.
+    int ret = wsrelay_js_send_packet(wsrelay_sendBuf, dwDataSize+8, stdComm_bIsServer ? idTo : 1);
 
     // A host reports success even with nobody to send to, like GNSServer::Send.
     if (stdComm_bIsServer)
@@ -638,6 +810,7 @@ int stdComm_Open(int idx, char16_t* pwPassword)
     }
 
     wsrelay_room = wsrelay_aShownRooms[idx];
+    wsrelay_js_rtc_begin(0);
     Hack_ResetClients();
     return 0;
 }
