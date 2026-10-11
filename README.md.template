@@ -35,7 +35,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ### Custom maps download automatically
 
-- If the host is playing a custom (community-made) map you don't have, or a different version of it, your browser gets it from the host's browser before the level loads. A panel shows the download's progress, or why it couldn't happen.
+- If the host is playing a custom (community-made) map you don't have, or a different version of it, your browser gets it from the host's browser before the level loads, over the direct link or, if that isn't up, passed through the lobby without being stored there. A panel shows the download's progress, or why it couldn't happen.
 - The map is saved in your browser, so next time it loads right away and you can host it too.
 - **No original game files are sent.** The original episodes are never offered. Any file inside a custom map that's an exact copy of a file from the original game is left out, and your browser fills it in from your own install. The rebuilt map must match the host's copy exactly (same SHA-256) before it's used. A map made only of original game files isn't sent at all.
 - This is the newest feature. It's live, but it hasn't been through a real custom-map match yet.
