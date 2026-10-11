@@ -318,6 +318,27 @@
                            "\n\nPick the folder that contains episode and resource.", true);
           return;
         }
+        // Windows folders ignore case but MEMFS doesn't, so "Episode/AODpc.gob" and
+        // a renamed "episode/JK1MP.gob" would land in two sibling folders. The
+        // engine's casepath() then only lists whichever folder it finds first,
+        // hiding the other one's files. Spell every folder one way: the required
+        // list's spelling where it has one, else the first spelling seen.
+        var dirSpelling = {};
+        for (var r of required) {
+          var rd = r.substring(0, r.lastIndexOf('/'));
+          dirSpelling[rd.toLowerCase()] = rd;
+        }
+        for (var e of files) {
+          var parts = e.path.split('/');
+          var dir = "";
+          for (var p = 0; p < parts.length - 1; p++) {
+            dir = dir ? dir + '/' + parts[p] : parts[p];
+            var key = dir.toLowerCase();
+            if (!(key in dirSpelling)) dirSpelling[key] = dir;
+            dir = dirSpelling[key];
+          }
+          e.path = dir ? dir + '/' + parts[parts.length - 1] : parts[parts.length - 1];
+        }
         for (var r of required) byLower[r.toLowerCase()].path = r;
 
         var totalBytes = files.reduce((n, e) => n + e.file.size, 0);
