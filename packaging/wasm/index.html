@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Emscripten-Generated Code</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>jkdf2mp Game Rooms</title>
     <style>
       body {
         font-family: arial;
@@ -109,33 +110,303 @@
         font-family: 'Lucida Console', Monaco, monospace;
         outline: none;
       }
-      #picker {
-        position: absolute;
-        top: 0; left: 0; right: 0; bottom: 0;
+      /* The landing page, after the turn-of-the-century game lobbies: teal page,
+         gold menu bar, pale yellow links. It covers the canvas until a folder is
+         picked. */
+      :root {
+        --teal: #336666;
+        --teal-light: #669999;
+        --teal-dark: #003333;
+        --gold: #ffcc66;
+        --link: #ffffcc;
+        --muted: #99cccc;
+        --ink: #ffffff;
+        --bad: #ffb199;
+      }
+      [hidden] { display: none !important; }
+      html.zone-open, html.zone-open body { overflow: hidden; }
+      #zone {
+        position: fixed;
+        inset: 0;
         z-index: 10;
+        overflow-y: auto;
+        background-color: var(--teal);
+        color: var(--ink);
+        font: 14px/1.35 Arial, Helvetica, sans-serif;
+      }
+      #zone a, .link-button {
+        color: var(--link);
+        text-decoration: underline;
+      }
+      #zone a:hover, .link-button:hover { color: var(--gold); }
+      #zone a:focus-visible, #zone button:focus-visible, #picker :focus-visible {
+        outline: 2px solid var(--gold);
+        outline-offset: 2px;
+      }
+      .zone-page { max-width: 940px; }
+
+      .topnav {
+        display: flex;
+        flex-wrap: wrap;
+        background-color: var(--teal-dark);
+        border-bottom: 1px solid #000;
+        font: bold 15px Verdana, Geneva, sans-serif;
+      }
+      .topnav a { padding: 3px 8px; border-right: 1px solid var(--teal-light); }
+
+      .masthead {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: stretch;
+        background: linear-gradient(100deg, var(--teal-dark) 0 62%, var(--teal) 62%);
+      }
+      .brand { padding: 10px 14px 8px; min-width: 190px; }
+      .brand-mark {
+        font: italic bold 40px/1 Verdana, Geneva, sans-serif;
+        letter-spacing: -2px;
+        color: #fff;
+      }
+      .brand-mark span { color: var(--gold); }
+      .brand-sub {
+        margin-top: 4px;
+        font: bold 17px Verdana, Geneva, sans-serif;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .banner {
+        flex: 1 1 300px;
         display: flex;
         align-items: center;
-        justify-content: center;
-        padding: 16px;
-        background-color: #111;
-        color: #eee;
-        font-family: arial, sans-serif;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 6px;
+        padding: 10px 14px;
+        background-color: #fff;
+        border: 1px solid #000;
+        color: #003333;
       }
-      #picker .panel { max-width: 560px; width: 100%; line-height: 1.45; }
-      #picker h1 { font-size: 22px; margin: 0 0 12px; }
-      #picker p { margin: 0 0 12px; color: #bbb; }
-      #picker label.button {
-        display: inline-block;
-        padding: 10px 16px;
-        border-radius: 6px;
-        background-color: #3a6fd8;
+      .banner p { margin: 0; font: bold 15px Verdana, Geneva, sans-serif; }
+      .banner small { display: block; margin-top: 3px; font: 12px Arial, sans-serif; color: #335555; }
+
+      .play {
+        flex: none;
+        padding: 8px 20px;
+        border: 2px outset #ffe7a8;
+        background: linear-gradient(#ffe7a8, var(--gold) 55%, #e8a93a);
+        color: #1a1a00;
+        font: bold 18px Verdana, Geneva, sans-serif;
+        cursor: pointer;
+        text-shadow: 0 1px 0 #fff3cf;
+      }
+      .play:hover { background: linear-gradient(#fff1c9, #ffd780 55%, #f0b549); }
+      .play:active { border-style: inset; }
+      .play.big { padding: 12px 34px; font-size: 22px; }
+
+      .goldnav {
+        display: flex;
+        flex-wrap: wrap;
+        background-color: var(--gold);
+        border-top: 1px solid #000;
+        border-bottom: 1px solid #000;
+        font: bold 15px Arial, Helvetica, sans-serif;
+      }
+      #zone .goldnav a {
+        padding: 2px 12px;
+        border-right: 1px solid #000;
+        color: #000;
+        text-decoration: none;
+      }
+      #zone .goldnav a:hover { background-color: #ffe0a0; }
+      .tagline { margin: 6px 8px; color: var(--muted); font-size: 15px; }
+
+      .layout { display: flex; align-items: flex-start; }
+      .sidebar {
+        flex: none;
+        width: 198px;
+        padding-bottom: 14px;
+        background-color: var(--teal-light);
+        border-bottom-right-radius: 48px;
+      }
+      .boxart {
+        height: 66px;
+        padding: 8px 10px;
+        box-sizing: border-box;
+        background: radial-gradient(circle at 80% 30%, #7a4a1a, #2a1200 60%, #000);
+        border-bottom: 1px solid #000;
+        font-family: Georgia, 'Times New Roman', serif;
+        color: #f2e6c4;
+      }
+      .boxart b { display: block; font-size: 20px; letter-spacing: 2px; text-transform: uppercase; }
+      .boxart span { font-size: 13px; letter-spacing: 1px; color: #e0c27a; }
+      .sidebar ul { list-style: none; margin: 6px 0 0; padding: 0 8px; }
+      .sidebar li { font: bold 14px/1.2 Verdana, Geneva, sans-serif; }
+      #zone .sidebar li a { color: #000; text-decoration: none; }
+      #zone .sidebar li a:hover { color: #fff; text-decoration: underline; }
+      #zone .sidebar li a.here { color: var(--gold); }
+      .goto { margin: 18px 8px 0; color: #fff; }
+      .goto a { display: block; }
+
+      .main { flex: 1; min-width: 0; padding: 0 8px 24px 8px; }
+      .main h1 { margin: 2px 0 8px; font: 20px Arial, Helvetica, sans-serif; }
+      .steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        align-items: center;
+        margin: 4px 0 10px;
+        padding: 0;
+        list-style: none;
+      }
+      .steps li { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+      .steps li b {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 2px solid #000;
+        background: radial-gradient(circle at 35% 30%, #ffe7a8, #c27a2a 70%, #5a3000);
+        color: #2a1200;
+        font: bold 16px Verdana, Geneva, sans-serif;
+      }
+      .main h2 {
+        margin: 16px 0 2px;
+        padding-bottom: 1px;
+        font: bold 18px Arial, Helvetica, sans-serif;
+      }
+      .main h2.ruled { border-bottom: 1px solid var(--teal-light); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+      .main h2.ruled small { font: 14px Arial, sans-serif; color: var(--muted); }
+      .main h3 { margin: 16px 0 0; font: bold 18px Arial, Helvetica, sans-serif; }
+      .main p { margin: 4px 0 8px; }
+      .main ul.headlines { margin: 2px 0 0; padding-left: 22px; }
+      .note { color: var(--muted); }
+      .lead-play { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 6px 0 4px; }
+      .lead-play p { margin: 0; flex: 1 1 220px; color: var(--muted); }
+
+      .rooms {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        column-gap: 28px;
+        margin: 2px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .rooms li { border-bottom: 1px solid var(--teal-light); }
+      .link-button {
+        display: block;
+        width: 100%;
+        padding: 1px 0;
+        border: 0;
+        background: none;
+        font: bold 15px Arial, Helvetica, sans-serif;
+        text-align: left;
+        cursor: pointer;
+      }
+      .link-button .tag { font-weight: normal; color: var(--muted); }
+
+      .info { margin: 0; padding-left: 20px; }
+      .info li { margin-bottom: 6px; }
+      #zone code { color: var(--gold); font: bold 14px 'Courier New', monospace; }
+
+      .footer {
+        margin-top: 8px;
+        padding: 12px 14px;
+        background-color: var(--teal-dark);
+        color: var(--muted);
+        font-size: 12px;
+        border-top: 1px solid var(--teal-light);
+      }
+      .footer p { margin: 0 0 6px; }
+      .footer a { margin-right: 14px; }
+
+      @media (max-width: 700px) {
+        .layout { flex-direction: column; align-items: stretch; }
+        .sidebar { width: auto; border-bottom-right-radius: 0; }
+        .sidebar ul { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+        .goto { display: none; }
+        .main { padding: 0 16px 24px; }
+        .rooms { grid-template-columns: 1fr; }
+        .masthead { background: var(--teal-dark); }
+        .brand-mark { font-size: 32px; }
+        .topnav a { padding-left: 8px; padding-right: 8px; }
+        .goldnav { font-size: 14px; }
+        #zone .goldnav a { padding-left: 7px; padding-right: 7px; }
+        .steps { gap: 8px 18px; }
+      }
+
+      /* The folder prompt, opened by Play JKDF2 or any room, and reused to
+         report problems once the game runs. */
+      #picker {
+        width: min(560px, calc(100vw - 32px));
+        max-height: calc(100vh - 32px);
+        padding: 0;
+        border: 2px solid #000;
+        background-color: var(--teal-dark);
         color: #fff;
-        font-weight: bold;
+        font: 15px/1.45 Arial, Helvetica, sans-serif;
+        box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.45);
+      }
+      #picker::backdrop { background-color: rgba(0, 20, 20, 0.6); }
+      #picker .titlebar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 6px 4px 12px;
+        background-color: var(--gold);
+        border-bottom: 1px solid #000;
+        color: #000;
+      }
+      #picker h1 { margin: 0; font: bold 17px Verdana, Geneva, sans-serif; }
+      #picker .close {
+        width: 26px;
+        height: 24px;
+        border: 2px outset #fff;
+        background: #ddd;
+        font: bold 14px Verdana, sans-serif;
+        cursor: pointer;
+      }
+      #picker .body { padding: 14px 16px 16px; }
+      #picker p { margin: 0 0 12px; }
+      #picker code { color: var(--gold); font: bold 15px 'Courier New', monospace; }
+      #picker .promises { margin: 0 0 12px; padding: 0; list-style: none; }
+      #picker .promises li {
+        position: relative;
+        margin-bottom: 10px;
+        padding: 8px 10px 8px 38px;
+        background-color: var(--teal);
+        border: 1px solid var(--teal-light);
+      }
+      #picker .promises li::before {
+        content: "\2713";
+        position: absolute;
+        left: 10px;
+        top: 7px;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background-color: var(--gold);
+        color: #000;
+        font: bold 14px/20px Arial, sans-serif;
+        text-align: center;
+      }
+      #picker .promises b { color: var(--gold); }
+      #picker .fine { color: var(--muted); font-size: 13px; }
+      #picker .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+      #picker label.play { display: inline-block; }
+      #picker label.play[aria-disabled=true] { opacity: 0.5; pointer-events: none; }
+      #picker .cancel {
+        padding: 7px 14px;
+        border: 2px outset #9cc;
+        background-color: var(--teal-light);
+        color: #fff;
+        font: bold 14px Verdana, Geneva, sans-serif;
         cursor: pointer;
       }
       #picker input[type=file] { display: none; }
-      #picker-result { margin-top: 16px; white-space: pre-line; }
-      #picker-result.error { color: #ff8a80; }
+      #picker-result { margin-top: 14px; white-space: pre-line; }
+      #picker-result:empty { display: none; }
+      #picker-result.error { color: var(--bad); font-weight: bold; }
     </style>
   </head>
   <body>
@@ -156,18 +427,172 @@
   </span>
 </span>
     <textarea id="output" rows="8"></textarea>
-    <div id="picker">
-      <div class="panel">
-        <h1>Choose your game folder</h1>
-        <p>Pick the folder where Jedi Knight: Dark Forces II or Mysteries of the Sith is installed
-          (the one that contains <code>episode</code> and <code>resource</code>).
-          OpenJKDF2 does not include any game files.</p>
-        <p>Your files are read by this page only. Nothing is uploaded.</p>
-        <label class="button" for="gamedir">Choose folder</label>
-        <input type="file" id="gamedir" webkitdirectory multiple>
-        <div id="picker-result"></div>
+    <div id="zone">
+      <div class="zone-page">
+        <nav class="topnav" aria-label="Project links">
+          <a href="#rooms">Home</a>
+          <a href="https://github.com/shinyquagsire23/OpenJKDF2">OpenJKDF2</a>
+          <a href="https://github.com/tristamus/OpenJKDF2">Source code</a>
+          <a href="#help">Help</a>
+        </nav>
+
+        <header class="masthead">
+          <div class="brand">
+            <div class="brand-mark">jkdf2<span>mp</span></div>
+            <div class="brand-sub">Game Rooms</div>
+          </div>
+          <div class="banner">
+            <p>Jedi Knight multiplayer, right in your browser.
+              <small>Bring your own copy of the game. Nothing to install.</small></p>
+            <button class="play" type="button" data-play>Play JKDF2</button>
+          </div>
+        </header>
+
+        <nav class="goldnav" aria-label="Sections">
+          <a href="#rooms">Game Rooms</a>
+          <a href="#start">Getting Started</a>
+          <a href="#files">Your Files</a>
+          <a href="#help">Help</a>
+        </nav>
+        <p class="tagline">Free to play. No account needed.</p>
+
+        <div class="layout">
+          <aside class="sidebar">
+            <div class="boxart" aria-hidden="true"><b>Jedi Knight</b><span>Dark Forces II</span></div>
+            <ul>
+              <li><a href="#rooms" class="here">Game Rooms</a></li>
+              <li><a href="#start">Getting Started</a></li>
+              <li><a href="#files">Your Files</a></li>
+              <li><a href="#help">Game Help</a></li>
+            </ul>
+            <div class="goto">Go To:
+              <a href="https://github.com/shinyquagsire23/OpenJKDF2">OpenJKDF2</a>
+              <a href="https://github.com/tristamus/jkdf2mp-bb-server">Lobby source</a>
+            </div>
+          </aside>
+
+          <main class="main">
+            <h1>Jedi Knight: Dark Forces II</h1>
+            <div class="lead-play">
+              <button class="play big" type="button" data-play>Play JKDF2</button>
+              <p>Pick your game folder and the game starts right here in this tab.</p>
+            </div>
+            <ol class="steps" aria-label="How it works">
+              <li><b>1</b>Pick your game folder</li>
+              <li><b>2</b>The game starts in this tab</li>
+              <li><b>3</b>Host or join a match</li>
+            </ol>
+
+            <h2 class="ruled">Headlines</h2>
+            <ul class="headlines">
+              <li><a href="#files">Your game files never leave your computer. Here's why.</a></li>
+              <li><a href="#start">New here? Getting started takes a minute.</a></li>
+            </ul>
+
+            <section id="rooms" aria-labelledby="rooms-title">
+              <h2 class="ruled" id="rooms-title">Play in the rooms below <small>Every room starts the same game</small></h2>
+              <p class="note">Pick any room to start. Once the game is running, choose Multiplayer to host a match or join one.</p>
+
+              <h3>Standard Rooms</h3>
+              <p class="note">Open to everyone with Jedi Knight: Dark Forces II</p>
+              <ul class="rooms">
+                <li><button class="link-button" type="button" data-play>Nar Shaddaa</button></li>
+                <li><button class="link-button" type="button" data-play>The Cantina</button></li>
+                <li><button class="link-button" type="button" data-play>Sulon</button></li>
+                <li><button class="link-button" type="button" data-play>Bespin <span class="tag">(Rookie)</span></button></li>
+                <li><button class="link-button" type="button" data-play>Canyon Oasis <span class="tag">(Rookie)</span></button></li>
+                <li><button class="link-button" type="button" data-play>Dark Palace <span class="tag">(Expert)</span></button></li>
+              </ul>
+
+              <h3>Capture the Flag Rooms</h3>
+              <p class="note">For team play</p>
+              <ul class="rooms">
+                <li><button class="link-button" type="button" data-play>CTF Room 1</button></li>
+                <li><button class="link-button" type="button" data-play>CTF Room 2</button></li>
+              </ul>
+
+              <h3>Mysteries of the Sith Rooms</h3>
+              <p class="note">Pick your Mysteries of the Sith folder for these</p>
+              <ul class="rooms">
+                <li><button class="link-button" type="button" data-play>Sith: Asteroid</button></li>
+                <li><button class="link-button" type="button" data-play>Sith: Altyr 5</button></li>
+              </ul>
+            </section>
+
+            <section id="start" aria-labelledby="start-title">
+              <h2 class="ruled" id="start-title">Getting Started</h2>
+              <ol class="info">
+                <li>You need Jedi Knight: Dark Forces II installed on this computer, for example from
+                  Steam or GOG. In Steam, right-click the game, then choose Manage, then Browse local files
+                  to see where it is.</li>
+                <li>Click <b>Play JKDF2</b> or any room, then pick the game's folder: the one with the
+                  <code>episode</code> and <code>resource</code> folders inside.</li>
+                <li>When the game starts, choose Multiplayer to host a match or join one.</li>
+              </ol>
+            </section>
+
+            <section id="files" aria-labelledby="files-title">
+              <h2 class="ruled" id="files-title">Your Files</h2>
+              <ul class="info">
+                <li><b>Nothing is uploaded.</b> When you pick your game folder, this page reads the files on
+                  your computer and loads them into the game in this browser tab. They're never sent to our
+                  server or to other players.</li>
+                <li><b>Why we ask for the folder.</b> This web version comes with no game files at all, so it
+                  only runs from a copy of the game you already have. The check makes sure the folder holds
+                  the game's files before it starts.</li>
+                <li><b>About the browser's "upload" message.</b> Your browser may ask whether to "upload"
+                  the files. That's its standard wording for letting a page read a folder. The files still
+                  stay on your computer.</li>
+                <li>Your characters and controls are saved in this browser, so they're there next time.</li>
+              </ul>
+            </section>
+
+            <section id="help" aria-labelledby="help-title">
+              <h2 class="ruled" id="help-title">Game Help</h2>
+              <ul class="info">
+                <li>Use a current Chrome or Firefox on a computer. Phones and tablets can't open a game folder.</li>
+                <li>If the page says files are missing, you picked a folder one level too high or too low.
+                  Pick the one that has <code>episode</code> and <code>resource</code> directly inside.</li>
+                <li>The game needs WebGL 2. If it won't start, turn on hardware acceleration in your
+                  browser's settings.</li>
+              </ul>
+            </section>
+          </main>
+        </div>
+
+        <footer class="footer">
+          <p>jkdf2mp is a free fan project built on OpenJKDF2. It is not affiliated with or endorsed by
+            Lucasfilm or Disney. Star Wars and Jedi Knight are trademarks of Lucasfilm Ltd.
+            You need your own copy of the game to play.</p>
+          <p><a href="https://github.com/shinyquagsire23/OpenJKDF2">OpenJKDF2</a><a href="https://github.com/tristamus/OpenJKDF2">Source code</a><a href="https://github.com/tristamus/jkdf2mp-bb-server">Lobby source</a></p>
+        </footer>
       </div>
     </div>
+
+    <dialog id="picker" aria-labelledby="picker-title">
+      <div class="titlebar">
+        <h1 id="picker-title">Pick your game folder</h1>
+        <button class="close" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="body">
+        <p class="picker-intro">Choose the folder where Jedi Knight: Dark Forces II (or Mysteries of the Sith)
+          is installed: the one with the <code>episode</code> and <code>resource</code> folders inside.</p>
+        <ul class="promises picker-intro">
+          <li><b>Nothing is uploaded.</b> Your files are read right here in this browser tab and never
+            leave your computer.</li>
+          <li><b>It's a quick check that you have your own copy of the game.</b> This web version comes
+            with no game files, so it can only run from a copy you already have.</li>
+        </ul>
+        <p class="fine picker-intro">Your browser may ask whether to "upload" the files. That's just its
+          standard wording for letting this page read them. Choose Upload to continue.</p>
+        <div class="actions picker-intro">
+          <label class="play" for="gamedir" tabindex="0" role="button">Choose game folder</label>
+          <button class="cancel" type="button">Not now</button>
+        </div>
+        <input type="file" id="gamedir" webkitdirectory multiple>
+        <div id="picker-result" role="status"></div>
+      </div>
+    </dialog>
 
     <script type='text/javascript'>
       var statusElement = document.getElementById('status');
@@ -298,13 +723,36 @@
         document.body.appendChild(engine);
       }
 
+      var picker = document.getElementById('picker');
+      var pickerTitle = document.getElementById('picker-title');
+      var chooseButton = picker.querySelector('label.play');
+      var readingFolder = false;
+
+      function openPicker() {
+        pickerTitle.textContent = 'Pick your game folder';
+        picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = false; });
+        picker.onclick = null;
+        var problem = browserProblem();
+        showPickerResult(problem || '', !!problem);
+        if (!picker.open) picker.showModal();
+        chooseButton.focus();
+      }
+
+      function closePicker() {
+        if (!readingFolder && picker.open) picker.close();
+      }
+
       function showProblem(title, text) {
-        document.querySelector('#picker h1').textContent = title;
-        document.querySelectorAll('#picker p, #picker label').forEach(function(e) { e.style.display = 'none'; });
+        pickerTitle.textContent = title;
+        picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
         showPickerResult(text, true);
-        var picker = document.getElementById('picker');
-        picker.style.display = '';
-        picker.onclick = function() { picker.style.display = 'none'; };
+        if (!picker.open) picker.showModal();
+        picker.onclick = function() { picker.close(); };
+      }
+
+      function hideZone() {
+        document.getElementById('zone').hidden = true;
+        document.documentElement.classList.remove('zone-open');
       }
 
       // What the game can't run without, checked before anyone picks a folder,
@@ -400,8 +848,8 @@
         var required = isMots ? REQUIRED_MOTS : REQUIRED_JK;
         var missing = required.filter(r => !byLower[r.toLowerCase()]);
         if (missing.length) {
-          showPickerResult("That folder is missing files the game needs:\n" + missing.join("\n") +
-                           "\n\nPick the folder that contains episode and resource.", true);
+          showPickerResult("That folder doesn't have the game files we're looking for:\n" + missing.join("\n") +
+                           "\n\nPick the folder that has episode and resource directly inside, then try again.", true);
           return;
         }
         // Windows folders ignore case but MEMFS doesn't, so "Episode/AODpc.gob" and
@@ -427,12 +875,15 @@
         }
         for (var r of required) byLower[r.toLowerCase()].path = r;
 
+        readingFolder = true;
+        chooseButton.setAttribute('aria-disabled', 'true');
         var totalBytes = files.reduce((n, e) => n + e.file.size, 0);
         var gameRoot = isMots ? '/mots/' : '/jk1/';
         var loaded = [];
         for (var i = 0; i < files.length; i++) {
-          showPickerResult("Reading " + (isMots ? "Mysteries of the Sith" : "Jedi Knight") + " files (" +
-                           (i + 1) + " of " + files.length + ", " + Math.round(totalBytes / 1048576) + " MB)...");
+          showPickerResult("Found your copy of " + (isMots ? "Mysteries of the Sith" : "Jedi Knight") +
+                           ". Loading it into this tab (" + (i + 1) + " of " + files.length + " files, " +
+                           Math.round(totalBytes / 1048576) + " MB)...");
           loaded.push({ path: gameRoot + files[i].path, data: new Uint8Array(await files[i].file.arrayBuffer()) });
         }
         var pickedPlayers = [];
@@ -454,25 +905,51 @@
           Module['arguments'].push('-motsCompat');
         }
 
-        document.getElementById('picker').style.display = 'none';
+        readingFolder = false;
+        picker.close();
+        hideZone();
         loadEngine(false);
       }
 
       document.getElementById('gamedir').addEventListener('change', function(ev) {
-        onFolderPicked(ev.target.files).catch(function(err) {
+        // Copied so the input can be cleared, which lets the same folder be
+        // picked again after fixing a problem.
+        var fileList = Array.from(ev.target.files);
+        ev.target.value = '';
+        onFolderPicked(fileList).catch(function(err) {
           showPickerResult("Could not read that folder: " + err, true);
+        }).finally(function() {
+          readingFolder = false;
+          chooseButton.removeAttribute('aria-disabled');
         });
+      });
+
+      // Play JKDF2 and every room open the same folder prompt.
+      document.querySelectorAll('[data-play]').forEach(function(b) {
+        b.addEventListener('click', openPicker);
+      });
+      picker.querySelector('.close').addEventListener('click', closePicker);
+      picker.querySelector('.cancel').addEventListener('click', closePicker);
+      // Escape closes the prompt, except while the folder is being read.
+      picker.addEventListener('cancel', function(ev) {
+        if (readingFolder) ev.preventDefault();
+      });
+      // The label stands in for the hidden file input, so let the keyboard press it too.
+      chooseButton.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          chooseButton.click();
+        }
       });
 
       // Local testing with a build made with -DOPENJKDF2_WASM_PRELOAD_DATA=ON:
       // open index.html#bundled to use the baked-in openjkdf2_data.data instead.
       if (window.location.hash === '#bundled') {
-        document.getElementById('picker').style.display = 'none';
+        hideZone();
         loadEngine(true);
       } else {
+        document.documentElement.classList.add('zone-open');
         Module.setStatus('Waiting for game folder...');
-        var problem = browserProblem();
-        if (problem) showPickerResult(problem, true);
       }
     </script>
   </body>
