@@ -251,6 +251,12 @@
         Module.setStatus = function(text) {
           if (text) Module.printErr('[post-exception status] ' + text);
         };
+        // The status line sits under the canvas, so say it where players can see it.
+        // Emscripten throws 'unwind' and ExitStatus on purpose; those aren't crashes.
+        if (!/unwind|ExitStatus/.test(String(event))) {
+          showProblem('The game stopped', String(event) +
+                      '\n\nPress F12 and open Console for details. Click anywhere to hide this.');
+        }
       };
 
       window.onresize = function()
@@ -291,6 +297,38 @@
         var engine = document.createElement('script');
         engine.src = 'openjkdf2.js';
         document.body.appendChild(engine);
+      }
+
+      function showProblem(title, text) {
+        document.querySelector('#picker h1').textContent = title;
+        document.querySelectorAll('#picker p, #picker label').forEach(function(e) { e.style.display = 'none'; });
+        showPickerResult(text, true);
+        var picker = document.getElementById('picker');
+        picker.style.display = '';
+        picker.onclick = function() { picker.style.display = 'none'; };
+      }
+
+      // What the game can't run without, checked before anyone picks a folder,
+      // so players see what's wrong instead of a page that never starts.
+      function browserProblem() {
+        var ua = navigator.userAgent;
+        // iPadOS reports itself as a Mac; touch points give it away.
+        var touchMac = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+        if ((navigator.userAgentData && navigator.userAgentData.mobile) ||
+            /Android|iPhone|iPad|iPod/i.test(ua) || touchMac) {
+          return "This needs a computer. Phones and tablets can't open a game folder.";
+        }
+        if (typeof WebAssembly !== 'object') {
+          return "This browser has WebAssembly turned off, and the game needs it. " +
+                 "Use a current Chrome or Firefox.";
+        }
+        var gl = null;
+        try { gl = document.createElement('canvas').getContext('webgl2'); } catch (e) {}
+        if (!gl) {
+          return "This browser can't draw with WebGL 2, which the game needs. " +
+                 "Turn on hardware acceleration in the browser's settings, or use a current Chrome or Firefox.";
+        }
+        return null;
       }
 
       function showPickerResult(text, isError) {
@@ -381,6 +419,8 @@
         loadEngine(true);
       } else {
         Module.setStatus('Waiting for game folder...');
+        var problem = browserProblem();
+        if (problem) showPickerResult(problem, true);
       }
     </script>
   </body>

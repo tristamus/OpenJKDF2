@@ -211,12 +211,14 @@ Serve `wasm_out/` over HTTP and open `index.html`. The page asks for the folder 
 game's `episode/` and `resource/` directories and reads those files in the browser; nothing is
 uploaded and no game files are part of the build.
 
-Multiplayer goes through a WebSocket relay (`src/Platform/Networking/WSRelay`), since browsers
-can't open UDP sockets. To play between tabs or computers, serve the page with the relay from
+Browsers can't open UDP sockets, so multiplayer (`src/Platform/Networking/WSRelay`) finds games
+and sets up connections through a WebSocket server, then sends game packets over WebRTC data
+channels, falling back to relaying them through that server when a direct link can't be made. To
+play between tabs or computers, serve the page with the relay from
 [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server) instead of a plain web server:
 `python3 relay/relay.py --dir wasm_out` (add `--host 0.0.0.0` to let other computers on your
-network join). The page connects to `/relay` on the server it was loaded from. Without a relay,
-hosting still works but nobody can join.
+network join, and `--stun`/`--turn` for players on other networks). The page connects to `/relay`
+on the server it was loaded from. Without a relay, hosting still works but nobody can join.
 
 For local testing only, configure with `-DOPENJKDF2_WASM_PRELOAD_DATA=ON` after copying your
 `jk1/` (and/or `mots/`) game folders into `wasm_out/`, then open `index.html#bundled`. That bakes the
