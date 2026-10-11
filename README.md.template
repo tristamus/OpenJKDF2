@@ -42,7 +42,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ### Mods (being tested)
 
-- Keep each mod in its own folder inside your game folder. After you pick the game folder, the page lists the mods it found and you choose one, or none. The choice is remembered for next time.
+- Put each mod in its own folder inside your game folder, put its GOB in `Resource`, or turn it on in JK Patch Commander. After you pick the game folder, the page lists the mods it found and you choose one, or none. GOBs in `Resource` and `mods` that aren't the game's own count as one mod, and only load when you choose it, so a host always shares everything its game loads. The first time, that mod is chosen, or else JK Patch Commander's active patches. After that, your choice is remembered.
 - If you host with a mod, players who join get it from your browser the same way as a custom map: files from the original game are left out and filled in from their own copy, and the result must match your mod exactly (same SHA-256). Mods up to 100 MB are sent.
 - If you join a game with a different mod, or none, the game restarts in the same tab with the host's, and you join again from Multiplayer with that game already selected. The join screen says which mod a game uses.
 - Mods you got from a host are saved in your browser, so next time they load without a download and you can choose them to host.

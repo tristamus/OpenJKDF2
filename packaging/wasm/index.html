@@ -543,8 +543,9 @@
                 <li>Click <b>Play JKDF2</b> or any room, then pick the game's folder: the one with the
                   <code>episode</code> and <code>resource</code> folders inside.</li>
                 <li>When the game starts, choose Multiplayer to host a match or join one.</li>
-                <li>To play with a mod, keep it in its own folder inside the game folder. After you pick the
-                  game folder, you can choose it. Players who join you get it too, and if you join a game with
+                <li>To play with a mod, put it in its own folder inside the game folder, or its GOB in
+                  <code>Resource</code>, or turn it on in JK Patch Commander. After you pick the game folder,
+                  you can choose it. Players who join you get it too, and if you join a game with
                   another mod, yours is swapped for the host's.</li>
               </ol>
             </section>
@@ -873,23 +874,50 @@
       var NOT_MODS = ['episode', 'resource', 'player', 'music', 'persist', 'mods', 'netmods', 'jkmods',
                       'expansions', 'jkpatch', '__macosx'];
 
-      // The mod folders among the picked files: top-level folders, and one
-      // level down in folders that aren't mods themselves, plus JK Patch
-      // Commander's active patch. Paths are already spelled one way.
+      // The game's own GOBs in resource/. The engine also loads every other
+      // GOB there, and every GOB in mods/, whatever its command line says
+      // (jkRes_LoadNew in src/Main/jkRes.c).
+      var RETAIL_RESOURCE = {
+        '.gob': ['res1hi.gob', 'res1low.gob', 'res2.gob', 'res1demo.gob'],
+        '.goo': ['jkmres.goo', 'jkmsndlo.goo']
+      };
+
+      // A name for a mod that is just GOBs: the GOB's own name, if they're
+      // all called the same.
+      function gobsName(names, fallback) {
+        var lower = names.map(function(n) { return n.toLowerCase(); });
+        if (!names.length || lower.some(function(n) { return n !== lower[0]; })) return fallback;
+        return names[0].replace(/\.[^.]*$/, '');
+      }
+
+      // The mods among the picked files, each with the files that belong to it:
+      // - top-level folders, and one level down in folders that aren't mods
+      //   themselves, plus expansions/<mod> and mods/<mod>
+      // - JK Patch Commander's active patches: it keeps patches in JKPatch/ and
+      //   starts the game with -path JKPatch\active
+      // - GOBs the engine would always load (resource/, mods/), as one mod, so
+      //   they only load when it's chosen and a host always shares them
+      // Paths are already spelled one way.
       function detectMods(files, isMots) {
         var ext = isMots ? '.goo' : '.gob';
         var dirs = {};
+        var always = [];
         for (var e of files) {
           var parts = e.path.split('/');
+          var lowerParts = e.path.toLowerCase().split('/');
+          if (parts.length === 2 && (lowerParts[0] === 'resource' || lowerParts[0] === 'mods') &&
+              lowerParts[1].endsWith(ext) && lowerParts[1][0] !== '.' &&
+              !(lowerParts[0] === 'resource' && RETAIL_RESOURCE[ext].indexOf(lowerParts[1]) >= 0))
+            always.push(e);
           for (var d = 1; d < parts.length; d++) {
             var dir = parts.slice(0, d).join('/');
             var k = dir.toLowerCase();
-            var x = dirs[k] || (dirs[k] = { path: dir, gob: false, subdirs: {}, bytes: 0 });
+            var x = dirs[k] || (dirs[k] = { path: dir, gob: false, gobs: [], subdirs: {}, bytes: 0 });
             x.bytes += e.file.size;
             if (d === parts.length - 1) {
-              if (parts[d].toLowerCase().endsWith(ext)) x.gob = true;
+              if (lowerParts[d].endsWith(ext)) { x.gob = true; x.gobs.push(parts[d]); }
             } else {
-              x.subdirs[parts[d].toLowerCase()] = true;
+              x.subdirs[lowerParts[d]] = true;
             }
           }
         }
@@ -909,11 +937,34 @@
           }
         }
         found.sort();
-        return found.map(function(k, i) {
-          var name = k === 'jkpatch/active' ? 'JKPatch active' : dirs[k].path.split('/').pop();
+        var mods = found.map(function(k) {
+          var x = dirs[k];
+          var name = k === 'jkpatch/active' ? gobsName(Object.keys(x.subdirs).length ? [] : x.gobs, 'JK Patch Commander patches')
+                                            : x.path.split('/').pop();
+          return { key: k, from: x.path, name: name, bytes: x.bytes,
+                   rel: function(lower, path) { return lower.startsWith(k + '/') ? path.substring(k.length + 1) : null; } };
+        });
+        if (always.length) {
+          // One folder, so two GOBs with the same name get different ones.
+          var rels = new Map(), taken = {};
+          for (var e of always) {
+            var file = e.path.split('/')[1], rel = file, n = 2;
+            while (taken[rel.toLowerCase()]) rel = file.replace(/(\.[^.]*)$/, '-' + (n++) + '$1');
+            taken[rel.toLowerCase()] = true;
+            rels.set(e.path.toLowerCase(), rel);
+          }
+          var where = always.some(function(e) { return /^mods\//i.test(e.path); })
+            ? (always.some(function(e) { return /^resource\//i.test(e.path); }) ? 'Resource and mods' : 'mods')
+            : 'Resource';
+          mods.unshift({ key: 'always', from: where, always: true,
+                         name: gobsName(always.map(function(e) { return e.path.split('/')[1]; }), 'GOBs in ' + where),
+                         bytes: always.reduce(function(n, e) { return n + e.file.size; }, 0),
+                         rel: function(lower) { return rels.get(lower) || null; } });
+        }
+        return mods.map(function(m, i) {
           // No spaces: the engine splits its command line on them.
-          var safe = name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
-          return { key: k, from: dirs[k].path, name: name, bytes: dirs[k].bytes, path: 'jkmods/' + i + '-' + safe };
+          m.path = 'jkmods/' + i + '-' + m.name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
+          return m;
         });
       }
 
@@ -967,8 +1018,10 @@
       function chooseMod(folderMods, saved) {
         var options = [{ id: 'none', name: 'No mod', where: 'The game as it came', path: null }];
         for (var m of folderMods) {
-          options.push({ id: 'folder:' + m.key, name: m.name, path: m.path,
-                         where: 'In your game folder (' + m.from + '), ' + megabytes(m.bytes) +
+          options.push({ id: 'folder:' + m.key, name: m.name, path: m.path, always: m.always,
+                         patches: m.key === 'jkpatch/active',
+                         where: (m.always ? 'In your game folder (' + m.from + "), so the original game would always load it, "
+                                          : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
                                 (m.bytes > 100 * 1048576 ? ". Too big to send: players need their own copy" : '') });
         }
         for (var s of saved) {
@@ -977,7 +1030,12 @@
         }
         var last = null;
         try { last = localStorage.getItem('jkdf2mp-mod'); } catch (e) {}
-        if (!options.some(function(o) { return o.id === last; })) last = 'none';
+        // First time: what the game would have loaded on its own, else what JK
+        // Patch Commander would start it with, else no mod.
+        if (!options.some(function(o) { return o.id === last; })) {
+          var first = options.find(function(o) { return o.always; }) || options.find(function(o) { return o.patches; });
+          last = first ? first.id : 'none';
+        }
 
         var list = modChoice.querySelector('.mod-list');
         list.textContent = '';
@@ -1079,8 +1137,9 @@
           for (var e of files) {
             var lower = e.path.toLowerCase();
             for (var m of folderMods) {
-              if (lower.startsWith(m.key + '/')) {
-                e.path = m.path + e.path.substring(m.key.length);
+              var rel = m.rel(lower, e.path);
+              if (rel) {
+                e.path = m.path + '/' + rel;
                 break;
               }
             }
