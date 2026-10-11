@@ -404,6 +404,21 @@
         cursor: pointer;
       }
       #picker input[type=file] { display: none; }
+      #mod-choice fieldset { margin: 0 0 12px; padding: 0; border: 0; }
+      #mod-choice legend { margin-bottom: 6px; padding: 0; font: bold 15px Verdana, Geneva, sans-serif; color: var(--gold); }
+      #mod-choice label {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        margin-bottom: 6px;
+        padding: 7px 10px;
+        background-color: var(--teal);
+        border: 1px solid var(--teal-light);
+        cursor: pointer;
+      }
+      #mod-choice label:has(input:checked) { border-color: var(--gold); }
+      #mod-choice input { accent-color: var(--gold); }
+      #mod-choice .where { display: block; color: var(--muted); font-size: 13px; }
       #picker-result { margin-top: 14px; white-space: pre-line; }
       #picker-result:empty { display: none; }
       #picker-result.error { color: var(--bad); font-weight: bold; }
@@ -528,6 +543,9 @@
                 <li>Click <b>Play JKDF2</b> or any room, then pick the game's folder: the one with the
                   <code>episode</code> and <code>resource</code> folders inside.</li>
                 <li>When the game starts, choose Multiplayer to host a match or join one.</li>
+                <li>To play with a mod, keep it in its own folder inside the game folder. After you pick the
+                  game folder, you can choose it. Players who join you get it too, and if you join a game with
+                  another mod, yours is swapped for the host's.</li>
               </ol>
             </section>
 
@@ -537,10 +555,10 @@
                 <li><b>Your game stays on your computer.</b> When you pick your game folder, this page reads the
                   files on your computer and loads them into the game in this browser tab. They aren't uploaded
                   to our server.</li>
-                <li><b>Except custom maps you host.</b> When you host a custom map, players who join without it
-                  get a copy from your browser, directly or passed through our server, which doesn't keep it.
-                  Files from the original game are never sent: each player's browser fills those in from their
-                  own copy.</li>
+                <li><b>Except custom maps and mods you host.</b> When you host a custom map or play with a mod,
+                  players who join without it get a copy from your browser, directly or passed through our
+                  server, which doesn't keep it. Files from the original game are never sent: each player's
+                  browser fills those in from their own copy.</li>
                 <li><b>Why we ask for the folder.</b> This web version comes with no game files at all, so it
                   only runs from a copy of the game you already have. The check makes sure the folder holds
                   the game's files before it starts.</li>
@@ -583,8 +601,8 @@
           is installed: the one with the <code>episode</code> and <code>resource</code> folders inside.</p>
         <ul class="promises picker-intro">
           <li><b>Your game stays on your computer.</b> Your files are read right here in this browser tab
-            and aren't uploaded. The one exception is a custom map you host: players who join without it
-            get a copy. Original game files are never sent.</li>
+            and aren't uploaded. The one exception is a custom map or mod you host: players who join
+            without it get a copy. Original game files are never sent.</li>
           <li><b>It's a quick check that you have your own copy of the game.</b> This web version comes
             with no game files, so it can only run from a copy you already have.</li>
         </ul>
@@ -595,6 +613,18 @@
           <button class="cancel" type="button">Not now</button>
         </div>
         <input type="file" id="gamedir" webkitdirectory multiple>
+        <div id="mod-choice" hidden>
+          <fieldset>
+            <legend>Play with a mod?</legend>
+            <div class="mod-list"></div>
+          </fieldset>
+          <p class="fine">Players who join you get your mod, except files from the original game, which
+            their browser fills in from their own copy. If you join a game with a different mod, the game
+            restarts with that one.</p>
+          <div class="actions">
+            <button class="play" type="button">Start</button>
+          </div>
+        </div>
         <div id="picker-result" role="status"></div>
       </div>
     </dialog>
@@ -731,11 +761,13 @@
       var picker = document.getElementById('picker');
       var pickerTitle = document.getElementById('picker-title');
       var chooseButton = picker.querySelector('label.play');
+      var modChoice = document.getElementById('mod-choice');
       var readingFolder = false;
 
       function openPicker() {
         pickerTitle.textContent = 'Pick your game folder';
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = false; });
+        modChoice.hidden = true;
         picker.onclick = null;
         var problem = browserProblem();
         showPickerResult(problem || '', !!problem);
@@ -750,6 +782,7 @@
       function showProblem(title, text) {
         pickerTitle.textContent = title;
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
+        modChoice.hidden = true;
         showPickerResult(text, true);
         if (!picker.open) picker.showModal();
         picker.onclick = function() { picker.close(); };
@@ -828,6 +861,162 @@
           console.log('OpenJKDF2: added characters from the game folder: ' + names.join(', '));
       }
 
+      // ---- Mods: folders the engine loads ahead of the game's own files
+      // (-path), each in its own folder inside the game folder. mods.js (in
+      // openjkdf2.js) shares the chosen one with joiners.
+
+      // A folder is a mod if it holds the game's GOBs (.gob, or .goo for
+      // MotS) or the game's resource folders.
+      var MOD_RESOURCE_DIRS = ['3do', 'mat', 'cog', 'misc', 'sound', 'ui', 'jkl', 'ai', 'voice', 'cmp', 'key', 'snd', 'pup'];
+      // Folders of the install itself. expansions/<mod> (OpenJKDF2's own
+      // place for them) and mods/<folder> are looked inside.
+      var NOT_MODS = ['episode', 'resource', 'player', 'music', 'persist', 'mods', 'netmods', 'jkmods',
+                      'expansions', 'jkpatch', '__macosx'];
+
+      // The mod folders among the picked files: top-level folders, and one
+      // level down in folders that aren't mods themselves, plus JK Patch
+      // Commander's active patch. Paths are already spelled one way.
+      function detectMods(files, isMots) {
+        var ext = isMots ? '.goo' : '.gob';
+        var dirs = {};
+        for (var e of files) {
+          var parts = e.path.split('/');
+          for (var d = 1; d < parts.length; d++) {
+            var dir = parts.slice(0, d).join('/');
+            var k = dir.toLowerCase();
+            var x = dirs[k] || (dirs[k] = { path: dir, gob: false, subdirs: {}, bytes: 0 });
+            x.bytes += e.file.size;
+            if (d === parts.length - 1) {
+              if (parts[d].toLowerCase().endsWith(ext)) x.gob = true;
+            } else {
+              x.subdirs[parts[d].toLowerCase()] = true;
+            }
+          }
+        }
+        function isMod(k) {
+          var x = dirs[k];
+          return !!x && (x.gob || MOD_RESOURCE_DIRS.some(function(r) { return x.subdirs[r]; }));
+        }
+        var found = [];
+        for (var k in dirs) {
+          var parts = k.split('/');
+          var top = parts[0];
+          if ((parts.length === 1 && NOT_MODS.indexOf(top) < 0) ||
+              (parts.length === 2 && (top === 'expansions' || top === 'mods')) ||
+              (parts.length === 2 && NOT_MODS.indexOf(top) < 0 && !isMod(top)) ||
+              k === 'jkpatch/active') {
+            if (isMod(k)) found.push(k);
+          }
+        }
+        found.sort();
+        return found.map(function(k, i) {
+          var name = k === 'jkpatch/active' ? 'JKPatch active' : dirs[k].path.split('/').pop();
+          // No spaces: the engine splits its command line on them.
+          var safe = name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
+          return { key: k, from: dirs[k].path, name: name, bytes: dirs[k].bytes, path: 'jkmods/' + i + '-' + safe };
+        });
+      }
+
+      // Mods saved from earlier games (mods.js keeps them), newest first.
+      function storedMods(game) {
+        return new Promise(function(resolve) {
+          var settled = false;
+          function done(list) {
+            if (settled) return;
+            settled = true;
+            resolve(list || []);
+          }
+          setTimeout(function() { done([]); }, 3000);
+          try {
+            var req = indexedDB.open('jkdf2mp-mods', 1);
+            req.onupgradeneeded = function() {
+              req.result.createObjectStore('meta', { keyPath: 'key' });
+              req.result.createObjectStore('data');
+            };
+            req.onsuccess = function() {
+              var db = req.result;
+              try {
+                var all = db.transaction('meta').objectStore('meta').getAll();
+                all.onsuccess = function() {
+                  db.close();
+                  var seen = {};
+                  done(all.result.filter(function(m) {
+                    if (m.game !== game || seen[m.sha256]) return false;
+                    return (seen[m.sha256] = true);
+                  }).sort(function(a, b) { return b.used - a.used; }));
+                };
+                all.onerror = function() { db.close(); done([]); };
+              } catch (e) {
+                db.close();
+                done([]);
+              }
+            };
+            req.onerror = req.onblocked = function() { done([]); };
+          } catch (e) {
+            done([]);
+          }
+        });
+      }
+
+      function megabytes(n) {
+        return n < 1048576 ? 'under 1 MB' : Math.round(n / 1048576) + ' MB';
+      }
+
+      // Asks which mod to start with. Resolves to { path, name }, or null for
+      // none. The choice is remembered for next time.
+      function chooseMod(folderMods, saved) {
+        var options = [{ id: 'none', name: 'No mod', where: 'The game as it came', path: null }];
+        for (var m of folderMods) {
+          options.push({ id: 'folder:' + m.key, name: m.name, path: m.path,
+                         where: 'In your game folder (' + m.from + '), ' + megabytes(m.bytes) +
+                                (m.bytes > 100 * 1048576 ? ". Too big to send: players need their own copy" : '') });
+        }
+        for (var s of saved) {
+          options.push({ id: 'saved:' + s.sha256, name: s.name, path: 'netmods/' + s.sha256.substring(0, 16),
+                         where: 'Saved from an online game, ' + megabytes(s.size) });
+        }
+        var last = null;
+        try { last = localStorage.getItem('jkdf2mp-mod'); } catch (e) {}
+        if (!options.some(function(o) { return o.id === last; })) last = 'none';
+
+        var list = modChoice.querySelector('.mod-list');
+        list.textContent = '';
+        options.forEach(function(o, i) {
+          var label = document.createElement('label');
+          var input = document.createElement('input');
+          input.type = 'radio';
+          input.name = 'mod';
+          input.value = String(i);
+          input.checked = o.id === last;
+          var text = document.createElement('span');
+          var name = document.createElement('b');
+          name.textContent = o.name;
+          var where = document.createElement('span');
+          where.className = 'where';
+          where.textContent = o.where;
+          text.append(name, where);
+          label.append(input, text);
+          list.appendChild(label);
+        });
+
+        pickerTitle.textContent = 'Choose a mod';
+        picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
+        showPickerResult('');
+        modChoice.hidden = false;
+        var start = modChoice.querySelector('button.play');
+        (list.querySelector('input:checked') || start).focus();
+        return new Promise(function(resolve) {
+          start.onclick = function() {
+            start.onclick = null;
+            var picked = list.querySelector('input:checked');
+            var o = options[picked ? Number(picked.value) : 0];
+            try { localStorage.setItem('jkdf2mp-mod', o.id); } catch (e) {}
+            modChoice.hidden = true;
+            resolve(o.path ? { path: o.path, name: o.name } : null);
+          };
+        });
+      }
+
       function showPickerResult(text, isError) {
         var el = document.getElementById('picker-result');
         el.textContent = text;
@@ -879,6 +1068,32 @@
           e.path = dir ? dir + '/' + parts[parts.length - 1] : parts[parts.length - 1];
         }
         for (var r of required) byLower[r.toLowerCase()].path = r;
+
+        // Mod folders are loaded under jkmods/, named so the engine's command
+        // line can carry them, and the chosen one is started with -path. A
+        // path given in the address (?path=...) is left as it is.
+        var game = isMots ? 'mots' : 'jk1';
+        if (Module['arguments'].indexOf('-path') < 0) {
+          var folderMods = detectMods(files, isMots);
+          var saved = typeof indexedDB !== 'undefined' ? await storedMods(game) : [];
+          for (var e of files) {
+            var lower = e.path.toLowerCase();
+            for (var m of folderMods) {
+              if (lower.startsWith(m.key + '/')) {
+                e.path = m.path + e.path.substring(m.key.length);
+                break;
+              }
+            }
+          }
+          Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
+          if (folderMods.length || saved.length) {
+            var mod = await chooseMod(folderMods, saved);
+            if (mod) {
+              Module['arguments'].push('-path', mod.path);
+              console.log('OpenJKDF2: starting with mod ' + mod.name + ' (' + mod.path + ')');
+            }
+          }
+        }
 
         readingFolder = true;
         chooseButton.setAttribute('aria-disabled', 'true');

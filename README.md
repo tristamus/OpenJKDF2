@@ -39,6 +39,14 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 - The map is saved in your browser, so next time it loads right away and you can host it too.
 - **No original game files are sent.** The original episodes are never offered. Any file inside a custom map that's an exact copy of a file from the original game is left out, and your browser fills it in from your own install. The rebuilt map must match the host's copy exactly (same SHA-256) before it's used. A map made only of original game files isn't sent at all.
 
+### Mods (being tested)
+
+- Keep each mod in its own folder inside your game folder. After you pick the game folder, the page lists the mods it found and you choose one, or none. The choice is remembered for next time.
+- If you host with a mod, players who join get it from your browser the same way as a custom map: files from the original game are left out and filled in from their own copy, and the result must match your mod exactly (same SHA-256). Mods up to 100 MB are sent.
+- If you join a game with a different mod, or none, the game restarts in the same tab with the host's, and you join again from Multiplayer with that game already selected. The join screen says which mod a game uses.
+- Mods you got from a host are saved in your browser, so next time they load without a download and you can choose them to host.
+- This hasn't been tried yet with a real mod such as SBX, or between two players.
+
 ### A landing page and clearer errors
 
 - A landing page in the style of early-2000s game lobby sites, with a Play button, "rooms", getting-started steps and a plain explanation of what happens to your files. Every room opens the same game; you host or join inside it.
