@@ -1139,9 +1139,10 @@
             for (var y = x + 1; y < on.length; y++) {
               var paths = clashes[on[x].index + ',' + on[y].index];
               if (paths)
-                lines.push(on[x].name + ' and ' + on[y].name + ' both change ' + paths.length +
-                           (paths.length === 1 ? ' file (' : ' files, such as ') + paths[0] +
-                           (paths.length === 1 ? ')' : '') + '. ' + on[x].name + "'s are used, since it's higher in the list.");
+                lines.push(on[x].name + ' and ' + on[y].name + ' both change ' +
+                           (paths.length === 1 ? paths[0] + '. ' + on[x].name + "'s version is used"
+                                               : paths.length + ' files, such as ' + paths[0] + '. ' + on[x].name + "'s versions are used") +
+                           ", since it's higher in the list.");
             }
           }
           note.textContent = lines.join('\n');
