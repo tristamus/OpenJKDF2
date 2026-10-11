@@ -355,6 +355,16 @@ LABEL_29:
         wuRegistry_SetWString("lastConnectedHost", jkGuiMultiplayer_ipText);
 #endif
         v10 = stdComm_Open(v7, v35.sessionName);
+#ifdef PLATFORM_WSRELAY
+        // Added: the host runs another mod, and the engine restarts into it
+        // (g_should_exit is set). Back out of the menus without showing any.
+        if ( v10 == STDCOMM_WSRELAY_RESTART )
+        {
+            jkGuiRend_DarrayFree(&jkGuiMultiplayer_stru_5564A8);
+            stdComm_CloseConnection();
+            return -1;
+        }
+#endif
         if ( v10 )
         {
             if ( v10 == 0x8877014A )
@@ -590,6 +600,11 @@ void jkGuiMultiplayer_sub_413E50(int idx)
         {
             jkGuiRend_SetVisibleAndDraw(&jkGuiMultiplayer_aElements3[9], &jkGuiMultiplayer_menu3, 1);
         }
+#ifdef PLATFORM_WSRELAY
+        // Added: the game's mod, on the otherwise unused third line.
+        stdComm_WSRelay_DescribeMod(idx, (char16_t*)jkGuiMultiplayer_stru_556168.field_200,
+                                    sizeof(jkGuiMultiplayer_stru_556168.field_200) / sizeof(char16_t));
+#endif
     }
     else
     {

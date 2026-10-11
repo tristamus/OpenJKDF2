@@ -10,33 +10,39 @@
 //
 // Original game files never cross the wire. The original episodes are never
 // offered, and any file inside a custom GOB that is byte-for-byte identical
-// to a file in the host's retail GOBs is replaced by a reference (offset,
-// size, SHA-256). The joiner fills those parts in from its own retail GOBs and
-// checks the rebuilt GOB against the host's SHA-256 before installing it. A
-// GOB made only of retail files (a renamed original episode) isn't sent.
+// to a file in the host's retail GOBs, or to a whole retail GOB, is replaced
+// by a reference (offset, size, SHA-256). The joiner fills those parts in
+// from its own retail GOBs and checks the rebuilt GOB against the host's
+// SHA-256 before installing it. A GOB made only of retail files (a renamed
+// original episode) isn't sent.
 //
 // Downloaded maps are kept in IndexedDB and written into episode/ before the
 // engine starts, so they're there next time and can be hosted.
 //
+// The same transfer also carries the host's mod (mods.js): KIND_MOD frames
+// ask for and send it, KIND_MAP frames the map.
+//
 // Every frame starts like a relay game packet, with idFrom and idTo (u32),
-// then MAGIC, a type byte and a version byte, padded to 16 bytes:
+// then MAGIC, a type byte, a version byte and a kind byte, padded to 16 bytes:
 //   joiner -> host   INFO_REQ
 //                    CHUNK_REQ  <id:8> <chunkSize u32> <first u32> <count u32>
 //   host -> joiner   INFO       <JSON: status, name, ext, size, sha256,
 //                                streamSize, refsBytes>
 //                    CHUNK      <id:8> <index u32> <data>
-// <id> is the first 8 bytes of the map's SHA-256, so chunks of another map are
-// never mixed in. The stream the chunks cut up is the reference table (u32
+// <id> is the first 8 bytes of the file's SHA-256, so chunks of another file
+// are never mixed in. The stream the chunks cut up is the reference table (u32
 // count, then u32 offset, u32 size and a 32-byte SHA-256 per reference),
-// followed by the GOB's bytes outside the references, in order. Game packets
+// followed by the file's bytes outside the references, in order. Game packets
 // start with a DSS message id below DSS_MAX (66), so their byte 8 is never
-// MAGIC's first byte ('J', 74).
+// MAGIC's first byte ('J', 74). Pages from before mods leave the kind byte at
+// 0 and ignore it, so they only ever answer for their map.
 
 (function() {
     var MAGIC = [0x4A, 0x4B, 0x4D, 0x54]; // "JKMT"
     var VERSION = 1;
     var HEADER = 16;
     var T_INFO_REQ = 1, T_INFO = 2, T_CHUNK_REQ = 3, T_CHUNK = 4;
+    var KIND_MAP = 0, KIND_MOD = 1;
 
     var MAX_MAP_BYTES = 100 * 1024 * 1024;
     var MAX_STORED_BYTES = 500 * 1024 * 1024;
@@ -56,7 +62,8 @@
     var STALL_MS = 15000;
     var CHECKING_UI_MS = 600;
 
-    var STATE_BUSY = 0, STATE_READY = 1, STATE_FAILED = 2;
+    // STATE_RESTART: the engine has to restart to use what was fetched (a mod).
+    var STATE_BUSY = 0, STATE_READY = 1, STATE_FAILED = 2, STATE_RESTART = 3;
 
     var GOB_ENTRY = 136; // u32 offset, u32 size, char[128] name (Win95/stdGob.h)
 
@@ -201,10 +208,16 @@
         var dir = parseGob(memReader(gob), gob.length);
         if (!dir)
             return { ok: false, reason: 'not-gob' };
+        return planShareRanges(gob, dir.entries, retailSources);
+    }
+
+    // The same for any bytes: each range ({ offset, size }) that is a copy of
+    // a file in the retail GOBs becomes a reference.
+    async function planShareRanges(gob, ranges, retailSources) {
         var index = contentIndex(retailSources);
         var refs = [];
         var custom = 0;
-        for (var e of dir.entries) {
+        for (var e of ranges) {
             if (e.size <= 0)
                 continue;
             var bytes = gob.subarray(e.offset, e.offset + e.size);
@@ -221,10 +234,22 @@
         }
         if (!custom)
             return { ok: false, reason: 'retail-only' };
+
+        // A reference inside another (a file of a nested GOB that is itself a
+        // copy, or a second entry for the same bytes) adds nothing.
+        refs.sort(function(a, b) { return a.offset - b.offset || b.size - a.size; });
+        var kept = [];
+        var end = 0;
+        for (var r of refs) {
+            if (kept.length && r.offset + r.size <= end)
+                continue;
+            kept.push(r);
+            end = Math.max(end, r.offset + r.size);
+        }
+        refs = kept;
         if (refs.length > MAX_REFS)
             return { ok: false, reason: 'too-many-files' };
 
-        refs.sort(function(a, b) { return a.offset - b.offset || a.size - b.size; });
         // Entries can share or overlap bytes; the parts that are copies of
         // retail files are the union of the references.
         var inline = [];
@@ -307,7 +332,8 @@
         return { ok: true, bytes: out };
     }
 
-    var lib = { parseGob: parseGob, planShare: planShare, rebuild: rebuild, sha256: sha256,
+    var lib = { parseGob: parseGob, planShare: planShare, planShareRanges: planShareRanges,
+                rebuild: rebuild, sha256: sha256, toHex: toHex,
                 isRetailEpisode: isRetailEpisode, validEpisodeName: validEpisodeName };
 
     // ---- The file system side.
@@ -357,9 +383,11 @@
             if (!path || !isFile(path))
                 continue;
             var read = fileReader(path);
-            var dir = parseGob(read, FS().stat(path).size);
+            var size = FS().stat(path).size;
+            var dir = parseGob(read, size);
+            // The whole GOB too, for a mod that carries a copy of one.
             if (dir)
-                out.push({ read: read, entries: dir.entries });
+                out.push({ read: read, entries: dir.entries.concat([{ offset: 0, size: size, name: '' }]) });
         }
         return out;
     }
@@ -383,10 +411,11 @@
         fs.writeFile(dir + '/' + name + '.' + ext, bytes);
     }
 
-    // ---- Downloaded maps in IndexedDB: "meta" holds small records to list
-    // and evict by, "data" the GOBs themselves, under the same key.
+    // ---- Downloads kept in IndexedDB, one database per kind: "meta" holds
+    // small records to list and evict by, "data" the files themselves, under
+    // the same key.
 
-    var store = (function() {
+    function makeStore(dbName, maxBytes) {
         var dbPromise = null;
 
         function open() {
@@ -394,7 +423,7 @@
                 return dbPromise;
             dbPromise = new Promise(function(resolve) {
                 try {
-                    var req = indexedDB.open('jkdf2mp-maps', 1);
+                    var req = indexedDB.open(dbName, 1);
                     req.onupgradeneeded = function() {
                         req.result.createObjectStore('meta', { keyPath: 'key' });
                         req.result.createObjectStore('data');
@@ -435,11 +464,11 @@
             return all.filter(function(m) { return !game || m.game === game; });
         }
 
-        async function get(game, name, sha) {
+        // The record under k and its data, marked as just used.
+        async function take(k) {
             var db = await open();
             if (!db)
                 return null;
-            var k = key(game, name, sha);
             var tx = db.transaction(['meta', 'data'], 'readwrite');
             var meta = await request(tx.objectStore('meta').get(k));
             var data = meta ? await request(tx.objectStore('data').get(k)) : null;
@@ -449,6 +478,27 @@
             }
             await done(tx);
             return meta && data ? { meta: meta, data: data } : null;
+        }
+
+        function get(game, name, sha) {
+            return take(key(game, name, sha));
+        }
+
+        // By content alone, whatever name it was saved under.
+        async function find(game, sha) {
+            var metas = await list(game);
+            for (var m of metas) {
+                if (m.sha256 === sha)
+                    return take(m.key);
+            }
+            return null;
+        }
+
+        async function read(k) {
+            var db = await open();
+            if (!db)
+                return null;
+            return request(db.transaction('data').objectStore('data').get(k));
         }
 
         async function put(game, name, ext, sha, bytes) {
@@ -469,7 +519,7 @@
             var drop = [];
             for (var m of metas) {
                 total += m.size;
-                if (total > MAX_STORED_BYTES && m.key !== k)
+                if (total > maxBytes && m.key !== k)
                     drop.push(m.key);
             }
             if (drop.length) {
@@ -482,32 +532,33 @@
             }
         }
 
-        // Writes the maps stored for this game into episode/, the most
-        // recently used version of each, unless the picked folder has one.
-        async function installAll(root, game) {
-            var metas = await list(game);
-            metas.sort(function(a, b) { return b.used - a.used; });
-            var seen = {};
-            var db = await open();
-            var names = [];
-            for (var m of metas) {
-                var lower = m.name.toLowerCase();
-                if (seen[lower])
-                    continue;
-                seen[lower] = true;
-                if (!validEpisodeName(m.name) || !validExt(m.ext) || findPath(root, 'episode/' + m.name + '.' + m.ext))
-                    continue;
-                var data = await request(db.transaction('data').objectStore('data').get(m.key));
-                if (!data)
-                    continue;
-                install(root, m.name, m.ext, new Uint8Array(data));
-                names.push(m.name);
-            }
-            return names;
-        }
+        return { list: list, get: get, find: find, read: read, put: put };
+    }
 
-        return { get: get, put: put, installAll: installAll };
-    })();
+    var store = makeStore('jkdf2mp-maps', MAX_STORED_BYTES);
+
+    // Writes the maps stored for this game into episode/, the most recently
+    // used version of each, unless the picked folder has one.
+    async function installStoredMaps(root, game) {
+        var metas = await store.list(game);
+        metas.sort(function(a, b) { return b.used - a.used; });
+        var seen = {};
+        var names = [];
+        for (var m of metas) {
+            var lower = m.name.toLowerCase();
+            if (seen[lower])
+                continue;
+            seen[lower] = true;
+            if (!validEpisodeName(m.name) || !validExt(m.ext) || findPath(root, 'episode/' + m.name + '.' + m.ext))
+                continue;
+            var data = await store.read(m.key);
+            if (!data)
+                continue;
+            install(root, m.name, m.ext, new Uint8Array(data));
+            names.push(m.name);
+        }
+        return names;
+    }
 
     // ---- What the joiner sees: a small panel over the game while a map
     // comes in, or with the reason it couldn't.
@@ -566,12 +617,16 @@
             return (n / 1048576).toFixed(n < 10485760 ? 1 : 0);
         }
 
-        function show(mapName, text, cancel) {
+        function what(kind) {
+            return kind === KIND_MOD ? 'mod' : 'map';
+        }
+
+        function show(mapName, text, cancel, kind) {
             if (!make())
                 return;
             el.className = '';
             el.hidden = false;
-            title.textContent = "Getting the host's map";
+            title.textContent = "Getting the host's " + what(kind);
             name.textContent = mapName;
             bar.hidden = false;
             bar.removeAttribute('value');
@@ -588,12 +643,12 @@
                 (via === 'relay' ? 'through the lobby' : 'straight from the host');
         }
 
-        function error(mapName, text) {
+        function error(mapName, text, kind) {
             if (!make())
                 return;
             el.className = 'jk-maps-error';
             el.hidden = false;
-            title.textContent = "Couldn't get the map";
+            title.textContent = "Couldn't get the " + what(kind);
             name.textContent = mapName;
             bar.hidden = true;
             detail.textContent = text;
@@ -602,13 +657,28 @@
             button.focus();
         }
 
+        // Something the player should read that isn't a failure, such as the
+        // game restarting with the host's mod.
+        function notice(heading, itemName, text) {
+            if (!make())
+                return;
+            el.className = '';
+            el.hidden = false;
+            title.textContent = heading;
+            name.textContent = itemName;
+            bar.hidden = true;
+            detail.textContent = text;
+            button.textContent = 'OK';
+            onCancel = null;
+        }
+
         function hide() {
             if (el)
                 el.hidden = true;
             onCancel = null;
         }
 
-        return { show: show, progress: progress, error: error, hide: hide };
+        return { show: show, progress: progress, error: error, notice: notice, hide: hide };
     })();
 
     var MESSAGES = {
@@ -632,6 +702,11 @@
     };
 
     function messageFor(reason, ctx) {
+        if (ctx.messageFor) {
+            var own = ctx.messageFor(reason);
+            if (own !== undefined)
+                return own;
+        }
         if (reason === 'retail-missing')
             return 'This game runs an original ' + gameOfEpisode(ctx.name) +
                    " level that isn't in the game folder you picked.";
@@ -648,7 +723,7 @@
 
     // ---- Frames.
 
-    function frame(type, idTo, bodyLen) {
+    function frame(type, idTo, bodyLen, kind) {
         var buf = new ArrayBuffer(HEADER + bodyLen);
         var b = new Uint8Array(buf);
         var v = new DataView(buf);
@@ -657,6 +732,7 @@
         b.set(MAGIC, 8);
         b[12] = type;
         b[13] = VERSION;
+        b[14] = kind || KIND_MAP;
         return { buf: buf, bytes: b, view: v };
     }
 
@@ -685,15 +761,45 @@
         return true;
     }
 
-    // ---- Host: prepares its map once when it starts hosting, then answers
-    // whoever asks.
+    // ---- Host: gets each thing it offers (its map, its mod) ready once when
+    // it starts hosting, then answers whoever asks.
 
-    var hosted = null;
+    var offers = {}; // kind -> { info, stream, id, waiting }
+
+    // prepare() resolves to { info, stream }: the INFO joiners get, and with
+    // status 'ok' the stream their chunks are cut from.
+    function offer(kind, prepare) {
+        var h = offers[kind] = { info: null, stream: null, id: null, waiting: [] };
+        (async function() {
+            var r;
+            try {
+                r = await prepare();
+            } catch (e) {
+                console.warn('OpenJKDF2: could not get the ' + (kind === KIND_MOD ? 'mod' : 'map') +
+                             ' ready for joiners: ' + e);
+                r = { info: { status: 'error' } };
+            }
+            if (offers[kind] !== h)
+                return;
+            h.info = r.info;
+            if (r.info.status === 'ok' && r.stream) {
+                h.stream = r.stream;
+                h.id = idOf(r.info.sha256);
+            }
+            for (var w of h.waiting)
+                sendInfo(kind, w.id, w.via);
+            h.waiting = [];
+        })();
+    }
+
+    function withdraw(kind) {
+        delete offers[kind];
+    }
 
     function host(name, ext) {
-        var h = hosted = { name: name, ext: ext, info: null, stream: null, waiting: [] };
-        (async function() {
+        offer(KIND_MAP, async function() {
             var info = { status: 'none', name: name, ext: ext };
+            var stream = null;
             try {
                 var root = gameRoot();
                 var path = validEpisodeName(name) && validExt(ext) ? findPath(root, 'episode/' + name + '.' + ext) : null;
@@ -709,8 +815,7 @@
                             info = { status: 'ok', name: name, ext: ext, size: gob.length,
                                      sha256: await sha256(gob), streamSize: plan.stream.length,
                                      refsBytes: plan.refsBytes };
-                            h.stream = plan.stream;
-                            h.id = idOf(info.sha256);
+                            stream = plan.stream;
                             console.log('OpenJKDF2: ready to send map ' + name + '.' + ext + ' to joiners (' +
                                         plan.refs + ' original files left out, ' + plan.stream.length + ' of ' +
                                         gob.length + ' bytes to send)');
@@ -723,48 +828,56 @@
                 console.warn('OpenJKDF2: could not prepare map ' + name + ' for joiners: ' + e);
                 info = { status: 'error', name: name, ext: ext };
             }
-            if (hosted !== h)
-                return;
-            h.info = info;
-            for (var w of h.waiting)
-                sendInfo(w.id, w.via);
-            h.waiting = [];
-        })();
+            return { info: info, stream: stream };
+        });
     }
 
     function unhost() {
-        hosted = null;
+        withdraw(KIND_MAP);
     }
 
-    function sendInfo(id, via) {
-        var json = new TextEncoder().encode(JSON.stringify(hosted.info));
-        var f = frame(T_INFO, id, json.length);
+    function sendInfo(kind, id, via) {
+        var json = new TextEncoder().encode(JSON.stringify(offers[kind].info));
+        var f = frame(T_INFO, id, json.length, kind);
         f.bytes.set(json, HEADER);
         send(id, f, via);
     }
 
-    function onHostFrame(from, type, data, via) {
-        if (!hosted || from < 2)
+    function onHostFrame(from, type, data, via, kind) {
+        if (from < 2)
             return;
         if (type === T_INFO_REQ) {
-            if (hosted.info)
-                sendInfo(from, via);
-            else if (hosted.waiting.length < 64)
-                hosted.waiting.push({ id: from, via: via });
-        } else if (type === T_CHUNK_REQ && hosted.stream && data.byteLength >= HEADER + 20) {
-            var v = new DataView(data);
-            if (!sameId(new Uint8Array(data, HEADER, 8), hosted.id))
+            var h = offers[kind];
+            if (!h)
                 return;
+            if (h.info)
+                sendInfo(kind, from, via);
+            else if (h.waiting.length < 64)
+                h.waiting.push({ id: from, via: via });
+        } else if (type === T_CHUNK_REQ && data.byteLength >= HEADER + 20) {
+            // Chunks are asked for by the file's id, whichever kind it is.
+            var want = new Uint8Array(data, HEADER, 8);
+            var k = null;
+            for (var key in offers) {
+                if (offers[key].stream && sameId(want, offers[key].id)) {
+                    k = Number(key);
+                    break;
+                }
+            }
+            if (k === null)
+                return;
+            var o = offers[k];
+            var v = new DataView(data);
             var size = v.getUint32(HEADER + 8, true);
             var first = v.getUint32(HEADER + 12, true);
             var count = Math.min(v.getUint32(HEADER + 16, true), MAX_CHUNKS_PER_REQ);
             if (size !== CHUNK_DIRECT && size !== CHUNK_RELAY)
                 return;
-            var stream = hosted.stream;
+            var stream = o.stream;
             for (var i = first; i < first + count && i * size < stream.length; i++) {
                 var part = stream.subarray(i * size, Math.min((i + 1) * size, stream.length));
-                var f = frame(T_CHUNK, from, 12 + part.length);
-                f.bytes.set(hosted.id, HEADER);
+                var f = frame(T_CHUNK, from, 12 + part.length, k);
+                f.bytes.set(o.id, HEADER);
                 f.view.setUint32(HEADER + 8, i, true);
                 f.bytes.set(part, HEADER + 12);
                 if (!send(from, f, via))
@@ -773,22 +886,33 @@
         }
     }
 
-    // ---- Joiner.
+    // ---- Joiner: one job per kind at a time, a map or a mod.
 
-    var job = null;
-    var jobState = STATE_READY;
+    var jobs = {};   // kind -> job
+    var states = {}; // kind -> STATE_*
 
-    function fetchMap(name, ext) {
-        var j = job = { name: name, ext: ext, label: name + '.' + ext, done: false,
-                        onInfo: null, onChunk: null, timers: [] };
-        jobState = STATE_BUSY;
-        runJob(j).then(function() {
-            finish(j, null);
+    // fields: label (shown on the panel) and whatever run needs. run(j) does
+    // the work and resolves to the state to end in (STATE_READY if it returns
+    // nothing), or throws fail(reason). j.messageFor(reason) can word a
+    // failure its own way.
+    function startJob(kind, fields, run) {
+        var j = { kind: kind, done: false, onInfo: null, onChunk: null, timers: [] };
+        for (var f in fields)
+            j[f] = fields[f];
+        jobs[kind] = j;
+        states[kind] = STATE_BUSY;
+        run(j).then(function(state) {
+            finish(j, null, state);
         }, function(e) {
             finish(j, e && e.reason ? e.reason : 'error');
             if (!(e && e.reason))
-                console.warn('OpenJKDF2: map download failed: ' + e);
+                console.warn('OpenJKDF2: ' + (kind === KIND_MOD ? 'mod' : 'map') + ' download failed: ' + e);
         });
+        return j;
+    }
+
+    function fetchMap(name, ext) {
+        startJob(KIND_MAP, { name: name, ext: ext, label: name + '.' + ext }, runJob);
     }
 
     function fail(reason) {
@@ -797,32 +921,39 @@
         return e;
     }
 
-    function finish(j, reason) {
+    function finish(j, reason, state) {
         if (j.done)
             return;
         j.done = true;
         j.timers.forEach(clearTimeout);
         if (j.cancel)
             j.cancel(fail(reason || 'done'));
-        if (job !== j)
+        if (jobs[j.kind] !== j)
             return;
         if (!reason) {
-            ui.hide();
-            jobState = STATE_READY;
+            // A restart leaves its notice up, to be read after the restart.
+            if (state !== STATE_RESTART)
+                ui.hide();
+            states[j.kind] = state || STATE_READY;
             return;
         }
         var text = messageFor(reason, j);
         if (text)
-            ui.error(j.label, text);
+            ui.error(j.label, text, j.kind);
         else
             ui.hide();
-        jobState = STATE_FAILED;
-        console.log('OpenJKDF2: map ' + j.label + ' not installed: ' + reason);
+        states[j.kind] = STATE_FAILED;
+        console.log('OpenJKDF2: ' + (j.kind === KIND_MOD ? 'mod ' : 'map ') + j.label + ' not installed: ' + reason);
     }
 
-    function abort(reason) {
-        if (job && !job.done)
-            finish(job, reason || 'cancelled');
+    function abort(reason, kind) {
+        var j = jobs[kind || KIND_MAP];
+        if (j && !j.done)
+            finish(j, reason || 'cancelled');
+    }
+
+    function state(kind) {
+        return kind in states ? states[kind] : STATE_READY;
     }
 
     function sleep(j, ms) {
@@ -850,6 +981,12 @@
         return !(net && net.rtcEnabled && !net.rtcEnabled());
     }
 
+    // Gives a direct link that is still starting up a moment to come up.
+    async function waitForDirect(j) {
+        for (var waited = 0; waited < DIRECT_WAIT_MS && directPossible() && !directUp(); waited += 100)
+            await sleep(j, 100);
+    }
+
     function askInfo(j) {
         return new Promise(function(resolve, reject) {
             var started = Date.now();
@@ -863,11 +1000,21 @@
                     return;
                 if (Date.now() - started > INFO_TIMEOUT_MS)
                     return reject(fail('no-answer'));
-                send(1, frame(T_INFO_REQ, 1, 0), directUp() ? 'direct' : 'relay');
+                send(1, frame(T_INFO_REQ, 1, 0, j.kind), directUp() ? 'direct' : 'relay');
                 j.timers.push(setTimeout(ask, INFO_RESEND_MS));
             }
             ask();
         });
+    }
+
+    // Checks what a host says about the file it offers before anything is
+    // asked for: sizes and the hash have to make sense.
+    function checkInfo(info, maxBytes) {
+        if (!(info.size > 0 && info.size <= maxBytes))
+            throw fail('too-big');
+        if (!(info.refsBytes >= 4 && info.streamSize >= info.refsBytes &&
+              info.streamSize <= info.size + 4 + MAX_REFS * REF_BYTES) || !/^[0-9a-f]{64}$/.test(info.sha256))
+            throw fail('corrupt');
     }
 
     async function runJob(j) {
@@ -883,7 +1030,7 @@
 
         var checking = setTimeout(function() {
             if (!j.done)
-                ui.show(j.label, "Checking the host's map...", function() { abort('cancelled'); });
+                ui.show(j.label, "Checking the host's map...", function() { abort('cancelled'); }, KIND_MAP);
         }, CHECKING_UI_MS);
         j.timers.push(checking);
         var info;
@@ -904,11 +1051,7 @@
             throw fail('other-map');
         if (info.ext !== j.ext)
             throw fail('other-game');
-        if (!(info.size > 0 && info.size <= MAX_MAP_BYTES))
-            throw fail('too-big');
-        if (!(info.refsBytes >= 4 && info.streamSize >= info.refsBytes &&
-              info.streamSize <= info.size + 4 + MAX_REFS * REF_BYTES) || !/^[0-9a-f]{64}$/.test(info.sha256))
-            throw fail('corrupt');
+        checkInfo(info, MAX_MAP_BYTES);
 
         if (local && isFile(local) && FS().stat(local).size === info.size &&
             await sha256(FS().readFile(local)) === info.sha256)
@@ -927,9 +1070,8 @@
         }
 
         clearTimeout(checking);
-        ui.show(j.label, 'Connecting to the host...', function() { abort('cancelled'); });
-        for (var waited = 0; waited < DIRECT_WAIT_MS && directPossible() && !directUp(); waited += 100)
-            await sleep(j, 100);
+        ui.show(j.label, 'Connecting to the host...', function() { abort('cancelled'); }, KIND_MAP);
+        await waitForDirect(j);
         var stream = await download(j, info, directUp() ? CHUNK_DIRECT : CHUNK_RELAY);
 
         var result = await rebuild(info, stream, retailSources(root, j.ext));
@@ -969,7 +1111,7 @@
             j.cancel = reject;
 
             function ask(first, count) {
-                var f = frame(T_CHUNK_REQ, 1, 20);
+                var f = frame(T_CHUNK_REQ, 1, 20, j.kind);
                 f.bytes.set(id, HEADER);
                 f.view.setUint32(HEADER + 8, chunkSize, true);
                 f.view.setUint32(HEADER + 12, first, true);
@@ -1037,16 +1179,17 @@
         });
     }
 
-    function onJoinerFrame(from, type, data) {
-        if (from !== 1 || !job || job.done)
+    function onJoinerFrame(from, type, data, kind) {
+        var j = jobs[kind];
+        if (from !== 1 || !j || j.done)
             return;
-        if (type === T_INFO && job.onInfo) {
+        if (type === T_INFO && j.onInfo) {
             var info = null;
             try { info = JSON.parse(new TextDecoder().decode(new Uint8Array(data, HEADER))); } catch (e) {}
             if (info && typeof info.status === 'string')
-                job.onInfo(info);
-        } else if (type === T_CHUNK && job.onChunk) {
-            job.onChunk(data);
+                j.onInfo(info);
+        } else if (type === T_CHUNK && j.onChunk) {
+            j.onChunk(data);
         }
     }
 
@@ -1055,13 +1198,13 @@
     function onFrame(from, data, via) {
         if (!isFrame(data))
             return;
-        var b = new Uint8Array(data, 12, 2);
-        if (b[1] !== VERSION)
+        var b = new Uint8Array(data, 12, 3);
+        if (b[1] !== VERSION || (b[2] !== KIND_MAP && b[2] !== KIND_MOD))
             return;
         if (b[0] === T_INFO_REQ || b[0] === T_CHUNK_REQ)
-            onHostFrame(from, b[0], data, via);
+            onHostFrame(from, b[0], data, via, b[2]);
         else
-            onJoinerFrame(from, b[0], data);
+            onJoinerFrame(from, b[0], data, b[2]);
     }
 
     Module.jkMaps = {
@@ -1071,8 +1214,19 @@
         host: host,
         unhost: unhost,
         fetch: fetchMap,
-        abort: abort,
-        state: function() { return jobState; }
+        abort: function(reason) { abort(reason, KIND_MAP); },
+        state: function() { return state(KIND_MAP); },
+        // What mods.js builds on to send the host's mod the same way.
+        core: {
+            KIND_MOD: KIND_MOD, STATE_BUSY: STATE_BUSY, STATE_READY: STATE_READY,
+            STATE_FAILED: STATE_FAILED, STATE_RESTART: STATE_RESTART,
+            CHUNK_DIRECT: CHUNK_DIRECT, CHUNK_RELAY: CHUNK_RELAY, CHECKING_UI_MS: CHECKING_UI_MS,
+            offer: offer, withdraw: withdraw, startJob: startJob, abort: abort, state: state,
+            askInfo: askInfo, checkInfo: checkInfo, download: download, waitForDirect: waitForDirect,
+            directUp: directUp, fail: fail, check: check, sleep: sleep, ui: ui,
+            findPath: findPath, isFile: isFile, gameRoot: gameRoot, retailSources: retailSources,
+            makeStore: makeStore
+        }
     };
 
     // Maps saved from earlier games go into episode/ before the engine starts,
@@ -1084,7 +1238,7 @@
         Module.preRun.push(function() {
             var mots = (Module['arguments'] || []).indexOf('-motsCompat') >= 0;
             Module.addRunDependency('jk-maps');
-            store.installAll(mots ? '/mots' : '/jk1', mots ? 'mots' : 'jk1').then(function(names) {
+            installStoredMaps(mots ? '/mots' : '/jk1', mots ? 'mots' : 'jk1').then(function(names) {
                 if (names.length)
                     console.log('OpenJKDF2: added maps saved from earlier games: ' + names.join(', '));
             }, function(e) {

@@ -404,6 +404,22 @@
         cursor: pointer;
       }
       #picker input[type=file] { display: none; }
+      #mod-choice fieldset { margin: 0 0 12px; padding: 0; border: 0; }
+      #mod-choice legend { margin-bottom: 6px; padding: 0; font: bold 15px Verdana, Geneva, sans-serif; color: var(--gold); }
+      #mod-choice label {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        margin-bottom: 6px;
+        padding: 7px 10px;
+        background-color: var(--teal);
+        border: 1px solid var(--teal-light);
+        cursor: pointer;
+      }
+      #mod-choice label:has(input:checked) { border-color: var(--gold); }
+      #mod-choice input { accent-color: var(--gold); }
+      #mod-choice .where { display: block; color: var(--muted); font-size: 13px; }
+      #mod-choice .mod-clash { margin: 0 0 12px; padding: 7px 10px; border-left: 3px solid var(--gold); font-size: 14px; white-space: pre-line; }
       #picker-result { margin-top: 14px; white-space: pre-line; }
       #picker-result:empty { display: none; }
       #picker-result.error { color: var(--bad); font-weight: bold; }
@@ -528,6 +544,10 @@
                 <li>Click <b>Play JKDF2</b> or any room, then pick the game's folder: the one with the
                   <code>episode</code> and <code>resource</code> folders inside.</li>
                 <li>When the game starts, choose Multiplayer to host a match or join one.</li>
+                <li>To play with mods, put each in its own folder inside the game folder, or its GOB in
+                  <code>Resource</code>, or turn it on in JK Patch Commander. After you pick the game folder,
+                  every mod it finds is ticked, and you can untick any. Players who join you get them too,
+                  and if you join a game with other mods, yours are swapped for the host's.</li>
               </ol>
             </section>
 
@@ -537,10 +557,10 @@
                 <li><b>Your game stays on your computer.</b> When you pick your game folder, this page reads the
                   files on your computer and loads them into the game in this browser tab. They aren't uploaded
                   to our server.</li>
-                <li><b>Except custom maps you host.</b> When you host a custom map, players who join without it
-                  get a copy from your browser, directly or passed through our server, which doesn't keep it.
-                  Files from the original game are never sent: each player's browser fills those in from their
-                  own copy.</li>
+                <li><b>Except custom maps and mods you host.</b> When you host a custom map or play with a mod,
+                  players who join without it get a copy from your browser, directly or passed through our
+                  server, which doesn't keep it. Files from the original game are never sent: each player's
+                  browser fills those in from their own copy.</li>
                 <li><b>Why we ask for the folder.</b> This web version comes with no game files at all, so it
                   only runs from a copy of the game you already have. The check makes sure the folder holds
                   the game's files before it starts.</li>
@@ -583,8 +603,8 @@
           is installed: the one with the <code>episode</code> and <code>resource</code> folders inside.</p>
         <ul class="promises picker-intro">
           <li><b>Your game stays on your computer.</b> Your files are read right here in this browser tab
-            and aren't uploaded. The one exception is a custom map you host: players who join without it
-            get a copy. Original game files are never sent.</li>
+            and aren't uploaded. The one exception is a custom map or mod you host: players who join
+            without it get a copy. Original game files are never sent.</li>
           <li><b>It's a quick check that you have your own copy of the game.</b> This web version comes
             with no game files, so it can only run from a copy you already have.</li>
         </ul>
@@ -595,6 +615,20 @@
           <button class="cancel" type="button">Not now</button>
         </div>
         <input type="file" id="gamedir" webkitdirectory multiple>
+        <div id="mod-choice" hidden>
+          <fieldset>
+            <legend>Mods to play with</legend>
+            <div class="mod-list"></div>
+          </fieldset>
+          <p class="mod-clash" role="status" hidden></p>
+          <p class="fine">Every mod in your game folder is ticked. Untick any you don't want this time.
+            When two mods change the same file, the one higher in the list is used. Players who join you
+            get your mods, except files from the original game, which their browser fills in from their
+            own copy. If you join a game with different mods, the game restarts with those.</p>
+          <div class="actions">
+            <button class="play" type="button">Start</button>
+          </div>
+        </div>
         <div id="picker-result" role="status"></div>
       </div>
     </dialog>
@@ -731,11 +765,13 @@
       var picker = document.getElementById('picker');
       var pickerTitle = document.getElementById('picker-title');
       var chooseButton = picker.querySelector('label.play');
+      var modChoice = document.getElementById('mod-choice');
       var readingFolder = false;
 
       function openPicker() {
         pickerTitle.textContent = 'Pick your game folder';
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = false; });
+        modChoice.hidden = true;
         picker.onclick = null;
         var problem = browserProblem();
         showPickerResult(problem || '', !!problem);
@@ -750,6 +786,7 @@
       function showProblem(title, text) {
         pickerTitle.textContent = title;
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
+        modChoice.hidden = true;
         showPickerResult(text, true);
         if (!picker.open) picker.showModal();
         picker.onclick = function() { picker.close(); };
@@ -828,6 +865,381 @@
           console.log('OpenJKDF2: added characters from the game folder: ' + names.join(', '));
       }
 
+      // ---- Mods: folders the engine loads ahead of the game's own files
+      // (-path), each in its own folder inside the game folder. mods.js (in
+      // openjkdf2.js) shares the chosen one with joiners.
+
+      // A folder is a mod if it holds the game's GOBs (.gob, or .goo for
+      // MotS) or the game's resource folders.
+      var MOD_RESOURCE_DIRS = ['3do', 'mat', 'cog', 'misc', 'sound', 'ui', 'jkl', 'ai', 'voice', 'cmp', 'key', 'snd', 'pup'];
+      // Folders of the install itself. expansions/<mod> (OpenJKDF2's own
+      // place for them) and mods/<folder> are looked inside.
+      var NOT_MODS = ['episode', 'resource', 'player', 'music', 'persist', 'mods', 'netmods', 'jkmods',
+                      'expansions', 'jkpatch', '__macosx'];
+
+      // The game's own GOBs in resource/. The engine also loads every other
+      // GOB there, and every GOB in mods/, whatever its command line says
+      // (jkRes_LoadNew in src/Main/jkRes.c).
+      var RETAIL_RESOURCE = {
+        '.gob': ['res1hi.gob', 'res1low.gob', 'res2.gob', 'res1demo.gob'],
+        '.goo': ['jkmres.goo', 'jkmsndlo.goo']
+      };
+
+      // The mods among the picked files, each with the files that belong to it,
+      // in the order they take precedence, which is the original game's where
+      // it has one (-path, then mods/, then resource/):
+      // - each GOB in JK Patch Commander's active folder. It keeps patches in
+      //   JKPatch/ and starts the game with -path JKPatch\active.
+      // - a folder of its own: top-level folders, one level down in folders
+      //   that aren't mods themselves, and expansions/<mod> and mods/<mod>
+      // - each GOB the engine would always load: in mods/, and in resource/
+      //   besides the game's own. They move under jkmods/ like the others, so
+      //   they only load when ticked and a host always shares what it runs.
+      // Paths are already spelled one way.
+      function detectMods(files, isMots) {
+        var ext = isMots ? '.goo' : '.gob';
+        var dirs = {};
+        var gobs = [];
+        for (var e of files) {
+          var parts = e.path.split('/');
+          var lowerParts = e.path.toLowerCase().split('/');
+          var last = lowerParts[lowerParts.length - 1];
+          if (last.endsWith(ext) && last[0] !== '.') {
+            if (parts.length === 2 && lowerParts[0] === 'mods')
+              gobs.push({ e: e, rank: 2, key: last, from: parts[0], always: true });
+            else if (parts.length === 2 && lowerParts[0] === 'resource' && RETAIL_RESOURCE[ext].indexOf(last) < 0)
+              gobs.push({ e: e, rank: 3, key: last, from: parts[0], always: true });
+            else if (parts.length === 3 && lowerParts[0] === 'jkpatch' && lowerParts[1] === 'active')
+              gobs.push({ e: e, rank: 0, key: last, from: 'JKPatch/active' });
+          }
+          for (var d = 1; d < parts.length; d++) {
+            var dir = parts.slice(0, d).join('/');
+            var k = dir.toLowerCase();
+            var x = dirs[k] || (dirs[k] = { path: dir, gob: false, subdirs: {}, bytes: 0 });
+            x.bytes += e.file.size;
+            if (d === parts.length - 1) {
+              if (lowerParts[d].endsWith(ext)) x.gob = true;
+            } else {
+              x.subdirs[lowerParts[d]] = true;
+            }
+          }
+        }
+        function isMod(k) {
+          var x = dirs[k];
+          return !!x && (x.gob || MOD_RESOURCE_DIRS.some(function(r) { return x.subdirs[r]; }));
+        }
+        gobs.sort(function(a, b) { return a.rank - b.rank || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0); });
+        var mods = gobs.map(function(g) {
+          var file = g.e.path.split('/').pop(), lower = g.e.path.toLowerCase();
+          return { rank: g.rank, from: g.from, always: g.always, name: file.replace(/\.[^.]*$/, ''), bytes: g.e.file.size,
+                   rel: function(l) { return l === lower ? file : null; } };
+        });
+        var found = [];
+        for (var k in dirs) {
+          var parts = k.split('/');
+          var top = parts[0];
+          if ((parts.length === 1 && NOT_MODS.indexOf(top) < 0) ||
+              (parts.length === 2 && (top === 'expansions' || top === 'mods')) ||
+              (parts.length === 2 && NOT_MODS.indexOf(top) < 0 && !isMod(top))) {
+            if (isMod(k)) found.push(k);
+          }
+        }
+        found.sort();
+        for (var k of found) {
+          (function(k, x) {
+            mods.push({ rank: 1, from: x.path, name: x.path.split('/').pop(), bytes: x.bytes,
+                        rel: function(lower, path) { return lower.startsWith(k + '/') ? path.substring(k.length + 1) : null; } });
+          })(k, dirs[k]);
+        }
+        // Sorting is stable, so each kind keeps its order.
+        mods.sort(function(a, b) { return a.rank - b.rank; });
+        return mods.map(function(m, i) {
+          // No spaces: the engine splits its command line on them.
+          m.path = 'jkmods/' + i + '-' + m.name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
+          return m;
+        });
+      }
+
+      // ---- Which files each mod changes, to tell when two ticked mods change
+      // the same one: its loose files, and what's inside the GOBs at its top
+      // level, by lowercase path. Text files don't count: the game doesn't read
+      // them, and every JK Patch Commander patch has a patchinfo.txt.
+
+      async function gobTable(file) {
+        try {
+          var head = new DataView(await file.slice(0, 12).arrayBuffer());
+          if (head.byteLength < 12 || head.getUint32(0, true) !== 0x20424f47) return null;
+          var at = head.getUint32(8, true);
+          var count = new DataView(await file.slice(at, at + 4).arrayBuffer()).getUint32(0, true);
+          if (count > 100000) return null;
+          var table = new Uint8Array(await file.slice(at + 4, at + 4 + count * 136).arrayBuffer());
+          if (table.length < count * 136) return null;
+          var v = new DataView(table.buffer), out = [];
+          for (var i = 0; i < count; i++) {
+            var name = '';
+            for (var j = 8; j < 136 && table[i * 136 + j]; j++) name += String.fromCharCode(table[i * 136 + j]);
+            out.push({ offset: v.getUint32(i * 136, true), size: v.getUint32(i * 136 + 4, true), name: name });
+          }
+          return out;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      async function modContents(mod, files, ext) {
+        var out = {};
+        for (var e of files) {
+          var rel = mod.rel(e.path.toLowerCase(), e.path);
+          if (!rel) continue;
+          var lower = rel.toLowerCase();
+          var table = lower.indexOf('/') < 0 && lower.endsWith(ext) ? await gobTable(e.file) : null;
+          if (table) {
+            for (var g of table) {
+              var p = g.name.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+              if (p && !p.endsWith('.txt') && !(p in out))
+                out[p] = { file: e.file, offset: g.offset, size: g.size, inGob: true };
+            }
+          } else if (!lower.endsWith('.txt')) {
+            out[lower] = { file: e.file, offset: 0, size: e.file.size, inGob: false };
+          }
+        }
+        return out;
+      }
+
+      // The SHA-256 of a file or part of one, read once.
+      var digests = new WeakMap();
+      function digest(file, offset, size) {
+        var m = digests.get(file);
+        if (!m) digests.set(file, m = {});
+        var k = offset + ':' + size;
+        return m[k] || (m[k] = file.slice(offset, offset + size).arrayBuffer()
+          .then(function(b) { return crypto.subtle.digest('SHA-256', b); })
+          .then(function(h) { return Array.from(new Uint8Array(h)).join(','); }));
+      }
+
+      async function sameBytes(a, b) {
+        if (a.size !== b.size) return false;
+        if (a.file === b.file && a.offset === b.offset) return true;
+        // Two copies of one GOB: compare them whole, once, not entry by entry.
+        if (a.inGob && b.inGob && a.file.size === b.file.size && a.offset === b.offset &&
+            await digest(a.file, 0, a.file.size) === await digest(b.file, 0, b.file.size))
+          return true;
+        return await digest(a.file, a.offset, a.size) === await digest(b.file, b.offset, b.size);
+      }
+
+      // What each mod changes, and for each pair of mods, the files both
+      // change but differently, as "i,j" -> [paths]. Without WebCrypto (an
+      // http page that isn't local) nothing is compared.
+      async function findClashes(mods, files, ext) {
+        var clashes = {};
+        var contents = [];
+        for (var m of mods) contents.push(await modContents(m, files, ext));
+        if (typeof crypto === 'undefined' || !crypto.subtle) return { clashes: clashes, contents: contents };
+        for (var i = 0; i < mods.length; i++) {
+          for (var j = i + 1; j < mods.length; j++) {
+            var list = [];
+            for (var p in contents[i]) {
+              if (p in contents[j] && !(await sameBytes(contents[i][p], contents[j][p]))) list.push(p);
+            }
+            if (list.length) clashes[i + ',' + j] = list;
+          }
+        }
+        return { clashes: clashes, contents: contents };
+      }
+
+      // Mods saved from earlier games (mods.js keeps them), newest first.
+      function storedMods(game) {
+        return new Promise(function(resolve) {
+          var settled = false;
+          function done(list) {
+            if (settled) return;
+            settled = true;
+            resolve(list || []);
+          }
+          setTimeout(function() { done([]); }, 3000);
+          try {
+            var req = indexedDB.open('jkdf2mp-mods', 1);
+            req.onupgradeneeded = function() {
+              req.result.createObjectStore('meta', { keyPath: 'key' });
+              req.result.createObjectStore('data');
+            };
+            req.onsuccess = function() {
+              var db = req.result;
+              try {
+                var all = db.transaction('meta').objectStore('meta').getAll();
+                all.onsuccess = function() {
+                  db.close();
+                  var seen = {};
+                  done(all.result.filter(function(m) {
+                    if (m.game !== game || seen[m.sha256]) return false;
+                    return (seen[m.sha256] = true);
+                  }).sort(function(a, b) { return b.used - a.used; }));
+                };
+                all.onerror = function() { db.close(); done([]); };
+              } catch (e) {
+                db.close();
+                done([]);
+              }
+            };
+            req.onerror = req.onblocked = function() { done([]); };
+          } catch (e) {
+            done([]);
+          }
+        });
+      }
+
+      function megabytes(n) {
+        return n < 1048576 ? 'under 1 MB' : Math.round(n / 1048576) + ' MB';
+      }
+
+      // Asks which mods to start with. Every mod in the game folder starts
+      // ticked, every time. A mod saved from an online game is that host's
+      // whole set, so it starts unticked and runs on its own. Resolves to the
+      // ticked options, highest first.
+      function chooseMods(folderMods, saved, clashes) {
+        var options = folderMods.map(function(m, i) {
+          return { index: i, name: m.name, path: m.path,
+                   where: (m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
+                                    : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
+                          (m.bytes > 100 * 1048576 ? ". Too big to send: players need their own copy" : '') };
+        });
+        for (var s of saved) {
+          options.push({ name: s.name, path: 'netmods/' + s.sha256.substring(0, 16), saved: true,
+                         where: 'Saved from an online game, ' + megabytes(s.size) + '. Runs on its own' });
+        }
+
+        var list = modChoice.querySelector('.mod-list');
+        var note = modChoice.querySelector('.mod-clash');
+        list.textContent = '';
+        var inputs = options.map(function(o, i) {
+          var label = document.createElement('label');
+          var input = document.createElement('input');
+          input.type = 'checkbox';
+          input.value = String(i);
+          input.checked = !o.saved;
+          var text = document.createElement('span');
+          var name = document.createElement('b');
+          name.textContent = o.name;
+          var where = document.createElement('span');
+          where.className = 'where';
+          where.textContent = o.where;
+          text.append(name, where);
+          label.append(input, text);
+          list.appendChild(label);
+          return input;
+        });
+
+        function ticked() {
+          return options.filter(function(o, i) { return inputs[i].checked; });
+        }
+        function update() {
+          var on = ticked().filter(function(o) { return !o.saved; });
+          var lines = [];
+          for (var x = 0; x < on.length; x++) {
+            for (var y = x + 1; y < on.length; y++) {
+              var paths = clashes[on[x].index + ',' + on[y].index];
+              if (paths)
+                lines.push(on[x].name + ' and ' + on[y].name + ' both change ' +
+                           (paths.length === 1 ? paths[0] + '. ' + on[x].name + "'s version is used"
+                                               : paths.length + ' files, such as ' + paths[0] + '. ' + on[x].name + "'s versions are used") +
+                           ", since it's higher in the list.");
+            }
+          }
+          note.textContent = lines.join('\n');
+          note.hidden = !lines.length;
+        }
+        inputs.forEach(function(input, i) {
+          input.onchange = function() {
+            // A saved set runs on its own.
+            if (input.checked) {
+              inputs.forEach(function(other, j) {
+                if (j !== i && (options[i].saved || options[j].saved)) other.checked = false;
+              });
+            }
+            update();
+          };
+        });
+        update();
+
+        pickerTitle.textContent = 'Choose your mods';
+        picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
+        showPickerResult('');
+        modChoice.hidden = false;
+        var start = modChoice.querySelector('button.play');
+        start.focus();
+        return new Promise(function(resolve) {
+          start.onclick = function() {
+            start.onclick = null;
+            modChoice.hidden = true;
+            resolve(ticked());
+          };
+        });
+      }
+
+      // The name of several mods together, for the lobby (at most 63
+      // characters, mods.js).
+      function setName(names) {
+        for (var n = names.length; n > 1; n--) {
+          var name = names.slice(0, n).join(' + ') + (n < names.length ? ' + ' + (names.length - n) + ' more' : '');
+          if (name.length <= 63) return name;
+        }
+        return names[0].substring(0, 50) + ' + ' + (names.length - 1) + ' more';
+      }
+
+      // The ticked mods as one folder, since the engine takes one -path, as
+      // [{ rel, data }]. The higher a mod is in the list, the more it wins:
+      // its GOBs are numbered first, because the engine looks in GOBs in the
+      // order they were added, and a lower mod's loose file is left out when
+      // a higher mod has that file, because the engine reads loose files
+      // before any GOB. A GOB that's an exact copy of one already in is left
+      // out. files carry .mod (the mod's index), .rel and .data, and so does
+      // what comes back.
+      async function setFiles(picked, files, contents, ext) {
+        var out = [], taken = {}, spelling = {}, gobs = [];
+        var hash = typeof crypto !== 'undefined' && !!crypto.subtle;
+        // A file and a folder can't share a name, and each folder is spelled
+        // one way, as in onFolderPicked.
+        function add(rel, data, mod) {
+          var parts = rel.split('/'), lower = rel.toLowerCase(), keys = [], dir = '';
+          if (taken[lower]) return;
+          for (var k = 1; k < parts.length; k++) {
+            var key = lower.split('/').slice(0, k).join('/');
+            if (taken[key] === 'file') return;
+            keys.push(key);
+          }
+          keys.forEach(function(key, k) {
+            taken[key] = 'dir';
+            dir = spelling[key] || (spelling[key] = (dir ? dir + '/' : '') + parts[k]);
+          });
+          taken[lower] = 'file';
+          out.push({ rel: (dir ? dir + '/' : '') + parts[parts.length - 1], data: data, mod: mod });
+        }
+        for (var r = 0; r < picked.length; r++) {
+          var i = picked[r].index;
+          var prefix = String(r + 1).padStart(3, '0') + '-';
+          for (var e of files) {
+            if (e.mod !== i) continue;
+            var lower = e.rel.toLowerCase();
+            if (lower.indexOf('/') < 0 && lower.endsWith(ext)) {
+              var copy = false;
+              for (var g of gobs) {
+                if (g === e.file || (hash && g.size === e.file.size &&
+                    await digest(g, 0, g.size) === await digest(e.file, 0, e.file.size))) {
+                  copy = true;
+                  break;
+                }
+              }
+              if (copy) continue;
+              gobs.push(e.file);
+              add(prefix + e.rel, e.data, i);
+            } else if (!picked.slice(0, r).some(function(o) { return lower in contents[o.index]; })) {
+              add(e.rel, e.data, i);
+            }
+          }
+        }
+        return out;
+      }
+
       function showPickerResult(text, isError) {
         var el = document.getElementById('picker-result');
         el.textContent = text;
@@ -880,6 +1292,37 @@
         }
         for (var r of required) byLower[r.toLowerCase()].path = r;
 
+        // Each mod is loaded in its own folder under jkmods/, named so the
+        // engine's command line can carry it. One ticked mod starts with -path
+        // set to its folder; several are put together in jkmods/set. A path
+        // given in the address (?path=...) is left as it is.
+        var game = isMots ? 'mots' : 'jk1';
+        var ext = isMots ? '.goo' : '.gob';
+        var picked = null, found = { clashes: {}, contents: [] };
+        if (Module['arguments'].indexOf('-path') < 0) {
+          var folderMods = detectMods(files, isMots);
+          var saved = typeof indexedDB !== 'undefined' ? await storedMods(game) : [];
+          if (folderMods.length > 1) {
+            showPickerResult('Looking through your mods...');
+            found = await findClashes(folderMods, files, ext);
+          }
+          for (var e of files) {
+            var lower = e.path.toLowerCase();
+            for (var i = 0; i < folderMods.length; i++) {
+              var rel = folderMods[i].rel(lower, e.path);
+              if (rel) {
+                e.path = folderMods[i].path + '/' + rel;
+                e.mod = i;
+                e.rel = rel;
+                break;
+              }
+            }
+          }
+          Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
+          if (folderMods.length || saved.length)
+            picked = await chooseMods(folderMods, saved, found.clashes);
+        }
+
         readingFolder = true;
         chooseButton.setAttribute('aria-disabled', 'true');
         var totalBytes = files.reduce((n, e) => n + e.file.size, 0);
@@ -889,8 +1332,38 @@
           showPickerResult("Found your copy of " + (isMots ? "Mysteries of the Sith" : "Jedi Knight") +
                            ". Loading it into this tab (" + (i + 1) + " of " + files.length + " files, " +
                            Math.round(totalBytes / 1048576) + " MB)...");
-          loaded.push({ path: gameRoot + files[i].path, data: new Uint8Array(await files[i].file.arrayBuffer()) });
+          files[i].data = new Uint8Array(await files[i].file.arrayBuffer());
+          loaded.push({ path: gameRoot + files[i].path, data: files[i].data });
         }
+        // One ticked mod runs from its own folder. Several are put together
+        // in jkmods/set, sharing their files' data, unless only one of them
+        // adds anything, as when they're all copies of one mod.
+        var start = null;
+        if (picked && picked.length === 1) {
+          start = picked[0];
+        } else if (picked && picked.length > 1) {
+          var set = await setFiles(picked, files, found.contents, ext);
+          var from = picked.filter(function(o) { return set.some(function(e) { return e.mod === o.index; }); });
+          if (from.length === 1) {
+            start = from[0];
+          } else if (from.length > 1) {
+            start = { path: 'jkmods/set', name: setName(from.map(function(o) { return o.name; })) };
+            Module.jkModFolders.push({ name: start.name, path: start.path });
+            for (var e of set) loaded.push({ path: gameRoot + start.path + '/' + e.rel, data: e.data });
+          }
+        }
+        if (start) {
+          Module['arguments'].push('-path', start.path);
+          console.log('OpenJKDF2: starting with ' + start.name + ' (' + start.path + ')');
+        }
+        for (var e of files) e.data = null;
+        // A mod's files are written in the order mods.js unpacks them for a
+        // joiner, sorted, since the engine looks in GOBs in the order they
+        // were added. The game's own files keep the order they came in.
+        var modRoot = gameRoot + 'jkmods/';
+        loaded = loaded.filter(function(e) { return !e.path.startsWith(modRoot); }).concat(
+          loaded.filter(function(e) { return e.path.startsWith(modRoot); })
+                .sort(function(a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; }));
         var pickedPlayers = [];
         for (var e of playerFiles)
           pickedPlayers.push({ path: e.path, data: new Uint8Array(await e.file.arrayBuffer()) });
