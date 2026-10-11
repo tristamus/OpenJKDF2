@@ -134,13 +134,9 @@ static int Linux_stdFileClose(stdFile_t hGobFile)
 {
     int ret = fclose((FILE*)hGobFile);
 
-#ifdef ARCH_WASM
-    EM_ASM(
-        FS.syncfs(false, function (err) {
-            // Error
-        });
-    );
-#endif // ARCH_WASM
+    // Removed (WASM): an FS.syncfs(false) after every close, reads included.
+    // Saves are mounted with IDBFS autoPersist (main.c, index.html), which
+    // stores a file once it's closed after a write, one sync at a time.
 
     return ret;
 }
