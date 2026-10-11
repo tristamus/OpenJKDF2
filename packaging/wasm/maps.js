@@ -844,6 +844,12 @@
         return !!(net && net.mapDirect && net.mapDirect(1));
     }
 
+    // No direct link is coming when WebRTC is off in this browser.
+    function directPossible() {
+        var net = Module.jkNet;
+        return !(net && net.rtcEnabled && !net.rtcEnabled());
+    }
+
     function askInfo(j) {
         return new Promise(function(resolve, reject) {
             var started = Date.now();
@@ -922,7 +928,7 @@
 
         clearTimeout(checking);
         ui.show(j.label, 'Connecting to the host...', function() { abort('cancelled'); });
-        for (var waited = 0; waited < DIRECT_WAIT_MS && !directUp(); waited += 100)
+        for (var waited = 0; waited < DIRECT_WAIT_MS && directPossible() && !directUp(); waited += 100)
             await sleep(j, 100);
         var stream = await download(j, info, directUp() ? CHUNK_DIRECT : CHUNK_RELAY);
 

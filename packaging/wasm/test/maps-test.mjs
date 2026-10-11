@@ -311,10 +311,14 @@ test('through the relay, frames stay under its cap', async () => {
         joinFiles: { ...retailInstall },
         direct: false,
     });
+    // WebRTC off in the joiner's browser: no waiting for a direct link.
+    g.join.jkNet.rtcEnabled = () => false;
     g.host.jkMaps.host('ctf_big', 'gob');
     await hostReady(g.host);
+    const started = Date.now();
     g.join.jkMaps.fetch('ctf_big', 'gob');
     assert.equal(await waitState(g.join), 1);
+    assert.ok(Date.now() - started < 2500, 'waited for a direct link: ' + (Date.now() - started) + ' ms');
     assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_big.gob')), Buffer.from(big));
     assert.ok(g.log.every(f => f.via === 'relay'));
     const chunks = framesTo(g.log, 'join', 4);
