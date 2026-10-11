@@ -40,13 +40,13 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 - **No original game files are sent.** The original episodes are never offered. Any file inside a custom map that's an exact copy of a file from the original game is left out, and your browser fills it in from your own install. The rebuilt map must match the host's copy exactly (same SHA-256) before it's used. A map made only of original game files isn't sent at all.
 - This is the newest feature. It's live, but it hasn't been through a real custom-map match yet.
 
-### Mods (being tested)
+### Mods
 
 - Put each mod in its own folder inside your game folder, put its GOB in `Resource`, or turn it on in JK Patch Commander. After you pick the game folder, the page lists the mods it found and you choose one, or none. GOBs in `Resource` and `mods` that aren't the game's own count as one mod, and only load when you choose it, so a host always shares everything its game loads. The first time, that mod is chosen, or else JK Patch Commander's active patches. After that, your choice is remembered.
 - If you host with a mod, players who join get it from your browser the same way as a custom map: files from the original game are left out and filled in from their own copy, and the result must match your mod exactly (same SHA-256). Mods up to 100 MB are sent.
 - If you join a game with a different mod, or none, the game restarts in the same tab with the host's, and you join again from Multiplayer with that game already selected. The join screen says which mod a game uses.
 - Mods you got from a host are saved in your browser, so next time they load without a download and you can choose them to host.
-- This hasn't been tried yet with a real mod such as SBX, or between two players.
+- Tested with Saber Battle X between two browsers: the in-tab restart, a joiner getting the mod directly and through the lobby, and switching back to no mod.
 
 ### A landing page and clearer errors
 
@@ -90,7 +90,7 @@ Everything above is merged into the `web-mp` branch, and the live site is built 
 - [#6](https://github.com/tristamus/OpenJKDF2/pull/6): custom map downloads
 - [#8](https://github.com/tristamus/OpenJKDF2/pull/8): the landing page says custom maps you host are shared
 - [#12](https://github.com/tristamus/OpenJKDF2/pull/12): View Cutscenes and Expansions & Mods hidden from the main menu
-- [#13](https://github.com/tristamus/OpenJKDF2/pull/13): mods, shared with joiners (draft, being tested)
+- [#13](https://github.com/tristamus/OpenJKDF2/pull/13): mods, shared with joiners (tested, not merged yet)
 - The lobby's code, including the Firefox fix, is on the `main` branch of [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
 
 To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md`.
