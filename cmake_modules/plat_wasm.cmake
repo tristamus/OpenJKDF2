@@ -31,8 +31,9 @@ macro(plat_initialize)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${USE_FLAGS}")
     #set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling --preload-file ${PROJECT_SOURCE_DIR}/wasm_out@/ ")
     # FS is exported so the page shell (packaging/wasm/index.html) can write the
-    # player's own game files into MEMFS before main() runs.
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS ")
+    # player's own game files into MEMFS before main() runs. maps.js (map
+    # downloads for joiners) is bundled in, so it always matches the engine.
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ")
     set(CMAKE_EXECUTABLE_SUFFIX .js)
 
     # Added: jk.c's _wcslen(const char16_t*) is a plain `for(len=0;str[len];len++)` loop,
@@ -52,6 +53,7 @@ endmacro()
 
 macro(plat_link_and_package)
     target_link_libraries(${BIN_NAME} PRIVATE -lm -lSDL3 -lGL -lGLEW -lopenal -lidbfs.js)
+    set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js)
     target_link_libraries(sith_engine PRIVATE nlohmann_json::nlohmann_json)
 
     # Game files normally come from the player's own install, picked in the
