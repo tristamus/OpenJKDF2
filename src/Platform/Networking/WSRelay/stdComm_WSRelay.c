@@ -4,10 +4,11 @@
 // The browser can't open UDP sockets, so every player keeps one WebSocket to a
 // relay (jkdf2mp-bb-server/relay). The relay lists games, lets players join
 // them and passes WebRTC signaling between a host and its clients. Once a
-// client's data channel to the host is open, game packets go over it
-// (unordered, no retransmits, like the UDP the game was written for: sithComm
-// resends what has to arrive). Until then, or if WebRTC can't connect, packets
-// go through the relay instead.
+// client's data channel to the host is open, game packets go over it. The
+// channel is reliable and ordered, like GNS: over a lossy channel sithComm's
+// own resends could land after newer state (a death after the respawn) and
+// replay it. Until then, or if WebRTC can't connect, packets go through the
+// relay instead.
 //
 // The game side mirrors the GNS backend: a star with the host as id 1, clients
 // get ids 2..64, and every packet carries an 8-byte idFrom/idTo header. A
@@ -81,7 +82,7 @@ EM_JS(void, wsrelay_js_connect, (), {
             var p = net.peers[id];
             if (p) return p;
             var pc = new RTCPeerConnection({ iceServers: net.ice || Module['jkIceServers'] || [] });
-            var dc = pc.createDataChannel('jk', { negotiated: true, id: 0, ordered: false, maxRetransmits: 0 });
+            var dc = pc.createDataChannel('jk', { negotiated: true, id: 0 });
             dc.binaryType = 'arraybuffer';
             p = net.peers[id] = { pc: pc, dc: dc, open: false };
             var update = function() {
