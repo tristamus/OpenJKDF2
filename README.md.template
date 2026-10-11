@@ -70,18 +70,20 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ## Where the code is
 
-None of this is merged into the `web-mp` branch yet. Each change is an open pull request that builds on the one before it, and the live site is built from the top of that stack.
+Everything above is merged into the `web-mp` branch, and the live site is built from it. Each change came in as its own pull request:
 
 - [#1](https://github.com/tristamus/OpenJKDF2/pull/1): browser build from a clean checkout, game folder picker, folder-spelling and file-search fixes
 - [#2](https://github.com/tristamus/OpenJKDF2/pull/2): lobby networking over WebSockets
 - [#3](https://github.com/tristamus/OpenJKDF2/pull/3): direct WebRTC connections, the lying-down fix, browser checks
 - [#4](https://github.com/tristamus/OpenJKDF2/pull/4): characters and controls kept in the browser
+- [#9](https://github.com/tristamus/OpenJKDF2/pull/9): the landing page
 - [#5](https://github.com/tristamus/OpenJKDF2/pull/5): Mysteries of the Sith 16-bit textures
+- [#10](https://github.com/tristamus/OpenJKDF2/pull/10): Single Player hidden from the main menu
 - [#6](https://github.com/tristamus/OpenJKDF2/pull/6): custom map downloads
-- The landing page (`ee9d3d2`) and the hidden Single Player button (`afd3dc7`) are commits in the same stack without pull requests of their own.
-- The lobby's code, including the Firefox fix, is in open pull requests in [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server/pulls), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
+- [#8](https://github.com/tristamus/OpenJKDF2/pull/8): the landing page says custom maps you host are shared
+- The lobby's code, including the Firefox fix, is on the `main` branch of [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
 
-To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md` as updated in the pull requests above.
+To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md`.
 
 ## Credits
 
