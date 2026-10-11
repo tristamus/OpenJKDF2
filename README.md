@@ -29,7 +29,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ### Your characters and controls are kept
 
-- When you pick your game folder, the characters in its `player` folder come in with their controls, difficulty and weapon settings. This works for both games.
+- When you pick your game folder, the characters in its `player` folder come in with their controls and weapon settings. This works for both games.
 - Changes you make in the browser are saved in the browser and are there on your next visit. If a character is in both places, the browser's copy wins.
 - Display and sound settings don't carry over, because the original games keep them in the Windows registry rather than the game folder.
 
@@ -38,7 +38,6 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 - If the host is playing a custom (community-made) map you don't have, or a different version of it, your browser gets it from the host's browser before the level loads, over the direct link or, if that isn't up, passed through the lobby without being stored there. A panel shows the download's progress, or why it couldn't happen.
 - The map is saved in your browser, so next time it loads right away and you can host it too.
 - **No original game files are sent.** The original episodes are never offered. Any file inside a custom map that's an exact copy of a file from the original game is left out, and your browser fills it in from your own install. The rebuilt map must match the host's copy exactly (same SHA-256) before it's used. A map made only of original game files isn't sent at all.
-- This is the newest feature. It's live, but it hasn't been through a real custom-map match yet.
 
 ### A landing page and clearer errors
 
