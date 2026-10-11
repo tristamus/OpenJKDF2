@@ -1,0 +1,47 @@
+name: WebAssembly
+
+on:
+  push:
+    branches:
+      - web-mp
+  pull_request:
+    branches:
+      - web-mp
+
+jobs:
+  build:
+
+    runs-on: ubuntu-24.04
+
+    env:
+      EMSDK_VERSION: 6.0.12
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout
+      # The WASM target only builds zlib and libpng from submodules; SDL3, OpenAL
+      # and GL come from Emscripten itself.
+      - name: Checkout submodules
+        run: git submodule update --init --depth 1 lib/zlib lib/libpng
+      - name: Install Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+      - name: Generate CMake Build System
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          cmake -B build_emcc --toolchain cmake_modules/toolchain_wasm.cmake
+      - name: Make
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          make -C build_emcc -j"$(nproc)"
+      # Engine and page only. No game files are ever part of this artifact:
+      # players pick their own install folder in the page.
+      - name: Collect web build
+        run: |
+          mkdir -p web
+          cp packaging/wasm/index.html build_emcc/openjkdf2.js build_emcc/openjkdf2.wasm web/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openjkdf2-wasm
+          path: web/

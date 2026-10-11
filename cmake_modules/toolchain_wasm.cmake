@@ -11,7 +11,11 @@ set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
-set(PLAT_WASM TRUE)
+# Cache entry, not a normal variable: CMakeLists.txt later declares
+# set(PLAT_WASM FALSE CACHE ...), and under cmake_minimum_required(3.20)
+# (CMP0126 OLD) creating that cache entry drops a same-named normal variable,
+# so a fresh configure used to fail with "Unknown platform!".
+set(PLAT_WASM TRUE CACHE BOOL "Emscripten WASM target" FORCE)
 set(SDL2_MIXER_INCLUDE_DIR "")
 
 message( STATUS "Emscripten toolchain invoked" )
