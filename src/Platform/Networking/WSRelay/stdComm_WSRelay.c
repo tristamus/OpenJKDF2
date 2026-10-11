@@ -26,6 +26,11 @@
 // answer ({"d": ...}) or an ICE candidate ({"c": ...}) for signal, and the
 // RTCPeerConnection iceServers list for ice. The JS below handles signal and
 // ice itself; the engine never sees them.
+//
+// A joiner who doesn't have the host's map gets it from the host before the
+// level loads (packaging/wasm/maps.js, bundled into this module). Its frames
+// travel like game packets, over a second data channel or the relay, and the
+// JS hands them to maps.js before the engine's queue.
 
 #include "stdComm_WSRelay.h"
 
@@ -84,7 +89,11 @@ EM_JS(void, wsrelay_js_connect, (), {
             var pc = new RTCPeerConnection({ iceServers: net.ice || Module['jkIceServers'] || [] });
             var dc = pc.createDataChannel('jk', { negotiated: true, id: 0 });
             dc.binaryType = 'arraybuffer';
-            p = net.peers[id] = { pc: pc, dc: dc, open: false };
+            // Map downloads get their own channel, so one never holds up game
+            // packets.
+            var mc = pc.createDataChannel('jk-map', { negotiated: true, id: 1 });
+            mc.binaryType = 'arraybuffer';
+            p = net.peers[id] = { pc: pc, dc: dc, mc: mc, open: false };
             var update = function() {
                 if (net.peers[id] !== p) return;
                 var was = p.open;
@@ -97,6 +106,7 @@ EM_JS(void, wsrelay_js_connect, (), {
             dc.onclose = update;
             pc.onconnectionstatechange = update;
             dc.onmessage = function(ev) { if (net.peers[id] === p) net.onPeerPacket(id, ev.data); };
+            mc.onmessage = function(ev) { if (net.peers[id] === p && Module.jkMaps) Module.jkMaps.onFrame(id, ev.data, 'direct'); };
             pc.onicecandidate = function(ev) { if (ev.candidate && net.peers[id] === p) net.signal(id, { c: ev.candidate.toJSON() }); };
             return p;
         };
@@ -107,6 +117,7 @@ EM_JS(void, wsrelay_js_connect, (), {
             delete net.peers[id];
             p.open = false;
             try { p.dc.close(); } catch (e) {}
+            try { p.mc.close(); } catch (e) {}
             try { p.pc.close(); } catch (e) {}
         };
 
@@ -176,6 +187,27 @@ EM_JS(void, wsrelay_js_connect, (), {
             return 1;
         };
 
+        /* Map download frames: over the map channel unless via is 'relay' or
+           the channel isn't open, else through the relay. Returns the way it
+           went, or null. */
+        net.mapSend = function(id, bytes, via) {
+            var p = net.peers[id];
+            if (via !== 'relay' && net.mapDirect(id)) {
+                try {
+                    p.mc.send(bytes);
+                    return 'direct';
+                } catch (e) {}
+            }
+            if (net.state !== 1) return null;
+            net.ws.send(bytes);
+            return 'relay';
+        };
+
+        net.mapDirect = function(id) {
+            var p = net.peers[id];
+            return !!(p && p.open && p.mc.readyState === 'open');
+        };
+
         /* Returns true for the lines JS handles itself. */
         net.onText = function(text) {
             var sp = text.indexOf(' ');
@@ -236,6 +268,9 @@ EM_JS(void, wsrelay_js_connect, (), {
         if (net.ws !== ws) return;
         if (typeof ev.data === 'string') {
             if (net.onText(ev.data)) return;
+        } else if (Module.jkMaps && Module.jkMaps.isFrame(ev.data)) {
+            Module.jkMaps.onFrame(new DataView(ev.data).getUint32(0, true), ev.data, 'relay');
+            return;
         } else {
             net.stats.wsRecv++;
         }
@@ -279,6 +314,32 @@ EM_JS(void, wsrelay_js_rtc_end, (), {
     if (!net) return;
     net.closeAll();
     net.isHost = false;
+});
+
+#define WSRELAY_MAP_BUSY (0)
+#define WSRELAY_MAP_READY (1)
+#define WSRELAY_MAP_FAILED (2)
+
+// Starts getting the host's episode GOB, if this player doesn't have it.
+EM_JS(void, wsrelay_js_map_fetch, (const char* pName, const char* pExt), {
+    if (Module.jkMaps) Module.jkMaps.fetch(UTF8ToString(pName), UTF8ToString(pExt));
+});
+
+EM_JS(int, wsrelay_js_map_state, (), {
+    return Module.jkMaps ? Module.jkMaps.state() : 1;
+});
+
+EM_JS(void, wsrelay_js_map_abort, (const char* pReason), {
+    if (Module.jkMaps) Module.jkMaps.abort(UTF8ToString(pReason));
+});
+
+// Gets our episode ready to send to joiners who don't have it.
+EM_JS(void, wsrelay_js_map_host, (const char* pName, const char* pExt), {
+    if (Module.jkMaps) Module.jkMaps.host(UTF8ToString(pName), UTF8ToString(pExt));
+});
+
+EM_JS(void, wsrelay_js_map_unhost, (), {
+    if (Module.jkMaps) Module.jkMaps.unhost();
 });
 
 // Pops one queued message into pOut. Returns its length, or -1 if the queue is
@@ -396,6 +457,7 @@ static void wsrelay_ResetSession()
     wsrelay_id = 0xFFFFFFFF;
     wsrelay_numDisconnected = 0;
     wsrelay_js_rtc_end();
+    wsrelay_js_map_unhost();
 }
 
 // Same count GNSServer::RealConnectedPlayers reports to joining clients.
@@ -604,6 +666,29 @@ static int wsrelay_WaitForChange(int* pFlag, int timeoutMs)
         emscripten_sleep(10);
     }
     return 0;
+}
+
+// Makes sure the host's episode is installed, getting it from the host if it's
+// missing or another version. Returns 0 if it couldn't be; maps.js has told
+// the player why.
+static int wsrelay_GetHostMap(const char* pEpisode)
+{
+    char name[32];
+    stdString_SafeStrCopy(name, pEpisode, sizeof(name));
+    wsrelay_js_map_fetch(name, JKRES_GOB_EXT);
+
+    int state;
+    while ((state = wsrelay_js_map_state()) == WSRELAY_MAP_BUSY)
+    {
+        wsrelay_PumpControl();
+        if (wsrelay_bHostLeft)
+            wsrelay_js_map_abort("host-left");
+        else if (wsrelay_js_state() != WSRELAY_STATE_OPEN)
+            wsrelay_js_map_abort("lobby-lost");
+        else
+            emscripten_sleep(10);
+    }
+    return state == WSRELAY_MAP_READY;
 }
 
 static int wsrelay_EnsureOpen(int timeoutMs)
@@ -822,6 +907,16 @@ int stdComm_Open(int idx, char16_t* pwPassword)
 
     wsrelay_room = wsrelay_aShownRooms[idx];
     wsrelay_js_rtc_begin(0);
+
+    // Before the level loads, which needs the map. The direct link the map
+    // can come over is starting up now.
+    if (!wsrelay_GetHostMap(wsrelay_storedEntryEnum.episodeGobName))
+    {
+        wsrelay_SendText("leave");
+        wsrelay_ResetSession();
+        return 0x80004005; // GUINET_NOGAMECONNECT
+    }
+
     Hack_ResetClients();
     return 0;
 }
@@ -905,6 +1000,10 @@ int DirectPlay_OpenHost(jkMultiEntry* pEntry)
     {
         stdPlatform_Printf("OpenJKDF2: The relay didn't open a room, hosting offline.\n");
         wsrelay_bHostPending = 0;
+    }
+    else
+    {
+        wsrelay_js_map_host(wsrelay_storedEntry.episodeGobName, JKRES_GOB_EXT);
     }
 
     return 0;

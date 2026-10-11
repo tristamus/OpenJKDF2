@@ -35,6 +35,12 @@ jobs:
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           make -C build_emcc -j"$(nproc)"
+      # Map downloads for joiners, with made-up GOBs (no game files).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test map downloads
+        run: node packaging/wasm/test/maps-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build
