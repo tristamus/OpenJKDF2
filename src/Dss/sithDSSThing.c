@@ -227,7 +227,15 @@ int sithDSSThing_ProcessStateUpdate(SithMessage *pMsg)
 
     uint32_t flags = NETMSG_POPS32();
     if ( pThing->type == SITH_THING_PLAYER && (pThing->flags & SITH_TF_DEAD) && !(flags & SITH_TF_DEAD) && MOTS_ONLY_COND(pThing != sithPlayer_g_pLocalPlayerThing))
+    {
+        // Added: a player who was dead when we joined got their death pose from
+        // sithDSS_ProcessPuppetStatus, which doesn't record its track in
+        // field_18, so sithPlayer_NewPlayer couldn't stop it and they ran
+        // around lying down. They've respawned, so drop every stale track.
+        if (pThing->renderData.puppet && pThing->puppet)
+            sithPuppet_ResetTrack(pThing);
         sithPlayer_debug_loadauto(pThing);
+    }
     
     // Lol, anticheat?
     if ( (pThing->flags & SITH_TF_INVULN) != 0 )
