@@ -41,6 +41,9 @@ jobs:
           node-version: 22
       - name: Test map downloads
         run: node packaging/wasm/test/maps-test.mjs
+      # The host's mod for joiners, with made-up files (no game files).
+      - name: Test mod sharing
+        run: node packaging/wasm/test/mods-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build
