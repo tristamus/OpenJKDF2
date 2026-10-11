@@ -200,18 +200,20 @@ The default deployment target is **iOS 18.0**, and Signing is ad-hoc by default.
 <details>
   <summary>Emscripten/WebAssembly</summary>
 
-WASM builds are semi-supported, but break often. The last tested tag for WASM is `v0.2.0`.
-
-```
-mkdir -p wasm_out
-```
-
-Copy your `episode/` and `resource/` directory to `wasm_out`, then
+WASM builds are semi-supported, but break often. Tested to compile with Emscripten 6.0.12.
 
 ```
 chmod +x ./build_run_openjkdf2_wasm.sh
 ./build_run_openjkdf2_wasm.sh
 ```
+
+Serve `wasm_out/` over HTTP and open `index.html`. The page asks for the folder containing your
+game's `episode/` and `resource/` directories and reads those files in the browser; nothing is
+uploaded and no game files are part of the build.
+
+For local testing only, configure with `-DOPENJKDF2_WASM_PRELOAD_DATA=ON` after copying your
+`jk1/` (and/or `mots/`) game folders into `wasm_out/`, then open `index.html#bundled`. That bakes the
+game files into `openjkdf2_data.data`, so never publish a build made this way.
 </details>
 
 <details>

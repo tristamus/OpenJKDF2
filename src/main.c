@@ -385,10 +385,13 @@ int main(int argc, char** argv)
 #endif
 #ifdef ARCH_WASM
     EM_ASM(
-        FS.mkdir('/jk1/player');
-        FS.mkdir('/mots/player');
-        FS.mkdir('/jk1/persist');
-        FS.mkdir('/mots/persist');
+        // Added: mkdirTree, since /jk1 and /mots are no longer guaranteed to
+        // exist from a preloaded data package (the page shell writes the
+        // player's own files there), and it tolerates dirs that already exist.
+        FS.mkdirTree('/jk1/player');
+        FS.mkdirTree('/mots/player');
+        FS.mkdirTree('/jk1/persist');
+        FS.mkdirTree('/mots/persist');
 
         //FS.mount(NODEFS, { root: './jk1/episode' }, '/jk1/episode');
         //FS.createLazyFile('/jk1/episode', "jk1demo.gob", "jk1/episode/jk1demo.gob", true, false);

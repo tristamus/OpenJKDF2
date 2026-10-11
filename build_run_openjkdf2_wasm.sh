@@ -35,10 +35,14 @@ popd
 cp packaging/wasm/index.html wasm_out/index.html
 cp build_emcc/openjkdf2.js wasm_out/openjkdf2.js
 cp build_emcc/openjkdf2.wasm wasm_out/openjkdf2.wasm
-cp build_emcc/openjkdf2_data.js wasm_out/openjkdf2_data.js
-cp build_emcc/openjkdf2_data.data wasm_out/openjkdf2_data.data
-
-gsed -i 's/var hasByteServing/var hasByteServing = false;\/\//g' wasm_out/openjkdf2.js
+# Only present when configured with -DOPENJKDF2_WASM_PRELOAD_DATA=ON (local testing;
+# the package contains game assets, never publish it). Otherwise the page asks the
+# player for their own game folder.
+if [ -f build_emcc/openjkdf2_data.data ]; then
+    cp build_emcc/openjkdf2_data.js wasm_out/openjkdf2_data.js
+    cp build_emcc/openjkdf2_data.data wasm_out/openjkdf2_data.data
+    gsed -i 's/var hasByteServing/var hasByteServing = false;\/\//g' wasm_out/openjkdf2.js
+fi
 
 # Update maxthomas.dev/openjkdf2, if you're me
 whodis=$(whoami)

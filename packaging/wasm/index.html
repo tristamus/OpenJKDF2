@@ -109,6 +109,33 @@
         font-family: 'Lucida Console', Monaco, monospace;
         outline: none;
       }
+      #picker {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        background-color: #111;
+        color: #eee;
+        font-family: arial, sans-serif;
+      }
+      #picker .panel { max-width: 560px; width: 100%; line-height: 1.45; }
+      #picker h1 { font-size: 22px; margin: 0 0 12px; }
+      #picker p { margin: 0 0 12px; color: #bbb; }
+      #picker label.button {
+        display: inline-block;
+        padding: 10px 16px;
+        border-radius: 6px;
+        background-color: #3a6fd8;
+        color: #fff;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      #picker input[type=file] { display: none; }
+      #picker-result { margin-top: 16px; white-space: pre-line; }
+      #picker-result.error { color: #ff8a80; }
     </style>
   </head>
   <body>
@@ -129,6 +156,18 @@
   </span>
 </span>
     <textarea id="output" rows="8"></textarea>
+    <div id="picker">
+      <div class="panel">
+        <h1>Choose your game folder</h1>
+        <p>Pick the folder where Jedi Knight: Dark Forces II or Mysteries of the Sith is installed
+          (the one that contains <code>episode</code> and <code>resource</code>).
+          OpenJKDF2 does not include any game files.</p>
+        <p>Your files are read by this page only. Nothing is uploaded.</p>
+        <label class="button" for="gamedir">Choose folder</label>
+        <input type="file" id="gamedir" webkitdirectory multiple>
+        <div id="picker-result"></div>
+      </div>
+    </div>
 
     <script type='text/javascript'>
       var statusElement = document.getElementById('status');
@@ -202,11 +241,9 @@
         }
       };
       Module.setStatus('Downloading...');
-      Module['arguments'] = window.location.search.substr(1).replaceAll("=", " ").split('&');
-      Module['arguments'] = Module['arguments'].map(i => '-' + i);
-      if (Module['arguments'] == "-") {
-        Module['arguments'] = "";
-      }
+      Module['arguments'] = window.location.search.substr(1).split('&')
+        .filter(i => i.length)
+        .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
         Module.setStatus('Exception thrown, see JavaScript console');
@@ -225,8 +262,127 @@
           canvas.style.height = window.innerHeight;
       }
     </script>
-    <script async type="text/javascript" src="openjkdf2_data.js"></script>
-    <script async type="text/javascript" src="openjkdf2.js"></script>
+    <script type='text/javascript'>
+      // Files every install needs, spelled the way the engine opens them
+      // (src/Main/InstallHelper.c, aRequiredAssets / aRequiredAssetsMots).
+      // MEMFS is case-sensitive, so picked files are renamed to these spellings.
+      var REQUIRED_JK = ["episode/JK1.gob", "episode/JK1CTF.gob", "episode/JK1MP.gob",
+                         "resource/Res1hi.gob", "resource/Res2.gob", "resource/jk_.cd"];
+      var REQUIRED_MOTS = ["episode/JKM_KFY.goo", "episode/JKM_MP.goo", "episode/JKM_SABER.goo",
+                           "episode/JKM.goo", "resource/Jkmres.goo", "resource/JKMsndLO.goo",
+                           "resource/jk_.cd"];
+
+      // Not copied into memory: player/ is the browser's own save storage (IDBFS,
+      // mounted in main.c), and the WASM build skips cutscenes (jkCutscene.c) and
+      // has music disabled (stdMci.c), so videos and soundtrack only cost memory.
+      function isSkipped(lowerPath) {
+        return lowerPath.startsWith("player/") ||
+               lowerPath.startsWith("resource/video/") ||
+               lowerPath.startsWith("music/") ||
+               /\.(exe|dll|ico|ini|txt|url|pdf|htm|html)$/.test(lowerPath);
+      }
+
+      function loadEngine(withBundledData) {
+        if (withBundledData) {
+          var data = document.createElement('script');
+          data.src = 'openjkdf2_data.js';
+          document.body.appendChild(data);
+        }
+        var engine = document.createElement('script');
+        engine.src = 'openjkdf2.js';
+        document.body.appendChild(engine);
+      }
+
+      function showPickerResult(text, isError) {
+        var el = document.getElementById('picker-result');
+        el.textContent = text;
+        el.className = isError ? 'error' : '';
+      }
+
+      async function onFolderPicked(fileList) {
+        // webkitRelativePath is "<picked folder>/episode/JK1.gob"; drop the first segment.
+        var files = [];
+        for (var f of fileList) {
+          var rel = f.webkitRelativePath.split('/').slice(1).join('/');
+          if (!rel || isSkipped(rel.toLowerCase())) continue;
+          files.push({ path: rel, file: f });
+        }
+
+        var byLower = {};
+        for (var e of files) byLower[e.path.toLowerCase()] = e;
+        var isMots = REQUIRED_MOTS.some(r => r.endsWith('.goo') && byLower[r.toLowerCase()]);
+        var required = isMots ? REQUIRED_MOTS : REQUIRED_JK;
+        var missing = required.filter(r => !byLower[r.toLowerCase()]);
+        if (missing.length) {
+          showPickerResult("That folder is missing files the game needs:\n" + missing.join("\n") +
+                           "\n\nPick the folder that contains episode and resource.", true);
+          return;
+        }
+        // Windows folders ignore case but MEMFS doesn't, so "Episode/AODpc.gob" and
+        // a renamed "episode/JK1MP.gob" would land in two sibling folders. The
+        // engine's casepath() then only lists whichever folder it finds first,
+        // hiding the other one's files. Spell every folder one way: the required
+        // list's spelling where it has one, else the first spelling seen.
+        var dirSpelling = {};
+        for (var r of required) {
+          var rd = r.substring(0, r.lastIndexOf('/'));
+          dirSpelling[rd.toLowerCase()] = rd;
+        }
+        for (var e of files) {
+          var parts = e.path.split('/');
+          var dir = "";
+          for (var p = 0; p < parts.length - 1; p++) {
+            dir = dir ? dir + '/' + parts[p] : parts[p];
+            var key = dir.toLowerCase();
+            if (!(key in dirSpelling)) dirSpelling[key] = dir;
+            dir = dirSpelling[key];
+          }
+          e.path = dir ? dir + '/' + parts[parts.length - 1] : parts[parts.length - 1];
+        }
+        for (var r of required) byLower[r.toLowerCase()].path = r;
+
+        var totalBytes = files.reduce((n, e) => n + e.file.size, 0);
+        var gameRoot = isMots ? '/mots/' : '/jk1/';
+        var loaded = [];
+        for (var i = 0; i < files.length; i++) {
+          showPickerResult("Reading " + (isMots ? "Mysteries of the Sith" : "Jedi Knight") + " files (" +
+                           (i + 1) + " of " + files.length + ", " + Math.round(totalBytes / 1048576) + " MB)...");
+          loaded.push({ path: gameRoot + files[i].path, data: new Uint8Array(await files[i].file.arrayBuffer()) });
+        }
+
+        Module.preRun.push(function() {
+          var FS = Module.FS;
+          FS.mkdirTree('/jk1');
+          FS.mkdirTree('/mots');
+          for (var e of loaded) {
+            FS.mkdirTree(e.path.substring(0, e.path.lastIndexOf('/')));
+            FS.writeFile(e.path, e.data, { canOwn: true });
+          }
+          loaded = null;
+        });
+        if (isMots && Module['arguments'].indexOf('-motsCompat') < 0) {
+          Module['arguments'].push('-motsCompat');
+        }
+
+        document.getElementById('picker').style.display = 'none';
+        loadEngine(false);
+      }
+
+      document.getElementById('gamedir').addEventListener('change', function(ev) {
+        onFolderPicked(ev.target.files).catch(function(err) {
+          showPickerResult("Could not read that folder: " + err, true);
+        });
+      });
+
+      // Local testing with a build made with -DOPENJKDF2_WASM_PRELOAD_DATA=ON:
+      // open index.html#bundled to use the baked-in openjkdf2_data.data instead.
+      if (window.location.hash === '#bundled') {
+        document.getElementById('picker').style.display = 'none';
+        loadEngine(true);
+      } else {
+        Module.setStatus('Waiting for game folder...');
+      }
+    </script>
   </body>
 </html>
 
