@@ -30,6 +30,11 @@
 #include "Main/sithCvar.h"
 #include "stdPlatform.h"
 
+// Added: the browser build is multiplayer-only, so its main menu hides Single Player.
+#if defined(ARCH_WASM)
+#define JKGUIMAIN_HIDE_SINGLEPLAYER
+#endif
+
 // Added
 extern int jkCredits_cdOverride;
 static char16_t jkGuiMain_versionBuffer[64];
@@ -116,6 +121,15 @@ void jkGuiMain_Show()
         jkGuiMain_elements[6].rect.y = 420+5;
 #endif
     }
+
+#ifdef JKGUIMAIN_HIDE_SINGLEPLAYER
+    // Added: a hidden element can't be drawn, clicked, focused or hotkeyed, so the
+    // Single Player handler below stays in place but is unreachable. Multiplayer
+    // and Quit move up half a slot so the pair stays centered where the three were.
+    jkGuiMain_elements[0].bIsVisible = 0;
+    jkGuiMain_elements[1].rect.y -= 30;
+    jkGuiMain_elements[2].rect.y -= 30;
+#endif
 
 #ifdef JKGUI_SMOL_SCREEN
     for (int i = 0; i < 11; i++) {
