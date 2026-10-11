@@ -65,7 +65,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ## Planned
 
-- **A bridge to desktop players (DirectPlay).** There's a written plan for a small bridge program so OpenJKDF2 desktop players can join browser games, and possibly the original `JK.EXE` after that. Nothing is built yet.
+- **A bridge to desktop players (DirectPlay).** There's a written plan for a small bridge program so OpenJKDF2 desktop players can join browser games, and possibly the original `JK.EXE` after that. Nothing is built yet. This would cost me money, so I won't move forward with this unless I see a lot of traction with this game.
 
 ## Where the code is
 
