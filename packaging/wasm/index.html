@@ -278,12 +278,11 @@
                            "episode/JKM.goo", "resource/Jkmres.goo", "resource/JKMsndLO.goo",
                            "resource/jk_.cd"];
 
-      // Not copied into memory: player/ is the browser's own save storage (IDBFS,
-      // mounted in main.c), and the WASM build skips cutscenes (jkCutscene.c) and
+      // Not copied into memory: the WASM build skips cutscenes (jkCutscene.c) and
       // has music disabled (stdMci.c), so videos and soundtrack only cost memory.
+      // player/ is handled on its own: see importPlayers.
       function isSkipped(lowerPath) {
-        return lowerPath.startsWith("player/") ||
-               lowerPath.startsWith("resource/video/") ||
+        return lowerPath.startsWith("resource/video/") ||
                lowerPath.startsWith("music/") ||
                /\.(exe|dll|ico|ini|txt|url|pdf|htm|html)$/.test(lowerPath);
       }
@@ -331,6 +330,51 @@
         return null;
       }
 
+      // Characters (player/<name>/: the .plr with controls, difficulty and
+      // weapon settings, plus saved games) and OpenJKDF2's settings (persist/)
+      // live in the browser's IndexedDB, one store per site. They're mounted
+      // and loaded before the engine starts, so it never reads an empty folder
+      // or saves over what's stored. Every file is stored again when the engine
+      // closes it after a write (autoPersist).
+      var SAVE_DIRS = ['/jk1/player', '/mots/player', '/jk1/persist', '/mots/persist'];
+
+      function mountSaves(FS, picked, gameRoot) {
+        var IDBFS = FS.filesystems.IDBFS;
+        for (var dir of SAVE_DIRS) {
+          FS.mkdirTree(dir);
+          FS.mount(IDBFS, { autoPersist: true }, dir);
+        }
+        Module.jkSavesMounted = true;  // main.c leaves them alone
+        Module.addRunDependency('saves');
+        FS.syncfs(true, function(err) {
+          if (err)
+            console.warn('OpenJKDF2: could not load saved characters (' + err + '), they will only last until the page closes');
+          importPlayers(FS, picked, gameRoot + 'player');
+          Module.removeRunDependency('saves');
+        });
+      }
+
+      // Brings in the characters from the picked install's player folder, so
+      // nobody has to make their character or set up controls again. A
+      // character the browser already has is kept as is, since it holds the
+      // changes made here.
+      function importPlayers(FS, picked, playerDir) {
+        var have = {};
+        for (var name of FS.readdir(playerDir)) have[name.toLowerCase()] = true;
+        var added = {};
+        for (var e of picked) {
+          var name = e.path.split('/')[0];
+          if (have[name.toLowerCase()]) continue;
+          var path = playerDir + '/' + e.path;
+          FS.mkdirTree(path.substring(0, path.lastIndexOf('/')));
+          FS.writeFile(path, e.data, { canOwn: true });
+          added[name] = true;
+        }
+        var names = Object.keys(added);
+        if (names.length)
+          console.log('OpenJKDF2: added characters from the game folder: ' + names.join(', '));
+      }
+
       function showPickerResult(text, isError) {
         var el = document.getElementById('picker-result');
         el.textContent = text;
@@ -340,10 +384,14 @@
       async function onFolderPicked(fileList) {
         // webkitRelativePath is "<picked folder>/episode/JK1.gob"; drop the first segment.
         var files = [];
+        var playerFiles = [];
         for (var f of fileList) {
           var rel = f.webkitRelativePath.split('/').slice(1).join('/');
           if (!rel || isSkipped(rel.toLowerCase())) continue;
-          files.push({ path: rel, file: f });
+          // player/<name>/... only; loose files in player/ aren't characters.
+          var m = rel.match(/^player\/([^\/]+\/.+)$/i);
+          if (m) playerFiles.push({ path: m[1], file: f });
+          else if (!/^player\//i.test(rel)) files.push({ path: rel, file: f });
         }
 
         var byLower = {};
@@ -387,6 +435,9 @@
                            (i + 1) + " of " + files.length + ", " + Math.round(totalBytes / 1048576) + " MB)...");
           loaded.push({ path: gameRoot + files[i].path, data: new Uint8Array(await files[i].file.arrayBuffer()) });
         }
+        var pickedPlayers = [];
+        for (var e of playerFiles)
+          pickedPlayers.push({ path: e.path, data: new Uint8Array(await e.file.arrayBuffer()) });
 
         Module.preRun.push(function() {
           var FS = Module.FS;
@@ -397,6 +448,7 @@
             FS.writeFile(e.path, e.data, { canOwn: true });
           }
           loaded = null;
+          mountSaves(FS, pickedPlayers, gameRoot);
         });
         if (isMots && Module['arguments'].indexOf('-motsCompat') < 0) {
           Module['arguments'].push('-motsCompat');

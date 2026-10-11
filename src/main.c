@@ -385,6 +385,13 @@ int main(int argc, char** argv)
 #endif
 #ifdef ARCH_WASM
     EM_ASM(
+        // Added: the page (packaging/wasm/index.html) mounts the saves and
+        // waits for them to load before starting the engine. Loading them
+        // here doesn't finish before the engine starts reading and writing
+        // saves, and a write then could save over everything stored.
+        if (Module.jkSavesMounted)
+            return;
+
         // Added: mkdirTree, since /jk1 and /mots are no longer guaranteed to
         // exist from a preloaded data package (the page shell writes the
         // player's own files there), and it tolerates dirs that already exist.
@@ -397,10 +404,12 @@ int main(int argc, char** argv)
         //FS.createLazyFile('/jk1/episode', "jk1demo.gob", "jk1/episode/jk1demo.gob", true, false);
         //FS.createLazyFile('/jk1/episode', "jk1mpdem.gob", "jk1/episode/jk1mpdem.gob", true, false);
 
-        FS.mount(IDBFS, {}, '/jk1/player');
-        FS.mount(IDBFS, {}, '/mots/player');
-        FS.mount(IDBFS, {}, '/jk1/persist');
-        FS.mount(IDBFS, {}, '/mots/persist');
+        // Added: autoPersist saves each file to IndexedDB when it's closed
+        // after a write, one sync at a time.
+        FS.mount(IDBFS, { autoPersist: true }, '/jk1/player');
+        FS.mount(IDBFS, { autoPersist: true }, '/mots/player');
+        FS.mount(IDBFS, { autoPersist: true }, '/jk1/persist');
+        FS.mount(IDBFS, { autoPersist: true }, '/mots/persist');
 
         // Then sync
         FS.syncfs(true, function (err) {
