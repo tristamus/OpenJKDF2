@@ -1,3 +1,96 @@
+# jkdf2mp: Jedi Knight multiplayer in your browser
+
+**Play: https://jkdf2mp.jkdf2mp-lobby.workers.dev/** (desktop Chrome or Firefox, plus your own copy of the game)
+
+This fork of [OpenJKDF2](https://github.com/shinyquagsire23/OpenJKDF2) lets you play **Star Wars Jedi Knight: Dark Forces II** and **Mysteries of the Sith** multiplayer in a web browser. Open the page, pick the folder where the game is installed, then host a match or join one from the game's own Multiplayer menu. There's nothing to install and no port forwarding to set up.
+
+jkdf2mp is a free fan project. It isn't affiliated with or endorsed by Lucasfilm or Disney.
+
+## Bring your own copy of the game
+
+- **No game files come with it.** This repository, the web build and the website contain no files from the original games. You need the game installed on your computer, for example from [Steam](https://store.steampowered.com/app/32380/STAR_WARS_Jedi_Knight_Dark_Forces_II/) or [GOG](https://www.gog.com/game/star_wars_jedi_knight_dark_forces_ii).
+- **Nothing is uploaded.** When you pick your game folder, the page reads the files inside your browser tab and loads them into the game there. They aren't sent to the lobby server. Your browser may call this "upload"; that's only its wording for letting a page read a folder.
+- **The one exception is custom maps,** and even then no original game files are sent. See [custom maps](#custom-maps-download-automatically) below.
+
+## What it adds to OpenJKDF2
+
+OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, and it needed the game files baked into the download, which can't be shared publicly. This fork adds the following.
+
+### Online multiplayer
+
+- **Host or join in the browser.** The Join screen lists every game on the lobby, with its map, episode and player count.
+- **Direct connections, with a fallback.** Once you join, your browser links straight to the host's browser over WebRTC and game traffic goes over that link. If a direct link can't be made, traffic goes through the lobby server instead, so you can still play, with more lag.
+- **An always-on lobby.** The lobby runs on Cloudflare's free Workers plan, so it's up without anyone's PC being on. It lists games, helps browsers connect to each other, and relays traffic for players who can't connect directly. It never stores or serves game files. Its source is in [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), which also has `relay.py`, a one-file Python lobby for running your own on your PC or local network.
+
+### Mysteries of the Sith
+
+- Pick your Mysteries of the Sith folder instead of Jedi Knight's and the expansion starts.
+- Lightsaber blades and some character skins used to draw wrong. Mysteries of the Sith uses 16-bit textures, which the browser's WebGL 2 rejects in the format the engine sends them. The browser build now converts them first, so they look the same as on desktop.
+
+### Your characters and controls are kept
+
+- When you pick your game folder, the characters in its `player` folder come in with their controls, difficulty and weapon settings. This works for both games.
+- Changes you make in the browser are saved in the browser and are there on your next visit. If a character is in both places, the browser's copy wins.
+- Display and sound settings don't carry over, because the original games keep them in the Windows registry rather than the game folder.
+
+### Custom maps download automatically
+
+- If the host is playing a custom (community-made) map you don't have, or a different version of it, your browser gets it from the host's browser before the level loads, over the direct link or, if that isn't up, passed through the lobby without being stored there. A panel shows the download's progress, or why it couldn't happen.
+- The map is saved in your browser, so next time it loads right away and you can host it too.
+- **No original game files are sent.** The original episodes are never offered. Any file inside a custom map that's an exact copy of a file from the original game is left out, and your browser fills it in from your own install. The rebuilt map must match the host's copy exactly (same SHA-256) before it's used. A map made only of original game files isn't sent at all.
+- This is the newest feature. It's live, but it hasn't been through a real custom-map match yet.
+
+### A landing page and clearer errors
+
+- A landing page in the style of early-2000s game lobby sites, with a Play button, "rooms", getting-started steps and a plain explanation of what happens to your files. Every room opens the same game; you host or join inside it.
+- The page tells you when your browser can't run the game, and why: a phone or tablet (they can't pick a folder), or missing WebAssembly or WebGL 2. If the game hits an error, it shows over the game instead of in a status line hidden behind it.
+- The browser build is multiplayer-only, so Single Player is hidden from the main menu.
+
+### Bug fixes
+
+- **Original maps missing from Host.** Windows installs spell some folders differently (`Episode` instead of `episode`), and the browser's file system is case-sensitive, so the original multiplayer and Capture the Flag episodes could vanish from the Host list. Every folder is now spelled one way.
+- **A player stuck lying down.** Someone who joined while another player was dead saw that player running around lying down after they respawned. The fix is in shared engine code, so desktop builds get it too.
+- **Files skipped by the file search** on Linux, macOS and the browser: a file whose name sorts before `.`, such as `!dm.gob`, was dropped. Also shared with desktop builds.
+- **Firefox couldn't connect** to a lobby run with `relay.py`, because its WebSocket reply used HTTP/1.0, which Firefox refuses. It now uses HTTP/1.1.
+- **The browser build compiles from a clean checkout** (it used to stop with "Unknown platform!"), no longer bundles game files, and has a GitHub Actions workflow that builds it.
+
+## Good to know
+
+- **Desktop only.** Use a current Chrome or Firefox on a computer with WebGL 2. Phones and tablets can't pick a game folder.
+- **No music or cutscenes.** OpenJKDF2's browser build turns off the soundtrack and skips cutscenes.
+- **Game passwords aren't private.** A game's password is sent along with the game list and checked in the joining player's browser, as in OpenJKDF2's desktop networking. Don't use a password you use anywhere else.
+- **IP addresses are shared.** A direct WebRTC link means the host and each player who joins learn each other's IP address.
+- **No TURN server.** Players whose network blocks a direct link play through the lobby, with more lag.
+- **Free-plan limits.** Cloudflare's free plan caps the lobby's requests per day. If a busy day hits the cap, the lobby stops answering until midnight UTC.
+- **Browser players can't play with desktop players yet.** See below.
+
+## Planned
+
+- **A bridge to desktop players (DirectPlay).** There's a written plan for a small bridge program so OpenJKDF2 desktop players can join browser games, and possibly the original `JK.EXE` after that. Nothing is built yet.
+
+## Where the code is
+
+None of this is merged into the `web-mp` branch yet. Each change is an open pull request that builds on the one before it, and the live site is built from the top of that stack.
+
+- [#1](https://github.com/tristamus/OpenJKDF2/pull/1): browser build from a clean checkout, game folder picker, folder-spelling and file-search fixes
+- [#2](https://github.com/tristamus/OpenJKDF2/pull/2): lobby networking over WebSockets
+- [#3](https://github.com/tristamus/OpenJKDF2/pull/3): direct WebRTC connections, the lying-down fix, browser checks
+- [#4](https://github.com/tristamus/OpenJKDF2/pull/4): characters and controls kept in the browser
+- [#5](https://github.com/tristamus/OpenJKDF2/pull/5): Mysteries of the Sith 16-bit textures
+- [#6](https://github.com/tristamus/OpenJKDF2/pull/6): custom map downloads
+- The landing page (`ee9d3d2`) and the hidden Single Player button (`afd3dc7`) are commits in the same stack without pull requests of their own.
+- The lobby's code, including the Firefox fix, is in open pull requests in [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server/pulls), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
+
+To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md` as updated in the pull requests above.
+
+## Credits
+
+The engine is [OpenJKDF2](https://github.com/shinyquagsire23/OpenJKDF2) by shinyquagsire23 and its contributors, a function-by-function reimplementation of Jedi Knight: Dark Forces II in C. This fork adds the browser multiplayer pieces and a few fixes on top of it. Star Wars and Jedi Knight are trademarks of Lucasfilm Ltd.
+
+Everything below this line is OpenJKDF2's own README.
+
+---
+
 # OpenJKDF2
 
 ![MacOS Screenshot](docs/images/screenshot.png)
