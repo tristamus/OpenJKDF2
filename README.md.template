@@ -44,7 +44,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 - A landing page in the style of early-2000s game lobby sites, with a Play button, "rooms", getting-started steps and a plain explanation of what happens to your files. Every room opens the same game; you host or join inside it.
 - The page tells you when your browser can't run the game, and why: a phone or tablet (they can't pick a folder), or missing WebAssembly or WebGL 2. If the game hits an error, it shows over the game instead of in a status line hidden behind it.
-- The browser build is multiplayer-only, so Single Player is hidden from the main menu.
+- The browser build is multiplayer-only, so the main menu hides Single Player, View Cutscenes and Expansions & Mods. Choose Player, Credits and Setup share one row along the bottom.
 
 ### Bug fixes
 
@@ -81,6 +81,7 @@ Everything above is merged into the `web-mp` branch, and the live site is built 
 - [#10](https://github.com/tristamus/OpenJKDF2/pull/10): Single Player hidden from the main menu
 - [#6](https://github.com/tristamus/OpenJKDF2/pull/6): custom map downloads
 - [#8](https://github.com/tristamus/OpenJKDF2/pull/8): the landing page says custom maps you host are shared
+- [#12](https://github.com/tristamus/OpenJKDF2/pull/12): View Cutscenes and Expansions & Mods hidden from the main menu
 - The lobby's code, including the Firefox fix, is on the `main` branch of [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
 
 To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md`.
