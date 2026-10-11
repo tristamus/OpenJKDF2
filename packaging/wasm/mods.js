@@ -561,11 +561,29 @@
     function describe(tailHex) {
         var want = parseTail(tailHex);
         var have = current && current.fp ? current : null;
-        function short(n) { return n.length > 24 ? n.substring(0, 23) + '...' : n; }
+        // The page names several mods "A + B + C", ending in "+ N more" when
+        // that's too long. Shortened, that's the first and how many more.
+        function several(n) { return n.split(' + ').length > 1; }
+        function short(n) {
+            if (n.length <= 24)
+                return n;
+            var parts = n.split(' + ');
+            if (parts.length < 2)
+                return n.substring(0, 23) + '...';
+            var more = parts.length - 1;
+            var m = /^(\d+) more$/.exec(parts[parts.length - 1]);
+            if (m)
+                more += Number(m[1]) - 1;
+            var rest = ' + ' + more + ' more';
+            var first = parts[0];
+            return (first.length > 24 - rest.length ? first.substring(0, 21 - rest.length) + '...' : first) + rest;
+        }
         if (want && want.bad)
             return 'Mod: unknown';
         if (want && have && want.fp === have.fp)
-            return 'Mod: ' + short(want.name);
+            return (several(want.name) ? 'Mods: ' : 'Mod: ') + short(want.name);
+        if (want && several(want.name))
+            return 'Mods: ' + short(want.name) + ' (the game restarts to load them)';
         if (want)
             return 'Mod: ' + short(want.name) + ' (the game restarts to load it)';
         if (have)

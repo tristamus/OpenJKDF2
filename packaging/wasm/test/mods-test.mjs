@@ -439,6 +439,30 @@ test('the join screen says what the selected game\'s mod means for this player',
     assert.equal(vanilla.jkMods.describe('00'), 'Mod: unknown');
 });
 
+test('several mods ticked together are one mod to a joiner, named by the first', async () => {
+    const name = 'Saber Battle X - JK + Alpha + Gamma';
+    const host = await makeTab({
+        files: { ...retailInstall, ...install('jkmods/set', { ...sbxFiles, 'cog/alpha.cog': Buffer.from('alpha') }) },
+        args: ['-path', 'jkmods/set'],
+        folders: [{ name: name, path: 'jkmods/set' }],
+    });
+    const vanilla = await makeTab({ files: { ...retailInstall } });
+    const t = tailOf(host);
+    assert.equal(vanilla.jkMods.describe(t), 'Mods: Saber Battle... + 2 more (the game restarts to load them)');
+    assert.equal(host.jkMods.describe(t), 'Mods: Saber Battle... + 2 more');
+    assert.equal(vanilla.jkMods.describe(tailOf(await makeTab({
+        files: { ...retailInstall, ...install('jkmods/set', sbxFiles) },
+        args: ['-path', 'jkmods/set'],
+        folders: [{ name: 'A + B', path: 'jkmods/set' }],
+    }))), 'Mods: A + B (the game restarts to load them)');
+    connect(host, vanilla);
+    host.jkMods.host();
+    await settle();
+    vanilla.jkMods.fetch(t);
+    assert.equal(await waitMod(vanilla), STATE_RESTART);
+    assert.deepEqual(filesUnder(vanilla, '/jk1/' + vanilla.jkMods.restart())['cog/alpha.cog'], Buffer.from('alpha'));
+});
+
 let failed = 0;
 for (const t of tests) {
     try {

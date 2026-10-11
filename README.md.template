@@ -42,11 +42,12 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ### Mods
 
-- Put each mod in its own folder inside your game folder, put its GOB in `Resource`, or turn it on in JK Patch Commander. After you pick the game folder, the page lists the mods it found and you choose one, or none. GOBs in `Resource` and `mods` that aren't the game's own count as one mod, and only load when you choose it, so a host always shares everything its game loads. The first time, that mod is chosen, or else JK Patch Commander's active patches. After that, your choice is remembered.
+- Put each mod in its own folder inside your game folder, put its GOB in `Resource`, or turn it on in JK Patch Commander. After you pick the game folder, the page lists every mod it found, all ticked, and you untick any you don't want this time. Each GOB in `Resource` or `mods` that isn't the game's own, and each of JK Patch Commander's active patches, is a mod of its own. They only load when ticked, so a host always shares everything its game loads.
+- Several ticked mods run together. When two of them change the same file, the one higher in the list wins, and the list says which files and which mod. JK Patch Commander's patches come first, then mod folders, then GOBs in `mods` and `Resource`, the order the original game gives them. To joiners, the ticked mods are one mod, named after them ("Saber Battle X - JK + 2 more"), so a joiner that ticked the same mods downloads nothing and anyone else gets the combination.
 - If you host with a mod, players who join get it from your browser the same way as a custom map: files from the original game are left out and filled in from their own copy, and the result must match your mod exactly (same SHA-256). Mods up to 100 MB are sent.
 - If you join a game with a different mod, or none, the game restarts in the same tab with the host's, and you join again from Multiplayer with that game already selected. The join screen says which mod a game uses.
 - Mods you got from a host are saved in your browser, so next time they load without a download and you can choose them to host.
-- Tested with Saber Battle X between two browsers: the in-tab restart, a joiner getting the mod directly and through the lobby, and switching back to no mod.
+- Tested with Saber Battle X between two browsers: the in-tab restart, a joiner getting the mod directly and through the lobby, and switching back to no mod. Ticking several mods was tested in headless Chromium with SBX and made-up mods, and in a sharing test of the combination, but not yet between two browsers.
 
 ### A landing page and clearer errors
 
