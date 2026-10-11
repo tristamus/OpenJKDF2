@@ -1,7 +1,8 @@
-// Shared by the tests in this folder: made-up GOBs, an in-memory stand-in
-// for Emscripten's FS and one for IndexedDB.
+// Shared by the tests in this folder: made-up GOBs and zips, an in-memory
+// stand-in for Emscripten's FS and one for IndexedDB.
 
 import { createHash } from 'node:crypto';
+import { deflateRawSync, crc32 } from 'node:zlib';
 
 // ---- Made-up GOBs, laid out like the real ones: header, file table, data.
 
@@ -32,6 +33,49 @@ export function makeGob(files, { overlap } = {}) {
             out.set(f.bytes, f.at);
     });
     return out;
+}
+
+// ---- Made-up zips: [{ name, bytes, store }], deflated unless store is set.
+
+export function makeZip(entries) {
+    const locals = [], centrals = [];
+    let at = 0;
+    for (const e of entries) {
+        const name = Buffer.from(e.name, 'utf8');
+        const data = e.store ? Buffer.from(e.bytes) : deflateRawSync(e.bytes);
+        const method = e.store ? 0 : 8, crc = crc32(e.bytes);
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(0x04034b50, 0);
+        local.writeUInt16LE(20, 4);
+        local.writeUInt16LE(0x800, 6);
+        local.writeUInt16LE(method, 8);
+        local.writeUInt32LE(crc, 14);
+        local.writeUInt32LE(data.length, 18);
+        local.writeUInt32LE(e.bytes.length, 22);
+        local.writeUInt16LE(name.length, 26);
+        locals.push(local, name, data);
+        const central = Buffer.alloc(46);
+        central.writeUInt32LE(0x02014b50, 0);
+        central.writeUInt16LE(20, 4);
+        central.writeUInt16LE(20, 6);
+        central.writeUInt16LE(0x800, 8);
+        central.writeUInt16LE(method, 10);
+        central.writeUInt32LE(crc, 16);
+        central.writeUInt32LE(data.length, 20);
+        central.writeUInt32LE(e.bytes.length, 24);
+        central.writeUInt16LE(name.length, 28);
+        central.writeUInt32LE(at, 42);
+        centrals.push(central, name);
+        at += 30 + name.length + data.length;
+    }
+    const cd = Buffer.concat(centrals);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(entries.length, 8);
+    end.writeUInt16LE(entries.length, 10);
+    end.writeUInt32LE(cd.length, 12);
+    end.writeUInt32LE(at, 16);
+    return Buffer.concat([...locals, cd, end]);
 }
 
 export function sha(bytes) {
