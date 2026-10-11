@@ -890,8 +890,13 @@
       // it has one (-path, then mods/, then resource/):
       // - each GOB in JK Patch Commander's active folder. It keeps patches in
       //   JKPatch/ and starts the game with -path JKPatch\active.
-      // - a folder of its own: top-level folders, one level down in folders
-      //   that aren't mods themselves, and expansions/<mod> and mods/<mod>
+      // - a folder of its own: top-level folders, the folders inside them, and
+      //   expansions/<mod> and mods/<mod>. A folder is a mod if it has a GOB
+      //   or the game's resource folders directly inside, which is all the
+      //   engine reads from a mod folder, so a mod folder inside another one
+      //   is a mod of its own. A folder with several GOBs, or with mod folders
+      //   inside, is a collection: one mod for its resource folders if it has
+      //   any, then one per GOB.
       // - each GOB the engine would always load: in mods/, and in resource/
       //   besides the game's own. They move under jkmods/ like the others, so
       //   they only load when ticked and a host always shares what it runs.
@@ -915,10 +920,9 @@
           for (var d = 1; d < parts.length; d++) {
             var dir = parts.slice(0, d).join('/');
             var k = dir.toLowerCase();
-            var x = dirs[k] || (dirs[k] = { path: dir, gob: false, subdirs: {}, bytes: 0 });
-            x.bytes += e.file.size;
+            var x = dirs[k] || (dirs[k] = { path: dir, gobs: [], subdirs: {} });
             if (d === parts.length - 1) {
-              if (lowerParts[d].endsWith(ext)) x.gob = true;
+              if (lowerParts[d].endsWith(ext) && lowerParts[d][0] !== '.') x.gobs.push(e);
             } else {
               x.subdirs[lowerParts[d]] = true;
             }
@@ -926,33 +930,68 @@
         }
         function isMod(k) {
           var x = dirs[k];
-          return !!x && (x.gob || MOD_RESOURCE_DIRS.some(function(r) { return x.subdirs[r]; }));
+          return !!x && (x.gobs.length > 0 || hasResourceDirs(x));
+        }
+        function hasResourceDirs(x) {
+          return MOD_RESOURCE_DIRS.some(function(r) { return x.subdirs[r]; });
+        }
+        function gobMod(e, rank, from, always) {
+          var file = e.path.split('/').pop(), lower = e.path.toLowerCase();
+          return { rank: rank, from: from, always: always, name: file.replace(/\.[^.]*$/, ''),
+                   rel: function(l) { return l === lower ? file : null; } };
         }
         gobs.sort(function(a, b) { return a.rank - b.rank || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0); });
-        var mods = gobs.map(function(g) {
-          var file = g.e.path.split('/').pop(), lower = g.e.path.toLowerCase();
-          return { rank: g.rank, from: g.from, always: g.always, name: file.replace(/\.[^.]*$/, ''), bytes: g.e.file.size,
-                   rel: function(l) { return l === lower ? file : null; } };
-        });
+        var mods = gobs.map(function(g) { return gobMod(g.e, g.rank, g.from, g.always); });
         var found = [];
         for (var k in dirs) {
           var parts = k.split('/');
           var top = parts[0];
           if ((parts.length === 1 && NOT_MODS.indexOf(top) < 0) ||
               (parts.length === 2 && (top === 'expansions' || top === 'mods')) ||
-              (parts.length === 2 && NOT_MODS.indexOf(top) < 0 && !isMod(top))) {
+              (parts.length === 2 && NOT_MODS.indexOf(top) < 0 && MOD_RESOURCE_DIRS.indexOf(parts[1]) < 0)) {
             if (isMod(k)) found.push(k);
           }
         }
         found.sort();
         for (var k of found) {
           (function(k, x) {
-            mods.push({ rank: 1, from: x.path, name: x.path.split('/').pop(), bytes: x.bytes,
-                        rel: function(lower, path) { return lower.startsWith(k + '/') ? path.substring(k.length + 1) : null; } });
+            // Its files, apart from the mod folders inside it.
+            var inner = found.filter(function(j) { return j.startsWith(k + '/'); });
+            function mine(lower) {
+              return lower.startsWith(k + '/') && !inner.some(function(j) { return lower.startsWith(j + '/'); });
+            }
+            var name = x.path.split('/').pop();
+            // A folder with one GOB or none is one mod, unless it also holds
+            // mod folders: then it's a collection, like a mod/ folder.
+            if (x.gobs.length < 2 && !inner.length) {
+              mods.push({ rank: 1, from: x.path, name: name,
+                          rel: function(lower, path) { return mine(lower) ? path.substring(k.length + 1) : null; } });
+              return;
+            }
+            // Its resource folders first: the engine looks for a loose file
+            // in a folder before it looks in the GOBs there.
+            if (hasResourceDirs(x)) {
+              mods.push({ rank: 1, from: x.path, name: name + ' (loose files)',
+                          rel: function(lower, path) {
+                            var rest = lower.substring(k.length + 1);
+                            return mine(lower) && MOD_RESOURCE_DIRS.indexOf(rest.split('/')[0]) >= 0 && rest.indexOf('/') > 0
+                              ? path.substring(k.length + 1) : null;
+                          } });
+            }
+            x.gobs.slice().sort(function(a, b) {
+              var p = a.path.toLowerCase(), q = b.path.toLowerCase();
+              return p < q ? -1 : p > q ? 1 : 0;
+            }).forEach(function(e) { mods.push(gobMod(e, 1, x.path)); });
           })(k, dirs[k]);
         }
         // Sorting is stable, so each kind keeps its order.
         mods.sort(function(a, b) { return a.rank - b.rank; });
+        for (var m of mods) m.bytes = 0;
+        for (var e of files) {
+          var lower = e.path.toLowerCase();
+          var m = mods.find(function(m) { return m.rel(lower, e.path); });
+          if (m) m.bytes += e.file.size;
+        }
         return mods.map(function(m, i) {
           // No spaces: the engine splits its command line on them.
           m.path = 'jkmods/' + i + '-' + m.name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
