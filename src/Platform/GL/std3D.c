@@ -3005,6 +3005,52 @@ int std3D_ClearZBuffer()
     return 1;
 }
 
+#if defined(ARCH_WASM)
+// Added: WebGL 2 has no GL_UNSIGNED_SHORT_*_REV types and rejects the 16bpp
+// uploads below (INVALID_ENUM), leaving every 16bpp material (MotS model
+// skins, saber blades) as an empty texture. Unpack to RGBA8 instead, in the
+// channel order the _REV upload gives, so TEX_MODE_16BPP's swap still applies.
+static void std3D_TexImage16bppAsRGBA8(tVBuffer *vbuf, int is_alpha_tex)
+{
+    uint32_t width = vbuf->format.width;
+    uint32_t height = vbuf->format.height;
+    uint32_t row_stride = vbuf->format.rowSize / 2;
+    if (row_stride < width)
+        row_stride = width;
+    const uint16_t* image_16bpp = (const uint16_t*)vbuf->sdlSurface->pixels;
+
+    uint8_t* image_data = (uint8_t*)malloc(width*height*4);
+    if (!image_data)
+        return;
+
+    for (uint32_t j = 0; j < height; j++)
+    {
+        for (uint32_t i = 0; i < width; i++)
+        {
+            uint16_t val = image_16bpp[(j*row_stride) + i];
+            uint8_t* out = &image_data[((j*width) + i) * 4];
+            if (!is_alpha_tex) // RGB565 as 5_6_5_REV: red from the low bits
+            {
+                out[0] = ((val & 0x1F) * 527 + 23) >> 6;
+                out[1] = (((val >> 5) & 0x3F) * 259 + 33) >> 6;
+                out[2] = (((val >> 11) & 0x1F) * 527 + 23) >> 6;
+                out[3] = 0xFF;
+            }
+            else // RGB1555 as 1_5_5_5_REV
+            {
+                out[0] = ((val & 0x1F) * 527 + 23) >> 6;
+                out[1] = (((val >> 5) & 0x1F) * 527 + 23) >> 6;
+                out[2] = (((val >> 10) & 0x1F) * 527 + 23) >> 6;
+                out[3] = (val >> 15) ? 0xFF : 0x0;
+            }
+        }
+    }
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
+    free(image_data);
+}
+#endif
+
 int std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is_alpha_tex, int no_alpha)
 {
     if (Main_bHeadless) return 1;
@@ -3053,7 +3099,9 @@ int std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is_alph
     if (vbuf->format.format.is16bit)
     {
         texture->is_16bit = 1;
-#if 1
+#if defined(ARCH_WASM)
+        std3D_TexImage16bppAsRGBA8(vbuf, is_alpha_tex);
+#else
         if (!is_alpha_tex)
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0,  GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, image_8bpp);
         else
