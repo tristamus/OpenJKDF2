@@ -31,6 +31,11 @@
 // level loads (packaging/wasm/maps.js, bundled into this module). Its frames
 // travel like game packets, over a second data channel or the relay, and the
 // JS hands them to maps.js before the engine's queue.
+//
+// A host running a mod (-path) adds a tail to its <entry> naming it
+// (packaging/wasm/mods.js). A joiner on another mod, or none, gets the
+// host's the same way, then the engine restarts into it and the player joins
+// again with that game already selected.
 
 #include "stdComm_WSRelay.h"
 
@@ -51,6 +56,9 @@
 #define WSRELAY_REPLY_MS (5000)
 #define WSRELAY_LIST_MS (500)
 #define WSRELAY_MAX_LISTED (32)
+// The mod tail after an entry, in hex: "JKMD", version, name length, a
+// 32-byte fingerprint and a name of up to 63 characters (mods.js).
+#define WSRELAY_MAX_TAIL_HEX (256)
 
 #define WSRELAY_STATE_CONNECTING (0)
 #define WSRELAY_STATE_OPEN (1)
@@ -342,6 +350,46 @@ EM_JS(void, wsrelay_js_map_unhost, (), {
     if (Module.jkMaps) Module.jkMaps.unhost();
 });
 
+// Same states as the map, and one more: the engine has to restart into the
+// host's mod (or out of ours).
+#define WSRELAY_MOD_RESTART (3)
+
+// The lobby tail for the mod this tab runs, "" for none.
+EM_JS(void, wsrelay_js_mod_tail, (char* pOut, int maxLen), {
+    stringToUTF8(Module.jkMods ? Module.jkMods.tail() : "", pOut, maxLen);
+});
+
+// Starts getting this tab onto the host's mod, from its lobby tail.
+EM_JS(void, wsrelay_js_mod_fetch, (const char* pTail), {
+    if (Module.jkMods) Module.jkMods.fetch(UTF8ToString(pTail));
+});
+
+EM_JS(int, wsrelay_js_mod_state, (), {
+    return Module.jkMods ? Module.jkMods.state() : 1;
+});
+
+EM_JS(void, wsrelay_js_mod_abort, (const char* pReason), {
+    if (Module.jkMods) Module.jkMods.abort(UTF8ToString(pReason));
+});
+
+// The path to restart into ("" for no mod), which becomes the running mod.
+EM_JS(void, wsrelay_js_mod_restart, (char* pOut, int maxLen), {
+    stringToUTF8(Module.jkMods ? Module.jkMods.restart() : "", pOut, maxLen);
+});
+
+EM_JS(void, wsrelay_js_mod_host, (), {
+    if (Module.jkMods) Module.jkMods.host();
+});
+
+EM_JS(void, wsrelay_js_mod_unhost, (), {
+    if (Module.jkMods) Module.jkMods.unhost();
+});
+
+// A line about a listed game's mod for the join screen.
+EM_JS(void, wsrelay_js_mod_describe, (const char* pTail, char* pOut, int maxLen), {
+    stringToUTF8(Module.jkMods ? Module.jkMods.describe(UTF8ToString(pTail)) : "", pOut, maxLen);
+});
+
 // Pops one queued message into pOut. Returns its length, or -1 if the queue is
 // empty. Text is NUL-terminated (maxLen includes the terminator).
 EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText), {
@@ -379,6 +427,12 @@ static int wsrelay_numDisconnected = 0;
 
 static jkMultiEntry wsrelay_storedEntry;      // the game we host
 static jkMultiEntry wsrelay_storedEntryEnum;  // the game we joined
+static char wsrelay_hostTail[WSRELAY_MAX_TAIL_HEX + 1];      // our mod, as we host
+static char wsrelay_storedTailEnum[WSRELAY_MAX_TAIL_HEX + 1]; // the joined game's mod
+
+// The room to select on the join screen after restarting into its mod. Not an
+// engine global, so it lasts through the restart.
+static int wsrelay_pendingRoom = -1;
 
 // The relay's latest game list, and the rooms behind the entries the join
 // screen is showing right now (jkGuiMultiplayer_aEntries).
@@ -386,8 +440,10 @@ static int wsrelay_bListReceived = 0;
 static int wsrelay_numListed = 0;
 static int wsrelay_aListRooms[WSRELAY_MAX_LISTED];
 static jkMultiEntry wsrelay_aListEntries[WSRELAY_MAX_LISTED];
+static char wsrelay_aListTails[WSRELAY_MAX_LISTED][WSRELAY_MAX_TAIL_HEX + 1];
 static int wsrelay_numShown = 0;
 static int wsrelay_aShownRooms[WSRELAY_MAX_LISTED];
+static char wsrelay_aShownTails[WSRELAY_MAX_LISTED][WSRELAY_MAX_TAIL_HEX + 1];
 
 static void wsrelay_ToHex(const void* pData, int len, char* pOut)
 {
@@ -409,12 +465,9 @@ static int wsrelay_HexNibble(char c)
     return -1;
 }
 
-// Decodes exactly len bytes; anything else is a malformed entry.
-static int wsrelay_FromHex(const char* pHex, void* pOut, int len)
+// Decodes the first len bytes of pHex.
+static int wsrelay_DecodeHex(const char* pHex, void* pOut, int len)
 {
-    if (!pHex || strlen(pHex) != (size_t)len*2)
-        return 0;
-
     uint8_t* pBytes = (uint8_t*)pOut;
     for (int i = 0; i < len; i++)
     {
@@ -427,20 +480,43 @@ static int wsrelay_FromHex(const char* pHex, void* pOut, int len)
     return 1;
 }
 
+// An entry, then the hex of a mod tail if the host runs a mod, which is
+// copied to pTail as it is (mods.js reads it). Anything else is malformed.
+static int wsrelay_EntryFromHex(const char* pHex, jkMultiEntry* pOut, char* pTail)
+{
+    const size_t entryHex = sizeof(jkMultiEntry)*2;
+    if (!pHex)
+        return 0;
+    size_t len = strlen(pHex);
+    if (len < entryHex || len > entryHex + WSRELAY_MAX_TAIL_HEX || (len - entryHex) % 2)
+        return 0;
+    for (size_t i = entryHex; i < len; i++)
+    {
+        if (wsrelay_HexNibble(pHex[i]) < 0)
+            return 0;
+    }
+    if (!wsrelay_DecodeHex(pHex, pOut, sizeof(jkMultiEntry)))
+        return 0;
+    memcpy(pTail, pHex + entryHex, len - entryHex);
+    pTail[len - entryHex] = 0;
+    return 1;
+}
+
 static int wsrelay_SendText(const char* pText)
 {
     wsrelay_verbosePrintf("Relay << %.80s\n", pText);
     return wsrelay_js_send_text(pText);
 }
 
+// Only a host sends entries, each followed by its mod tail.
 static void wsrelay_SendEntry(const char* pOp, int id, const jkMultiEntry* pEntry)
 {
     char hex[sizeof(jkMultiEntry)*2 + 1];
     wsrelay_ToHex(pEntry, sizeof(jkMultiEntry), hex);
     if (id >= 0)
-        snprintf(wsrelay_textBuf, sizeof(wsrelay_textBuf), "%s %d %s", pOp, id, hex);
+        snprintf(wsrelay_textBuf, sizeof(wsrelay_textBuf), "%s %d %s%s", pOp, id, hex, wsrelay_hostTail);
     else
-        snprintf(wsrelay_textBuf, sizeof(wsrelay_textBuf), "%s %s", pOp, hex);
+        snprintf(wsrelay_textBuf, sizeof(wsrelay_textBuf), "%s %s%s", pOp, hex, wsrelay_hostTail);
     wsrelay_SendText(wsrelay_textBuf);
 }
 
@@ -458,6 +534,7 @@ static void wsrelay_ResetSession()
     wsrelay_numDisconnected = 0;
     wsrelay_js_rtc_end();
     wsrelay_js_map_unhost();
+    wsrelay_js_mod_unhost();
 }
 
 // Same count GNSServer::RealConnectedPlayers reports to joining clients.
@@ -534,7 +611,7 @@ static void wsrelay_HandleList(char* pArgs)
             break;
 
         jkMultiEntry* pEntry = &wsrelay_aListEntries[n];
-        if (!wsrelay_FromHex(pHex, pEntry, sizeof(jkMultiEntry)))
+        if (!wsrelay_EntryFromHex(pHex, pEntry, wsrelay_aListTails[n]))
             continue;
 
         int room = atoi(pTok);
@@ -601,7 +678,8 @@ static void wsrelay_HandleText(char* pText)
         char* pId = strtok_r(NULL, " ", &pSave);
         char* pHex = strtok_r(NULL, " ", &pSave);
         jkMultiEntry entry;
-        if (wsrelay_bJoining && pId && wsrelay_FromHex(pHex, &entry, sizeof(entry)))
+        char tail[WSRELAY_MAX_TAIL_HEX + 1];
+        if (wsrelay_bJoining && pId && wsrelay_EntryFromHex(pHex, &entry, tail))
         {
             // Same as GNSClient receiving its GNSInfoPacket.
             wsrelay_id = (uint32_t)atoi(pId);
@@ -609,6 +687,7 @@ static void wsrelay_HandleText(char* pText)
 
             wsrelay_storedEntryEnum = entry;
             wsrelay_storedEntryEnum.field_E0 = 10;
+            strcpy(wsrelay_storedTailEnum, tail);
 
             // Hack?
             sithMulti_multiModeFlags = wsrelay_storedEntryEnum.multiModeFlags;
@@ -689,6 +768,28 @@ static int wsrelay_GetHostMap(const char* pEpisode)
             emscripten_sleep(10);
     }
     return state == WSRELAY_MAP_READY;
+}
+
+// Gets this tab onto the host's mod, or off ours if the host runs none.
+// Returns WSRELAY_MAP_READY if it already is, WSRELAY_MOD_RESTART if the
+// engine has to restart for it, or WSRELAY_MAP_FAILED; mods.js has told the
+// player why.
+static int wsrelay_GetHostMod()
+{
+    wsrelay_js_mod_fetch(wsrelay_storedTailEnum);
+
+    int state;
+    while ((state = wsrelay_js_mod_state()) == WSRELAY_MAP_BUSY)
+    {
+        wsrelay_PumpControl();
+        if (wsrelay_bHostLeft)
+            wsrelay_js_mod_abort("host-left");
+        else if (wsrelay_js_state() != WSRELAY_STATE_OPEN)
+            wsrelay_js_mod_abort("lobby-lost");
+        else
+            emscripten_sleep(10);
+    }
+    return state;
 }
 
 static int wsrelay_EnsureOpen(int timeoutMs)
@@ -908,8 +1009,34 @@ int stdComm_Open(int idx, char16_t* pwPassword)
     wsrelay_room = wsrelay_aShownRooms[idx];
     wsrelay_js_rtc_begin(0);
 
-    // Before the level loads, which needs the map. The direct link the map
-    // can come over is starting up now.
+    // The mod first: on another one, the engine restarts before any map
+    // matters. The direct link both can come over is starting up now.
+    int modState = wsrelay_GetHostMod();
+    if (modState == WSRELAY_MOD_RESTART)
+    {
+        char path[sizeof(openjkdf2_aRestartPath)];
+        wsrelay_js_mod_restart(path, sizeof(path));
+        stdPlatform_Printf("OpenJKDF2: Restarting with mod path \"%s\" to join room %d\n", path, wsrelay_room);
+        wsrelay_pendingRoom = wsrelay_room;
+        wsrelay_SendText("leave");
+        wsrelay_ResetSession();
+
+        // As the Expansions & Mods menu does (jkGUIMods.c). The menus return
+        // to the main loop without drawing anything else, which then exits
+        // and main() starts the engine again on this path.
+        stdString_SafeStrCopy(openjkdf2_aRestartPath, path, sizeof(openjkdf2_aRestartPath));
+        openjkdf2_restartMode = OPENJKDF2_RESTART_PATH;
+        g_should_exit = 1;
+        return STDCOMM_WSRELAY_RESTART;
+    }
+    if (modState != WSRELAY_MAP_READY)
+    {
+        wsrelay_SendText("leave");
+        wsrelay_ResetSession();
+        return 0x80004005; // GUINET_NOGAMECONNECT
+    }
+
+    // Before the level loads, which needs the map.
     if (!wsrelay_GetHostMap(wsrelay_storedEntryEnum.episodeGobName))
     {
         wsrelay_SendText("leave");
@@ -984,7 +1111,9 @@ int DirectPlay_OpenHost(jkMultiEntry* pEntry)
     }
 
     wsrelay_bHostPending = 1;
+    wsrelay_pendingRoom = -1;
     wsrelay_storedEntry.multiModeFlags = sithMulti_multiModeFlags;
+    wsrelay_js_mod_tail(wsrelay_hostTail, sizeof(wsrelay_hostTail));
     wsrelay_SendEntry("host", -1, &wsrelay_storedEntry);
 
     uint32_t until = stdPlatform_GetTimeMsec() + WSRELAY_REPLY_MS;
@@ -1004,6 +1133,7 @@ int DirectPlay_OpenHost(jkMultiEntry* pEntry)
     else
     {
         wsrelay_js_map_host(wsrelay_storedEntry.episodeGobName, JKRES_GOB_EXT);
+        wsrelay_js_mod_host();
     }
 
     return 0;
@@ -1051,6 +1181,15 @@ int stdComm_EnumSessions(int a, void* b)
     {
         jkGuiMultiplayer_aEntries[i] = wsrelay_aListEntries[i];
         wsrelay_aShownRooms[i] = wsrelay_aListRooms[i];
+        strcpy(wsrelay_aShownTails[i], wsrelay_aListTails[i]);
+
+        // Back from restarting into this game's mod: select it again. The join
+        // screen keeps whichever entry has this guid selected.
+        if (wsrelay_aShownRooms[i] == wsrelay_pendingRoom)
+        {
+            jkGui_guid_556040 = jkGuiMultiplayer_aEntries[i].guidInstance;
+            wsrelay_pendingRoom = -1;
+        }
     }
     wsrelay_numShown = n;
     dplay_dword_55D618 = n;
@@ -1075,4 +1214,18 @@ void DirectPlay_Destroy()
 int DirectPlay_IdkSessionDesc(jkMultiEntry* pEntry)
 {
     return 1;
+}
+
+void stdComm_WSRelay_DescribeMod(int idx, char16_t* pOut, int maxChars)
+{
+    char text[128];
+    text[0] = 0;
+    if (idx >= 0 && idx < wsrelay_numShown)
+        wsrelay_js_mod_describe(wsrelay_aShownTails[idx], text, sizeof(text));
+
+    // mods.js only writes printable ASCII here.
+    int i = 0;
+    for (; text[i] && i < maxChars - 1; i++)
+        pOut[i] = (char16_t)(uint8_t)text[i];
+    pOut[i] = 0;
 }
