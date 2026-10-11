@@ -223,7 +223,8 @@ on the server it was loaded from. Without a relay, hosting still works but nobod
 A player who joins a game with a custom map they don't have gets it from the host's tab
 (`packaging/wasm/maps.js`, bundled into `openjkdf2.js`). Files in the map that are copies of the
 original game's are never sent: the joiner rebuilds them from their own install. Its tests run in
-Node 22 without game files: `node packaging/wasm/test/maps-test.mjs`.
+Node 22 without game files: `node packaging/wasm/test/maps-test.mjs`. The same goes for sharing
+mods (`mods-test.mjs`) and the page's mod list, including zipped mods (`picker-test.mjs`).
 
 For local testing only, configure with `-DOPENJKDF2_WASM_PRELOAD_DATA=ON` after copying your
 `jk1/` (and/or `mots/`) game folders into `wasm_out/`, then open `index.html#bundled`. That bakes the

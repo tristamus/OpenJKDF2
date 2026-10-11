@@ -544,10 +544,12 @@
                 <li>Click <b>Play JKDF2</b> or any room, then pick the game's folder: the one with the
                   <code>episode</code> and <code>resource</code> folders inside.</li>
                 <li>When the game starts, choose Multiplayer to host a match or join one.</li>
-                <li>To play with mods, put each in its own folder inside the game folder, or its GOB in
-                  <code>Resource</code>, or turn it on in JK Patch Commander. After you pick the game folder,
-                  every mod it finds is ticked, and you can untick any. Players who join you get them too,
-                  and if you join a game with other mods, yours are swapped for the host's.</li>
+                <li>To play with mods, put them in the game folder: in a <code>mod</code> or <code>mods</code>
+                  folder, in a folder of their own, or as a GOB in <code>Resource</code>. GOBs, zip files and
+                  unzipped mods all work, and so do JK Patch Commander's patches. After you pick the game
+                  folder, each mod it finds has its own checkbox, all ticked, and you can untick any. Players
+                  who join you get them too, and if you join a game with other mods, yours are swapped for
+                  the host's.</li>
               </ol>
             </section>
 
@@ -890,11 +892,18 @@
       // it has one (-path, then mods/, then resource/):
       // - each GOB in JK Patch Commander's active folder. It keeps patches in
       //   JKPatch/ and starts the game with -path JKPatch\active.
-      // - a folder of its own: top-level folders, one level down in folders
-      //   that aren't mods themselves, and expansions/<mod> and mods/<mod>
+      // - a folder of its own: top-level folders, the folders inside them, and
+      //   expansions/<mod> and mods/<mod>. A folder is a mod if it has a GOB
+      //   or the game's resource folders directly inside, which is all the
+      //   engine reads from a mod folder, so a mod folder inside another one
+      //   is a mod of its own. A folder with several GOBs, or with mod folders
+      //   inside, is a collection: one mod for its resource folders if it has
+      //   any, then one per GOB.
       // - each GOB the engine would always load: in mods/, and in resource/
       //   besides the game's own. They move under jkmods/ like the others, so
       //   they only load when ticked and a host always shares what it runs.
+      // A zip with a mod in it is a folder of its own wherever it is, since
+      // openZips has already opened it in place.
       // Paths are already spelled one way.
       function detectMods(files, isMots) {
         var ext = isMots ? '.goo' : '.gob';
@@ -915,10 +924,9 @@
           for (var d = 1; d < parts.length; d++) {
             var dir = parts.slice(0, d).join('/');
             var k = dir.toLowerCase();
-            var x = dirs[k] || (dirs[k] = { path: dir, gob: false, subdirs: {}, bytes: 0 });
-            x.bytes += e.file.size;
+            var x = dirs[k] || (dirs[k] = { path: dir, gobs: [], subdirs: {} });
             if (d === parts.length - 1) {
-              if (lowerParts[d].endsWith(ext)) x.gob = true;
+              if (lowerParts[d].endsWith(ext) && lowerParts[d][0] !== '.') x.gobs.push(e);
             } else {
               x.subdirs[lowerParts[d]] = true;
             }
@@ -926,38 +934,192 @@
         }
         function isMod(k) {
           var x = dirs[k];
-          return !!x && (x.gob || MOD_RESOURCE_DIRS.some(function(r) { return x.subdirs[r]; }));
+          return !!x && (x.gobs.length > 0 || hasResourceDirs(x));
+        }
+        function hasResourceDirs(x) {
+          return MOD_RESOURCE_DIRS.some(function(r) { return x.subdirs[r]; });
+        }
+        function gobMod(e, rank, from, always) {
+          var file = e.path.split('/').pop(), lower = e.path.toLowerCase();
+          return { rank: rank, from: from, always: always, name: file.replace(/\.[^.]*$/, ''),
+                   rel: function(l) { return l === lower ? file : null; } };
         }
         gobs.sort(function(a, b) { return a.rank - b.rank || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0); });
-        var mods = gobs.map(function(g) {
-          var file = g.e.path.split('/').pop(), lower = g.e.path.toLowerCase();
-          return { rank: g.rank, from: g.from, always: g.always, name: file.replace(/\.[^.]*$/, ''), bytes: g.e.file.size,
-                   rel: function(l) { return l === lower ? file : null; } };
-        });
+        var mods = gobs.map(function(g) { return gobMod(g.e, g.rank, g.from, g.always); });
+        var zipRoots = {};
+        for (var e of files) {
+          if (e.zipDepth) zipRoots[e.path.toLowerCase().split('/').slice(0, e.zipDepth).join('/')] = true;
+        }
         var found = [];
         for (var k in dirs) {
           var parts = k.split('/');
           var top = parts[0];
           if ((parts.length === 1 && NOT_MODS.indexOf(top) < 0) ||
               (parts.length === 2 && (top === 'expansions' || top === 'mods')) ||
-              (parts.length === 2 && NOT_MODS.indexOf(top) < 0 && !isMod(top))) {
+              (parts.length === 2 && NOT_MODS.indexOf(top) < 0 && MOD_RESOURCE_DIRS.indexOf(parts[1]) < 0) ||
+              zipRoots[k] ||
+              (zipRoots[parts.slice(0, -1).join('/')] && MOD_RESOURCE_DIRS.indexOf(parts[parts.length - 1]) < 0)) {
             if (isMod(k)) found.push(k);
           }
         }
         found.sort();
         for (var k of found) {
           (function(k, x) {
-            mods.push({ rank: 1, from: x.path, name: x.path.split('/').pop(), bytes: x.bytes,
-                        rel: function(lower, path) { return lower.startsWith(k + '/') ? path.substring(k.length + 1) : null; } });
+            // Its files, apart from the mod folders inside it.
+            var inner = found.filter(function(j) { return j.startsWith(k + '/'); });
+            function mine(lower) {
+              return lower.startsWith(k + '/') && !inner.some(function(j) { return lower.startsWith(j + '/'); });
+            }
+            var name = x.path.split('/').pop();
+            if (zipRoots[k]) name = name.replace(/\.zip$/i, '');
+            // A folder with one GOB or none is one mod, unless it also holds
+            // mod folders: then it's a collection, like a mod/ folder.
+            if (x.gobs.length < 2 && !inner.length) {
+              mods.push({ rank: 1, from: x.path, name: name,
+                          rel: function(lower, path) { return mine(lower) ? path.substring(k.length + 1) : null; } });
+              return;
+            }
+            // Its resource folders first: the engine looks for a loose file
+            // in a folder before it looks in the GOBs there.
+            if (hasResourceDirs(x)) {
+              mods.push({ rank: 1, from: x.path, name: name + ' (loose files)',
+                          rel: function(lower, path) {
+                            var rest = lower.substring(k.length + 1);
+                            return mine(lower) && MOD_RESOURCE_DIRS.indexOf(rest.split('/')[0]) >= 0 && rest.indexOf('/') > 0
+                              ? path.substring(k.length + 1) : null;
+                          } });
+            }
+            x.gobs.slice().sort(function(a, b) {
+              var p = a.path.toLowerCase(), q = b.path.toLowerCase();
+              return p < q ? -1 : p > q ? 1 : 0;
+            }).forEach(function(e) { mods.push(gobMod(e, 1, x.path)); });
           })(k, dirs[k]);
         }
         // Sorting is stable, so each kind keeps its order.
         mods.sort(function(a, b) { return a.rank - b.rank; });
+        for (var m of mods) m.bytes = 0;
+        for (var e of files) {
+          var lower = e.path.toLowerCase();
+          var m = mods.find(function(m) { return m.rel(lower, e.path); });
+          if (m) m.bytes += e.file.size;
+        }
         return mods.map(function(m, i) {
           // No spaces: the engine splits its command line on them.
           m.path = 'jkmods/' + i + '-' + m.name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
           return m;
         });
+      }
+
+      // ---- Mods kept as zip files. The game can't read a zip, so the page
+      // opens each one that holds a mod and puts its files in a folder named
+      // after it, as if it had been unzipped in place, like
+      // mod/SBX.zip/Saber Battle X - JK.gob. detectMods then finds it like
+      // any mod folder. A zip holds a mod if it has a GOB or the game's
+      // resource folders, at its top or in the one folder there. A resource
+      // folder in it is opened too, since some mods are zipped the way
+      // they're installed; levels in an episode folder in it are left out.
+      // Zips with the game's own files, zips in the game's own folders or
+      // JK Patch Commander's, and zips that use anything but deflate or no
+      // compression, or a password, stay closed.
+      var ZIP_SKIPPED = ['episode', 'player', 'music', 'netmods', 'jkmods', 'jkpatch'];
+      var ZIP_MAX_BYTES = 512 * 1048576;
+
+      async function openZips(files, isMots) {
+        var ext = isMots ? '.goo' : '.gob';
+        var retail = REQUIRED_JK.concat(REQUIRED_MOTS, RETAIL_RESOURCE[ext]).map(function(r) {
+          return r.split('/').pop().toLowerCase();
+        }).filter(function(n) { return n.endsWith(ext); });
+        var out = [];
+        for (var e of files) {
+          var lower = e.path.toLowerCase();
+          if (!lower.endsWith('.zip') || ZIP_SKIPPED.indexOf(lower.split('/')[0]) >= 0) { out.push(e); continue; }
+          var inside = null;
+          try {
+            inside = await zipMod(e.file, ext, retail);
+          } catch (err) {
+            console.warn('OpenJKDF2: could not open ' + e.path + ': ' + err);
+          }
+          if (!inside) { out.push(e); continue; }
+          console.log('OpenJKDF2: opened ' + e.path + ' (' + inside.length + ' files)');
+          var depth = e.path.split('/').length;
+          for (var f of inside) out.push({ path: e.path + '/' + f.path, file: f.file, zipDepth: depth });
+        }
+        return out;
+      }
+
+      // The files a zip would unzip to, with their paths in the mod, or null
+      // if it doesn't hold a mod or can't be opened.
+      async function zipMod(file, ext, retail) {
+        var list = await zipList(file);
+        if (!list) return null;
+        list = list.filter(function(z) {
+          var parts = z.name.split('/');
+          return !z.name.endsWith('/') && parts[0].toLowerCase() !== '__macosx' &&
+                 parts[parts.length - 1][0] !== '.' &&
+                 !parts.some(function(p) { return p === '' || p === '.' || p === '..' || p.indexOf(':') >= 0; });
+        });
+        // A zip of one folder: the mod is what's in it.
+        var tops = {};
+        for (var z of list) tops[z.name.indexOf('/') > 0 ? z.name.split('/')[0].toLowerCase() : ''] = true;
+        var only = Object.keys(tops);
+        var strip = only.length === 1 && only[0] && only[0] !== 'resource' && only[0] !== 'episode' &&
+                    MOD_RESOURCE_DIRS.indexOf(only[0]) < 0;
+        var kept = [], bytes = 0, isMod = false;
+        for (var z of list) {
+          var rel = strip ? z.name.substring(z.name.indexOf('/') + 1) : z.name;
+          var parts = rel.toLowerCase().split('/');
+          if (retail.indexOf(parts[parts.length - 1]) >= 0) return null;
+          if (parts[0] === 'episode') continue;
+          if (parts[0] === 'resource' && parts.length > 1) { rel = rel.substring(rel.indexOf('/') + 1); parts.shift(); }
+          if (isSkipped(parts.join('/'))) continue;
+          if ((parts.length <= 2 && parts[parts.length - 1].endsWith(ext)) ||
+              (parts.length > 1 && MOD_RESOURCE_DIRS.indexOf(parts[0]) >= 0) ||
+              (parts.length > 2 && MOD_RESOURCE_DIRS.indexOf(parts[1]) >= 0)) isMod = true;
+          if ((z.flags & 1) || (z.method !== 0 && z.method !== 8)) return null;
+          bytes += z.size;
+          kept.push({ path: rel, z: z });
+        }
+        if (!isMod || bytes > ZIP_MAX_BYTES) return null;
+        if (kept.some(function(k) { return k.z.method === 8; }) && typeof DecompressionStream === 'undefined') return null;
+        for (var k of kept) k.file = await zipRead(file, k.z);
+        return kept;
+      }
+
+      // A zip's entries, from its central directory at the end. Names not
+      // marked as UTF-8 are read a byte a character, which is right for the
+      // plain names mods use.
+      async function zipList(file) {
+        var tailLen = Math.min(file.size, 22 + 65535);
+        var tail = new Uint8Array(await file.slice(file.size - tailLen).arrayBuffer());
+        var t = new DataView(tail.buffer);
+        var i = tail.length - 22;
+        while (i >= 0 && t.getUint32(i, true) !== 0x06054b50) i--;
+        if (i < 0) return null;
+        var count = t.getUint16(i + 10, true), cdSize = t.getUint32(i + 12, true), cdAt = t.getUint32(i + 16, true);
+        if (count === 0xffff || cdAt === 0xffffffff || cdAt + cdSize > file.size) return null;
+        var cd = new Uint8Array(await file.slice(cdAt, cdAt + cdSize).arrayBuffer());
+        var c = new DataView(cd.buffer), list = [];
+        for (var p = 0, n = 0; n < count; n++) {
+          if (p + 46 > cd.length || c.getUint32(p, true) !== 0x02014b50) return null;
+          var flags = c.getUint16(p + 8, true), nameLen = c.getUint16(p + 28, true);
+          var raw = cd.subarray(p + 46, p + 46 + nameLen);
+          list.push({ name: ((flags & 0x800) ? new TextDecoder().decode(raw) : String.fromCharCode.apply(null, raw)).replace(/\\/g, '/'),
+                      flags: flags, method: c.getUint16(p + 10, true), csize: c.getUint32(p + 20, true),
+                      size: c.getUint32(p + 24, true), at: c.getUint32(p + 42, true) });
+          p += 46 + nameLen + c.getUint16(p + 30, true) + c.getUint16(p + 32, true);
+        }
+        return list;
+      }
+
+      async function zipRead(file, z) {
+        var head = new DataView(await file.slice(z.at, z.at + 30).arrayBuffer());
+        if (head.byteLength < 30 || head.getUint32(0, true) !== 0x04034b50) throw new Error('no file at ' + z.at);
+        var start = z.at + 30 + head.getUint16(26, true) + head.getUint16(28, true);
+        var data = file.slice(start, start + z.csize);
+        var out = z.method === 0 ? data :
+          await new Response(data.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+        if (out.size !== z.size) throw new Error(z.name + ' came out the wrong size');
+        return out;
       }
 
       // ---- Which files each mod changes, to tell when two ticked mods change
@@ -1268,6 +1430,11 @@
           showPickerResult("That folder doesn't have the game files we're looking for:\n" + missing.join("\n") +
                            "\n\nPick the folder that has episode and resource directly inside, then try again.", true);
           return;
+        }
+        // Zipped mods are opened first, so they're found and loaded like the rest.
+        if (Module['arguments'].indexOf('-path') < 0 && files.some(function(e) { return /\.zip$/i.test(e.path); })) {
+          showPickerResult('Opening zipped mods...');
+          files = await openZips(files, isMots);
         }
         // Windows folders ignore case but MEMFS doesn't, so "Episode/AODpc.gob" and
         // a renamed "episode/JK1MP.gob" would land in two sibling folders. The

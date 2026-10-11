@@ -44,6 +44,9 @@ jobs:
       # The host's mod for joiners, with made-up files (no game files).
       - name: Test mod sharing
         run: node packaging/wasm/test/mods-test.mjs
+      # The page's mod list and zipped mods, with made-up files.
+      - name: Test the mod list
+        run: node packaging/wasm/test/picker-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build
