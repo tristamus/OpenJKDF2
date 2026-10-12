@@ -1,4 +1,4 @@
-MSGS 102          # <--- DON'T FORGET TO UPDATE THIS COUNT
+MSGS 104          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
 #  "<key>"     <unused number>   "<string>"
 
@@ -34,6 +34,8 @@ MSGS 102          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_EN_VSYNC"                      0 "Enable VSync"
    "GUIEXT_EN_BLOOM"                      0 "Enable Bloom"
    "GUIEXT_EN_SSAO"                       0 "Enable SSAO"
+   "GUIEXT_EN_SABER_GLOW"                 0 "Colored Saber Glow"
+   "GUIEXT_EN_SABER_GLOW_HINT"            0 "Light the area around a lit saber in its blade's color?"
    "GUIEXT_SSAA_MULT"                     0 "SSAA Multiplier:"
    "GUIEXT_GAMMA_VAL"                     0 "Gamma Value:"
    "GUIEXT_HUD_SCALE"                     0 "HUD Scale:"

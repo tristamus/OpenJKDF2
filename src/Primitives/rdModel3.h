@@ -210,6 +210,7 @@ MATH_FUNC int rdModel3_GetMeshMatrix(rdThing *pThing, rdMatrix34 *orient, uint32
 MATH_FUNC int rdModel3_ReplaceMesh(rdModel3 *pModel, int geosetNum, int meshNum, rdMesh *pSrcMesh);
 MATH_FUNC int rdModel3_Draw(rdThing *pThing, rdMatrix34 *pPlacement);
 MATH_FUNC void rdModel3_DrawHNode(rdHierarchyNode *pNode);
+extern int rdModel3_bAllowColoredLights; // Added: colored saber glow
 MATH_FUNC void rdModel3_DrawMesh(rdMesh *pMesh, rdMatrix34 *orient);
 MATH_FUNC FAST_FUNC int rdModel3_DrawFace(rdFace *pFace, int lightFlags);
 

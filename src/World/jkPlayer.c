@@ -45,6 +45,9 @@
 #define FAST_MISSION_TEXT_DEFAULT (0)
 #endif
 
+// Added: colored saber glow. A lit saber lights the area in its blade's color (Setup > Display).
+int jkPlayer_enableSaberGlow = 1;
+
 // DO NOT FORGET TO ADD TO jkPlayer_ResetVars()
 #ifdef QOL_IMPROVEMENTS
 int Window_isHiDpi_tmp = 0;
@@ -180,6 +183,7 @@ void jkPlayer_StartupVars()
     sithCvar_RegisterBool("r_enableOrigAspect",         0,                          &jkPlayer_enableOrigAspect,         CVARFLAG_LOCAL);
     sithCvar_RegisterBool("r_enableBloom",              0,                          &jkPlayer_enableBloom,              CVARFLAG_LOCAL);
     sithCvar_RegisterBool("r_enableSSAO",               0,                          &jkPlayer_enableSSAO,               CVARFLAG_LOCAL);
+    sithCvar_RegisterBool("r_enableSaberGlow",          1,                          &jkPlayer_enableSaberGlow,          CVARFLAG_LOCAL); // Added
     sithCvar_RegisterInt("r_fpslimit",                  0,                          &jkPlayer_fpslimit,                 CVARFLAG_LOCAL);
     sithCvar_RegisterBool("r_enableVsync",              1,                          &jkPlayer_enableVsync,              CVARFLAG_LOCAL);
     sithCvar_RegisterFlex("r_ssaaMultiple",             1.0,                        &jkPlayer_ssaaMultiple,             CVARFLAG_LOCAL);
@@ -228,6 +232,7 @@ void jkPlayer_ResetVars()
     jkPlayer_enableOrigAspect = 0;
     jkPlayer_enableBloom = 0;
     jkPlayer_enableSSAO = 0;
+    jkPlayer_enableSaberGlow = 1; // Added
     jkPlayer_fpslimit = 0;
     jkPlayer_enableVsync = 1;
     jkPlayer_ssaaMultiple = 1.0;
@@ -576,6 +581,7 @@ void jkPlayer_WriteConf(char16_t *name)
         stdJSON_SaveInt(ext_fpath, "fpslimit", jkPlayer_fpslimit);
         stdJSON_SaveBool(ext_fpath, "enablevsync", jkPlayer_enableVsync);
         stdJSON_SaveBool(ext_fpath, "enablebloom", jkPlayer_enableBloom);
+        stdJSON_SaveBool(ext_fpath, "saberglow", jkPlayer_enableSaberGlow); // Added
         stdJSON_SaveFloat(ext_fpath, "ssaamultiple", jkPlayer_ssaaMultiple);
         stdJSON_SaveInt(ext_fpath, "enablessao", jkPlayer_enableSSAO);
         stdJSON_SaveFloat(ext_fpath, "gamma", jkPlayer_gamma);
@@ -781,6 +787,7 @@ int jkPlayer_ReadConf(char16_t *name)
         jkPlayer_fpslimit = stdJSON_GetInt(ext_fpath, "fpslimit", jkPlayer_fpslimit);
         jkPlayer_enableVsync = stdJSON_GetBool(ext_fpath, "enablevsync", jkPlayer_enableVsync);
         jkPlayer_enableBloom = stdJSON_GetBool(ext_fpath, "enablebloom", jkPlayer_enableBloom);
+        jkPlayer_enableSaberGlow = stdJSON_GetBool(ext_fpath, "saberglow", jkPlayer_enableSaberGlow); // Added
         jkPlayer_ssaaMultiple = stdJSON_GetFloat(ext_fpath, "ssaamultiple", jkPlayer_ssaaMultiple);
         jkPlayer_enableSSAO = stdJSON_GetInt(ext_fpath, "enablessao", jkPlayer_enableSSAO);
         jkPlayer_gamma = stdJSON_GetFloat(ext_fpath, "gamma", jkPlayer_gamma);

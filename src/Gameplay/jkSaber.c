@@ -16,6 +16,8 @@
 #include "Engine/sithCollision.h"
 #include "Main/jkSmack.h"
 #include "General/stdString.h"
+#include "Engine/rdMaterial.h"
+#include "Win95/stdDisplay.h"
 
 #include "jk.h"
 
@@ -28,6 +30,195 @@ void jkSaber_Startup()
 
 void jkSaber_Shutdown()
 {
+}
+
+// Added: colored saber glow. Averages the visible pixels of a blade material's
+// first texture, weighted by how colorful each pixel is, so a white core doesn't
+// wash the color out. Returns 0 when the texture has no visible pixels (SBX's
+// blades are fully transparent), 1 with the color otherwise. A gray or white
+// texture gives white.
+static int jkSaber_GlowColorFromTexture(rdMaterial* pMaterial, rdVector3* pOut)
+{
+    if (!pMaterial || !pMaterial->textures || !pMaterial->num_textures)
+        return 0;
+#ifdef RDMATERIAL_LRU_LOAD_UNLOAD
+    if (!pMaterial->bDataLoaded)
+        return 0;
+#endif
+
+    rdTexture* pTexture = &pMaterial->textures[0];
+    if (!pTexture->num_mipmaps)
+        return 0;
+    tVBuffer* pVBuf = pTexture->texture_struct[0];
+    if (!pVBuf)
+        return 0;
+
+    int bIs16bit = pVBuf->format.format.is16bit;
+    const rdColor24* pPalette = NULL;
+    if (!bIs16bit) {
+        // The renderer shows 8-bit textures through the level's palette
+        if (sithWorld_g_pCurrentWorld && sithWorld_g_pCurrentWorld->colormaps)
+            pPalette = sithWorld_g_pCurrentWorld->colormaps->colors;
+        else
+            pPalette = pMaterial->palette_alloc;
+        if (!pPalette)
+            return 0;
+    }
+
+    int width = pVBuf->format.width;
+    int height = pVBuf->format.height;
+    if (width <= 0 || height <= 0)
+        return 0;
+    int rowStride = pVBuf->format.rowSize / (bIs16bit ? 2 : 1);
+    if (rowStride < width)
+        rowStride = width;
+    int bAlpha = pTexture->alpha_en & 1;
+
+    if (!stdDisplay_VBufferLock(pVBuf))
+        return 0;
+    const uint8_t* pPixels = (const uint8_t*)pVBuf->surface_lock_alloc;
+    if (!pPixels) {
+        stdDisplay_VBufferUnlock(pVBuf);
+        return 0;
+    }
+
+    double sumR = 0.0, sumG = 0.0, sumB = 0.0, sumWeight = 0.0;
+    int numVisible = 0;
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            flex_t r, g, b;
+            if (bIs16bit)
+            {
+                uint16_t val = ((const uint16_t*)pPixels)[(y * rowStride) + x];
+                if (bAlpha) { // RGB1555
+                    if (!(val >> 15))
+                        continue;
+                    r = ((val >> 10) & 0x1F) / 31.0;
+                    g = ((val >> 5) & 0x1F) / 31.0;
+                    b = (val & 0x1F) / 31.0;
+                }
+                else { // RGB565
+                    r = ((val >> 11) & 0x1F) / 31.0;
+                    g = ((val >> 5) & 0x3F) / 63.0;
+                    b = (val & 0x1F) / 31.0;
+                }
+            }
+            else
+            {
+                uint8_t idx = pPixels[(y * rowStride) + x];
+                if (idx == 0 || (bAlpha && idx == pTexture->color_transparent))
+                    continue;
+                r = pPalette[idx].r / 255.0;
+                g = pPalette[idx].g / 255.0;
+                b = pPalette[idx].b / 255.0;
+            }
+
+            flex_t maxC = r > g ? (r > b ? r : b) : (g > b ? g : b);
+            flex_t minC = r < g ? (r < b ? r : b) : (g < b ? g : b);
+            if (maxC < 0.08)
+                continue;
+            numVisible++;
+
+            flex_t weight = maxC - minC;
+            sumR += r * weight;
+            sumG += g * weight;
+            sumB += b * weight;
+            sumWeight += weight;
+        }
+    }
+    stdDisplay_VBufferUnlock(pVBuf);
+
+    if (!numVisible)
+        return 0;
+
+    // Mostly gray or white blade: white light
+    if (sumWeight < numVisible * 0.06 || sumWeight <= 0.0) {
+        rdVector_Set3(pOut, 1.0, 1.0, 1.0);
+        return 1;
+    }
+
+    flex_t r = sumR / sumWeight;
+    flex_t g = sumG / sumWeight;
+    flex_t b = sumB / sumWeight;
+    flex_t maxC = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    if (maxC <= 0.0) {
+        rdVector_Set3(pOut, 1.0, 1.0, 1.0);
+        return 1;
+    }
+    rdVector_Set3(pOut, r / maxC, g / maxC, b / maxC);
+    return 1;
+}
+
+// Added: colored saber glow. Color from a color word in the blade material's
+// file name, for blades whose texture is blank. Longer words are checked first,
+// so "lblue" wins over "blue".
+static int jkSaber_GlowColorFromName(const char* pFname, rdVector3* pOut)
+{
+    static const struct {
+        const char* pWord;
+        flex32_t r, g, b;
+    } aColorWords[] = {
+        {"lightblue", 0.45, 0.80, 1.00},
+        {"ltblue",    0.45, 0.80, 1.00},
+        {"lblue",     0.45, 0.80, 1.00},
+        {"magenta",   1.00, 0.30, 0.85},
+        {"purple",    0.70, 0.25, 1.00},
+        {"violet",    0.70, 0.25, 1.00},
+        {"orange",    1.00, 0.50, 0.10},
+        {"yellow",    1.00, 0.90, 0.20},
+        {"silver",    1.00, 1.00, 1.00},
+        {"white",     1.00, 1.00, 1.00},
+        {"green",     0.20, 1.00, 0.25},
+        {"cyan",      0.20, 0.95, 1.00},
+        {"teal",      0.20, 0.95, 1.00},
+        {"blue",      0.15, 0.35, 1.00},
+        {"gold",      1.00, 0.80, 0.20},
+        {"pink",      1.00, 0.35, 0.80},
+        {"red",       1.00, 0.12, 0.08},
+    };
+
+    if (!pFname)
+        return 0;
+
+    char lowered[128];
+    stdString_SafeStrCopy(lowered, pFname, sizeof(lowered));
+    for (char* c = lowered; *c; c++) {
+        if (*c >= 'A' && *c <= 'Z')
+            *c = *c - 'A' + 'a';
+    }
+    // Only the file's own name, not its folder
+    const char* pName = lowered;
+    for (const char* c = lowered; *c; c++) {
+        if (*c == '/' || *c == '\\')
+            pName = c + 1;
+    }
+
+    for (size_t i = 0; i < sizeof(aColorWords) / sizeof(aColorWords[0]); i++)
+    {
+        if (strstr(pName, aColorWords[i].pWord)) {
+            rdVector_Set3(pOut, aColorWords[i].r, aColorWords[i].g, aColorWords[i].b);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Added: colored saber glow. The color of the light a lit blade casts: from the
+// side texture, then the tip texture, then their file names, else white.
+static void jkSaber_CalcGlowColor(jkPlayerInfo* saberinfo, const char* material_side_fname, const char* material_tip_fname)
+{
+    rdVector3* pOut = &saberinfo->saberGlowColor;
+    if (jkSaber_GlowColorFromTexture(saberinfo->polyline.face.material, pOut))
+        return;
+    if (jkSaber_GlowColorFromTexture(saberinfo->polyline.tipFace.material, pOut))
+        return;
+    if (jkSaber_GlowColorFromName(material_side_fname, pOut))
+        return;
+    if (jkSaber_GlowColorFromName(material_tip_fname, pOut))
+        return;
+    rdVector_Set3(pOut, 1.0, 1.0, 1.0);
 }
 
 void jkSaber_InitializeSaberInfo(SithThing *thing, char *material_side_fname, char *material_tip_fname, flex_t base_rad, flex_t tip_rad, flex_t len, SithThing *wall_sparks, SithThing *blood_sparks, SithThing *saber_sparks)
@@ -62,6 +253,8 @@ void jkSaber_InitializeSaberInfo(SithThing *thing, char *material_side_fname, ch
     saberinfo->blood_sparks = blood_sparks;
     saberinfo->saber_sparks = saber_sparks;
     saberinfo->length = len;
+
+    jkSaber_CalcGlowColor(saberinfo, material_side_fname, material_tip_fname); // Added: colored saber glow
 }
 
 void jkSaber_PolylineRand(rdThing *thing)

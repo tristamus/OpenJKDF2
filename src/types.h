@@ -545,6 +545,7 @@ typedef struct rdLight
 #endif
     flex_t minRadius;
     flex_t maxRadius;
+    rdVector3 rgb; // Added: light color, (1,1,1) is the original white. Only colored saber glow sets it.
 } rdLight;
 
 
@@ -697,6 +698,7 @@ typedef struct rdProcEntry
     int32_t y_min_related;
     int32_t y_max_related;
     uint32_t vertexColorMode;
+    uint32_t bVertexRGB; // Added: this face's lighting is in paRed/Green/BlueIntensities (vertex color mode 1 when it was made)
 } rdProcEntry;
 
 typedef struct v11_struct
@@ -1638,6 +1640,10 @@ typedef struct rdMeshinfo
     flex_t* paRedIntensities;
     flex_t* paGreenIntensities;
     flex_t* paBlueIntensities;
+    // Added: colored dynamic light per channel, used instead of paDynamicLight when set
+    flex_t* paDynamicRed;
+    flex_t* paDynamicGreen;
+    flex_t* paDynamicBlue;
 #endif
     rdVector3* verticesOrig;
 } rdMeshinfo;
@@ -2674,6 +2680,7 @@ typedef struct jkPlayerInfo
     flex_t jkmUnk6;
     int32_t personality;
 #endif // JKM_TYPES
+    rdVector3 saberGlowColor; // Added: color of the light the lit blade casts, worked out from its materials
 } jkPlayerInfo;
 
 typedef struct jkPlayerMpcInfo

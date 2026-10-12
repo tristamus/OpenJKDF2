@@ -26,6 +26,42 @@
 #include "Engine/rdColormap.h"
 #include "Primitives/rdPrimit3.h"
 #include "Primitives/rdDebug.h"
+#include "Engine/rdLight.h"
+
+// Added: colored saber glow on models. While the caller allows it, a Gouraud-lit mesh
+// that a colored light reaches is lit per channel and drawn with vertex color mode 1.
+// The buffer holds red, green, blue and a block of zeros for the dynamic light slot.
+int rdModel3_bAllowColoredLights = 0;
+static int rdModel3_bMeshColored = 0;
+static flex_t* rdModel3_paColoredLight = NULL;
+static int rdModel3_coloredLightSize = 0;
+
+static int rdModel3_MeshLightsAreColored()
+{
+    for (int i = 0; i < rdModel3_numMeshLights; i++)
+    {
+        rdLight* pLight = apMeshLights[i];
+        if (pLight->rgb.x != 1.0 || pLight->rgb.y != 1.0 || pLight->rgb.z != 1.0)
+            return 1;
+    }
+    return 0;
+}
+
+static int rdModel3_EnsureColoredLightBuffer(int numVertices)
+{
+    if (numVertices <= rdModel3_coloredLightSize)
+        return 1;
+
+    flex_t* pNew = (flex_t*)RDROID_ALLOC(sizeof(flex_t) * 4 * numVertices);
+    if (!pNew)
+        return 0;
+    memset(pNew, 0, sizeof(flex_t) * 4 * numVertices);
+    if (rdModel3_paColoredLight)
+        RDROID_FREE(rdModel3_paColoredLight);
+    rdModel3_paColoredLight = pNew;
+    rdModel3_coloredLightSize = numVertices;
+    return 1;
+}
 
 model3Loader_t rdModel3_RegisterLoader(model3Loader_t pfFunc)
 {
@@ -1496,6 +1532,7 @@ void rdModel3_DrawMesh(rdMesh *pMesh, rdMatrix34 *orient)
     RD_ASSERTREL(pMesh != NULL); // Added: J3D assert
 
     pCurMesh = pMesh;
+    rdModel3_bMeshColored = 0; // Added
     if ( !pMesh->geometryMode )
         return;
     
@@ -1639,6 +1676,32 @@ void rdModel3_DrawMesh(rdMesh *pMesh, rdMatrix34 *orient)
             pCurMesh->vertices_unk,
             pCurMesh->numVertices,
             rdCamera_g_pCurCamera->attenuationMin);
+
+        // Added: colored saber glow. Only for meshes drawn in mono vertex color mode,
+        // so MotS level geometry keeps its own RGB lighting.
+        if (rdModel3_bAllowColoredLights
+            && rdGetVertexColorMode() == 0
+            && rdModel3_MeshLightsAreColored()
+            && rdModel3_EnsureColoredLightBuffer(pCurMesh->numVertices))
+        {
+            int n = rdModel3_coloredLightSize;
+            rdLight_CalcVertexIntensitiesRGB(
+                apMeshLights,
+                rdModel3_aLocalLightPos,
+#ifdef JKM_LIGHTING
+                rdModel3_aLocalLightDir,
+#endif
+                rdModel3_numMeshLights,
+                pCurMesh->vertexNormals,
+                pCurMesh->aVertices,
+                pCurMesh->vertices_i,
+                &rdModel3_paColoredLight[0],
+                &rdModel3_paColoredLight[n],
+                &rdModel3_paColoredLight[n*2],
+                pCurMesh->numVertices,
+                rdCamera_g_pCurCamera->attenuationMin);
+            rdModel3_bMeshColored = 1;
+        }
     }
     else if (rdModel3_lightingMode == RD_LIGHTMODE_6_UNK) // MOTS added
     {
@@ -1658,6 +1721,10 @@ void rdModel3_DrawMesh(rdMesh *pMesh, rdMatrix34 *orient)
 #ifdef TARGET_TWL
     rdroid_g_curRenderOptions |= 1;
 #endif
+
+    // Added: colored saber glow
+    if (rdModel3_bMeshColored)
+        rdSetVertexColorMode(1);
 
     for (int i = 0; i < pMesh->numFaces; i++)
     {
@@ -1681,6 +1748,13 @@ void rdModel3_DrawMesh(rdMesh *pMesh, rdMatrix34 *orient)
         // Everything except rdModel3_DrawFace: 2ms
         rdModel3_DrawFace(face, flags);
         ++face;
+    }
+
+    // Added: colored saber glow
+    if (rdModel3_bMeshColored)
+    {
+        rdSetVertexColorMode(0);
+        rdModel3_bMeshColored = 0;
     }
 }
 
@@ -1743,9 +1817,21 @@ int rdModel3_DrawFace(rdFace *pFace, int lightFlags)
             rdPrimit3_NoClipFace(geometryMode, lightingMode, textureMode, &vertexSrc, &vertexDst, &pFace->texVertOffset);
     }
     else {
+        flex_t* pDynamicLight = vertexSrc.paDynamicLight;
         vertexSrc.paRedIntensities = pCurMesh->paRedIntensities;
         vertexSrc.paGreenIntensities = pCurMesh->paGreenIntensities;
         vertexSrc.paBlueIntensities = pCurMesh->paBlueIntensities;
+
+        // Added: colored saber glow. The per-channel light already includes the
+        // static vertex light, so the dynamic slot gets the block of zeros.
+        if (rdModel3_bMeshColored) {
+            int n = rdModel3_coloredLightSize;
+            vertexSrc.paRedIntensities = &rdModel3_paColoredLight[0];
+            vertexSrc.paGreenIntensities = &rdModel3_paColoredLight[n];
+            vertexSrc.paBlueIntensities = &rdModel3_paColoredLight[n*2];
+            vertexSrc.paDynamicLight = &rdModel3_paColoredLight[n*3];
+        }
+
         vertexDst.paRedIntensities = procEntry->paRedIntensities;
         vertexDst.paGreenIntensities = procEntry->paGreenIntensities;
         vertexDst.paBlueIntensities = procEntry->paBlueIntensities;
@@ -1754,6 +1840,7 @@ int rdModel3_DrawFace(rdFace *pFace, int lightFlags)
             rdPrimit3_ClipFaceRGB(rdCamera_g_pCurCamera->pClipFrustum, geometryMode, lightingMode, textureMode, &vertexSrc, &vertexDst, &pFace->texVertOffset);
         else
             rdPrimit3_NoClipFaceRGB(geometryMode, lightingMode, textureMode, &vertexSrc, &vertexDst, &pFace->texVertOffset);
+        vertexSrc.paDynamicLight = pDynamicLight; // Added
     }
 
     if ( vertexDst.numVertices < 3u )

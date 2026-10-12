@@ -1607,15 +1607,20 @@ void rdPrimit3_ClipFaceRGBLevel
                 flex_t* greenIter = mesh_out->paGreenIntensities;
                 flex_t* blueIter = mesh_out->paBlueIntensities;
 
+                // Added: colored dynamic light (saber glow), per channel
+                flex_t* pDynRed = idxInfo->paDynamicRed ? idxInfo->paDynamicRed : pfVar9;
+                flex_t* pDynGreen = idxInfo->paDynamicGreen ? idxInfo->paDynamicGreen : pfVar9;
+                flex_t* pDynBlue = idxInfo->paDynamicBlue ? idxInfo->paDynamicBlue : pfVar9;
+
                 int idxIter = 0;
                 
                 for (int idkIn_ = idxInfo->numVertices; idkIn_ > 0; idkIn_--) {
                     iVar12 = *piVar18;
                     prVar1 = prVar7 + iVar12;
                     rdVector_Copy3(prVar20, prVar1);
-                    *redIter = stdMath_Clamp(idxInfo->paRedIntensities[idxIter] + pfVar9[iVar12], 0.0, 1.0);
-                    *greenIter = stdMath_Clamp(idxInfo->paGreenIntensities[idxIter] + pfVar9[iVar12], 0.0, 1.0);
-                    *blueIter = stdMath_Clamp(idxInfo->paBlueIntensities[idxIter] + pfVar9[iVar12], 0.0, 1.0);
+                    *redIter = stdMath_Clamp(idxInfo->paRedIntensities[idxIter] + pDynRed[iVar12], 0.0, 1.0);
+                    *greenIter = stdMath_Clamp(idxInfo->paGreenIntensities[idxIter] + pDynGreen[iVar12], 0.0, 1.0);
+                    *blueIter = stdMath_Clamp(idxInfo->paBlueIntensities[idxIter] + pDynBlue[iVar12], 0.0, 1.0);
                     prVar20++;
                     piVar18++;
 
@@ -1686,6 +1691,11 @@ void rdPrimit3_ClipFaceRGBLevel
                     flex_t* greenIter = mesh_out->paGreenIntensities;
                     flex_t* blueIter = mesh_out->paBlueIntensities;
 
+                    // Added: colored dynamic light (saber glow), per channel
+                    flex_t* pDynRed = idxInfo->paDynamicRed ? idxInfo->paDynamicRed : pfVar9;
+                    flex_t* pDynGreen = idxInfo->paDynamicGreen ? idxInfo->paDynamicGreen : pfVar9;
+                    flex_t* pDynBlue = idxInfo->paDynamicBlue ? idxInfo->paDynamicBlue : pfVar9;
+
                     int idxIter = 0;
                     local_8 = idxInfo->numVertices;
                     do {
@@ -1695,9 +1705,9 @@ void rdPrimit3_ClipFaceRGBLevel
                         iVar13 = *piVar18;
                         prVar17->x = prVar5[iVar13].x + idkIn->x;
                         prVar17->y = prVar5[iVar13].y + idkIn->y;
-                        *redIter = stdMath_Clamp(pfVar9[iVar12] + idxInfo->paRedIntensities[idxIter], 0.0, 1.0);
-                        *greenIter = stdMath_Clamp(pfVar9[iVar12] + idxInfo->paGreenIntensities[idxIter], 0.0, 1.0);
-                        *blueIter = stdMath_Clamp(pfVar9[iVar12] + idxInfo->paBlueIntensities[idxIter], 0.0, 1.0);
+                        *redIter = stdMath_Clamp(pDynRed[iVar12] + idxInfo->paRedIntensities[idxIter], 0.0, 1.0);
+                        *greenIter = stdMath_Clamp(pDynGreen[iVar12] + idxInfo->paGreenIntensities[idxIter], 0.0, 1.0);
+                        *blueIter = stdMath_Clamp(pDynBlue[iVar12] + idxInfo->paBlueIntensities[idxIter], 0.0, 1.0);
 
                         local_10++;
                         prVar17++;
