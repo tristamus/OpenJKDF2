@@ -1010,6 +1010,18 @@
         });
       }
 
+      // Mods are for Jedi Knight only, so Mysteries of the Sith runs as the
+      // original game: no mod list, and the mods in its folder aren't loaded.
+      // Left in, the engine would still load the ones in mods/ and resource/,
+      // without joiners getting them.
+      function withoutMods(files) {
+        var mods = detectMods(files, true);
+        return files.filter(function(e) {
+          var lower = e.path.toLowerCase();
+          return !mods.some(function(m) { return m.rel(lower, e.path); });
+        });
+      }
+
       // ---- Mods kept as zip files. The game can't read a zip, so the page
       // opens each one that holds a mod and puts its files in a folder named
       // after it, as if it had been unzipped in place, like
@@ -1432,7 +1444,7 @@
           return;
         }
         // Zipped mods are opened first, so they're found and loaded like the rest.
-        if (Module['arguments'].indexOf('-path') < 0 && files.some(function(e) { return /\.zip$/i.test(e.path); })) {
+        if (Module['arguments'].indexOf('-path') < 0 && !isMots && files.some(function(e) { return /\.zip$/i.test(e.path); })) {
           showPickerResult('Opening zipped mods...');
           files = await openZips(files, isMots);
         }
@@ -1466,7 +1478,9 @@
         var game = isMots ? 'mots' : 'jk1';
         var ext = isMots ? '.goo' : '.gob';
         var picked = null, found = { clashes: {}, contents: [] };
-        if (Module['arguments'].indexOf('-path') < 0) {
+        if (Module['arguments'].indexOf('-path') < 0 && isMots) {
+          files = withoutMods(files);
+        } else if (Module['arguments'].indexOf('-path') < 0) {
           var folderMods = detectMods(files, isMots);
           var saved = typeof indexedDB !== 'undefined' ? await storedMods(game) : [];
           if (folderMods.length > 1) {

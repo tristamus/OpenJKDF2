@@ -16,10 +16,10 @@ function cut(from, to) {
     assert.ok(a > 0 && b > a, 'index.html has ' + from);
     return html.substring(a, b);
 }
-const { openZips, detectMods } = new Function(
+const { openZips, detectMods, withoutMods } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
-    '\nreturn { openZips, detectMods };')();
+    '\nreturn { openZips, detectMods, withoutMods };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -100,6 +100,37 @@ test('zips that are not mods stay closed', async () => {
     const after = await openZips(before, false);
     assert.deepEqual(after.map(e => e.path), before.map(e => e.path));
     assert.deepEqual(list(after), []);
+});
+
+// Laid out like a Steam Mysteries of the Sith folder with the MotS
+// Remastered pack in it.
+const goo = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
+function pickMots(extra) {
+    const files = {
+        'Episode/JKM.GOO': null, 'Episode/JKM_KFY.GOO': null, 'Episode/JKM_MP.GOO': null, 'Episode/JKM_SABER.GOO': null,
+        'Episode/MotS Secret Level/jkl/S6L1.jkl': 'jkl', 'Resource/JKMRES.GOO': null, 'Resource/JKMsndLO.goo': null,
+        'Resource/JK_.CD': 'cd', 'Resource/Backup Sounds/JKMSNDLO.GOO': null, 'Resource/ui/BM/bkmain.bm': 'bm',
+        'Mods/JKMRemasteredAssets.goo': null, 'jkmcutscenes/JKM4B.GOO': null,
+        'jkgm/materials/SABER19/metadata.json': '{}', 'Controls/assassin.ctm': 'c', 'registry.json': '{}',
+        ...extra };
+    return Object.entries(files).map(([path, bytes]) => ({
+        path, file: new Blob([bytes || (/\.goo$/i.test(path) ? goo('x', path) : Buffer.from(path))]) }));
+}
+
+test('a Mysteries of the Sith folder loads without its mods', () => {
+    const files = pickMots({});
+    assert.deepEqual(detectMods(files, true).map(m => m.name), ['jkmcutscenes', 'JKMRemasteredAssets']);
+    const kept = withoutMods(files).map(e => e.path);
+    assert.deepEqual(kept, files.map(e => e.path).filter(p => !/^(Mods|jkmcutscenes)\//.test(p)));
+    for (const p of ['Resource/JKMRES.GOO', 'Resource/JKMsndLO.goo', 'Episode/JKM_MP.GOO', 'Resource/ui/BM/bkmain.bm'])
+        assert.ok(kept.includes(p), p);
+});
+
+test('every kind of MotS mod is left out', () => {
+    const files = pickMots({ 'Resource/Saber.goo': null, 'mods/More.goo': null, 'SBX/sbx.goo': null, 'Kit/cog/k.cog': 'k',
+                             'mod/A.goo': null, 'mod/B.goo': null, 'JKPatch/active/p.goo': null });
+    assert.equal(detectMods(withoutMods(files), true).length, 0);
+    assert.ok(withoutMods(files).some(e => e.path === 'Resource/JKMRES.GOO'));
 });
 
 let failed = 0;
