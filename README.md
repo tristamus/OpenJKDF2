@@ -93,6 +93,7 @@ Everything above is merged into the `web-mp` branch, and the live site is built 
 - [#12](https://github.com/tristamus/OpenJKDF2/pull/12): View Cutscenes and Expansions & Mods hidden from the main menu
 - [#13](https://github.com/tristamus/OpenJKDF2/pull/13): mods, several at a time, shared with joiners
 - [#15](https://github.com/tristamus/OpenJKDF2/pull/15): display settings kept in the browser between visits
+- [#18](https://github.com/tristamus/OpenJKDF2/pull/18): characters with an unreadable `.plr` can be picked again
 - The lobby's code, including the Firefox fix, is on the `main` branch of [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
 
 To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md`.
