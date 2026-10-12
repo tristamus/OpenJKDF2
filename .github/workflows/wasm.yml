@@ -47,6 +47,9 @@ jobs:
       # The page's mod list and zipped mods, with made-up files.
       - name: Test the mod list
         run: node packaging/wasm/test/picker-test.mjs
+      # Screenshots: storing them, their names and the zip, with made-up pictures.
+      - name: Test screenshots
+        run: node packaging/wasm/test/screenshots-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

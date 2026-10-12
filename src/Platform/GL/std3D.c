@@ -3664,6 +3664,26 @@ void std3D_ScreenshotWindow(const char* pFpath)
 }
 #endif
 
+#ifdef ARCH_WASM
+// Added: screenshots in the browser build, which has no PNG writer
+// (TARGET_CAN_JKGM is off there). Reads back the frame std3D_DrawMenu just
+// drew into the window, HUD included, as RGBA rows from the bottom up, for the
+// page to encode (jkGame_UpdateScreenshots). The caller frees it.
+uint8_t* std3D_ReadWindowRGBA(int* pW, int* pH)
+{
+    int w = Window_xSize, h = Window_ySize;
+    if (Main_bHeadless || w <= 0 || h <= 0) return NULL;
+
+    uint8_t* data = (uint8_t*)malloc((size_t)w * h * 4);
+    if (!data) return NULL;
+    glBindFramebuffer(GL_FRAMEBUFFER, std3D_windowFbo);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    *pW = w;
+    *pH = h;
+    return data;
+}
+#endif
+
 int std3D_HasAlpha()
 {
     return 1;

@@ -131,6 +131,9 @@ void std3D_Screenshot(const char* pFpath);
 #ifdef RDRASTER_SOFTWARE_RENDERER
 void std3D_ScreenshotWindow(const char* pFpath);
 #endif
+#ifdef ARCH_WASM
+uint8_t* std3D_ReadWindowRGBA(int* pW, int* pH); // Added
+#endif
 
 void std3D_ResetUIRenderList();
 int std3D_AddBitmapToTextureCache(stdBitmap *texture, int mipIdx, int is_alpha_tex, int no_alpha);

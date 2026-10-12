@@ -307,6 +307,49 @@
 
       .info { margin: 0; padding-left: 20px; }
       .info li { margin-bottom: 6px; }
+
+      .zone-button {
+        padding: 4px 12px;
+        border: 2px outset #9cc;
+        background-color: var(--teal-light);
+        color: #fff;
+        font: bold 13px Verdana, Geneva, sans-serif;
+        cursor: pointer;
+      }
+      .zone-button:active { border-style: inset; }
+      .zone-button:disabled { opacity: 0.5; cursor: default; }
+      .text-button {
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--link);
+        font: inherit;
+        text-decoration: underline;
+        cursor: pointer;
+      }
+      .text-button:hover { color: var(--gold); }
+      .shots-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
+      .shots {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .shots li {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 6px;
+        background-color: var(--teal-dark);
+        border: 1px solid var(--teal-light);
+        font-size: 13px;
+      }
+      .shots img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background-color: #000; }
+      .shots .when { margin-top: 4px; font-weight: bold; font-size: 14px; }
+      .shots .what { color: var(--muted); }
+      .shots .shot-actions { display: flex; gap: 14px; margin-top: 2px; }
       #zone code { color: var(--gold); font: bold 14px 'Courier New', monospace; }
 
       .footer {
@@ -468,6 +511,7 @@
           <a href="#rooms">Game Rooms</a>
           <a href="#start">Getting Started</a>
           <a href="#files">Your Files</a>
+          <a href="#screenshots">Screenshots</a>
           <a href="#help">Help</a>
         </nav>
         <p class="tagline">Free to play. No account needed.</p>
@@ -479,6 +523,7 @@
               <li><a href="#rooms" class="here">Game Rooms</a></li>
               <li><a href="#start">Getting Started</a></li>
               <li><a href="#files">Your Files</a></li>
+              <li><a href="#screenshots">Your Screenshots</a></li>
               <li><a href="#help">Game Help</a></li>
             </ul>
             <div class="goto">Go To:
@@ -570,7 +615,20 @@
                   the files. That's its standard wording for letting a page read a folder. The files still
                   stay on your computer.</li>
                 <li>Your characters and controls are saved in this browser, so they're there next time.</li>
+                <li>So are your screenshots, under <a href="#screenshots">Your Screenshots</a>. Clearing this
+                  site's data in your browser deletes them, so download the ones you want to keep.</li>
               </ul>
+            </section>
+
+            <section id="screenshots" aria-labelledby="screenshots-title">
+              <h2 class="ruled" id="screenshots-title">Your Screenshots <small id="shots-summary"></small></h2>
+              <p class="note">Press F12 in a game, or the key you set for screenshots, and the picture is
+                saved here, in this browser.</p>
+              <div class="shots-bar" id="shots-bar" hidden>
+                <button class="zone-button" type="button" id="shots-zip">Download all (.zip)</button>
+                <button class="zone-button" type="button" id="shots-clear">Delete all</button>
+              </div>
+              <ul class="shots" id="shots"></ul>
             </section>
 
             <section id="help" aria-labelledby="help-title">
@@ -733,6 +791,410 @@
           canvas.height = window.innerHeight;
           canvas.style.height = window.innerHeight;
       }
+    </script>
+    <script type='text/javascript'>
+      // ---- Screenshots: F12 in a game, or the key set for them. The engine
+      // reads the finished frame back and hands it here
+      // (jkGame_UpdateScreenshots in src/Main/jkGame.c). Each one is turned
+      // into a PNG and kept in this browser's IndexedDB, in a database of its
+      // own rather than with the characters and settings, and listed under
+      // Your Screenshots on this page.
+
+      var SHOT_GAMES = {
+        jk1: { tag: 'JK', title: 'Jedi Knight' },
+        mots: { tag: 'MotS', title: 'Mysteries of the Sith' }
+      };
+
+      // The level's file name without .jkl, safe in a file name.
+      function shotLevel(level) {
+        return String(level || '').replace(/^.*[\\/]/, '').replace(/\.jkl$/i, '')
+                                  .replace(/[^\w.-]+/g, '_').substring(0, 31);
+      }
+
+      // "JK 2026-10-12 02-42-16 m10", in the player's own time zone, so they
+      // sort by when they were taken.
+      function shotName(game, level, date) {
+        function two(n) { return (n < 10 ? '0' : '') + n; }
+        var name = (SHOT_GAMES[game] || SHOT_GAMES.jk1).tag + ' ' +
+                   date.getFullYear() + '-' + two(date.getMonth() + 1) + '-' + two(date.getDate()) + ' ' +
+                   two(date.getHours()) + '-' + two(date.getMinutes()) + '-' + two(date.getSeconds());
+        var lvl = shotLevel(level);
+        return lvl ? name + ' ' + lvl : name;
+      }
+
+      // The engine's rows run from the bottom up, and what's on screen isn't
+      // meant to be seen through.
+      function shotPixels(rgba, w, h) {
+        var out = new Uint8ClampedArray(w * h * 4);
+        var row = w * 4;
+        for (var y = 0; y < h; y++)
+          out.set(rgba.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+        for (var i = 3; i < out.length; i += 4)
+          out[i] = 255;
+        return out;
+      }
+
+      function canvasBytes(canvas, type, quality) {
+        return new Promise(function(resolve, reject) {
+          canvas.toBlob(function(blob) {
+            if (!blob) return reject(new Error('the browser could not make the ' + type));
+            blob.arrayBuffer().then(function(b) { resolve(new Uint8Array(b)); }, reject);
+          }, type, quality);
+        });
+      }
+
+      var THUMB_WIDTH = 320;
+
+      // The PNG, and a small JPEG for the list on this page, so the page
+      // doesn't load every full-size picture to show them.
+      async function shotImages(pixels, w, h) {
+        var canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').putImageData(new ImageData(pixels, w, h), 0, 0);
+        var thumb = document.createElement('canvas');
+        thumb.width = Math.min(THUMB_WIDTH, w);
+        thumb.height = Math.max(1, Math.round(h * thumb.width / w));
+        var ctx = thumb.getContext('2d');
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(canvas, 0, 0, thumb.width, thumb.height);
+        return { png: await canvasBytes(canvas, 'image/png'), thumb: await canvasBytes(thumb, 'image/jpeg', 0.85) };
+      }
+
+      // A record per screenshot in meta (name, game, level, time, size and
+      // the small picture) and its PNG in data, both under its file name.
+      function shotStore(idb) {
+        var dbPromise = null;
+
+        function open() {
+          if (!dbPromise) {
+            dbPromise = new Promise(function(resolve, reject) {
+              var req = idb.open('jkdf2mp-screenshots', 1);
+              req.onupgradeneeded = function() {
+                req.result.createObjectStore('meta', { keyPath: 'key' });
+                req.result.createObjectStore('data');
+              };
+              req.onsuccess = function() { resolve(req.result); };
+              req.onerror = function() { reject(req.error); };
+              req.onblocked = function() { reject(new Error('the screenshot store is busy')); };
+            });
+            // Lets a later call try again.
+            dbPromise.catch(function() { dbPromise = null; });
+          }
+          return dbPromise;
+        }
+
+        function request(req) {
+          return new Promise(function(resolve, reject) {
+            req.onsuccess = function() { resolve(req.result); };
+            req.onerror = function() { reject(req.error); };
+          });
+        }
+
+        function done(tx) {
+          return new Promise(function(resolve, reject) {
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = tx.onabort = function() { reject(tx.error); };
+          });
+        }
+
+        // Newest first.
+        async function list() {
+          var db = await open();
+          var all = await request(db.transaction('meta').objectStore('meta').getAll());
+          return all.sort(function(a, b) { return b.time - a.time; });
+        }
+
+        async function read(key) {
+          var db = await open();
+          return request(db.transaction('data').objectStore('data').get(key));
+        }
+
+        async function add(meta, png) {
+          var db = await open();
+          var tx = db.transaction(['meta', 'data'], 'readwrite');
+          tx.objectStore('data').put(png, meta.key);
+          tx.objectStore('meta').put(meta);
+          await done(tx);
+        }
+
+        async function remove(keys) {
+          var db = await open();
+          var tx = db.transaction(['meta', 'data'], 'readwrite');
+          for (var key of keys) {
+            tx.objectStore('meta').delete(key);
+            tx.objectStore('data').delete(key);
+          }
+          await done(tx);
+        }
+
+        return { list: list, read: read, add: add, remove: remove };
+      }
+
+      // What the engine calls: save() takes a screenshot and stores it in the
+      // background, and result() tells it how the oldest one still owed went
+      // (0 not done yet, 1 saved, 2 not saved), each one once, in order.
+      function shotSaver(store, makeImages) {
+        var queue = Promise.resolve();
+        var results = [];
+
+        function save(rgba, w, h, game, level) {
+          var date = new Date();
+          var job = queue.then(async function() {
+            var images = await makeImages(shotPixels(rgba, w, h), w, h);
+            var base = shotName(game, level, date);
+            var taken = {};
+            for (var m of await store.list())
+              taken[m.key] = true;
+            var name = base + '.png';
+            for (var n = 2; taken[name]; n++)
+              name = base + ' (' + n + ').png';
+            await store.add({ key: name, game: SHOT_GAMES[game] ? game : 'jk1', level: shotLevel(level),
+                              time: date.getTime(), width: w, height: h, size: images.png.length,
+                              thumb: images.thumb }, images.png);
+          });
+          queue = job.then(function() {
+            results.push(1);
+          }, function(err) {
+            console.warn('OpenJKDF2: screenshot not saved (' + err + ')');
+            results.push(2);
+          });
+          return true;
+        }
+
+        function result() {
+          return results.length ? results.shift() : 0;
+        }
+
+        return { save: save, result: result };
+      }
+
+      // ---- A zip of them all, stored rather than compressed: PNGs already are.
+
+      var crcTable = null;
+      function crc32(bytes) {
+        if (!crcTable) {
+          crcTable = new Uint32Array(256);
+          for (var n = 0; n < 256; n++) {
+            var c = n;
+            for (var k = 0; k < 8; k++)
+              c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+            crcTable[n] = c >>> 0;
+          }
+        }
+        var crc = 0xFFFFFFFF;
+        for (var i = 0; i < bytes.length; i++)
+          crc = crcTable[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+      }
+
+      // files: [{ name, data: Uint8Array, date }]
+      function zipFiles(files) {
+        var enc = new TextEncoder();
+        var parts = [], central = [], at = 0;
+        for (var f of files) {
+          var name = enc.encode(f.name);
+          var crc = crc32(f.data), d = f.date;
+          var time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+          var day = (Math.max(0, d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+          var local = new DataView(new ArrayBuffer(30));
+          local.setUint32(0, 0x04034b50, true);
+          local.setUint16(4, 20, true);
+          local.setUint16(6, 0x800, true); // UTF-8 names
+          local.setUint16(10, time, true);
+          local.setUint16(12, day, true);
+          local.setUint32(14, crc, true);
+          local.setUint32(18, f.data.length, true);
+          local.setUint32(22, f.data.length, true);
+          local.setUint16(26, name.length, true);
+          parts.push(new Uint8Array(local.buffer), name, f.data);
+          var entry = new DataView(new ArrayBuffer(46));
+          entry.setUint32(0, 0x02014b50, true);
+          entry.setUint16(4, 20, true);
+          entry.setUint16(6, 20, true);
+          entry.setUint16(8, 0x800, true);
+          entry.setUint16(12, time, true);
+          entry.setUint16(14, day, true);
+          entry.setUint32(16, crc, true);
+          entry.setUint32(20, f.data.length, true);
+          entry.setUint32(24, f.data.length, true);
+          entry.setUint16(28, name.length, true);
+          entry.setUint32(42, at, true);
+          central.push(new Uint8Array(entry.buffer), name);
+          at += 30 + name.length + f.data.length;
+        }
+        var cdSize = central.reduce(function(n, p) { return n + p.length; }, 0);
+        var end = new DataView(new ArrayBuffer(22));
+        end.setUint32(0, 0x06054b50, true);
+        end.setUint16(8, files.length, true);
+        end.setUint16(10, files.length, true);
+        end.setUint32(12, cdSize, true);
+        end.setUint32(16, at, true);
+        var all = parts.concat(central, [new Uint8Array(end.buffer)]);
+        var out = new Uint8Array(at + cdSize + 22), p = 0;
+        for (var a of all) {
+          out.set(a, p);
+          p += a.length;
+        }
+        return out;
+      }
+
+      // ---- Your Screenshots on this page.
+
+      var shots = typeof indexedDB !== 'undefined' ? shotStore(indexedDB) : null;
+      var thumbUrls = [];
+
+      Module.jkScreenshots = shotSaver(shots || {
+        list: async function() { return []; },
+        add: async function() { throw new Error('this browser has no IndexedDB'); }
+      }, shotImages);
+
+      function sizeText(bytes) {
+        return bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB'
+                               : (bytes / 1048576).toFixed(1) + ' MB';
+      }
+
+      function downloadFile(bytes, name, type) {
+        var url = URL.createObjectURL(new Blob([bytes], { type: type }));
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
+      }
+
+      async function downloadShot(key) {
+        var png = await shots.read(key);
+        if (png) downloadFile(png, key, 'image/png');
+      }
+
+      // Full size in a new tab. The tab is opened right away, while the click
+      // still counts, or the browser would block it as a pop-up.
+      async function viewShot(key) {
+        var tab = window.open('', '_blank');
+        var png = await shots.read(key);
+        if (!png) {
+          if (tab) tab.close();
+          return;
+        }
+        var url = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
+        if (tab) tab.location.href = url;
+        else window.location.href = url;
+        setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
+      }
+
+      function textButton(label, ariaLabel, onClick) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'text-button';
+        b.textContent = label;
+        b.setAttribute('aria-label', ariaLabel);
+        b.addEventListener('click', onClick);
+        return b;
+      }
+
+      async function showShots() {
+        var list = document.getElementById('shots');
+        var metas = [];
+        try {
+          metas = shots ? await shots.list() : [];
+        } catch (err) {
+          console.warn('OpenJKDF2: could not read screenshots (' + err + ')');
+        }
+        thumbUrls.forEach(function(u) { URL.revokeObjectURL(u); });
+        thumbUrls = [];
+        list.replaceChildren();
+        var total = 0;
+        for (var meta of metas) {
+          total += meta.size;
+          var when = new Date(meta.time).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
+          var game = (SHOT_GAMES[meta.game] || SHOT_GAMES.jk1).title;
+
+          var li = document.createElement('li');
+          var view = document.createElement('a');
+          view.href = '#screenshots';
+          view.title = 'Open full size';
+          view.addEventListener('click', (function(key) {
+            return function(ev) {
+              ev.preventDefault();
+              viewShot(key);
+            };
+          })(meta.key));
+          var img = document.createElement('img');
+          if (meta.thumb) {
+            var url = URL.createObjectURL(new Blob([meta.thumb], { type: 'image/jpeg' }));
+            thumbUrls.push(url);
+            img.src = url;
+          }
+          img.alt = 'Screenshot: ' + game + (meta.level ? ', ' + meta.level : '') + ', ' + when;
+          view.appendChild(img);
+          var whenEl = document.createElement('span');
+          whenEl.className = 'when';
+          whenEl.textContent = when;
+          var what = document.createElement('span');
+          what.className = 'what';
+          what.textContent = game + (meta.level ? ', level ' + meta.level : '') + ', ' +
+                             meta.width + ' x ' + meta.height + ', ' + sizeText(meta.size);
+          var actions = document.createElement('span');
+          actions.className = 'shot-actions';
+          actions.append(
+            textButton('Download', 'Download the screenshot from ' + when, (function(key) {
+              return function() {
+                downloadShot(key).catch(function(err) { console.warn('OpenJKDF2: ' + err); });
+              };
+            })(meta.key)),
+            textButton('Delete', 'Delete the screenshot from ' + when, (function(key) {
+              return async function() {
+                try { await shots.remove([key]); } catch (err) { console.warn('OpenJKDF2: ' + err); }
+                showShots();
+              };
+            })(meta.key)));
+          li.append(view, whenEl, what, actions);
+          list.appendChild(li);
+        }
+        document.getElementById('shots-bar').hidden = !metas.length;
+        document.getElementById('shots-summary').textContent = !metas.length ? 'None yet' :
+          metas.length + (metas.length === 1 ? ' screenshot, ' : ' screenshots, ') + sizeText(total);
+      }
+
+      document.getElementById('shots-zip').addEventListener('click', async function(ev) {
+        var button = ev.currentTarget;
+        button.disabled = true;
+        try {
+          var files = [];
+          for (var m of (await shots.list()).reverse()) {
+            var png = await shots.read(m.key);
+            if (png) files.push({ name: m.key, data: new Uint8Array(png), date: new Date(m.time) });
+          }
+          if (files.length) {
+            var d = new Date();
+            downloadFile(zipFiles(files), 'jkdf2mp screenshots ' + d.getFullYear() + '-' +
+                         String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + '.zip',
+                         'application/zip');
+          }
+        } catch (err) {
+          console.warn('OpenJKDF2: could not make the zip (' + err + ')');
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      document.getElementById('shots-clear').addEventListener('click', async function() {
+        var metas = await shots.list();
+        if (!metas.length) return;
+        var what = metas.length === 1 ? 'your screenshot' : 'all ' + metas.length + ' screenshots';
+        if (!confirm('Delete ' + what + ' from this browser? This can\'t be undone.')) return;
+        try {
+          await shots.remove(metas.map(function(m) { return m.key; }));
+        } catch (err) {
+          console.warn('OpenJKDF2: ' + err);
+        }
+        showShots();
+      });
+
+      showShots();
     </script>
     <script type='text/javascript'>
       // Files every install needs, spelled the way the engine opens them

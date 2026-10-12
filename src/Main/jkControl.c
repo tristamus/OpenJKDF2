@@ -137,7 +137,11 @@ int jkControl_HandleHudKeys(SithThing *player, flex_t b)
         if (v15 && sithThing_MotsTick(0xe,0,6.0))
         {
             jkGame_Screenshot();
+            // Added: the browser build says whether it was saved once it has
+            // been (jkGame_UpdateScreenshots).
+#ifndef ARCH_WASM
             jkDev_PrintUniString(jkStrings_GetUniStringWithFallback("GAME_SCREENSHOT"));
+#endif
         }
 
         sithControl_GetKey(INPUT_FUNC_TALLY, &v15);
