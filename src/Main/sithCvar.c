@@ -111,6 +111,11 @@ int sithCvar_LoadVar(tSithCvar* pCvar, const char* pFpath)
     char tmp[SITHCVAR_MAX_STRLEN];
     if (!pCvar) return 0;
 
+    // Added: start from the linked variable, so a file or key that's missing
+    // keeps what the game already has (for a character, the settings just read
+    // from its openjkdf2.json) instead of putting back the registered default.
+    sithCvar_UpdateValInternal(pCvar);
+
     switch (pCvar->type) {
         case CVARTYPE_BOOL:
             pCvar->boolVal = stdJSON_GetBool(pFpath, pCvar->pName, pCvar->val);
