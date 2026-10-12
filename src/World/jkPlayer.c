@@ -546,7 +546,7 @@ void jkPlayer_WriteConf(char16_t *name)
     stdString_WcharToChar(nameTmp, name, 31);
     nameTmp[31] = 0;
     stdFnames_MakePath3(ext_fpath, 256, "player", nameTmp, "openjkdf2.json"); // Added
-    stdFnames_MakePath3(ext_fpath_cvars, 256, "player", nameTmp, SITHCVAR_FNAME); // Added
+    stdFnames_MakePath3(ext_fpath_cvars, 256, "player", nameTmp, SITHCVAR_PLAYER_FNAME); // Added
     stdString_snprintf(fpath, 128, "player\\%s\\%s.plr", nameTmp, nameTmp);
     if ( stdConffile_OpenWriteBypass(fpath) )
     {
@@ -713,7 +713,7 @@ int jkPlayer_ReadConf(char16_t *name)
     _wcsncpy(jkPlayer_playerShortName, name, 0x1Fu);
     jkPlayer_playerShortName[31] = 0;
     stdFnames_MakePath3(ext_fpath, 256, "player", v6, "openjkdf2.json");
-    stdFnames_MakePath3(ext_fpath_cvars, 256, "player", v6, SITHCVAR_FNAME); // Added
+    stdFnames_MakePath3(ext_fpath_cvars, 256, "player", v6, SITHCVAR_PLAYER_FNAME); // Added
     stdString_snprintf(fpath, 256, "player\\%s\\%s.plr", v6, v6); // Added: sprintf -> snprintf
     if (!stdConffile_OpenReadBypass(fpath))
         return 0;

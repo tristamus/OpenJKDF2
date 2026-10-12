@@ -31,7 +31,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 - When you pick your game folder, the characters in its `player` folder come in with their controls and weapon settings. This works for both games.
 - Changes you make in the browser are saved in the browser and are there on your next visit. If a character is in both places, the browser's copy wins.
-- Display and sound settings don't carry over, because the original games keep them in the Windows registry rather than the game folder.
+- Display settings you set in the browser (Setup > Display: field of view, gamma, HUD scale and the rest) are kept for your next visit too. The original games' own display and sound settings don't carry over, because they keep them in the Windows registry rather than the game folder.
 
 ### Custom maps download automatically
 
@@ -91,6 +91,7 @@ Everything above is merged into the `web-mp` branch, and the live site is built 
 - [#8](https://github.com/tristamus/OpenJKDF2/pull/8): the landing page says custom maps you host are shared
 - [#12](https://github.com/tristamus/OpenJKDF2/pull/12): View Cutscenes and Expansions & Mods hidden from the main menu
 - [#13](https://github.com/tristamus/OpenJKDF2/pull/13): mods, several at a time, shared with joiners
+- [#15](https://github.com/tristamus/OpenJKDF2/pull/15): display settings kept in the browser between visits
 - The lobby's code, including the Firefox fix, is on the `main` branch of [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
 
 To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md`.
