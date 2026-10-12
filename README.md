@@ -48,6 +48,12 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 - Mods you got from a host are saved in your browser, so next time they load without a download and you can choose them to host.
 - Tested with Saber Battle X between two browsers: the in-tab restart, a joiner getting the mod directly and through the lobby, and switching back to no mod. Ticking several mods was tested in headless Chromium with SBX and made-up mods, and in a sharing test of the combination, but not yet between two browsers.
 
+### Screenshots
+
+- Press F12 in a game, or the key you set for screenshots, and the game saves exactly what's on screen, HUD included. Once the picture is stored it says "Screenshot saved to Your Screenshots on the main page", or that it wasn't saved. This works in both games.
+- The pictures are kept in your browser. The landing page lists them under Your Screenshots, newest first, where you can open each one full size, download it or delete it, or download them all as a zip. Clearing the site's data in your browser deletes them, so download the ones you want to keep.
+- Before this, F12 said "Screenshot taken" but saved nothing: the browser build had no way to write the picture.
+
 ### A landing page and clearer errors
 
 - A landing page in the style of early-2000s game lobby sites, with a Play button, "rooms", getting-started steps and a plain explanation of what happens to your files. Every room opens the same game; you host or join inside it.
@@ -92,6 +98,7 @@ Everything above is merged into the `web-mp` branch, and the live site is built 
 - [#12](https://github.com/tristamus/OpenJKDF2/pull/12): View Cutscenes and Expansions & Mods hidden from the main menu
 - [#13](https://github.com/tristamus/OpenJKDF2/pull/13): mods, several at a time, shared with joiners
 - [#15](https://github.com/tristamus/OpenJKDF2/pull/15): display settings kept in the browser between visits
+- [#17](https://github.com/tristamus/OpenJKDF2/pull/17): screenshots saved in the browser and listed on the landing page
 - The lobby's code, including the Firefox fix, is on the `main` branch of [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
 
 To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md`.
