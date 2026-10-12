@@ -746,9 +746,12 @@
 
       // Not copied into memory: the WASM build skips cutscenes (jkCutscene.c) and
       // has music disabled (stdMci.c), so videos and soundtrack only cost memory.
+      // jkmcutscenes/ is the MotS Remastered pack's cutscenes, which its
+      // launcher runs with -path.
       // player/ is handled on its own: see importPlayers.
       function isSkipped(lowerPath) {
         return lowerPath.startsWith("resource/video/") ||
+               lowerPath.startsWith("jkmcutscenes/") ||
                lowerPath.startsWith("music/") ||
                /\.(exe|dll|ico|ini|txt|url|pdf|htm|html)$/.test(lowerPath);
       }
@@ -886,6 +889,13 @@
         '.gob': ['res1hi.gob', 'res1low.gob', 'res2.gob', 'res1demo.gob'],
         '.goo': ['jkmres.goo', 'jkmsndlo.goo']
       };
+      // Loaded like the game's own GOBs, so not listed: the MotS Remastered
+      // pack's assets, which its installer puts in mods/. It loads for whoever
+      // has it and isn't sent to joiners. A ticked mod still comes first.
+      var ALWAYS_LOADED = {
+        '.gob': [],
+        '.goo': ['jkmremasteredassets.goo']
+      };
 
       // The mods among the picked files, each with the files that belong to it,
       // in the order they take precedence, which is the original game's where
@@ -900,8 +910,9 @@
       //   inside, is a collection: one mod for its resource folders if it has
       //   any, then one per GOB.
       // - each GOB the engine would always load: in mods/, and in resource/
-      //   besides the game's own. They move under jkmods/ like the others, so
-      //   they only load when ticked and a host always shares what it runs.
+      //   besides the game's own and ALWAYS_LOADED. They move under jkmods/
+      //   like the others, so they only load when ticked and a host always
+      //   shares what it runs.
       // A zip with a mod in it is a folder of its own wherever it is, since
       // openZips has already opened it in place.
       // Paths are already spelled one way.
@@ -913,7 +924,7 @@
           var parts = e.path.split('/');
           var lowerParts = e.path.toLowerCase().split('/');
           var last = lowerParts[lowerParts.length - 1];
-          if (last.endsWith(ext) && last[0] !== '.') {
+          if (last.endsWith(ext) && last[0] !== '.' && ALWAYS_LOADED[ext].indexOf(last) < 0) {
             if (parts.length === 2 && lowerParts[0] === 'mods')
               gobs.push({ e: e, rank: 2, key: last, from: parts[0], always: true });
             else if (parts.length === 2 && lowerParts[0] === 'resource' && RETAIL_RESOURCE[ext].indexOf(last) < 0)
@@ -1441,7 +1452,9 @@
         // engine's casepath() then only lists whichever folder it finds first,
         // hiding the other one's files. Spell every folder one way: the required
         // list's spelling where it has one, else the first spelling seen.
-        var dirSpelling = {};
+        // mods/ is spelled the engine's way too, since it always loads the
+        // GOBs left there (jkRes_LoadNew).
+        var dirSpelling = { mods: 'mods' };
         for (var r of required) {
           var rd = r.substring(0, r.lastIndexOf('/'));
           dirSpelling[rd.toLowerCase()] = rd;
