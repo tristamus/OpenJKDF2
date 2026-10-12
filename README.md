@@ -68,6 +68,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 - **Files skipped by the file search** on Linux, macOS and the browser: a file whose name sorts before `.`, such as `!dm.gob`, was dropped. Also shared with desktop builds.
 - **Firefox couldn't connect** to a lobby run with `relay.py`, because its WebSocket reply used HTTP/1.0, which Firefox refuses. It now uses HTTP/1.1.
 - **The browser build compiles from a clean checkout** (it used to stop with "Unknown platform!"), no longer bundles game files, and has a GitHub Actions workflow that builds it.
+- **"Cannot set player" for some characters.** A character whose `.plr` file was empty, cut short or didn't start with `version 1` showed up in the Players list but couldn't be picked. Picking it now starts it over with default settings under the same name, and the old file is kept as `<name>.plr.bak`. A `.plr` with a byte-order mark or spaces in front of `version 1` is read as it is. Shared with desktop builds.
 
 ## Good to know
 
@@ -100,6 +101,7 @@ Everything above is merged into the `web-mp` branch, and the live site is built 
 - [#13](https://github.com/tristamus/OpenJKDF2/pull/13): mods, several at a time, shared with joiners
 - [#15](https://github.com/tristamus/OpenJKDF2/pull/15): display settings kept in the browser between visits
 - [#17](https://github.com/tristamus/OpenJKDF2/pull/17): screenshots saved in the browser and listed on the landing page
+- [#18](https://github.com/tristamus/OpenJKDF2/pull/18): characters with an unreadable `.plr` can be picked again
 - The lobby's code, including the Firefox fix, is on the `main` branch of [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), and each deployed build is kept on its [`builds`](https://github.com/tristamus/jkdf2mp-bb-server/tree/builds) branch.
 
 To build the browser version yourself, see the Emscripten/WebAssembly section of `BUILDING.md`.
