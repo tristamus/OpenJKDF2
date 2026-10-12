@@ -308,12 +308,14 @@
       .info { margin: 0; padding-left: 20px; }
       .info li { margin-bottom: 6px; }
 
-      /* Features: small windows like the folder prompt, flowed into two
-         columns so short and long ones pack together. */
-      .features { columns: 280px 2; column-gap: 10px; margin-top: 6px; }
+      /* Features: small windows like the folder prompt, two to a row. */
+      .features {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+        gap: 10px;
+        margin-top: 6px;
+      }
       .feature {
-        break-inside: avoid;
-        margin-bottom: 10px;
         background-color: var(--teal-dark);
         border: 1px solid #000;
         box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35);
@@ -608,65 +610,37 @@
 
             <section id="features" aria-labelledby="features-title">
               <h2 class="ruled" id="features-title">Features <small>What this web version adds</small></h2>
-              <p class="note">Everything here works in both Jedi Knight and Mysteries of the Sith unless it
-                says otherwise.</p>
+              <p class="note">Works in both Jedi Knight and Mysteries of the Sith.</p>
               <div class="features">
                 <div class="feature">
                   <h3>Play online</h3>
                   <ul>
-                    <li>Host or join from the game's own Multiplayer menu. Join lists every open game.</li>
-                    <li>Your browser links straight to the host's. When it can't, the lobby passes the
-                      traffic along.</li>
-                    <li>No install, no port forwarding, no account. The lobby is always on.</li>
+                    <li>Host or join from the game's Multiplayer menu.</li>
+                    <li>Browsers connect directly, with the lobby as a fallback.</li>
+                    <li>No install, port forwarding or account.</li>
                   </ul>
                 </div>
                 <div class="feature">
                   <h3>Custom maps and mods</h3>
                   <ul>
-                    <li>A custom map you don't have downloads from the host before the level loads.</li>
-                    <li>Every mod in your game folder gets a checkbox: GOBs, zips, mod folders and JK Patch
-                      Commander patches. Tick several to run them together.</li>
-                    <li>Players who join get the host's mods. Join a game with different mods and the game
-                      restarts with the host's.</li>
-                    <li>Original game files are never sent. Each browser fills them in from its own copy.</li>
+                    <li>Missing custom maps download from the host.</li>
+                    <li>Mix and match mods from your game folder.</li>
+                    <li>Players who join get the host's mods.</li>
+                    <li>Original game files are never sent.</li>
                   </ul>
                 </div>
                 <div class="feature">
                   <h3>Sabers and screenshots</h3>
                   <ul>
-                    <li>A lit saber lights up its surroundings in its blade's color. Turn it off in
-                      Setup &gt; Display.</li>
-                    <li>F12 saves a screenshot, HUD and all, to <a href="#screenshots">Your Screenshots</a>
-                      on this page.</li>
-                  </ul>
-                </div>
-                <div class="feature">
-                  <h3>Mysteries of the Sith</h3>
-                  <ul>
-                    <li>Pick your MotS folder instead of Jedi Knight's and the expansion starts.</li>
-                    <li>Saber blades and skins that used to draw wrong now look as they do on PC.</li>
-                    <li>The host screen has MotS's personalities and ranked Jedi game types, so
-                      personality characters can be picked.</li>
-                    <li>The MotS Remastered fan pack loads like the game's own files instead of as a mod.</li>
+                    <li>Sabers light their surroundings in the blade's color.</li>
+                    <li>F12 saves screenshots to <a href="#screenshots">Your Screenshots</a>.</li>
                   </ul>
                 </div>
                 <div class="feature">
                   <h3>Kept for next time</h3>
                   <ul>
-                    <li>Your characters come in from your game folder with their controls and weapon
-                      settings.</li>
-                    <li>Changes you make here, and display settings like field of view, gamma and HUD
-                      scale, are saved in this browser.</li>
-                    <li>Maps and mods you've downloaded load right away next time, and you can host them.</li>
-                  </ul>
-                </div>
-                <div class="feature">
-                  <h3>Fixes</h3>
-                  <ul>
-                    <li>Characters that gave "Cannot set player" can be picked again.</li>
-                    <li>Original multiplayer and CTF maps no longer go missing from the Host list.</li>
-                    <li>Players no longer stay lying down after they respawn.</li>
-                    <li>The main menu only shows what works in the browser.</li>
+                    <li>Characters and controls come in from your game folder.</li>
+                    <li>Settings, maps and mods are saved in this browser.</li>
                   </ul>
                 </div>
               </div>
