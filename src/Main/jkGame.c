@@ -31,6 +31,10 @@
 #include <nds.h>
 #endif
 
+#ifdef ARCH_WASM
+#include <emscripten.h>
+#endif
+
 int jkGame_Startup()
 {
     stdPlatform_Printf("OpenJKDF2: %s\n", __func__);
@@ -130,6 +134,57 @@ void jkGame_SetDefaultSettings()
     jkPlayer_setCrosshair = 0;
     jkPlayer_setSaberCam = 0;
 }
+
+#ifdef ARCH_WASM
+// Added: screenshots in the browser build. The page (index.html) turns the
+// picture into a PNG and keeps it in the browser, where its main page lists
+// it under Your Screenshots. Returns 0 if the page can't take it.
+EM_JS_DEPS(jkGame, "$UTF8ToString");
+EM_JS(int, jkGame_js_saveScreenshot, (const uint8_t* pRgba, int w, int h, int bMots, const char* pLevel), {
+    if (!Module.jkScreenshots) return 0;
+    return Module.jkScreenshots.save(HEAPU8.slice(pRgba, pRgba + w * h * 4), w, h,
+                                     bMots ? 'mots' : 'jk1', UTF8ToString(pLevel)) ? 1 : 0;
+});
+
+// How the oldest screenshot still being stored went, told once: 0 not done
+// yet, 1 saved, 2 not saved.
+EM_JS(int, jkGame_js_screenshotResult, (), {
+    return Module.jkScreenshots ? Module.jkScreenshots.result() : 2;
+});
+
+static int jkGame_bScreenshotQueued = 0;
+static int jkGame_numScreenshotsStoring = 0;
+
+// Called once the frame is drawn, HUD included. WebGL clears the screen as
+// soon as the browser shows it, so the picture can't be read back any later.
+// Says whether each one was saved once the page has stored it, so the message
+// isn't in the picture and never claims a save that didn't happen.
+static void jkGame_UpdateScreenshots()
+{
+    while (jkGame_numScreenshotsStoring)
+    {
+        int result = jkGame_js_screenshotResult();
+        if (!result)
+            break;
+        jkGame_numScreenshotsStoring--;
+        jkDev_DebugLog(result == 1 ? "Screenshot saved to Your Screenshots on the main page."
+                                   : "Screenshot not saved: the browser couldn't store it.");
+    }
+
+    if (!jkGame_bScreenshotQueued)
+        return;
+    jkGame_bScreenshotQueued = 0;
+
+    int w = 0, h = 0;
+    uint8_t* pRgba = std3D_ReadWindowRGBA(&w, &h);
+    if (pRgba && jkGame_js_saveScreenshot(pRgba, w, h, Main_bMotsCompat,
+                                          sithWorld_g_pCurrentWorld ? sithWorld_g_pCurrentWorld->map_jkl_fname : ""))
+        jkGame_numScreenshotsStoring++;
+    else
+        jkDev_DebugLog("Screenshot not saved: the browser couldn't store it.");
+    free(pRgba);
+}
+#endif
 
 int jkGame_Update()
 {
@@ -408,6 +463,9 @@ int jkGame_Update()
 #endif
 #if defined(SDL2_RENDER) || defined(TARGET_RETRO_HOMEBREW)
     std3D_DrawMenu();
+#ifdef ARCH_WASM
+    jkGame_UpdateScreenshots();
+#endif
     rdFinishFrame();
 #endif
 
@@ -530,6 +588,11 @@ int jkGame_Update()
 #ifdef SDL2_RENDER
 void jkGame_Screenshot()
 {
+#ifdef ARCH_WASM
+    // Added: taken at the end of this frame, once it's drawn
+    // (jkGame_UpdateScreenshots).
+    jkGame_bScreenshotQueued = 1;
+#else
     //stdPlatform_Printf("TODO: Implement screenshots\n");
     char local_80[128];
     int bVar2 = 0;
@@ -549,6 +612,7 @@ void jkGame_Screenshot()
     } while (!bVar2);
 
     std3D_Screenshot(local_80);
+#endif
 }
 #endif
 
