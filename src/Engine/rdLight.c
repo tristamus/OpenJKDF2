@@ -30,6 +30,7 @@ int rdLight_NewEntry(rdLight *pLight)
     pLight->direction.z = 0.0;
     pLight->intensity = 1.0;
     pLight->color = 0xFFFFFF;
+    rdVector_Set3(&pLight->rgb, 1.0, 1.0, 1.0); // Added: colored saber glow
 #ifdef JKM_LIGHTING
     pLight->angleX = 0.0;
     pLight->cosAngleX = 0.0;
@@ -252,6 +253,82 @@ flex_t rdLight_CalcVertexIntensities(rdLight **apLights, rdVector3 *aLightPos,
     } 
     return (flex_t)(local_28 / (flex_t)numVertices);
 #endif
+}
+
+// Added: rdLight_CalcVertexIntensities with each light's color applied per channel,
+// for meshes lit by a colored saber glow. Same falloff and the same early stop as
+// the original, per channel; with white lights each channel matches the original.
+void rdLight_CalcVertexIntensitiesRGB(rdLight **apLights, rdVector3 *aLightPos,
+#ifdef JKM_LIGHTING
+    rdVector3 *localLightDirs,
+#endif
+    int numLights, rdVector3 *aVertexNormal, rdVector3 *aVertices, flex_t *aVertexColors, flex_t *aRed, flex_t *aGreen, flex_t *aBlue, int numVertices, flex_t scalar)
+{
+    rdVector3 diff;
+#ifdef JKM_LIGHTING
+    int bMotsLighting = localLightDirs && Main_bMotsCompat;
+#else
+    int bMotsLighting = 0;
+#endif
+
+    for (int j = 0; j < numVertices; j++)
+    {
+        // The original's MotS path starts every vertex from the first vertex's color;
+        // do the same so a mesh doesn't change brightness when a colored light reaches it
+        flex_t red = bMotsLighting ? aVertexColors[0] : aVertexColors[j];
+        flex_t green = red;
+        flex_t blue = red;
+
+        for (int i = 0; i < numLights; i++)
+        {
+            rdLight* light = apLights[i];
+            rdVector_Sub3(&diff, &aLightPos[i], &aVertices[j]);
+            flex_t len = rdVector_Len3(&diff);
+            flex_t amount = 0.0;
+            if (len >= light->minRadius)
+                goto next_light;
+
+            rdVector_Normalize3Acc(&diff);
+#ifdef JKM_LIGHTING
+            if (bMotsLighting && light->type >= 3)
+            {
+                // Spot light, as in rdLight_CalcVertexIntensities
+                flex_t lightMagnitude = rdVector_Dot3(&localLightDirs[i], &diff);
+                if (lightMagnitude > light->cosAngleY)
+                {
+                    flex_t spotIntensity = light->intensity;
+                    if (lightMagnitude < light->cosAngleX)
+                        spotIntensity = (1.0 - (light->cosAngleX - lightMagnitude) * light->lux) * spotIntensity;
+                    amount = (spotIntensity - len * scalar) * rdVector_Dot3(&aVertexNormal[j], &localLightDirs[i]);
+                }
+            }
+            else
+#endif
+            {
+                flex_t lightMagnitude = rdVector_Dot3(&aVertexNormal[j], &diff);
+                if (lightMagnitude > 0.0)
+                    amount = (light->intensity - len * scalar) * lightMagnitude;
+            }
+
+            red += amount * light->rgb.x;
+            green += amount * light->rgb.y;
+            blue += amount * light->rgb.z;
+
+next_light:
+            // MotS caps each light's sum at full as it goes, Jedi Knight only at the end
+            if (bMotsLighting) {
+                if (red > 1.0) red = 1.0;
+                if (green > 1.0) green = 1.0;
+                if (blue > 1.0) blue = 1.0;
+            }
+            if (red >= 1.0 && green >= 1.0 && blue >= 1.0)
+                break;
+        }
+
+        aRed[j] = stdMath_Clamp(red, 0.0, 1.0);
+        aGreen[j] = stdMath_Clamp(green, 0.0, 1.0);
+        aBlue[j] = stdMath_Clamp(blue, 0.0, 1.0);
+    }
 }
 
 flex_t rdLight_CalcFaceIntensity(rdLight **apLights, rdVector3 *apLightPos, int numLights, rdFace *pFace, rdVector3 *pNormal, rdVector3 *apVertices, flex_t attenuation)

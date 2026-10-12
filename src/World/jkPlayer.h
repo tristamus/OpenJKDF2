@@ -137,6 +137,8 @@ int jkPlayer_SyncForcePowers(int rank,int bIsMulti); // MOTS added
 
 extern int jkPlayer_aMotsFpBins[74];
 
+extern int jkPlayer_enableSaberGlow; // Added: colored saber glow
+
 #ifdef QOL_IMPROVEMENTS
 extern int jkPlayer_fov;
 extern int jkPlayer_fovIsVertical;

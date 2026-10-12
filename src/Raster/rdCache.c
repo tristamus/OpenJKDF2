@@ -112,6 +112,10 @@ rdProcEntry *rdCache_GetProcEntry()
     // Added: Try and prevent weird issues.
     out_procEntry->material = NULL;
 
+    // Added: remember the vertex color mode per face, so faces lit in color
+    // (colored saber glow) and mono faces can share one flush.
+    out_procEntry->bVertexRGB = (rdGetVertexColorMode() == 1);
+
     return out_procEntry;
 }
 
@@ -684,7 +688,7 @@ int rdCache_SendFaceListToHardware()
             {
                 // MOTS added
 #ifdef JKM_LIGHTING
-                if (rdGetVertexColorMode() == 1) {
+                if (active_6c->bVertexRGB) { // Added: per face
                     flex_t* iterRedIntense = active_6c->paRedIntensities;
                     flex_t* iterGreenIntense = active_6c->paGreenIntensities;
                     flex_t* iterBlueIntense = active_6c->paBlueIntensities;
@@ -724,7 +728,7 @@ int rdCache_SendFaceListToHardware()
 
 #ifdef TARGET_TWL
                 // Added: populate this here too
-                if (!(rdGetVertexColorMode() != 1 || lighting_capability != 3) && lighting_capability != 0) {
+                if (!(!active_6c->bVertexRGB || lighting_capability != 3) && lighting_capability != 0) { // Added: per face
                     v24 = active_6c->extralight + active_6c->light_level_static;
                     v25 = stdMath_Clamp(v24, 0.0, 1.0);
                     v26 = stdMath_Clamp(v25, v148, 1.0);
@@ -811,7 +815,7 @@ int rdCache_SendFaceListToHardware()
                 else
                 {
                     // MOTS added
-                    if (rdGetVertexColorMode() != 1 || lighting_capability != 3)
+                    if (!active_6c->bVertexRGB || lighting_capability != 3) // Added: per face
                     {
                         if ( lighting_capability == 3 )
                             light_level = active_6c->vertexIntensities[vtx_idx];
@@ -1046,7 +1050,7 @@ solid_tri:
         {
             // MOTS added
 #ifdef JKM_LIGHTING
-            if (rdGetVertexColorMode() == 1) {
+            if (active_6c->bVertexRGB) { // Added: per face
                 flex_t* iterRedIntense = active_6c->paRedIntensities;
                 flex_t* iterGreenIntense = active_6c->paGreenIntensities;
                 flex_t* iterBlueIntense = active_6c->paBlueIntensities;
@@ -1180,7 +1184,7 @@ LABEL_232:
             else
             {
                 // MOTS added
-                if (rdGetVertexColorMode() != 1 || lighting_capability != 3)
+                if (!active_6c->bVertexRGB || lighting_capability != 3) // Added: per face
                 {
                     v91 = (rdColormap *)active_6c->colormap;
                     if ( lighting_capability == 3 )

@@ -38,7 +38,7 @@ static int slider_images[2] = {JKGUI_BM_SLIDER_BACK, JKGUI_BM_SLIDER_THUMB};
 void jkGuiDisplay_FovDraw(jkGuiElement *element, jkGuiMenu *menu, tVBuffer *vbuf, int redraw);
 void jkGuiDisplay_FramelimitDraw(jkGuiElement *element, jkGuiMenu *menu, tVBuffer *vbuf, int redraw);
 
-static jkGuiElement jkGuiDisplay_aElements[31] = { 
+static jkGuiElement jkGuiDisplay_aElements[32] = { 
     { ELEMENT_TEXT,        0,            0, NULL,                   3, {0, 410, 640, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
     { ELEMENT_TEXT,        0,            6, "GUI_SETUP",            3, {20, 20, 600, 40},   1, 0, NULL,                        0, 0, 0, {0}, 0},
     { ELEMENT_TEXTBUTTON,  GUI_GENERAL,  2, "GUI_GENERAL",          3, {20, 80, 120, 40},   1, 0, "GUI_GENERAL_HINT",          0, 0, 0, {0}, 0},
@@ -72,18 +72,21 @@ static jkGuiElement jkGuiDisplay_aElements[31] = {
     {ELEMENT_CHECKBOX,     0,            0, "GUIEXT_EN_SSAO",    0, {400, 270, 300, 40}, 1,  0, NULL, 0, 0, 0, {0}, 0},
     
     // 23
-    { ELEMENT_TEXT,        0,            0, "GUIEXT_SSAA_MULT",            2, {400, 320, 120, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
-    { ELEMENT_TEXTBOX,      0,            0, NULL,    100, {530, 320, 80, 20}, 1,  0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_SSAA_MULT",            2, {400, 340, 120, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBOX,      0,            0, NULL,    100, {530, 340, 80, 20}, 1,  0, NULL, 0, 0, 0, {0}, 0},
     
     // 25
-    { ELEMENT_TEXT,        0,            0, "GUIEXT_GAMMA_VAL",            2, {400, 350, 120, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
-    { ELEMENT_TEXTBOX,      0,            0, NULL,    100, {530, 350, 80, 20}, 1,  0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_GAMMA_VAL",            2, {400, 365, 120, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBOX,      0,            0, NULL,    100, {530, 365, 80, 20}, 1,  0, NULL, 0, 0, 0, {0}, 0},
 
     // 27
-    { ELEMENT_TEXT,        0,            0, "GUIEXT_HUD_SCALE",            2, {400, 380, 120, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
-    { ELEMENT_TEXTBOX,      0,            0, NULL,    100, {530, 380, 80, 20}, 1,  0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_HUD_SCALE",            2, {400, 390, 120, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBOX,      0,            0, NULL,    100, {530, 390, 80, 20}, 1,  0, NULL, 0, 0, 0, {0}, 0},
 
     { ELEMENT_TEXTBUTTON,  GUI_ADVANCED, 2, "GUI_ADVANCED",               3, {220, 430, 200, 40}, 1, 0, NULL,                        0, 0, 0, {0}, 0},
+
+    // 30, Added: colored saber glow, under SSAO
+    {ELEMENT_CHECKBOX,     0,            0, "GUIEXT_EN_SABER_GLOW",    0, {400, 300, 300, 40}, 1,  0, "GUIEXT_EN_SABER_GLOW_HINT", 0, 0, 0, {0}, 0},
 
     { ELEMENT_END,         0,            0, NULL,                   0, {0},                 0, 0, NULL,                        0, 0, 0, {0}, 0},
 };
@@ -214,6 +217,7 @@ int jkGuiDisplay_Show()
     jkGuiDisplay_aElements[20].selectedTextEntry = jkPlayer_enableVsync;
     jkGuiDisplay_aElements[21].selectedTextEntry = jkPlayer_enableBloom;
     jkGuiDisplay_aElements[22].selectedTextEntry = jkPlayer_enableSSAO;
+    jkGuiDisplay_aElements[30].selectedTextEntry = jkPlayer_enableSaberGlow; // Added
 
     ftmp = jkPlayer_ssaaMultiple;
     jk_snwprintf(render_level, 255, u"%.2f", ftmp);
@@ -241,6 +245,7 @@ continue_menu:
         jkPlayer_enableVsync = jkGuiDisplay_aElements[20].selectedTextEntry;
         jkPlayer_enableBloom = jkGuiDisplay_aElements[21].selectedTextEntry;
         jkPlayer_enableSSAO = jkGuiDisplay_aElements[22].selectedTextEntry;
+        jkPlayer_enableSaberGlow = !!jkGuiDisplay_aElements[30].selectedTextEntry; // Added
 
         char tmp[256];
         stdString_WcharToChar(tmp, render_level, 255);

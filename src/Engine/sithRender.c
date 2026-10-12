@@ -57,6 +57,46 @@ int sithRender_008d1668 = 0;
 // Added: safeguard
 int sithRender_adjoinSafeguard = 0;
 
+// Added: colored saber glow. Set when a lit saber added a colored light this frame,
+// and when the world's per-channel dynamic light for this frame is ready.
+static int sithRender_bColoredLights = 0;
+static int sithRender_bColoredWorld = 0;
+static flex_t* sithRender_aVertDynamicRGB = NULL; // red, green and blue blocks of numVertices each
+static int sithRender_numVertDynamicRGB = 0;
+
+// Added: colored saber glow. A lit saber's light takes the blade's glow color.
+static void sithRender_SetSaberLightColor(rdLight* pLight, SithThing* pThing)
+{
+    rdVector_Set3(&pLight->rgb, 1.0, 1.0, 1.0);
+    if (!jkPlayer_enableSaberGlow || !pThing->playerInfo)
+        return;
+
+    const rdVector3* pColor = &pThing->playerInfo->saberGlowColor;
+    if (pColor->x <= 0.0 && pColor->y <= 0.0 && pColor->z <= 0.0) // never worked out
+        return;
+
+    pLight->rgb = *pColor;
+    if (pColor->x != 1.0 || pColor->y != 1.0 || pColor->z != 1.0)
+        sithRender_bColoredLights = 1;
+}
+
+// Added: colored saber glow. Room for per-channel dynamic light on every world vertex.
+static int sithRender_EnsureDynamicRGB(int numVertices)
+{
+    if (numVertices <= sithRender_numVertDynamicRGB)
+        return 1;
+
+    flex_t* pNew = (flex_t*)SITH_ALLOC(sizeof(flex_t) * 3 * numVertices);
+    if (!pNew)
+        return 0;
+    memset(pNew, 0, sizeof(flex_t) * 3 * numVertices);
+    if (sithRender_aVertDynamicRGB)
+        SITH_FREE(sithRender_aVertDynamicRGB);
+    sithRender_aVertDynamicRGB = pNew;
+    sithRender_numVertDynamicRGB = numVertices;
+    return 1;
+}
+
 void sithRender_RenderDebugLight(flex_t intensity, rdVector3* pos)
 {
 #if 0
@@ -246,6 +286,12 @@ void sithRender_Close()
     //rdThing_Free(lightDebugThing);
 
     sithRenderSky_Close();
+
+    // Added: colored saber glow
+    if (sithRender_aVertDynamicRGB)
+        SITH_FREE(sithRender_aVertDynamicRGB);
+    sithRender_aVertDynamicRGB = NULL;
+    sithRender_numVertDynamicRGB = 0;
 }
 
 void sithRender_Shutdown()
@@ -402,6 +448,12 @@ void sithRender_Draw()
     sithRender_numThingSectors = 0;
     sithRender_numThingLights = 0;
     sithRender_numSecorFrustrums = 0;
+
+    // Added: colored saber glow. Every light starts white; saber lights set their color as they're added.
+    sithRender_bColoredLights = 0;
+    sithRender_bColoredWorld = 0;
+    for (int i = 0; i < SITHREND_NUM_LIGHTS; i++)
+        rdVector_Set3(&sithRender_aThingLights[i].rgb, 1.0, 1.0, 1.0);
     sithRender_numAlphaAdjoins = 0;
     sithRender_numSpritesToDraw = 0;
     sithRender_numRenderedSectors = 0;
@@ -528,6 +580,10 @@ void sithRender_Draw()
     
     if ( (sithRender_renderflags & 2) != 0 )
         sithRender_BuildDynamicLights();
+
+    // Added: colored saber glow. Models drawn this frame (players, items, your
+    // first-person hands) take colored lights per channel.
+    rdModel3_bAllowColoredLights = sithRender_bColoredLights;
 
 #ifdef JKM_LIGHTING
     // MOTS added
@@ -739,6 +795,7 @@ void sithRender_BuildVisibleSectorList(SithSector *pSector, rdClipFrustum *pFrus
                     if ( thing->actorParams.timeLeftLengthChange > 0.0 )
                     {
                         sithRender_aThingLights[lightIdx].intensity = thing->actorParams.timeLeftLengthChange;
+                        sithRender_SetSaberLightColor(&sithRender_aThingLights[lightIdx], thing); // Added
                         rdCamera_AddLight(rdCamera_g_pCurCamera, &sithRender_aThingLights[lightIdx], &thing->actorParams.saberBladePos);
                         lightIdx = ++sithRender_numThingLights;
                     }
@@ -1087,6 +1144,7 @@ void sithRender_NoClip(SithSector *sector, rdClipFrustum *frustumArg, flex_t pre
                     if ( thing->actorParams.timeLeftLengthChange > 0.0 )
                     {
                         sithRender_aThingLights[lightIdx].intensity = thing->actorParams.timeLeftLengthChange;
+                        sithRender_SetSaberLightColor(&sithRender_aThingLights[lightIdx], thing); // Added
                         rdCamera_AddLight(rdCamera_g_pCurCamera, &sithRender_aThingLights[lightIdx], &thing->actorParams.saberBladePos);
                         lightIdx = ++sithRender_numThingLights;
                     }
@@ -1311,6 +1369,7 @@ void sithRender_KindaClipAssignFrustum(SithSector *sector, rdClipFrustum *frustu
                 if ( thing->actorParams.timeLeftLengthChange > 0.0 )
                 {
                     sithRender_aThingLights[lightIdx].intensity = thing->actorParams.timeLeftLengthChange;
+                    sithRender_SetSaberLightColor(&sithRender_aThingLights[lightIdx], thing); // Added
                     rdCamera_AddLight(rdCamera_g_pCurCamera, &sithRender_aThingLights[lightIdx], &thing->actorParams.saberBladePos);
                     lightIdx = ++sithRender_numThingLights;
                 }
@@ -1735,10 +1794,22 @@ void sithRender_RenderSectors()
     sithRender_renderflags &= ~0x8; // Drops render time by 2/3 by rendering by n-gons instead of tris
 #endif
 
+    // Added: colored saber glow. Jedi Knight's walls go through MotS's per-channel
+    // path while a colored saber light is in view. Its walls keep equal red, green and
+    // blue copies of their light (sithSurface), so they look the same otherwise.
+#ifdef JKM_LIGHTING
+    int bGlowWorldRGB = LIKELY(rdroid_curAcceleration) && !(sithRender_renderflags & 0x80) && sithRender_bColoredWorld;
+#else
+    int bGlowWorldRGB = 0;
+#endif
+
     if (LIKELY(rdroid_curAcceleration))
     {
         rdSetZBufferMethod(RD_ZBUFFER_READ_WRITE);
         if (sithRender_renderflags & 0x80) {
+            rdSetVertexColorMode(1);
+        }
+        else if (bGlowWorldRGB) { // Added
             rdSetVertexColorMode(1);
         }
     }
@@ -1763,6 +1834,21 @@ void sithRender_RenderSectors()
     sithRender_faceView.aVertices = sithWorld_g_pCurrentWorld->aTransformedVertices;
     sithRender_faceView.paDynamicLight = sithWorld_g_pCurrentWorld->aVertDynamicLights;
     sithRender_faceView.aTexVerticies = vertices_uvs;
+
+    // Added: colored saber glow
+#ifdef JKM_LIGHTING
+    if (sithRender_bColoredWorld) {
+        int numWorldVertices = sithWorld_g_pCurrentWorld->numVertices;
+        sithRender_faceView.paDynamicRed = &sithRender_aVertDynamicRGB[0];
+        sithRender_faceView.paDynamicGreen = &sithRender_aVertDynamicRGB[numWorldVertices];
+        sithRender_faceView.paDynamicBlue = &sithRender_aVertDynamicRGB[numWorldVertices * 2];
+    }
+    else {
+        sithRender_faceView.paDynamicRed = NULL;
+        sithRender_faceView.paDynamicGreen = NULL;
+        sithRender_faceView.paDynamicBlue = NULL;
+    }
+#endif
     pFullCameraFrustum = rdCamera_g_pCurCamera->pClipFrustum;
 
     for (v72 = 0; v72 < sithRender_g_numVisibleSectors; v72++)
@@ -2410,6 +2496,12 @@ LABEL_150:
 
         // Surprisingly, this is a fairly minimal cost to the entire render, 3ms on landing terminal spawn
         rdSetProcFaceUserData(level_idk->id | 0x10000);
+
+        // Added: colored saber glow. Jedi Knight's level-geometry models are lit
+        // in mono mode as before (the model path adds the color itself).
+        if (bGlowWorldRGB)
+            rdSetVertexColorMode(0);
+
         int safeguard = 0;
         for ( i = level_idk->pFirstThingInSector; i; i = i->pNextThingInSector )
         {
@@ -2509,6 +2601,10 @@ LABEL_150:
 #endif
         }
 
+        // Added: colored saber glow
+        if (bGlowWorldRGB)
+            rdSetVertexColorMode(1);
+
         ++sithRender_numRenderedSectors;
     }
     
@@ -2518,6 +2614,10 @@ LABEL_150:
     rdCache_Flush();
 //#endif
     rdCamera_g_pCurCamera->pClipFrustum = pFullCameraFrustum;
+
+    // Added: colored saber glow
+    if (bGlowWorldRGB)
+        rdSetVertexColorMode(0);
 }
 
 void sithRender_BuildVisibleSectorsThingList()
@@ -2598,6 +2698,7 @@ void sithRender_BuildSectorThingList(SithSector *pSector, flex_t curDistance, fl
                     if ( i->actorParams.timeLeftLengthChange > 0.0 )
                     {
                         sithRender_aThingLights[sithRender_numThingLights].intensity = i->actorParams.timeLeftLengthChange;
+                        sithRender_SetSaberLightColor(&sithRender_aThingLights[sithRender_numThingLights], i); // Added
                         rdCamera_AddLight(rdCamera_g_pCurCamera, &sithRender_aThingLights[sithRender_numThingLights], &i->actorParams.saberBladePos);
                         ++sithRender_numThingLights;
                     }
@@ -2648,6 +2749,11 @@ void sithRender_BuildDynamicLights()
     if (!sithRender_g_numVisibleSectors)
         return;
 
+    // Added: colored saber glow
+    int numWorldVertices = sithWorld_g_pCurrentWorld->numVertices;
+    int bColored = sithRender_bColoredLights && sithRender_EnsureDynamicRGB(numWorldVertices);
+    sithRender_bColoredWorld = bColored;
+
     for (int k = 0; k < sithRender_g_numVisibleSectors; k++)
     {
         sectorIter = sithRender_aVisibleSectors[k];
@@ -2687,6 +2793,29 @@ void sithRender_BuildDynamicLights()
                     // This vertex is as lit as it can be, stop adding aLights to it
                     if ( sithWorld_g_pCurrentWorld->aVertDynamicLights[idx] >= 1.0 )
                         break;
+                }
+
+                // Added: colored saber glow. The same light per channel, tinted by each light's color.
+                if (bColored)
+                {
+                    flex_t red = 0.0, green = 0.0, blue = 0.0;
+                    for (int i = 0; i < numSectorLights; i++)
+                    {
+                        int id = tmpLights[i]->id;
+                        flex_t distCalc = rdVector_Dist3(&rdCamera_g_pCurCamera->aLightPositions[id], &sithWorld_g_pCurrentWorld->aVertices[idx]);
+                        if ( distCalc < tmpLights[i]->maxRadius )
+                        {
+                            flex_t amount = tmpLights[i]->intensity - distCalc * rdCamera_g_pCurCamera->attenuationMax;
+                            red += amount * tmpLights[i]->rgb.x;
+                            green += amount * tmpLights[i]->rgb.y;
+                            blue += amount * tmpLights[i]->rgb.z;
+                        }
+                        if ( red >= 1.0 && green >= 1.0 && blue >= 1.0 )
+                            break;
+                    }
+                    sithRender_aVertDynamicRGB[idx] = red;
+                    sithRender_aVertDynamicRGB[numWorldVertices + idx] = green;
+                    sithRender_aVertDynamicRGB[(numWorldVertices * 2) + idx] = blue;
                 }
                 sithWorld_g_pCurrentWorld->alloc_unk9c[idx] = sithRender_lastRenderTick;
             }
