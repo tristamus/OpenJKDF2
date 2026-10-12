@@ -16,10 +16,10 @@ function cut(from, to) {
     assert.ok(a > 0 && b > a, 'index.html has ' + from);
     return html.substring(a, b);
 }
-const { openZips, detectMods } = new Function(
+const { openZips, detectMods, isSkipped } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
-    '\nreturn { openZips, detectMods };')();
+    '\nreturn { openZips, detectMods, isSkipped };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -100,6 +100,34 @@ test('zips that are not mods stay closed', async () => {
     const after = await openZips(before, false);
     assert.deepEqual(after.map(e => e.path), before.map(e => e.path));
     assert.deepEqual(list(after), []);
+});
+
+// Laid out like a Steam Mysteries of the Sith folder with the MotS
+// Remastered pack in it, as the page has it after skipping what it doesn't load.
+const goo = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
+function pickMots(extra) {
+    const files = {
+        'episode/JKM.goo': null, 'episode/JKM_KFY.goo': null, 'episode/JKM_MP.goo': null, 'episode/JKM_SABER.goo': null,
+        'episode/MotS Secret Level/jkl/S6L1.jkl': 'jkl', 'resource/Jkmres.goo': null, 'resource/JKMsndLO.goo': null,
+        'resource/jk_.cd': 'cd', 'resource/Backup Sounds/JKMSNDLO.GOO': null, 'resource/ui/BM/bkmain.bm': 'bm',
+        'mods/JKMRemasteredAssets.goo': null, 'jkmcutscenes/JKM4B.GOO': null,
+        'jkgm/materials/SABER19/metadata.json': '{}', 'Controls/assassin.ctm': 'c', 'registry.json': '{}',
+        ...extra };
+    return Object.entries(files).filter(([path]) => !isSkipped(path.toLowerCase())).map(([path, bytes]) => ({
+        path, file: new Blob([bytes || (/\.goo$/i.test(path) ? goo('x', path) : Buffer.from(path))]) }));
+}
+const listMots = (files) => detectMods(files, true).map(m => m.name + ' (' + m.from + ')');
+
+test('the MotS Remastered pack is loaded like the game, not listed', () => {
+    const files = pickMots({});
+    assert.deepEqual(listMots(files), []);
+    assert.ok(files.some(e => e.path === 'mods/JKMRemasteredAssets.goo'));
+    assert.ok(!files.some(e => /^jkmcutscenes\//.test(e.path)));
+});
+
+test('MotS mods are still listed next to it', () => {
+    assert.deepEqual(listMots(pickMots({ 'mods/More.goo': null, 'resource/Saber.goo': null, 'SBX/sbx.goo': null })),
+                     ['SBX (SBX)', 'More (mods)', 'Saber (resource)']);
 });
 
 let failed = 0;
