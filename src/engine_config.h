@@ -449,6 +449,12 @@
 #define REGISTRY_FNAME ("registry.json")
 #endif
 
+// Added: each character's own cvars, in player/<name>/ next to openjkdf2.json.
+// Not SITHCVAR_FNAME, which has persist/ in front on WASM: player/<name>/persist/
+// never exists, so the file was never written, and loading it put every
+// display setting back to its default.
+#define SITHCVAR_PLAYER_FNAME ("openjkdf2_cvars.json")
+
 #define STDUPDATER_DEFAULT_URL ("https://api.github.com/repos/shinyquagsire23/OpenJKDF2/releases?per_page=1")
 #define STDUPDATER_DEFAULT_WIN64_FILENAME ("win64-debug.zip")
 #define STDUPDATER_DEFAULT_MACOS_FILENAME ("macos-debug.tar.gz")
