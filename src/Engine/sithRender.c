@@ -64,7 +64,13 @@ static int sithRender_bColoredWorld = 0;
 static flex_t* sithRender_aVertDynamicRGB = NULL; // red, green and blue blocks of numVertices each
 static int sithRender_numVertDynamicRGB = 0;
 
-// Added: colored saber glow. A lit saber's light takes the blade's glow color.
+// Added: colored saber glow. How far a lit saber's light goes from white toward the blade's color.
+#define SITHRENDER_SABER_TINT (0.6)
+
+// Added: colored saber glow. A lit saber's light is tinted by the blade's glow color but stays as
+// bright as the white light it replaces. The saber is often the strongest light near its holder, and
+// the blade's own color is far darker than white (green about 3/4, red and blue much less), so the
+// area went dim, and every white light that came and went (sparks, shots) took it back to normal.
 static void sithRender_SetSaberLightColor(rdLight* pLight, SithThing* pThing)
 {
     rdVector_Set3(&pLight->rgb, 1.0, 1.0, 1.0);
@@ -74,10 +80,18 @@ static void sithRender_SetSaberLightColor(rdLight* pLight, SithThing* pThing)
     const rdVector3* pColor = &pThing->playerInfo->saberGlowColor;
     if (pColor->x <= 0.0 && pColor->y <= 0.0 && pColor->z <= 0.0) // never worked out
         return;
+    if (pColor->x == 1.0 && pColor->y == 1.0 && pColor->z == 1.0)
+        return;
 
-    pLight->rgb = *pColor;
-    if (pColor->x != 1.0 || pColor->y != 1.0 || pColor->z != 1.0)
-        sithRender_bColoredLights = 1;
+    rdVector3 tint;
+    tint.x = 1.0 + (pColor->x - 1.0) * SITHRENDER_SABER_TINT;
+    tint.y = 1.0 + (pColor->y - 1.0) * SITHRENDER_SABER_TINT;
+    tint.z = 1.0 + (pColor->z - 1.0) * SITHRENDER_SABER_TINT;
+    flex_t luma = 0.2126 * tint.x + 0.7152 * tint.y + 0.0722 * tint.z;
+
+    // A channel can go over 1; each is capped at full where the light lands.
+    rdVector_Scale3(&pLight->rgb, &tint, 1.0 / luma);
+    sithRender_bColoredLights = 1;
 }
 
 // Added: colored saber glow. Room for per-channel dynamic light on every world vertex.
