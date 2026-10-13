@@ -130,6 +130,56 @@ test('MotS mods are still listed next to it', () => {
                      ['SBX (SBX)', 'More (mods)', 'Saber (resource)']);
 });
 
+// The page's memory of which mods were left unticked, with a stand-in for
+// the browser's localStorage.
+function memory(store) {
+    return new Function('localStorage',
+        cut('      // Which mods from the game folder this browser left', '      function megabytes') +
+        '\nreturn { modKey, modsLeftOut, rememberModsLeftOut };')(store);
+}
+function makeStore() {
+    const items = {};
+    return { getItem: k => k in items ? items[k] : null, setItem: (k, v) => { items[k] = String(v); }, items };
+}
+
+test('each mod keeps its key for remembering it when other mods come and go', () => {
+    const { modKey } = memory(makeStore());
+    const folder = { 'mod/SBX.gob': null, 'mod/Two/t.gob': null, 'mods/SBX.gob': null, 'resource/SBX.gob': null, 'SBX/sbx.gob': null };
+    const before = detectMods(pick(folder), false);
+    const keys = before.map(modKey);
+    assert.equal(new Set(keys).size, keys.length, keys.join(', '));
+    const after = detectMods(pick({ ...folder, 'mod/A.gob': null }), false);
+    for (const m of before) {
+        const same = after.find(n => modKey(n) === modKey(m));
+        assert.ok(same && same.from === m.from && same.name === m.name, modKey(m));
+    }
+    // Its folder under jkmods/ is numbered by its place in the list, so it moves.
+    assert.notEqual(after.find(n => modKey(n) === 'mod/sbx').path, before.find(m => modKey(m) === 'mod/sbx').path);
+});
+
+test('the mods left unticked are remembered for each game', () => {
+    const store = makeStore();
+    const { modsLeftOut, rememberModsLeftOut } = memory(store);
+    assert.deepEqual(modsLeftOut('jk1'), []);
+    rememberModsLeftOut('jk1', ['mod/sbx', 'mods/blade']);
+    assert.deepEqual(modsLeftOut('jk1'), ['mod/sbx', 'mods/blade']);
+    assert.deepEqual(modsLeftOut('mots'), []);
+    rememberModsLeftOut('jk1', []);
+    assert.deepEqual(modsLeftOut('jk1'), []);
+});
+
+test('a broken or blocked store leaves every mod ticked', () => {
+    for (const bad of ['not json', '{"a":1}', '3']) {
+        const store = makeStore();
+        store.items['jkdf2mp-mods-left-out-jk1'] = bad;
+        assert.deepEqual(memory(store).modsLeftOut('jk1'), [], bad);
+    }
+    const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
+    const { modsLeftOut, rememberModsLeftOut } = memory(blocked);
+    assert.deepEqual(modsLeftOut('jk1'), []);
+    rememberModsLeftOut('jk1', ['mod/sbx']);
+});
+
 let failed = 0;
 for (const t of tests) {
     try {
