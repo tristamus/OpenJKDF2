@@ -155,7 +155,7 @@ void sithDSSThing_UpdateState(SithThing *pThing, int toID, int outstream)
         NETMSG_PUSHS16(pThing->puppet->field_0);
         NETMSG_PUSHS16(pThing->puppet->field_4);
     }
-    NETMSG_PUSHS32(pThing->light);
+    NETMSG_PUSHF32(pThing->light); // Fixed: was PUSHS32, which cut it to a whole number; the receiver reads a float
     switch ( pThing->type )
     {
         case SITH_THING_ACTOR:
