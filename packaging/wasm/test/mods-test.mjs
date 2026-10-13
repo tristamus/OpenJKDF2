@@ -209,7 +209,7 @@ test('the lobby tail carries the mod\'s name and fingerprint, and nothing else r
     const { encodeTail, parseTail } = tab.jkMods.lib;
     const fp = sha(Buffer.from('x'));
     const t = encodeTail(fp, 'Saber Battle X');
-    assert.deepEqual(parseTail(t), { fp, name: 'Saber Battle X' });
+    assert.deepEqual(parseTail(t), { fp, name: 'Saber Battle X', pack: null });
     assert.equal(parseTail(''), null);
     assert.ok(parseTail('00').bad);
     assert.ok(parseTail(t.slice(0, -2)).bad);
@@ -222,6 +222,25 @@ test('the lobby tail carries the mod\'s name and fingerprint, and nothing else r
     assert.ok(480 + encodeTail(fp, 'x'.repeat(63)).length + 'welcome 64 '.length < 1024);
 });
 
+test('the lobby tail also says whether the host runs the Remastered pack, and an older one isn\'t guessed at', async () => {
+    const tab = await makeTab({ files: {} });
+    const { encodeTail, parseTail } = tab.jkMods.lib;
+    const fp = sha(Buffer.from('x')), pack = sha(Buffer.from('y')).slice(0, 32);
+    const packOnly = encodeTail(null, null, pack);
+    assert.deepEqual(parseTail(packOnly), { fp: null, name: null, pack });
+    assert.deepEqual(parseTail(encodeTail(fp, 'SBX', pack)), { fp, name: 'SBX', pack });
+    // The tail pages wrote before the pack was in it: version 1, no flags.
+    assert.ok(parseTail('4a4b4d4401' + '03' + fp + Buffer.from('SBX').toString('hex')).bad);
+    const withFlags = f => packOnly.slice(0, 10) + f + packOnly.slice(12);
+    assert.ok(parseTail(withFlags('00')).bad);
+    assert.ok(parseTail(withFlags('04')).bad);
+    assert.ok(parseTail(withFlags('01')).bad);
+    // A name only goes with a mod.
+    assert.ok(parseTail(packOnly.slice(0, 12) + '03' + packOnly.slice(14) + '414243').bad);
+    // The longest fits the engine's WSRELAY_MAX_TAIL_HEX (stdComm_WSRelay.c).
+    assert.ok(encodeTail(fp, 'x'.repeat(63), pack).length <= 256);
+});
+
 // ---- Host and joiner.
 
 test('the running mod is worked out before the engine starts, and named in the lobby tail', async () => {
@@ -230,7 +249,7 @@ test('the running mod is worked out before the engine starts, and named in the l
     assert.equal(cur.name, 'SBX');
     assert.equal(cur.path, 'jkmods/0-SBX');
     assert.equal(cur.fp, sha(host.jkMods.lib.pack('/jk1/jkmods/0-SBX').bytes));
-    assert.deepEqual(host.jkMods.lib.parseTail(tailOf(host)), { fp: cur.fp, name: 'SBX' });
+    assert.deepEqual(host.jkMods.lib.parseTail(tailOf(host)), { fp: cur.fp, name: 'SBX', pack: null });
 
     const vanilla = await makeTab({ files: { ...retailInstall } });
     assert.equal(vanilla.jkMods.current(), null);
@@ -461,6 +480,142 @@ test('several mods ticked together are one mod to a joiner, named by the first',
     vanilla.jkMods.fetch(t);
     assert.equal(await waitMod(vanilla), STATE_RESTART);
     assert.deepEqual(filesUnder(vanilla, '/jk1/' + vanilla.jkMods.restart())['cog/alpha.cog'], Buffer.from('alpha'));
+});
+
+// ---- The MotS Remastered pack, which the engine loads from mods/ for
+// whoever has it.
+
+const motsRetail = {
+    '/mots/resource/Jkmres.goo': makeGob([{ name: 'cog\\kyle_m.cog', bytes: randomBytes(900) }]),
+    '/mots/episode/JKM_MP.goo': makeGob([{ name: 'jkl\\m1.jkl', bytes: randomBytes(500) }]),
+};
+const remaster = makeGob([
+    { name: 'cog\\kyle_m.cog', bytes: randomBytes(1200) },
+    { name: 'mat\\bry_e11.mat', bytes: randomBytes(3000) },
+]);
+const remasterOther = makeGob([
+    { name: 'cog\\kyle_m.cog', bytes: randomBytes(1200) },
+    { name: 'mat\\bry_e11.mat', bytes: randomBytes(3000) },
+]);
+const PACK_AT = '/mots/mods/JKMRemasteredAssets.goo';
+const PACK_OFF = '/mots/jkpack-off/JKMRemasteredAssets.goo';
+const packFp = bytes => sha(bytes).slice(0, 32);
+
+function motsTab({ pack = null, at = PACK_AT, extra = {}, args = [], folders = [] } = {}) {
+    const files = { ...motsRetail, ...extra };
+    if (pack)
+        files[at] = pack;
+    return makeTab({ files, cwd: '/mots', args: ['-motsCompat', ...args], folders });
+}
+
+// The reason a job gave up, from the line maps.js logs for it.
+async function failure(tab, tail) {
+    const lines = [];
+    const log = console.log;
+    console.log = (...a) => { lines.push(a.join(' ')); };
+    try {
+        tab.jkMods.fetch(tail);
+        assert.equal(await waitMod(tab), STATE_FAILED);
+    } finally {
+        console.log = log;
+    }
+    const m = lines.map(l => / not installed: (\S+)$/.exec(l)).find(Boolean);
+    return m && m[1];
+}
+
+test('a MotS player\'s Remastered pack is fingerprinted before the engine starts, and named in the lobby tail', async () => {
+    const host = await motsTab({ pack: remaster });
+    assert.deepEqual(host.jkMods.lib.parseTail(tailOf(host)), { fp: null, name: null, pack: packFp(remaster) });
+    assert.equal(tailOf(await motsTab()), '');
+    // In resource/, where the engine loads every GOB from too, and spelled any way.
+    const inRes = await motsTab({ pack: remaster, at: '/mots/resource/jkmremasteredassets.GOO' });
+    assert.equal(inRes.jkMods.lib.parseTail(tailOf(inRes)).pack, packFp(remaster));
+    // Jedi Knight has no such pack.
+    assert.equal(tailOf(await makeTab({ files: { ...retailInstall, '/jk1/mods/JKMRemasteredAssets.goo': remaster } })), '');
+});
+
+test('a joiner without the host\'s Remastered pack is told to add it, and nothing is sent', async () => {
+    const host = await motsTab({ pack: remaster });
+    const join = await motsTab();
+    const link = connect(host, join);
+    host.jkMods.host();
+    await settle();
+    assert.equal(join.jkMods.describe(tailOf(host)), 'Needs the MotS Remastered pack');
+    assert.equal(await failure(join, tailOf(host)), 'pack-missing');
+    assert.equal(link.log.length, 0);
+});
+
+test('a joiner with another version of the Remastered pack is told so', async () => {
+    const host = await motsTab({ pack: remaster });
+    const join = await motsTab({ pack: remasterOther });
+    connect(host, join);
+    assert.equal(join.jkMods.describe(tailOf(host)), "Needs the host's version of the Remastered pack");
+    assert.equal(await failure(join, tailOf(host)), 'pack-other');
+    assert.ok(join.FS.files.has(PACK_AT));
+});
+
+test('players with the same Remastered pack just join', async () => {
+    const host = await motsTab({ pack: remaster });
+    const join = await motsTab({ pack: remaster });
+    const link = connect(host, join);
+    assert.equal(join.jkMods.describe(tailOf(host)), 'Remastered pack');
+    join.jkMods.fetch(tailOf(host));
+    assert.equal(await waitMod(join), STATE_READY);
+    assert.equal(link.log.length, 0);
+});
+
+test('a joiner restarts without the Remastered pack for a host without it, and with it again for one with it', async () => {
+    const plainHost = await motsTab();
+    const packHost = await motsTab({ pack: remaster });
+    const join = await motsTab({ pack: remaster });
+    connect(plainHost, join);
+    assert.equal(join.jkMods.describe(''), 'No Remastered pack (the game restarts without it)');
+    join.jkMods.fetch(tailOf(plainHost));
+    assert.equal(await waitMod(join), STATE_RESTART);
+    assert.equal(join.jkMods.restart(), '');
+    assert.ok(!join.FS.files.has(PACK_AT), 'still where the engine loads it');
+    assert.deepEqual(join.FS.files.get(PACK_OFF), new Uint8Array(remaster));
+    assert.equal(tailOf(join), '');
+    assert.equal(join.jkMods.describe(''), '');
+    join.jkMods.fetch(tailOf(plainHost));
+    assert.equal(await waitMod(join), STATE_READY);
+
+    connect(packHost, join);
+    assert.equal(join.jkMods.describe(tailOf(packHost)), 'Remastered pack (the game restarts to load it)');
+    join.jkMods.fetch(tailOf(packHost));
+    assert.equal(await waitMod(join), STATE_RESTART);
+    assert.equal(join.jkMods.restart(), '');
+    assert.deepEqual(join.FS.files.get(PACK_AT), new Uint8Array(remaster));
+    assert.ok(!join.FS.files.has(PACK_OFF));
+    assert.equal(tailOf(join), tailOf(packHost));
+});
+
+test('the Remastered pack goes with the host\'s mod, both ways', async () => {
+    const modFiles = { 'm.goo': modGob, 'cog/x.cog': randomBytes(4000) };
+    const modHost = await motsTab({
+        extra: install('jkmods/0-M', modFiles, '/mots'),
+        args: ['-path', 'jkmods/0-M'], folders: [{ name: 'M', path: 'jkmods/0-M' }],
+    });
+    const join = await motsTab({ pack: remaster });
+    connect(modHost, join);
+    modHost.jkMods.host();
+    await settle();
+    assert.equal(join.jkMods.describe(tailOf(modHost)), 'Mod: M, no Remastered pack (the game restarts)');
+    join.jkMods.fetch(tailOf(modHost));
+    assert.equal(await waitMod(join), STATE_RESTART);
+    assert.equal(join.jkMods.restart(), 'netmods/' + modHost.jkMods.current().fp.slice(0, 16));
+    assert.ok(join.FS.files.has(PACK_OFF));
+    assert.equal(tailOf(join), tailOf(modHost));
+
+    // Back to a host with the pack and no mod: off the mod, on the pack.
+    const packHost = await motsTab({ pack: remaster });
+    connect(packHost, join);
+    assert.equal(join.jkMods.describe(tailOf(packHost)), 'No mod, Remastered pack (the game restarts)');
+    join.jkMods.fetch(tailOf(packHost));
+    assert.equal(await waitMod(join), STATE_RESTART);
+    assert.equal(join.jkMods.restart(), '');
+    assert.ok(join.FS.files.has(PACK_AT));
+    assert.equal(tailOf(join), tailOf(packHost));
 });
 
 let failed = 0;

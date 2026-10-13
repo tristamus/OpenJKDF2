@@ -138,6 +138,12 @@ export function makeFS(files, cwd = '/jk1') {
                 throw new Error('ENOENT ' + path);
         },
         mkdirTree(path) { extraDirs.add(path); },
+        rename(from, to) {
+            if (!map.has(from))
+                throw new Error('ENOENT ' + from);
+            map.set(to, map.get(from));
+            map.delete(from);
+        },
         open(path) {
             if (!map.has(path))
                 throw new Error('ENOENT ' + path);

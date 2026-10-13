@@ -23,8 +23,22 @@
 // netmods/<first 16 hex digits of the fingerprint> when needed, so they can
 // be chosen next time from the folder prompt.
 //
+// The MotS Remastered pack (JKMRemasteredAssets.goo) isn't a mod the player
+// picks: the page leaves it in mods/, which the engine always loads
+// (index.html). Its files replace the game's own, with weapon and character
+// scripts that play by other rules, and with models and textures that change
+// the order the engine numbers sounds, models and textures in, which is how
+// players' messages name them. So a game runs it as the host does: a joiner
+// needs it when the host runs it, and runs without theirs when the host
+// doesn't, restarting either way like for a mod. It's over MAX_MOD_BYTES, so
+// it isn't sent.
+//
 // The lobby tail, hex-encoded after the 240-byte jkMultiEntry:
-//   "JKMD" <version u8> <name length u8> <fingerprint: 32 bytes> <name>
+//   "JKMD" <version u8> <flags u8> <name length u8>
+//   [<mod fingerprint: 32 bytes>] [<pack fingerprint: 16 bytes>] <name>
+// flags: 1 the host runs a mod, named by <name>; 2 it runs the Remastered
+// pack, whose fingerprint is the first 16 bytes of its SHA-256. A host with
+// neither sends no tail.
 
 (function() {
     var maps = Module.jkMaps;
@@ -35,8 +49,10 @@
     var KIND_MOD = core.KIND_MOD;
 
     var TAIL_MAGIC = [0x4A, 0x4B, 0x4D, 0x44]; // "JKMD"
-    var TAIL_VERSION = 1;
+    var TAIL_VERSION = 2;
+    var TAIL_MOD = 1, TAIL_PACK = 2;
     var MAX_NAME = 63;
+    var PACK_FP_BYTES = 16;
     // What can be sent, like a map; bigger mods are still fingerprinted, so a
     // joiner with the same folder can use theirs.
     var MAX_MOD_BYTES = 100 * 1024 * 1024;
@@ -231,37 +247,61 @@
         return (name || 'mod').substring(0, MAX_NAME);
     }
 
-    function encodeTail(fp, name) {
-        name = cleanName(name);
-        var b = new Uint8Array(4 + 2 + 32 + name.length);
+    // fp is the mod's fingerprint and name its name, or both null for none;
+    // packFp is the Remastered pack's fingerprint, or null.
+    function encodeTail(fp, name, packFp) {
+        name = fp ? cleanName(name) : '';
+        var at = 7;
+        var b = new Uint8Array(at + (fp ? 32 : 0) + (packFp ? PACK_FP_BYTES : 0) + name.length);
         b.set(TAIL_MAGIC, 0);
         b[4] = TAIL_VERSION;
-        b[5] = name.length;
-        for (var i = 0; i < 32; i++)
-            b[6 + i] = parseInt(fp.substr(i * 2, 2), 16);
+        b[5] = (fp ? TAIL_MOD : 0) | (packFp ? TAIL_PACK : 0);
+        b[6] = name.length;
+        function put(hex, n) {
+            for (var i = 0; i < n; i++)
+                b[at++] = parseInt(hex.substr(i * 2, 2), 16);
+        }
+        if (fp)
+            put(fp, 32);
+        if (packFp)
+            put(packFp, PACK_FP_BYTES);
         for (var j = 0; j < name.length; j++)
-            b[38 + j] = name.charCodeAt(j);
+            b[at++] = name.charCodeAt(j);
         return lib.toHex(b);
     }
 
-    // null when the host runs no mod, { fp, name } for its mod, or
-    // { bad: true } for a tail this page can't read.
+    // null when the host runs no mod and no pack, { fp, name, pack } with
+    // null for what it doesn't run, or { bad: true } for a tail this page
+    // can't read, such as one from a page before the pack was in it.
     function parseTail(hex) {
         hex = String(hex || '');
         if (!hex)
             return null;
-        if (hex.length % 2 || !/^[0-9a-fA-F]+$/.test(hex) || hex.length < 2 * 38)
+        if (hex.length % 2 || !/^[0-9a-fA-F]+$/.test(hex) || hex.length < 2 * 7)
             return { bad: true };
         var b = new Uint8Array(hex.length / 2);
         for (var i = 0; i < b.length; i++)
             b[i] = parseInt(hex.substr(i * 2, 2), 16);
+        var flags = b[5];
+        var size = 7 + (flags & TAIL_MOD ? 32 : 0) + (flags & TAIL_PACK ? PACK_FP_BYTES : 0) + b[6];
         if (b[0] !== TAIL_MAGIC[0] || b[1] !== TAIL_MAGIC[1] || b[2] !== TAIL_MAGIC[2] ||
-            b[3] !== TAIL_MAGIC[3] || b[4] !== TAIL_VERSION || b[5] > MAX_NAME || b.length !== 38 + b[5])
+            b[3] !== TAIL_MAGIC[3] || b[4] !== TAIL_VERSION || !flags || flags & ~(TAIL_MOD | TAIL_PACK) ||
+            b[6] > MAX_NAME || !(flags & TAIL_MOD) !== !b[6] || b.length !== size)
             return { bad: true };
+        var at = 7;
+        var fp = null, pack = null;
+        if (flags & TAIL_MOD) {
+            fp = lib.toHex(b.subarray(at, at + 32));
+            at += 32;
+        }
+        if (flags & TAIL_PACK) {
+            pack = lib.toHex(b.subarray(at, at + PACK_FP_BYTES));
+            at += PACK_FP_BYTES;
+        }
         var name = '';
-        for (var j = 0; j < b[5]; j++)
-            name += String.fromCharCode(b[38 + j]);
-        return { fp: lib.toHex(b.subarray(6, 38)), name: cleanName(name) };
+        for (var j = 0; j < b[6]; j++)
+            name += String.fromCharCode(b[at + j]);
+        return { fp: fp, name: fp ? cleanName(name) : null, pack: pack };
     }
 
     // ---- Which mod this tab runs, and the mods it could switch to.
@@ -316,10 +356,49 @@
         return { fp: fp, name: cleanName(name || saved.meta.name), path: path };
     }
 
+    // ---- The Remastered pack.
+
+    var PACK_NAME = 'jkmremasteredassets.goo';
+    var PACK_TITLE = 'MotS Remastered pack';
+    // The folders the engine loads it from (jkRes_LoadNew), and the one it
+    // waits in while this tab runs without it, which the engine doesn't read.
+    var PACK_DIRS = ['mods', 'resource'];
+    var PACK_OFF_DIR = 'jkpack-off';
+
+    // The pack in the picked folder, worked out before the engine starts:
+    // { fp, dir, file, root, on }, its fingerprint, the folder it loads from
+    // and its name there, the game folder, and whether it's loaded. null for
+    // a player without it.
+    var remaster = null;
+
+    function packRunning() {
+        return remaster && remaster.on ? remaster.fp : null;
+    }
+
+    // Moves the pack where the engine loads it from, or out of its way, for
+    // the engine's next start.
+    function setPack(on) {
+        if (!remaster || remaster.on === on)
+            return;
+        var off = remaster.root + '/' + PACK_OFF_DIR;
+        var from = (remaster.on ? remaster.dir : off) + '/' + remaster.file;
+        var to = (on ? remaster.dir : off) + '/' + remaster.file;
+        try {
+            FS().mkdirTree(on ? remaster.dir : off);
+            FS().rename(from, to);
+            remaster.on = on;
+            console.log('OpenJKDF2: ' + (on ? 'loading the ' : 'leaving out the ') + PACK_TITLE);
+        } catch (e) {
+            console.warn('OpenJKDF2: could not move the ' + PACK_TITLE + ': ' + e);
+        }
+    }
+
     // ---- Host.
 
     function tail() {
-        return current && current.fp ? encodeTail(current.fp, current.name) : '';
+        var fp = current && current.fp ? current.fp : null;
+        var pack = packRunning();
+        return fp || pack ? encodeTail(fp, fp ? current.name : null, pack) : '';
     }
 
     function host() {
@@ -386,7 +465,12 @@
         'bad-files': "The host's mod has file names that can't be saved here, so it wasn't installed.",
         'changed': "The host's mod files changed after their game started. They need to reload the page.",
         'other-mod': 'The host is running a different mod now.',
-        'unreadable': "This game's mod details couldn't be read. One of you may need to reload the page."
+        'unreadable': "This game's mod details couldn't be read. One of you may need to reload the page.",
+        'pack-missing': 'This game uses the MotS Remastered pack, which your game folder doesn\'t have. To join, ' +
+                        "put JKMRemasteredAssets.goo in your game folder's Mods folder, then reload this page " +
+                        'and pick the folder again.',
+        'pack-other': "Your MotS Remastered pack is a different version from the host's. To join, you both " +
+                      'need the same JKMRemasteredAssets.goo.'
     };
 
     function messageFor(reason) {
@@ -408,7 +492,7 @@
         var want = parseTail(tailHex);
         core.startJob(KIND_MOD, {
             want: want,
-            label: want && !want.bad ? want.name : 'Unknown mod',
+            label: want && !want.bad ? want.name || PACK_TITLE : 'Unknown mod',
             ext: gameExt(),
             messageFor: messageFor
         }, runJob);
@@ -418,34 +502,55 @@
         core.abort('cancelled', KIND_MOD);
     }
 
+    var REJOIN = ' When the main menu is back, join from Multiplayer again: this game will already be selected.';
+
     async function runJob(j) {
         var want = j.want;
         if (want && want.bad)
             throw fail('unreadable');
+        var wantFp = want ? want.fp : null;
+        var wantPack = want ? want.pack : null;
         var have = current && current.fp ? current.fp : null;
-        if ((want ? want.fp : null) === have)
+        var havePack = packRunning();
+        if (wantPack && wantPack !== havePack) {
+            if (!remaster)
+                throw fail('pack-missing');
+            if (remaster.fp !== wantPack)
+                throw fail('pack-other');
+        }
+        if (wantFp === have && wantPack === havePack)
             return core.STATE_READY;
 
-        if (!want) {
-            target = { fp: null, name: null, path: '' };
+        // The pack only changes with a restart, so it goes with the mod's.
+        var packText = wantPack === havePack ? '' : wantPack ?
+            ' It also loads your ' + PACK_TITLE + ', which the host uses.' :
+            " It also leaves out your " + PACK_TITLE + ", which the host doesn't use.";
+        var found;
+        if (wantFp === have) {
+            found = current ? { fp: current.fp, name: current.name, path: current.path } : { fp: null, name: null, path: '' };
+            core.ui.notice(wantPack ? 'Restarting with the Remastered pack' : 'Restarting without the Remastered pack',
+                           PACK_TITLE,
+                           (wantPack ? 'The host uses the ' + PACK_TITLE + ', so the game restarts to load yours.' :
+                            "The host doesn't use the " + PACK_TITLE + ', so the game restarts without yours, ' +
+                            'since every player has to run the same files.') + REJOIN);
+        } else if (!wantFp) {
+            found = { fp: null, name: null, path: '' };
             core.ui.notice('Restarting without your mod', current.name,
-                           "The host isn't using a mod, so the game restarts without yours. When the main " +
-                           'menu is back, join from Multiplayer again: this game will already be selected.');
-            return core.STATE_RESTART;
+                           "The host isn't using a mod, so the game restarts without yours." + packText + REJOIN);
+        } else {
+            found = await findLocal(j, want);
+            if (!found) {
+                var info = await askHost(j, want);
+                found = await findBySize(j, want, info) || await download(j, want, info);
+            }
+            if (!found.downloaded)
+                console.log('OpenJKDF2: using mod ' + want.name + ' from ' + found.path);
+            core.check(j);
+            core.ui.notice("Restarting with the host's mod", want.name,
+                           'The game restarts to load it.' + packText + REJOIN);
         }
-
-        var found = await findLocal(j, want);
-        if (!found) {
-            var info = await askHost(j, want);
-            found = await findBySize(j, want, info) || await download(j, want, info);
-        }
-        if (!found.downloaded)
-            console.log('OpenJKDF2: using mod ' + want.name + ' from ' + found.path);
-        core.check(j);
+        found.pack = !!wantPack;
         target = found;
-        core.ui.notice("Restarting with the host's mod", want.name,
-                       'The game restarts to load it. When the main menu is back, join from Multiplayer ' +
-                       'again: this game will already be selected.');
         return core.STATE_RESTART;
     }
 
@@ -554,6 +659,8 @@
         var t = target;
         target = null;
         current = t && t.fp ? { fp: t.fp, name: t.name, path: t.path } : null;
+        if (t)
+            setPack(!!t.pack);
         return t ? t.path : '';
     }
 
@@ -580,15 +687,37 @@
         }
         if (want && want.bad)
             return 'Mod: unknown';
-        if (want && have && want.fp === have.fp)
-            return (several(want.name) ? 'Mods: ' : 'Mod: ') + short(want.name);
-        if (want && several(want.name))
-            return 'Mods: ' + short(want.name) + ' (the game restarts to load them)';
-        if (want)
-            return 'Mod: ' + short(want.name) + ' (the game restarts to load it)';
-        if (have)
-            return 'No mod (the game restarts without ' + short(have.name) + ')';
-        return '';
+        var wantPack = want ? want.pack : null;
+        if (wantPack && !remaster)
+            return 'Needs the MotS Remastered pack';
+        if (wantPack && remaster.fp !== wantPack)
+            return "Needs the host's version of the Remastered pack";
+
+        var mod = '', modWhy = '';
+        if (want && want.fp) {
+            mod = (several(want.name) ? 'Mods: ' : 'Mod: ') + short(want.name);
+            if (!have || want.fp !== have.fp)
+                modWhy = several(want.name) ? ' (the game restarts to load them)' : ' (the game restarts to load it)';
+        } else if (have) {
+            mod = 'No mod';
+            modWhy = ' (the game restarts without ' + short(have.name) + ')';
+        }
+        var havePack = packRunning();
+        var pack = '', packWhy = '';
+        if (wantPack) {
+            pack = 'Remastered pack';
+            if (!havePack)
+                packWhy = ' (the game restarts to load it)';
+        } else if (havePack) {
+            pack = 'No Remastered pack';
+            packWhy = ' (the game restarts without it)';
+        }
+        if (!pack)
+            return mod + modWhy;
+        if (!mod)
+            return pack + packWhy;
+        return mod + ', ' + (wantPack ? 'Remastered pack' : 'no Remastered pack') +
+               (modWhy || packWhy ? ' (the game restarts)' : '');
     }
 
     Module.jkMods = {
@@ -620,6 +749,46 @@
     Module.preRun = Module.preRun || [];
     if (typeof Module.preRun === 'function')
         Module.preRun = [Module.preRun];
+
+    // Finds the Remastered pack where the engine loads it from, and its
+    // fingerprint, which is needed before anyone can host or join.
+    Module.preRun.push(function() {
+        if (!isMots())
+            return;
+        var root = '/mots';
+        var found = null;
+        for (var d of PACK_DIRS) {
+            var dir = core.findPath(root, d);
+            var names = [];
+            try { names = dir ? FS().readdir(dir) : []; } catch (e) {}
+            for (var n of names) {
+                if (n.toLowerCase() === PACK_NAME && core.isFile(dir + '/' + n)) {
+                    found = { dir: dir, file: n };
+                    break;
+                }
+            }
+            if (found)
+                break;
+        }
+        if (!found)
+            return;
+        Module.addRunDependency('jk-remaster');
+        (async function() {
+            var fp = (await lib.sha256(FS().readFile(found.dir + '/' + found.file))).substring(0, 2 * PACK_FP_BYTES);
+            remaster = { fp: fp, dir: found.dir, file: found.file, root: root, on: true };
+            console.log('OpenJKDF2: running the ' + PACK_TITLE + ' (' + fp + ')');
+        })().catch(function(e) {
+            // Without a fingerprint it can't be matched with the host's, so
+            // this tab runs without it.
+            console.warn('OpenJKDF2: could not read the ' + PACK_TITLE + ', so it is left out: ' + e);
+            remaster = { fp: null, dir: found.dir, file: found.file, root: root, on: true };
+            setPack(false);
+            remaster = null;
+        }).finally(function() {
+            Module.removeRunDependency('jk-remaster');
+        });
+    });
+
     Module.preRun.push(function() {
         var path = pathArg();
         if (!path)
