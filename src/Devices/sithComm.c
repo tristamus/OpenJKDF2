@@ -149,8 +149,11 @@ int sithComm_SendMsgToPlayer(SithMessage *pMessage, int idTo, int outstream, int
             {
                 if ( i != playerThingIdx && (jkPlayer_playerInfos[i].playerNetId == idTo || (idTo == -1 || !idTo) && (jkPlayer_playerInfos[i].flags & 1) != 0) )
                     pMessage->netMsg.field_14 |= 1 << i;
-                if (!i && i != playerThingIdx) {
-                    pMessage->netMsg.field_14 |= 1 << i; // Added: Dedicated server hax
+                // Added: Dedicated server hax. Fixed: only for messages to everyone. A message sent
+                // to one other player also got resent to the host, which then ran it as if meant for
+                // it (a Carbonite hit between two joiners froze the host too).
+                if (!i && i != playerThingIdx && (idTo == -1 || !idTo)) {
+                    pMessage->netMsg.field_14 |= 1 << i;
                 }
             }
             if ( !pMessage->netMsg.field_14 )
