@@ -484,6 +484,13 @@
         cursor: pointer;
       }
       #mod-choice label:has(input:checked) { border-color: var(--gold); }
+      #mod-choice label.mod-all, #mod-choice label.mod-all:has(input:checked) {
+        align-items: center;
+        background-color: transparent;
+        border-color: transparent transparent var(--teal-light);
+      }
+      #mod-choice label.mod-all[hidden] { display: none; }
+      #mod-choice .mod-count { margin-left: auto; color: var(--muted); font-size: 13px; }
       #mod-choice input { accent-color: var(--gold); }
       #mod-choice .where { display: block; color: var(--muted); font-size: 13px; }
       #mod-choice .mod-clash { margin: 0 0 12px; padding: 7px 10px; border-left: 3px solid var(--gold); font-size: 14px; white-space: pre-line; }
@@ -658,9 +665,9 @@
                 <li>To play with mods, put them in the game folder: in a <code>mod</code> or <code>mods</code>
                   folder, in a folder of their own, or as a GOB in <code>Resource</code>. GOBs, zip files and
                   unzipped mods all work, and so do JK Patch Commander's patches. After you pick the game
-                  folder, each mod it finds has its own checkbox, all ticked, and you can untick any. Players
-                  who join you get them too, and if you join a game with other mods, yours are swapped for
-                  the host's.</li>
+                  folder, each mod it finds has its own checkbox, all ticked, and you can untick any, or all
+                  of them at once with Select all. Players who join you get them too, and if you join a game
+                  with other mods, yours are swapped for the host's.</li>
               </ol>
             </section>
 
@@ -744,10 +751,12 @@
         <div id="mod-choice" hidden>
           <fieldset>
             <legend>Mods to play with</legend>
+            <label class="mod-all" hidden><input type="checkbox"><b>Select all</b><span class="mod-count"></span></label>
             <div class="mod-list"></div>
           </fieldset>
           <p class="mod-clash" role="status" hidden></p>
-          <p class="fine">Every mod in your game folder is ticked. Untick any you don't want this time.
+          <p class="fine">Every mod in your game folder starts ticked. Untick any you don't want this time,
+            or untick Select all and tick the few you want.
             When two mods change the same file, the one higher in the list is used. Players who join you
             get your mods, except files from the original game, which their browser fills in from their
             own copy. If you join a game with different mods, the game restarts with those.</p>
@@ -1849,6 +1858,27 @@
           note.textContent = lines.join('\n');
           note.hidden = !lines.length;
         }
+        // Select all ticks or unticks every mod from the game folder. It
+        // shows mixed when only some are ticked, and a click on it then
+        // ticks them all. Shown for two or more.
+        var all = modChoice.querySelector('.mod-all');
+        var allBox = all.querySelector('input');
+        var mine = inputs.filter(function(input, i) { return !options[i].saved; });
+        all.hidden = mine.length < 2;
+        function updateAll() {
+          var n = mine.filter(function(input) { return input.checked; }).length;
+          allBox.checked = n === mine.length;
+          allBox.indeterminate = n > 0 && n < mine.length;
+          all.querySelector('.mod-count').textContent = n + ' of ' + mine.length + ' ticked';
+        }
+        allBox.onchange = function() {
+          inputs.forEach(function(input, i) {
+            if (!options[i].saved) input.checked = allBox.checked;
+            else if (allBox.checked) input.checked = false;
+          });
+          update();
+          updateAll();
+        };
         inputs.forEach(function(input, i) {
           input.onchange = function() {
             // A saved set runs on its own.
@@ -1858,9 +1888,11 @@
               });
             }
             update();
+            updateAll();
           };
         });
         update();
+        updateAll();
 
         pickerTitle.textContent = 'Choose your mods';
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
