@@ -647,7 +647,7 @@
                   <h3>Kept for next time</h3>
                   <ul>
                     <li>Characters and controls come in from your game folder.</li>
-                    <li>Settings, maps and mods are saved in this browser.</li>
+                    <li>Settings, maps, mods and which mods you ticked are saved in this browser.</li>
                   </ul>
                 </div>
               </div>
@@ -665,9 +665,10 @@
                 <li>To play with mods, put them in the game folder: in a <code>mod</code> or <code>mods</code>
                   folder, in a folder of their own, or as a GOB in <code>Resource</code>. GOBs, zip files and
                   unzipped mods all work, and so do JK Patch Commander's patches. After you pick the game
-                  folder, each mod it finds has its own checkbox, all ticked, and you can untick any, or all
-                  of them at once with Select all. Players who join you get them too, and if you join a game
-                  with other mods, yours are swapped for the host's.</li>
+                  folder, each mod it finds has its own checkbox. They start ticked, and you can untick any,
+                  or all of them at once with Select all. This browser remembers which you left unticked for
+                  next time. Players who join you get them too, and if you join a game with other mods, yours
+                  are swapped for the host's.</li>
               </ol>
             </section>
 
@@ -755,8 +756,8 @@
             <div class="mod-list"></div>
           </fieldset>
           <p class="mod-clash" role="status" hidden></p>
-          <p class="fine">Every mod in your game folder starts ticked. Untick any you don't want this time,
-            or untick Select all and tick the few you want.
+          <p class="fine">Mods start the way you left them last time, and new ones start ticked.
+            Untick any you don't want, or untick Select all and tick the few you want.
             When two mods change the same file, the one higher in the list is used. Players who join you
             get your mods, except files from the original game, which their browser fills in from their
             own copy. If you join a game with different mods, the game restarts with those.</p>
@@ -1798,17 +1799,39 @@
         });
       }
 
+      // Which mods from the game folder this browser left unticked last
+      // time, per game, so the list starts the way the player left it. A mod
+      // that's new since then starts ticked.
+      var MODS_LEFT_OUT = 'jkdf2mp-mods-left-out-';
+      function modKey(m) {
+        return (m.from + '/' + m.name).toLowerCase();
+      }
+      function modsLeftOut(game) {
+        try {
+          var keys = JSON.parse(localStorage.getItem(MODS_LEFT_OUT + game) || '[]');
+          return Array.isArray(keys) ? keys : [];
+        } catch (e) {
+          return [];
+        }
+      }
+      function rememberModsLeftOut(game, keys) {
+        try {
+          localStorage.setItem(MODS_LEFT_OUT + game, JSON.stringify(keys));
+        } catch (e) {}
+      }
+
       function megabytes(n) {
         return n < 1048576 ? 'under 1 MB' : Math.round(n / 1048576) + ' MB';
       }
 
-      // Asks which mods to start with. Every mod in the game folder starts
-      // ticked, every time. A mod saved from an online game is that host's
-      // whole set, so it starts unticked and runs on its own. Resolves to the
-      // ticked options, highest first.
-      function chooseMods(folderMods, saved, clashes) {
+      // Asks which mods to start with. Mods in the game folder start ticked,
+      // apart from those left unticked last time. A mod saved from an online
+      // game is that host's whole set, so it starts unticked and runs on its
+      // own. Resolves to the ticked options, highest first.
+      function chooseMods(folderMods, saved, clashes, game) {
+        var leftOut = modsLeftOut(game);
         var options = folderMods.map(function(m, i) {
-          return { index: i, name: m.name, path: m.path,
+          return { index: i, name: m.name, path: m.path, key: modKey(m),
                    where: (m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
                                     : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
                           (m.bytes > 100 * 1048576 ? ". Too big to send: players need their own copy" : '') };
@@ -1826,7 +1849,7 @@
           var input = document.createElement('input');
           input.type = 'checkbox';
           input.value = String(i);
-          input.checked = !o.saved;
+          input.checked = !o.saved && leftOut.indexOf(o.key) < 0;
           var text = document.createElement('span');
           var name = document.createElement('b');
           name.textContent = o.name;
@@ -1904,6 +1927,10 @@
           start.onclick = function() {
             start.onclick = null;
             modChoice.hidden = true;
+            // A saved set says nothing about the folder's mods.
+            if (!ticked().some(function(o) { return o.saved; }))
+              rememberModsLeftOut(game, options.filter(function(o, i) { return !o.saved && !inputs[i].checked; })
+                                               .map(function(o) { return o.key; }));
             resolve(ticked());
           };
         });
@@ -2060,7 +2087,7 @@
           }
           Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
           if (folderMods.length || saved.length)
-            picked = await chooseMods(folderMods, saved, found.clashes);
+            picked = await chooseMods(folderMods, saved, found.clashes, game);
         }
 
         readingFolder = true;
