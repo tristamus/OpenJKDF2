@@ -1859,10 +1859,13 @@ int sithThing_ParseThingArg(StdConffileArg *arg, SithThing* pThing, int param)
                 return 1;
 
             // MOTS added
+            // Fixed: class cogs run on every machine like in JK, unless flagged
+            // SERVER (flags=0x80). This test was inverted, which sent kyle_m.cog's
+            // newplayer and skill messages to the host in multiplayer.
             if (Main_bMotsCompat) {
                 pCog->flags |= SITH_COG_CLASS;
-                if (pCog->flags & SITH_COG_SERVER) {
-                    pCog->flags |= SITH_COG_CLASS | SITH_COG_LOCAL;
+                if (!(pCog->flags & SITH_COG_SERVER)) {
+                    pCog->flags |= SITH_COG_LOCAL;
                 }
             }
             else {
