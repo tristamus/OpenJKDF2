@@ -1429,7 +1429,8 @@
       };
       // Loaded like the game's own GOBs, so not listed: the MotS Remastered
       // pack's assets, which its installer puts in mods/. It loads for whoever
-      // has it and isn't sent to joiners. A ticked mod still comes first.
+      // has it, and in multiplayer every player runs it as the host does
+      // (mods.js). It isn't sent to joiners. A ticked mod still comes first.
       var ALWAYS_LOADED = {
         '.gob': [],
         '.goo': ['jkmremasteredassets.goo']
