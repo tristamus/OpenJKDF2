@@ -17,14 +17,16 @@
 // packets go straight to the player named in idTo (the host for 0 or 1).
 //
 // Text frames are relay control lines, binary frames are game packets:
-//   us -> relay   list | host <entry> | update <entry> | join <room>
+//   us -> relay   list <game> | host <entry> | update <entry> | join <room>
 //                 welcome <id> <entry> | leave | signal <id> <data> | ping
 //                 hello <game> <name>
 //   relay -> us   list (<room> <players> <entry>)* | hosted <room>
 //                 peer-joined <id> | peer-left <id> | welcome <id> <entry>
 //                 host-left | error <code> | signal <id> <data> | ice <data>
-// <entry> is a hex-encoded jkMultiEntry. <data> is base64 JSON: an SDP offer or
-// answer ({"d": ...}) or an ICE candidate ({"c": ...}) for signal, and the
+// list asks for the games this game can join: those hosted by the same game
+// (jk1 or mots), and any whose host hasn't said which it runs. <entry> is a
+// hex-encoded jkMultiEntry. <data> is base64 JSON: an SDP offer or answer
+// ({"d": ...}) or an ICE candidate ({"c": ...}) for signal, and the
 // RTCPeerConnection iceServers list for ice. The JS below handles signal and
 // ice itself; the engine never sees them.
 //
@@ -1247,8 +1249,10 @@ int stdComm_EnumSessions(int a, void* b)
     }
     else
     {
+        // Only the games this one can join: Jedi Knight can't join a game
+        // Mysteries of the Sith hosts, or the other way round.
         wsrelay_bListReceived = 0;
-        wsrelay_SendText("list");
+        wsrelay_SendText(Main_bMotsCompat ? "list mots" : "list jk1");
         wsrelay_WaitForChange(&wsrelay_bListReceived, WSRELAY_LIST_MS);
     }
 
