@@ -19,6 +19,7 @@
 // Text frames are relay control lines, binary frames are game packets:
 //   us -> relay   list | host <entry> | update <entry> | join <room>
 //                 welcome <id> <entry> | leave | signal <id> <data> | ping
+//                 hello <game> <name>
 //   relay -> us   list (<room> <players> <entry>)* | hosted <room>
 //                 peer-joined <id> | peer-left <id> | welcome <id> <entry>
 //                 host-left | error <code> | signal <id> <data> | ice <data>
@@ -26,6 +27,11 @@
 // answer ({"d": ...}) or an ICE candidate ({"c": ...}) for signal, and the
 // RTCPeerConnection iceServers list for ice. The JS below handles signal and
 // ice itself; the engine never sees them.
+//
+// For the landing page's live counts, the JS also tells the relay this
+// player's name (base64 UTF-8) and game (jk1 or mots) with hello, from the
+// start rather than once the player opens the Join screen, and keeps the
+// socket open outside a game so they stay counted.
 //
 // A joiner who doesn't have the host's map gets it from the host before the
 // level loads (packaging/wasm/maps.js, bundled into this module). Its frames
@@ -41,6 +47,7 @@
 
 #include "Win95/stdComm.h"
 #include "Dss/sithMulti.h"
+#include "Main/Main.h"
 #include "General/stdString.h"
 #include "stdPlatform.h"
 #include "jk.h"
@@ -235,56 +242,100 @@ EM_JS(void, wsrelay_js_connect, (), {
             if (op === 'host-left') net.closeAll();
             return false;
         };
+        /* The live counts: this player's name and game, sent when the socket
+           opens and whenever they change. Module.jkPresence says where the
+           engine keeps them. */
+        net.sayHello = function() {
+            var who = Module.jkPresence;
+            if (!who || net.state !== 1) return;
+            var chars = [];
+            for (var i = 0; i < 31; i++) {
+                var ch = HEAPU16[(who.name >> 1) + i];
+                if (!ch) break;
+                chars.push(ch);
+            }
+            var name = String.fromCharCode.apply(null, chars);
+            if (!name.trim()) return;
+            var bytes = new TextEncoder().encode(name);
+            var line = 'hello ' + (HEAP32[who.mots >> 2] ? 'mots' : 'jk1') + ' ' + btoa(String.fromCharCode.apply(null, bytes));
+            if (line === net.helloSent) return;
+            net.helloSent = line;
+            net.ws.send(line);
+        };
+
+        /* Outside a game, reconnects a lost socket after a while (the lobby
+           restarts when it's updated), so the player stays counted. In a game,
+           losing the relay is the engine's to handle. */
+        net.retryMs = 2000 + Math.random() * 4000;
+        net.keepPresence = function() {
+            if (!Module.jkPresence || net.session || net.retry || net.state !== 2) return;
+            net.retry = setTimeout(function() {
+                net.retry = null;
+                if (!net.session) net.connect();
+            }, net.retryMs);
+            net.retryMs = Math.min(net.retryMs * 2, 120000);
+        };
+
+        net.connect = function() {
+            if (net.ws && net.state !== 2) return;
+            clearTimeout(net.retry);
+            net.retry = null;
+            if (net.ws) {
+                try { net.ws.close(); } catch (e) {}
+            }
+            var url = Module['jkRelayUrl'];
+            if (!url && typeof location !== 'undefined')
+                url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
+            net.queue = [];
+            net.state = 0;
+            var ws;
+            try {
+                ws = new WebSocket(url);
+            } catch (e) {
+                console.error('OpenJKDF2: relay ' + url + ': ' + e);
+                net.state = 2;
+                return;
+            }
+            ws.binaryType = 'arraybuffer';
+            var keepalive = null;
+            ws.onopen = function() {
+                net.state = 1;
+                net.retryMs = 2000 + Math.random() * 4000;
+                console.log('OpenJKDF2: connected to relay ' + url);
+                net.helloSent = null;
+                net.sayHello();
+                /* With game packets on WebRTC, the socket can sit idle for a whole
+                   match, and proxies drop idle WebSockets. */
+                keepalive = setInterval(function() { if (ws.readyState === 1) ws.send('ping'); }, 25000);
+            };
+            ws.onclose = function() {
+                if (keepalive) clearInterval(keepalive);
+                if (net.ws !== ws) return;
+                net.state = 2;
+                net.keepPresence();
+            };
+            ws.onerror = function() {
+                console.error('OpenJKDF2: relay connection error (' + url + ')');
+                // Browsers follow up with onclose, but don't wait on it to give up.
+                if (net.ws === ws && net.state === 0) net.state = 2;
+            };
+            ws.onmessage = function(ev) {
+                if (net.ws !== ws) return;
+                if (typeof ev.data === 'string') {
+                    if (net.onText(ev.data)) return;
+                } else if (Module.jkMaps && Module.jkMaps.isFrame(ev.data)) {
+                    Module.jkMaps.onFrame(new DataView(ev.data).getUint32(0, true), ev.data, 'relay');
+                    return;
+                } else {
+                    net.stats.wsRecv++;
+                }
+                net.queue.push(ev.data);
+            };
+            net.ws = ws;
+        };
     }
 
-    if (net.ws && net.state !== 2) return;
-    if (net.ws) {
-        try { net.ws.close(); } catch (e) {}
-    }
-    var url = Module['jkRelayUrl'];
-    if (!url && typeof location !== 'undefined')
-        url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
-    net.queue = [];
-    net.state = 0;
-    var ws;
-    try {
-        ws = new WebSocket(url);
-    } catch (e) {
-        console.error('OpenJKDF2: relay ' + url + ': ' + e);
-        net.state = 2;
-        return;
-    }
-    ws.binaryType = 'arraybuffer';
-    var keepalive = null;
-    ws.onopen = function() {
-        net.state = 1;
-        console.log('OpenJKDF2: connected to relay ' + url);
-        /* With game packets on WebRTC, the socket can sit idle for a whole
-           match, and proxies drop idle WebSockets. */
-        keepalive = setInterval(function() { if (ws.readyState === 1) ws.send('ping'); }, 25000);
-    };
-    ws.onclose = function() {
-        if (keepalive) clearInterval(keepalive);
-        if (net.ws === ws) net.state = 2;
-    };
-    ws.onerror = function() {
-        console.error('OpenJKDF2: relay connection error (' + url + ')');
-        // Browsers follow up with onclose, but don't wait on it to give up.
-        if (net.ws === ws && net.state === 0) net.state = 2;
-    };
-    ws.onmessage = function(ev) {
-        if (net.ws !== ws) return;
-        if (typeof ev.data === 'string') {
-            if (net.onText(ev.data)) return;
-        } else if (Module.jkMaps && Module.jkMaps.isFrame(ev.data)) {
-            Module.jkMaps.onFrame(new DataView(ev.data).getUint32(0, true), ev.data, 'relay');
-            return;
-        } else {
-            net.stats.wsRecv++;
-        }
-        net.queue.push(ev.data);
-    };
-    net.ws = ws;
+    net.connect();
 });
 
 EM_JS(int, wsrelay_js_state, (), {
@@ -313,6 +364,7 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     var net = Module.jkNet;
     if (!net) return;
     net.closeAll();
+    net.session = true;
     net.isHost = !!isHost;
     if (!isHost && net.rtcEnabled()) net.offer(1);
 });
@@ -321,7 +373,26 @@ EM_JS(void, wsrelay_js_rtc_end, (), {
     var net = Module.jkNet;
     if (!net) return;
     net.closeAll();
+    net.session = false;
     net.isHost = false;
+    net.keepPresence();
+});
+
+// Where the engine keeps the player's name and whether it runs MotS, for the
+// live counts.
+EM_JS(void, wsrelay_js_presence, (const char16_t* pName, const int32_t* pMots), {
+    // Catches a new name: the player picks theirs after the engine starts.
+    if (!Module.jkPresence)
+        setInterval(function() { if (Module.jkNet) Module.jkNet.sayHello(); }, 2000);
+    Module.jkPresence = { name: pName, mots: pMots };
+});
+
+// The room the landing page's Join button picked, to select on the join
+// screen once it's listed. Only once: a restart into its mod keeps it itself.
+EM_JS(int, wsrelay_js_take_join_room, (), {
+    var room = Number(Module['jkJoinRoom']);
+    delete Module['jkJoinRoom'];
+    return room > 0 && room < 1e9 ? Math.floor(room) : -1;
 });
 
 #define WSRELAY_MAP_BUSY (0)
@@ -837,6 +908,15 @@ void stdComm_WSRelay_Startup()
 
     wsrelay_ResetSession();
     Hack_ResetClients();
+
+    int room = wsrelay_js_take_join_room();
+    if (room > 0)
+        wsrelay_pendingRoom = room;
+
+    // Counted in the landing page's live counts from the start, not only once
+    // the player opens the Join screen.
+    wsrelay_js_presence(jkPlayer_playerShortName, &Main_bMotsCompat);
+    wsrelay_js_connect();
 }
 
 void stdComm_WSRelay_Shutdown()
