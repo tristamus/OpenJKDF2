@@ -18,6 +18,8 @@ extern int32_t Main_bDwCompat;
 extern int32_t Main_bDroidWorks;
 extern int32_t Main_bDwCogVerbs;
 extern int32_t Main_bEnhancedCogVerbs;
+extern int32_t Main_compositeMode;
+extern int32_t Main_bFlickerLog;
 #endif
 
 int Main_Startup(const char *cmdline);
