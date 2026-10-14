@@ -108,10 +108,6 @@ int32_t Main_bDwCompat = 0;
 int32_t Main_bDroidWorks = 0; // full DroidWorks game mode (implies Main_bDwCompat)
 int32_t Main_bDwCogVerbs = 0; // import DW COG verbs into JK/MOTS
 int32_t Main_bEnhancedCogVerbs = 0;
-int32_t Main_compositeMode = 0; // Added: flicker test, see std3D_DrawSceneFbo
-int32_t Main_bFlickerLog = 0; // Added: flicker test, see std3D_DrawSceneFbo
-int32_t Main_bloomTest = 0; // Added: flicker test, see std3D_DrawSceneFbo
-int32_t Main_ssaoTest = 0; // Added: flicker test, see std3D_DrawSceneFbo
 char Main_strEpisode[129];
 char Main_strMap[128+4];
 #endif
@@ -594,10 +590,6 @@ void Main_Shutdown()
     Main_bDroidWorks = 0;
     Main_bDwCogVerbs = 0;
     Main_bEnhancedCogVerbs = 0;
-    Main_compositeMode = 0;
-    Main_bFlickerLog = 0;
-    Main_bloomTest = 0;
-    Main_ssaoTest = 0;
     memset(Main_strEpisode, 0, sizeof(Main_strEpisode));
     memset(Main_strMap, 0, sizeof(Main_strMap));
 
@@ -776,30 +768,6 @@ void Main_ParseCmdLine(char *cmdline)
         {
             // DW COG verb import into JK/MOTS games (analog of -enhancedCogVerbs).
             Main_bDwCogVerbs = 1;
-        }
-        else if (!__strcmpi(pArgTok, "-composite") || !__strcmpi(pArgTok, "/composite"))
-        {
-            // Added: flicker test, how std3D_DrawSceneFbo blends bloom and SSAO into the 3D view
-            char* pArgNext = _strtok(0, " \t");
-            Main_compositeMode = pArgNext ? _atoi(pArgNext) : 0;
-        }
-        else if (!__strcmpi(pArgTok, "-flickerLog") || !__strcmpi(pArgTok, "/flickerLog"))
-        {
-            // Added: flicker test, log renderer state that can change from frame to frame
-            char* pArgNext = _strtok(0, " \t");
-            Main_bFlickerLog = pArgNext ? _atoi(pArgNext) : 0;
-        }
-        else if (!__strcmpi(pArgTok, "-bloomTest") || !__strcmpi(pArgTok, "/bloomTest"))
-        {
-            // Added: flicker test, 1 skips adding the glow, 2 also skips the blur passes
-            char* pArgNext = _strtok(0, " \t");
-            Main_bloomTest = pArgNext ? _atoi(pArgNext) : 0;
-        }
-        else if (!__strcmpi(pArgTok, "-ssaoTest") || !__strcmpi(pArgTok, "/ssaoTest"))
-        {
-            // Added: flicker test, 1 skips the SSAO passes with SSAO still on
-            char* pArgNext = _strtok(0, " \t");
-            Main_ssaoTest = pArgNext ? _atoi(pArgNext) : 0;
         }
 #endif
         else

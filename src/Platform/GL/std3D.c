@@ -8,7 +8,6 @@
 #include "World/sithWorld.h"
 #include "Engine/rdColormap.h"
 #include "Main/jkGame.h"
-#include "Main/Main.h"
 #include "World/jkPlayer.h"
 #include "General/stdBitmap.h"
 #include "stdPlatform.h"
@@ -98,30 +97,6 @@ typedef struct std3DFramebuffer
 GLint std3D_windowFbo = 0;
 std3DFramebuffer std3D_framebuffers[2];
 std3DFramebuffer *std3D_pFb = NULL;
-
-// Added: flicker diagnostics. The -composite N argument (?composite=N on the web build)
-// picks how the bloom, emissive and SSAO passes are blended into the 3D view:
-// 0 is the original, 1 adds the glow without multiplying the 3D view already on screen
-// by the glow buffers' alpha, 2 also stops the scene and SSAO passes from scaling it by
-// the scene's own alpha. -flickerLog 1 prints renderer state that can change per frame.
-// -bloomTest 1 runs the bloom blur passes but doesn't add the glow; 2 skips the blur passes
-// too. -ssaoTest 1 skips the SSAO passes. Both leave the setting itself on.
-static int std3D_compositeMode = -1;
-static int std3D_bFlickerLog = 0;
-static int std3D_scenesSinceComposite = 0;
-static int std3D_flickerStats[4]; // composites after 0, 1, 2+ scenes; framebuffer rebuilds
-static flex_t std3D_lastLoggedFade = 1.0;
-
-static void std3D_ReadFlickerParams()
-{
-    if (std3D_compositeMode >= 0)
-        return;
-    std3D_compositeMode = Main_compositeMode > 0 ? Main_compositeMode : 0;
-    std3D_bFlickerLog = Main_bFlickerLog;
-    if (std3D_compositeMode || std3D_bFlickerLog || Main_bloomTest || Main_ssaoTest)
-        stdPlatform_Printf("std3D: flicker test, composite mode %d, log %d, bloom test %d, ssao test %d\n",
-                           std3D_compositeMode, std3D_bFlickerLog, Main_bloomTest, Main_ssaoTest);
-}
 
 static bool has_initted = false;
 
@@ -782,9 +757,6 @@ int std3D_StartScene()
     rendered_tris = 0;
     
     std3D_swapFramebuffers();
-    // Added: flicker diagnostics
-    std3D_ReadFlickerParams();
-    ++std3D_scenesSinceComposite;
     
     double supersample_level = jkPlayer_ssaaMultiple; // Can also be set lower
     int32_t tex_w = (int32_t)((double)Window_xSize * supersample_level);
@@ -794,11 +766,6 @@ int std3D_StartScene()
         || (!(std3D_pFb->enable_extra & 1) && jkPlayer_enableBloom)
         || (!(std3D_pFb->enable_extra & 2) && jkPlayer_enableSSAO))
     {
-        // Added: flicker diagnostics
-        std3D_flickerStats[3]++;
-        if (std3D_bFlickerLog)
-            stdPlatform_Printf("std3D: rebuilding scene buffer %d at %dx%d (was %dx%d)\n", std3D_activeFb, tex_w, tex_h, std3D_pFb->w, std3D_pFb->h);
-
         std3D_deleteFramebuffer(std3D_pFb);
         std3D_generateFramebuffer(tex_w, tex_h, std3D_pFb);
     }
@@ -2435,29 +2402,7 @@ void std3D_DrawSceneFbo()
         //draw_bloom = 0;
     }
 
-    // Added: flicker diagnostics
-    std3D_ReadFlickerParams();
-    if (Main_ssaoTest)
-        draw_ssao = 0;
-    std3D_flickerStats[std3D_scenesSinceComposite > 2 ? 2 : std3D_scenesSinceComposite]++;
-    std3D_scenesSinceComposite = 0;
-    if (std3D_bFlickerLog)
-    {
-        if (rdroid_curColorEffects.fade != std3D_lastLoggedFade)
-        {
-            stdPlatform_Printf("std3D: screen fade %f -> %f\n", std3D_lastLoggedFade, rdroid_curColorEffects.fade);
-            std3D_lastLoggedFade = rdroid_curColorEffects.fade;
-        }
-        if (std3D_flickerStats[0] + std3D_flickerStats[1] + std3D_flickerStats[2] >= 600)
-        {
-            stdPlatform_Printf("std3D: last 600 frames: %d shown again, %d new, %d with extra scenes; %d buffer rebuilds; buffer %d, bloom %d, ssao %d\n",
-                               std3D_flickerStats[0], std3D_flickerStats[1], std3D_flickerStats[2], std3D_flickerStats[3],
-                               std3D_activeFb, draw_bloom, draw_ssao);
-            memset(std3D_flickerStats, 0, sizeof(std3D_flickerStats));
-        }
-    }
-
-    if (draw_bloom && Main_bloomTest < 2) // Added: flicker test
+    if (draw_bloom)
     {
         glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->blur1.fbo);
         glClear( GL_COLOR_BUFFER_BIT );
@@ -2484,10 +2429,7 @@ void std3D_DrawSceneFbo()
 
     if (!draw_ssao)
     {
-        if (std3D_compositeMode >= 2) // Added: flicker test, don't scale by the scene's alpha
-            glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ZERO, GL_ONE);
-        else
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->tex0, 0, 0, 1.0, 1.0, jkPlayer_gamma, 0);
         //std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->tex1, 0, 0, 0.0, 1.0, jkPlayer_gamma, 0); // test emission output
     }
@@ -2499,22 +2441,15 @@ void std3D_DrawSceneFbo()
         std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->ssaoBlur2, std3D_pFb->ssaoBlur1.tex, 0, 0, 14.0, 3.0, 1.0 * rad_scale, 1);
         //std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->ssaoBlur3, std3D_pFb->ssaoBlur2.tex, 0, 0, 8.0, 3.0, 4.0);
 
-        if (std3D_compositeMode >= 2) // Added: flicker test, don't scale by the scene's alpha
-            glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ZERO, GL_ONE);
-        else
-            glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
+        glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
         std3D_DrawSimpleTex(&std3D_ssaoMixStage, &std3D_pFb->window, std3D_pFb->ssaoBlur2.tex, std3D_pFb->tex0, 0, 0.0, 0.0, jkPlayer_gamma, 0);
     }
 
-    // Added: flicker test, add the glow without scaling what's already on screen by its alpha
-    if (std3D_compositeMode >= 1)
-        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ONE);
-    else
-        glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
+    glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
     if (!draw_bloom)
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->tex1, 0, 0, 1.0, 1.0, jkPlayer_gamma, 0);
 
-    if (draw_bloom && Main_bloomTest < 2) // Added: flicker test
+    if (draw_bloom)
     {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
@@ -2533,18 +2468,13 @@ void std3D_DrawSceneFbo()
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->blurBlend, std3D_pFb->blur4.tex, 0, 0, 1.0, bloom_intensity * 1.2, bloom_gamma, 0);
         */
 
-        if (std3D_compositeMode >= 1) // Added: flicker test, as above
-            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ONE);
-        else
-            glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
+        glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
         //std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->blurBlend.tex, 0, 0, 1.0, 1.0, 1.0, 0);
-        if (!Main_bloomTest) { // Added: flicker test
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->tex1, 0, 0, 1.0, 1.5, jkPlayer_gamma, 0);
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->blur1.tex, 0, 0, 1.0, bloom_intensity * 1.5, jkPlayer_gamma, 0);
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->blur2.tex, 0, 0, 1.0, bloom_intensity * 1.0, jkPlayer_gamma, 0);
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->blur3.tex, 0, 0, 1.0, bloom_intensity * 1.0, jkPlayer_gamma, 0);
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->blur4.tex, 0, 0, 1.0, bloom_intensity * 0.8, jkPlayer_gamma, 0);
-        }
     }
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
