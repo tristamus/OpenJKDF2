@@ -2537,6 +2537,7 @@
       }
       document.querySelectorAll('[data-play]').forEach(function(b) {
         b.addEventListener('click', function() {
+          delete Module.jkJoinRoom;
           openPicker(b.dataset.game ? { game: b.dataset.game, room: roomName(b) } : null);
         });
       });
@@ -2981,7 +2982,9 @@
           showRoomNote(window.jkLobbyMock.describe(kind, label, quick, want));
           return;
         }
+        // A Join that was closed before picking a folder doesn't carry over.
         if (kind === 'join' && id) Module.jkJoinRoom = Number(id);
+        else delete Module.jkJoinRoom;
         room.close();
         openPicker(want);
       }
