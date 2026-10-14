@@ -497,6 +497,319 @@
       #picker-result { margin-top: 14px; white-space: pre-line; }
       #picker-result:empty { display: none; }
       #picker-result.error { color: var(--bad); font-weight: bold; }
+
+      /* Live counts in Standard Rooms, and Nar Shaddaa's room window, after
+         the Zone's room list and its game room client: tables on black, a
+         white list of who's on, a grey toolbar and status bar. */
+      :root {
+        --win-grey: #d4d0c8;
+        --win-dark: #808080;
+        --win-text: #000;
+        --live: #33cc66;
+        --join-hi: #e9ffff;
+        --join: #8fdbe4;
+        --join-lo: #2b8796;
+      }
+      .rooms.counted .link-button, .note.counted {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr);
+        align-items: baseline;
+      }
+      .rooms.counted .link-button { text-decoration: none; }
+      .rooms.counted .room-name { text-decoration: underline; }
+      .rooms .count {
+        color: var(--ink);
+        font-weight: normal;
+        font-variant-numeric: tabular-nums;
+      }
+      .rooms .count.busy { color: var(--muted); }
+      .main h2.ruled small b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+      #room {
+        width: min(1040px, calc(100vw - 32px));
+        height: min(760px, calc(100vh - 32px));
+        padding: 0;
+        border: 2px solid #000;
+        background-color: var(--win-grey);
+        color: var(--win-text);
+        font: 13px/1.35 Verdana, Geneva, sans-serif;
+        box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.45);
+      }
+      #room[open] { display: flex; flex-direction: column; }
+      #room::backdrop { background-color: rgba(0, 20, 20, 0.6); }
+      #room :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+      #room .titlebar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 6px 4px 12px;
+        background-color: var(--gold);
+        border-bottom: 1px solid #000;
+      }
+      #room h1 { margin: 0; font: bold 15px Verdana, Geneva, sans-serif; overflow-wrap: anywhere; }
+      #room .close {
+        flex: none;
+        width: 26px;
+        height: 24px;
+        border: 2px outset #fff;
+        background: #ddd;
+        font: bold 14px Verdana, sans-serif;
+        cursor: pointer;
+      }
+      .room-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 2px;
+        padding: 3px 6px;
+        border-bottom: 1px solid var(--win-dark);
+      }
+      .room-toolbar button {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 8px;
+        border: 1px solid transparent;
+        background: none;
+        color: var(--win-text);
+        font: 12px Tahoma, Verdana, sans-serif;
+        cursor: pointer;
+      }
+      .room-toolbar button:hover { border-color: #fff var(--win-dark) var(--win-dark) #fff; }
+      .room-toolbar button[aria-pressed=true] {
+        border-color: var(--win-dark) #fff #fff var(--win-dark);
+        background-color: #e4e1db;
+      }
+      .room-toolbar svg { width: 14px; height: 14px; flex: none; }
+      .room-toolbar .sep { width: 1px; height: 18px; margin: 0 6px; background: var(--win-dark); border-right: 1px solid #fff; }
+      .room-body { flex: 1; min-height: 0; display: flex; }
+      .room-games {
+        flex: 1;
+        min-width: 0;
+        overflow: auto;
+        padding: 12px;
+        background-color: #000;
+        color: #fff;
+        border-right: 2px solid var(--win-dark);
+      }
+      .room-message { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+      .sr {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      .room-message b { color: var(--gold); }
+
+      .tables {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(208px, 1fr));
+        gap: 14px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .table { position: relative; display: flex; flex-direction: column; min-width: 0; }
+      .table-head {
+        position: relative;
+        padding: 3px 12px 4px 7px;
+        background-color: var(--teal);
+        border-radius: 0 20px 20px 0;
+        color: #fff;
+      }
+      .table-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+      .table-no { font: bold 13px Verdana, Geneva, sans-serif; white-space: nowrap; }
+      .table-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        color: #e8f4f4;
+      }
+      .table-seats { margin-left: auto; font: 12px Verdana, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .table-seats.changed { animation: table-flash 1.2s ease-out; }
+      @keyframes table-flash { from { background-color: var(--gold); color: #000; } to { background-color: transparent; } }
+      .table-lock { width: 10px; height: 12px; flex: none; }
+      .game-tag {
+        flex: none;
+        text-decoration: none;
+        cursor: help;
+        padding: 0 4px;
+        border: 1px solid var(--gold);
+        color: var(--gold);
+        font: bold 10px Verdana, sans-serif;
+        letter-spacing: 0.5px;
+      }
+      .table-info { position: relative; margin: 3px 0 0 7px; font-size: 11px; }
+      .table-info summary {
+        display: inline-block;
+        padding: 0 5px;
+        background-color: #1f5f8b;
+        color: #fff;
+        cursor: pointer;
+        list-style: none;
+      }
+      .table-info summary::-webkit-details-marker { display: none; }
+      .table-info[open] summary { background-color: var(--gold); color: #000; }
+      .table-info dl {
+        position: absolute;
+        z-index: 2;
+        left: 0;
+        top: 100%;
+        min-width: 190px;
+        margin: 2px 0 0;
+        padding: 6px 8px;
+        background-color: #fff;
+        border: 1px solid #000;
+        box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.5);
+        color: #000;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 2px 8px;
+      }
+      .table-info dt { font-weight: bold; }
+      .table-info dd { margin: 0; overflow-wrap: anywhere; }
+      .table-body { display: flex; align-items: center; gap: 8px; min-height: 104px; }
+      .ring { position: relative; flex: none; width: 100px; height: 100px; }
+      .ring::before {
+        content: "";
+        position: absolute;
+        inset: 6px;
+        border: 9px solid var(--teal);
+        border-top-color: transparent;
+        border-right-color: transparent;
+        border-radius: 50%;
+        transform: rotate(-20deg);
+      }
+      .seat {
+        position: absolute;
+        width: 7px;
+        height: 7px;
+        margin: -3.5px 0 0 -3.5px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.7);
+      }
+      .seat.taken { background-color: #fff; border-color: #fff; }
+      .round {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 54px;
+        height: 54px;
+        margin: -27px 0 0 -27px;
+        padding: 0;
+        border: 2px solid #0c2a2a;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, var(--join-hi), var(--join) 45%, var(--join-lo));
+        color: #001a1a;
+        font: bold 12px Verdana, Geneva, sans-serif;
+        cursor: pointer;
+        box-shadow: 0 2px 0 rgba(255, 255, 255, 0.15);
+      }
+      .round span { padding: 1px 4px; background-color: rgba(255, 255, 255, 0.55); border: 1px solid rgba(0, 0, 0, 0.35); }
+      .round.host { background: radial-gradient(circle at 35% 30%, #fff3c4, var(--gold) 45%, #b07a1a); color: #2a1200; }
+      .round:hover { filter: brightness(1.1); }
+      .round:active { transform: translateY(1px); }
+      .round:disabled {
+        cursor: default;
+        filter: none;
+        background: repeating-conic-gradient(#666 0 25%, #333 0 50%) 0 0 / 4px 4px;
+        border-color: #444;
+      }
+      .table-players { flex: 1; min-width: 0; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+      .table-players li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .table-players .host-tag { margin-left: 4px; color: var(--gold); font-size: 10px; }
+      .table-players .more, .table-players .unnamed { color: var(--muted); }
+      .table-state { margin: 0; padding-left: 7px; font: bold 12px Verdana, sans-serif; color: #fff; }
+      .table-state.full { color: var(--gold); }
+      .table.empty .table-head { background-color: #224444; }
+      .table.empty .table-state { color: var(--muted); font-weight: normal; }
+
+      .game-list { width: 100%; border-collapse: collapse; font-size: 12px; }
+      .game-list th {
+        padding: 4px 8px;
+        background-color: var(--teal);
+        text-align: left;
+        white-space: nowrap;
+      }
+      .game-list td { padding: 5px 8px; border-bottom: 1px solid #224444; vertical-align: top; }
+      .game-list td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .game-list .zone-button { padding: 2px 10px; font-size: 12px; }
+      .list-scroll { overflow-x: auto; }
+
+      .roster {
+        flex: none;
+        width: 210px;
+        overflow-y: auto;
+        background-color: #fff;
+        color: #000;
+        font: 12px Tahoma, Verdana, sans-serif;
+      }
+      .roster-head {
+        position: sticky;
+        top: 0;
+        padding: 2px 6px;
+        background-color: var(--win-grey);
+        border-bottom: 1px solid var(--win-dark);
+        text-align: center;
+      }
+      .roster section { padding: 6px 6px 4px; }
+      .roster h2 {
+        display: flex;
+        justify-content: space-between;
+        margin: 0 0 2px;
+        font: bold 12px Tahoma, Verdana, sans-serif;
+        text-transform: uppercase;
+      }
+      .roster h2 span { font-variant-numeric: tabular-nums; }
+      .roster ul { margin: 0; padding: 0 0 0 12px; list-style: none; }
+      .roster li { display: flex; justify-content: space-between; gap: 6px; }
+      .roster li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .roster li .where { flex: none; color: #555; }
+      .roster .none { color: #555; }
+
+      .room-note {
+        margin: 0;
+        padding: 6px 10px;
+        background-color: #fffbe6;
+        border-top: 1px solid var(--win-dark);
+        font-size: 12px;
+      }
+      .room-status {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 12px;
+        padding: 3px 8px;
+        border-top: 1px solid #fff;
+        font: 12px Tahoma, Verdana, sans-serif;
+      }
+      .room-status .panel {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 1px 6px;
+        border: 1px solid;
+        border-color: var(--win-dark) #fff #fff var(--win-dark);
+      }
+      .live-dot { width: 8px; height: 8px; border-radius: 50%; background-color: var(--win-dark); }
+      .live-dot.on { background-color: var(--live); box-shadow: 0 0 0 1px #116633; }
+      #room-status-extra { margin-left: auto; }
+
+      @media (max-width: 700px) {
+        #room { width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; box-shadow: none; }
+        .room-body { flex-direction: column; overflow-y: auto; }
+        .room-games { flex: none; overflow: visible; border-right: 0; border-bottom: 2px solid var(--win-dark); padding: 12px 16px; }
+        .roster { width: auto; overflow: visible; }
+        .tables { grid-template-columns: repeat(auto-fill, minmax(min(208px, 100%), 1fr)); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .table-seats.changed { animation: none; }
+      }
     </style>
   </head>
   <body>
@@ -586,18 +899,19 @@
             </ul>
 
             <section id="rooms" aria-labelledby="rooms-title">
-              <h2 class="ruled" id="rooms-title">Play in the rooms below <small>Every room starts the same game</small></h2>
-              <p class="note">Pick any room to start. Once the game is running, choose Multiplayer to host a match or join one.</p>
+              <h2 class="ruled" id="rooms-title">Play in the rooms below <small id="total-players" aria-live="polite"></small></h2>
+              <p class="note">Every room starts the same game. Once it's running, choose Multiplayer to host a match
+                or join one. Open Nar Shaddaa to see who's playing right now.</p>
 
               <h3>Standard Rooms</h3>
-              <p class="note">Open to everyone with Jedi Knight: Dark Forces II</p>
-              <ul class="rooms">
-                <li><button class="link-button" type="button" data-play>Nar Shaddaa</button></li>
-                <li><button class="link-button" type="button" data-play>The Cantina</button></li>
-                <li><button class="link-button" type="button" data-play>Sulon</button></li>
-                <li><button class="link-button" type="button" data-play>Bespin <span class="tag">(Rookie)</span></button></li>
-                <li><button class="link-button" type="button" data-play>Canyon Oasis <span class="tag">(Rookie)</span></button></li>
-                <li><button class="link-button" type="button" data-play>Dark Palace <span class="tag">(Expert)</span></button></li>
+              <p class="note counted"><span>Players</span><span>Open to everyone with Jedi Knight: Dark Forces II</span></p>
+              <ul class="rooms counted">
+                <li><button class="link-button" type="button" data-room aria-haspopup="dialog"><span class="count busy" id="room-count">&ndash;</span><span><span class="room-name">Nar Shaddaa</span> <span class="tag" id="room-game-count"></span></span></button></li>
+                <li><button class="link-button" type="button" data-play><span class="count"></span><span class="room-name">The Cantina</span></button></li>
+                <li><button class="link-button" type="button" data-play><span class="count"></span><span class="room-name">Sulon</span></button></li>
+                <li><button class="link-button" type="button" data-play><span class="count"></span><span><span class="room-name">Bespin</span> <span class="tag">(Rookie)</span></span></button></li>
+                <li><button class="link-button" type="button" data-play><span class="count"></span><span><span class="room-name">Canyon Oasis</span> <span class="tag">(Rookie)</span></span></button></li>
+                <li><button class="link-button" type="button" data-play><span class="count"></span><span><span class="room-name">Dark Palace</span> <span class="tag">(Expert)</span></span></button></li>
               </ul>
 
               <h3>Capture the Flag Rooms</h3>
@@ -659,7 +973,7 @@
                 <li>You need Jedi Knight: Dark Forces II installed on this computer, for example from
                   Steam or GOG. In Steam, right-click the game, then choose Manage, then Browse local files
                   to see where it is.</li>
-                <li>Click <b>Play JKDF2</b> or any room, then pick the game's folder: the one with the
+                <li>Click <b>Play JKDF2</b>, any room, or Join or Host in Nar Shaddaa, then pick the game's folder: the one with the
                   <code>episode</code> and <code>resource</code> folders inside.</li>
                 <li>When the game starts, choose Multiplayer to host a match or join one.</li>
                 <li>To play with mods, put them in the game folder: in a <code>mod</code> or <code>mods</code>
@@ -766,6 +1080,30 @@
           </div>
         </div>
         <div id="picker-result" role="status"></div>
+      </div>
+    </dialog>
+
+    <dialog id="room" aria-labelledby="room-title">
+      <div class="titlebar">
+        <h1 id="room-title">Jedi Knight: Dark Forces II - Nar Shaddaa</h1>
+        <button class="close" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="room-toolbar" role="toolbar" aria-label="Room">
+        <button type="button" data-act="host"><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="#ffcc66" stroke="#7a5200"/><path d="M5 4l5 3-5 3z" fill="#2a1200"/></svg>Quick Host</button>
+        <button type="button" data-act="join"><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="#8fdbe4" stroke="#1f5f6b"/><path d="M3 7h6M7 4l3 3-3 3" fill="none" stroke="#001a1a" stroke-width="1.5"/></svg>Quick Join</button>
+        <span class="sep" aria-hidden="true"></span>
+        <button type="button" data-view="table" aria-pressed="true"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1h5v5H1zM8 1h5v5H8zM1 8h5v5H1zM8 8h5v5H8z" fill="#336666"/></svg>Table View</button>
+        <button type="button" data-view="list" aria-pressed="false"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 2h12v2H1zM1 6h12v2H1zM1 10h12v2H1z" fill="#336666"/></svg>List View</button>
+      </div>
+      <div class="room-body">
+        <div class="room-games" id="room-games"></div>
+        <aside class="roster" id="roster" aria-label="Players online"></aside>
+      </div>
+      <p class="room-note" id="room-note" role="status" hidden></p>
+      <div class="room-status">
+        <span class="panel"><span class="live-dot" id="room-live-dot"></span><span id="room-live">Connecting</span></span>
+        <span class="panel" id="room-summary"></span>
+        <span id="room-status-extra"></span>
       </div>
     </dialog>
 
@@ -2170,7 +2508,8 @@
         });
       });
 
-      // Play JKDF2 and every room open the same folder prompt.
+      // Play JKDF2 and every room open the same folder prompt. Nar Shaddaa
+      // opens its room window first, whose Join and Host buttons open it.
       document.querySelectorAll('[data-play]').forEach(function(b) {
         b.addEventListener('click', openPicker);
       });
@@ -2197,6 +2536,516 @@
         document.documentElement.classList.add('zone-open');
         Module.setStatus('Waiting for game folder...');
       }
+    </script>
+    <script type='text/javascript'>
+      // ---- Live counts and Nar Shaddaa's room window. The lobby sends the
+      // landing page a status whenever a game or a player comes or goes
+      // ("watch" in jkdf2mp-bb-server's lobby): how many players are online,
+      // the names of those not in a game, and each game with its players'
+      // names. Nar Shaddaa in Standard Rooms shows the count and opens a window
+      // listing the games, like the Zone's game room client did.
+      //
+      // A status looks like:
+      //   { online: 8, lobby: ['DarkJedi_7'],
+      //     games: [{ id: 3, name: 'No mods dueling', game: 'jk1', map: '01narshadda.jkl',
+      //               episode: 'JK1MP.gob', mod: '', locked: false, players: 2, max: 4,
+      //               names: ['Kyle_K', 'MaraJade'] }] }
+      // id is the lobby's room number, names start with the host's, and online
+      // counts everyone with the game running, in a game or not. Names are
+      // typed by players, so they only ever go into the page as text.
+
+      var ROOM_MAX_NAMES = 4;   // names on a table before "+N more"
+      var ROOM_MAX_SEATS = 8;   // seat dots drawn around a table's button
+      var room = document.getElementById('room');
+      var roomGames = document.getElementById('room-games');
+      var roster = document.getElementById('roster');
+      var roomNote = document.getElementById('room-note');
+      var lobbyLive = { state: 'connecting', status: null, updated: null, view: 'table', seen: {}, cols: 0 };
+      try {
+        if (localStorage.getItem('jkdf2mp-room-view') === 'list') lobbyLive.view = 'list';
+      } catch (e) {}
+
+      function el(tag, cls, str) {
+        var e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (str !== undefined) e.textContent = str;
+        return e;
+      }
+
+      function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+      // Only what the page shows, in the types it expects, whatever arrives.
+      function cleanStatus(s) {
+        function str(v, max) {
+          return typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').substring(0, max) : '';
+        }
+        function num(v) { return typeof v === 'number' && isFinite(v) && v >= 0 ? Math.floor(v) : 0; }
+        function names(v) {
+          return Array.isArray(v) ? v.slice(0, 64).map(function(n) { return str(n, 32); }) : [];
+        }
+        if (!s || typeof s !== 'object') return null;
+        var games = (Array.isArray(s.games) ? s.games : []).slice(0, 64).filter(function(g) {
+          return g && typeof g === 'object';
+        }).map(function(g) {
+          return { id: num(g.id), name: str(g.name, 32), game: g.game === 'mots' ? 'mots' : 'jk1',
+                   map: str(g.map, 64), episode: str(g.episode, 64), mod: str(g.mod, 64),
+                   locked: !!g.locked, players: num(g.players), max: num(g.max), names: names(g.names) };
+        });
+        return { online: num(s.online), lobby: names(s.lobby), games: games };
+      }
+
+      // Takes the lobby's latest status, or null with why there's none:
+      // 'connecting' or 'down'.
+      function lobbyShow(status, state) {
+        lobbyLive.status = status ? cleanStatus(status) : null;
+        lobbyLive.state = lobbyLive.status ? 'live' : (state || 'down');
+        if (lobbyLive.status) lobbyLive.updated = new Date();
+        renderRoomCount();
+        if (room.open) renderRoom();
+      }
+
+      function renderRoomCount() {
+        var s = lobbyLive.status;
+        var count = document.getElementById('room-count');
+        var games = document.getElementById('room-game-count');
+        var total = document.getElementById('total-players');
+        if (s) {
+          count.textContent = s.online;
+          count.classList.remove('busy');
+          games.textContent = plural(s.games.length, 'game', 'games');
+          total.replaceChildren(el('b', null, String(s.online)), document.createTextNode(' Total Players'));
+        } else {
+          count.textContent = '–';
+          count.classList.add('busy');
+          games.textContent = '';
+          total.textContent = lobbyLive.state === 'down' ? 'Live counts unavailable' : '';
+        }
+      }
+
+      var LOCK_SVG = '<svg class="table-lock" viewBox="0 0 10 12" role="img" aria-label="Password">' +
+                     '<rect x="1" y="5" width="8" height="7" rx="1" fill="#ffcc66"/>' +
+                     '<path d="M3 5V3.5a2 2 0 0 1 4 0V5" fill="none" stroke="#ffcc66" stroke-width="1.5"/></svg>';
+
+      function gameNumber(i) { return 'Game ' + (i + 1); }
+
+      function motsTag() {
+        var tag = el('abbr', 'game-tag', 'MotS');
+        tag.title = 'Mysteries of the Sith';
+        return tag;
+      }
+
+      function isFull(g) { return g.max > 0 && g.players >= g.max; }
+
+      // The dots around a table's button: one per seat, filled when taken.
+      function seatDots(ring, taken, seats) {
+        if (seats < 1 || seats > ROOM_MAX_SEATS) return;
+        for (var k = 0; k < seats; k++) {
+          var a = (-115 + (seats > 1 ? k * 125 / (seats - 1) : 62)) * Math.PI / 180;
+          var dot = el('span', 'seat' + (k < taken ? ' taken' : ''));
+          dot.style.left = (50 + 40 * Math.cos(a)).toFixed(1) + 'px';
+          dot.style.top = (50 + 40 * Math.sin(a)).toFixed(1) + 'px';
+          dot.setAttribute('aria-hidden', 'true');
+          ring.append(dot);
+        }
+      }
+
+      function gameTable(g, i) {
+        var li = el('li', 'table');
+        var no = gameNumber(i);
+        var full = isFull(g);
+        var head = el('div', 'table-head');
+        var line = el('div', 'table-line');
+        line.append(el('b', 'table-no', no));
+        if (g.game === 'mots') line.append(motsTag());
+        if (g.locked) line.insertAdjacentHTML('beforeend', LOCK_SVG);
+        var seats = el('span', 'table-seats');
+        var shown = el('span', null, g.max ? g.players + '/' + g.max : String(g.players));
+        shown.setAttribute('aria-hidden', 'true');
+        seats.append(shown, el('span', 'sr', g.players + (g.max ? ' of ' + g.max : '') + ' players'));
+        if (lobbyLive.seen[g.id] !== undefined && lobbyLive.seen[g.id] !== g.players) seats.classList.add('changed');
+        line.append(seats);
+        head.append(line);
+        var title = el('div', 'table-line');
+        title.append(el('span', 'table-title', g.name || '(no name)'));
+        head.append(title);
+        li.append(head);
+
+        var info = el('details', 'table-info');
+        info.dataset.key = 'info-' + g.id;
+        var summary = el('summary', null, 'Info');
+        summary.dataset.key = 'sum-' + g.id;
+        var dl = el('dl');
+        [['Game', g.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight'],
+         ['Map', g.map || 'Unknown'], ['Episode', g.episode || 'Unknown'],
+         ['Mod', g.mod || 'None'], ['Password', g.locked ? 'Yes' : 'No']].forEach(function(row) {
+          dl.append(el('dt', null, row[0]), el('dd', null, row[1]));
+        });
+        info.append(summary, dl);
+        li.append(info);
+
+        var body = el('div', 'table-body');
+        var ring = el('div', 'ring');
+        seatDots(ring, g.players, g.max);
+        var button = el('button', 'round');
+        button.type = 'button';
+        if (full) {
+          button.disabled = true;
+          button.setAttribute('aria-label', no + ' is full');
+        } else {
+          button.append(el('span', null, 'Join'));
+          button.setAttribute('aria-label', 'Join ' + no);
+          button.dataset.join = g.id;
+          button.dataset.label = no;
+          button.dataset.key = 'join-' + g.id;
+        }
+        ring.append(button);
+        body.append(ring, playerList(g));
+        li.append(body);
+
+        var open = g.max - g.players;
+        li.append(el('p', 'table-state' + (full ? ' full' : ''),
+                     full ? 'Game Is Full' : (g.max ? plural(open, 'seat open', 'seats open') : '')));
+        return li;
+      }
+
+      // Host first, as many names as fit, then how many more. A player whose
+      // name the lobby doesn't have (an older game) still takes a line.
+      function playerList(g) {
+        var ul = el('ul', 'table-players');
+        var names = g.names.slice();
+        while (names.length < g.players) names.push(null);
+        var shown = names.length > ROOM_MAX_NAMES ? ROOM_MAX_NAMES - 1 : names.length;
+        names.slice(0, shown).forEach(function(n, k) {
+          var li = el('li', n ? null : 'unnamed', n || 'Player');
+          if (k === 0) li.append(el('span', 'host-tag', 'host'));
+          ul.append(li);
+        });
+        if (names.length > shown) ul.append(el('li', 'more', '+' + (names.length - shown) + ' more'));
+        return ul;
+      }
+
+      function emptyTable(i) {
+        var li = el('li', 'table empty');
+        var head = el('div', 'table-head');
+        var line = el('div', 'table-line');
+        line.append(el('b', 'table-no', gameNumber(i)));
+        head.append(line, el('div', 'table-line', ' '));
+        li.append(head);
+        var body = el('div', 'table-body');
+        var ring = el('div', 'ring');
+        var button = el('button', 'round host');
+        button.type = 'button';
+        button.append(el('span', null, 'Host'));
+        button.setAttribute('aria-label', 'Host a game');
+        button.dataset.act = 'host';
+        button.dataset.key = 'host-' + i;
+        ring.append(button);
+        body.append(ring);
+        li.append(body, el('p', 'table-state', 'Open table'));
+        return li;
+      }
+
+      // Open tables fill out the last row, and there's always one to host at.
+      function fillTables(force) {
+        var ul = roomGames.querySelector('.tables');
+        if (!ul) return;
+        var cols = getComputedStyle(ul).gridTemplateColumns.split(' ').filter(Boolean).length || 1;
+        if (cols === lobbyLive.cols && !force) return;
+        lobbyLive.cols = cols;
+        ul.querySelectorAll('.table.empty').forEach(function(e) { e.remove(); });
+        var n = ul.children.length;
+        var slots = Math.max(cols, Math.ceil((n + 1) / cols) * cols);
+        for (var i = n; i < slots; i++) ul.append(emptyTable(i));
+      }
+
+      function gameList(games) {
+        var wrap = el('div', 'list-scroll');
+        var table = el('table', 'game-list');
+        var head = el('tr');
+        ['Game', 'Name', 'Players', 'Map', 'Mod', "Who's playing", ''].forEach(function(h) {
+          head.append(el('th', null, h));
+        });
+        var thead = el('thead');
+        thead.append(head);
+        var tbody = el('tbody');
+        games.forEach(function(g, i) {
+          var tr = el('tr');
+          var no = gameNumber(i);
+          var name = el('td', null, g.name || '(no name)');
+          if (g.game === 'mots') name.append(' ', motsTag());
+          if (g.locked) name.insertAdjacentHTML('beforeend', ' ' + LOCK_SVG);
+          var names = g.names.filter(Boolean);
+          var action = el('td');
+          if (isFull(g)) {
+            action.textContent = 'Full';
+          } else {
+            var b = el('button', 'zone-button', 'Join');
+            b.type = 'button';
+            b.setAttribute('aria-label', 'Join ' + no);
+            b.dataset.join = g.id;
+            b.dataset.label = no;
+            b.dataset.key = 'join-' + g.id;
+            action.append(b);
+          }
+          tr.append(el('td', 'num', no), name,
+                    el('td', 'num', g.max ? g.players + '/' + g.max : String(g.players)),
+                    el('td', null, g.map || 'Unknown'), el('td', null, g.mod || 'None'),
+                    el('td', null, names.length ? names.join(', ') : '–'), action);
+          tbody.append(tr);
+        });
+        table.append(thead, tbody);
+        wrap.append(table);
+        return wrap;
+      }
+
+      function renderRoster() {
+        var s = lobbyLive.status;
+        roster.replaceChildren(el('div', 'roster-head', "Who's on"));
+        function section(title, count, rows, none) {
+          var sec = el('section');
+          var h = el('h2', null, title);
+          h.append(el('span', null, count));
+          sec.append(h);
+          if (rows) {
+            var ul = el('ul');
+            rows.forEach(function(r) {
+              var li = el('li');
+              li.append(el('span', null, r[0]));
+              if (r[1]) li.append(el('span', 'where', r[1]));
+              ul.append(li);
+            });
+            if (!rows.length && none) ul.append(el('li', 'none', none));
+            sec.append(ul);
+          }
+          roster.append(sec);
+        }
+        if (!s) {
+          section('Total players', '–');
+          return;
+        }
+        var playing = [];
+        var inGames = 0;
+        s.games.forEach(function(g, i) {
+          inGames += g.players;
+          g.names.forEach(function(n) { if (n) playing.push([n, gameNumber(i)]); });
+        });
+        var inLobby = Math.max(0, s.online - inGames);
+        var lobbyRows = s.lobby.filter(Boolean).map(function(n) { return [n]; });
+        if (lobbyRows.length < inLobby) lobbyRows.push(['+' + (inLobby - lobbyRows.length) + ' without a name']);
+        if (playing.length < inGames) playing.push(['+' + (inGames - playing.length) + ' without a name']);
+        section('Total players', String(s.online));
+        section('In the lobby', String(inLobby), lobbyRows, 'Nobody');
+        section('Playing', String(inGames), playing, 'Nobody');
+      }
+
+      function renderRoomStatus() {
+        var s = lobbyLive.status;
+        var dot = document.getElementById('room-live-dot');
+        dot.classList.toggle('on', !!s);
+        document.getElementById('room-live').textContent =
+          s ? 'Live' : (lobbyLive.state === 'down' ? 'Not connected' : 'Connecting');
+        var summary = document.getElementById('room-summary');
+        if (s) {
+          summary.textContent = 'Updated ' + lobbyLive.updated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) +
+                                ' · ' + plural(s.games.length, 'game', 'games') + ' · ' + plural(s.online, 'player', 'players');
+        } else {
+          summary.textContent = lobbyLive.state === 'down' ? 'Trying again' : 'Waiting for the lobby';
+        }
+      }
+
+      function renderRoom() {
+        var s = lobbyLive.status;
+        // A redraw keeps what has focus and which Info panels are open.
+        var active = document.activeElement;
+        var focusKey = active && roomGames.contains(active) ? active.dataset.key : null;
+        var openInfo = Array.from(roomGames.querySelectorAll('details[open]')).map(function(d) { return d.dataset.key; });
+        roomGames.replaceChildren();
+        if (!s) {
+          roomGames.append(el('p', 'room-message', lobbyLive.state === 'down' ?
+            "Live counts unavailable: the lobby isn't answering right now, so the games can't be listed here. " +
+            'You can still start the game, choose Multiplayer, then Join.' : 'Connecting to the lobby…'));
+        } else {
+          if (!s.games.length)
+            roomGames.append(el('p', 'room-message', 'No games right now. Host one and it shows up here for everyone.'));
+          if (lobbyLive.view === 'list') {
+            if (s.games.length) roomGames.append(gameList(s.games));
+          } else {
+            var ul = el('ul', 'tables');
+            s.games.forEach(function(g, i) { ul.append(gameTable(g, i)); });
+            roomGames.append(ul);
+          }
+          lobbyLive.seen = {};
+          s.games.forEach(function(g) { lobbyLive.seen[g.id] = g.players; });
+        }
+        lobbyLive.cols = 0;
+        fillTables(true);
+        openInfo.forEach(function(k) {
+          var d = roomGames.querySelector('details[data-key="' + k + '"]');
+          if (d) d.open = true;
+        });
+        if (focusKey) {
+          var f = roomGames.querySelector('[data-key="' + focusKey + '"]');
+          if (f) f.focus();
+        }
+        room.querySelectorAll('[data-view]').forEach(function(b) {
+          b.setAttribute('aria-pressed', String(b.dataset.view === lobbyLive.view));
+        });
+        renderRoster();
+        renderRoomStatus();
+      }
+
+      function openRoom() {
+        roomNote.hidden = true;
+        if (!room.open) room.showModal();
+        renderRoom();
+      }
+
+      var roomNoteTimer = null;
+      function showRoomNote(text) {
+        roomNote.textContent = text;
+        roomNote.hidden = false;
+        clearTimeout(roomNoteTimer);
+        roomNoteTimer = setTimeout(function() { roomNote.hidden = true; }, 10000);
+      }
+
+      // Quick Join picks the open game with the most players, without a password.
+      function quickJoinGame() {
+        var s = lobbyLive.status;
+        var best = null, bestIndex = -1;
+        (s ? s.games : []).forEach(function(g, i) {
+          if (!isFull(g) && !g.locked && (!best || g.players > best.players)) { best = g; bestIndex = i; }
+        });
+        return best ? { id: best.id, label: gameNumber(bestIndex) } : null;
+      }
+
+      // Join and Host start the game the way Play does. Joining hands the
+      // engine the room to select on its Join screen (Module.jkJoinRoom).
+      function roomAction(kind, id, label) {
+        var quick = kind === 'quick-join';
+        if (quick) {
+          var pick = quickJoinGame();
+          kind = 'join';
+          id = pick ? pick.id : 0;
+          label = pick ? pick.label : '';
+        }
+        if (window.jkLobbyMock) {
+          showRoomNote(window.jkLobbyMock.describe(kind, label, quick));
+          return;
+        }
+        if (kind === 'join' && id) Module.jkJoinRoom = Number(id);
+        room.close();
+        openPicker();
+      }
+
+      roomGames.addEventListener('click', function(ev) {
+        var join = ev.target.closest('[data-join]');
+        if (join) return roomAction('join', join.dataset.join, join.dataset.label);
+        if (ev.target.closest('[data-act=host]')) roomAction('host');
+      });
+      room.querySelector('[data-act=host]').addEventListener('click', function() { roomAction('host'); });
+      room.querySelector('[data-act=join]').addEventListener('click', function() { roomAction('quick-join'); });
+      room.querySelectorAll('[data-view]').forEach(function(b) {
+        b.addEventListener('click', function() {
+          lobbyLive.view = b.dataset.view;
+          try { localStorage.setItem('jkdf2mp-room-view', lobbyLive.view); } catch (e) {}
+          renderRoom();
+        });
+      });
+      room.querySelector('.close').addEventListener('click', function() { room.close(); });
+      document.querySelectorAll('[data-room]').forEach(function(b) {
+        b.addEventListener('click', openRoom);
+      });
+      if (typeof ResizeObserver === 'function') {
+        new ResizeObserver(function() { if (room.open) fillTables(); }).observe(roomGames);
+      }
+
+      // The page watches the lobby while the landing page shows; the game
+      // keeps its own connection once it runs.
+      var lobbyWatch = null;
+
+      function startLobbyWatch() {
+        if (lobbyWatch) return;
+        if (!/^https?:$/.test(location.protocol)) {
+          lobbyShow(null, 'down');
+          return;
+        }
+        var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
+        var w = lobbyWatch = { ws: null, retry: null, keepalive: null, delay: 2000, stopped: false };
+        function connect() {
+          w.retry = null;
+          var ws;
+          try {
+            ws = w.ws = new WebSocket(url);
+          } catch (e) {
+            lobbyShow(null, 'down');
+            return;
+          }
+          ws.onopen = function() {
+            ws.send('watch');
+            w.keepalive = setInterval(function() { if (ws.readyState === 1) ws.send('ping'); }, 25000);
+          };
+          ws.onmessage = function(ev) {
+            if (typeof ev.data !== 'string') return;
+            var m = /^status ([A-Za-z0-9+\/]+={0,2})$/.exec(ev.data);
+            if (m) {
+              try {
+                var bytes = Uint8Array.from(atob(m[1]), function(c) { return c.charCodeAt(0); });
+                lobbyShow(JSON.parse(new TextDecoder().decode(bytes)));
+                w.delay = 2000;
+              } catch (e) {
+                console.warn('OpenJKDF2: could not read the lobby status: ' + e);
+              }
+            } else if (/^error /.test(ev.data)) {
+              // A lobby without live counts: ask again much later.
+              w.delay = 5 * 60 * 1000;
+              ws.close();
+            }
+          };
+          ws.onclose = function() {
+            clearInterval(w.keepalive);
+            if (w.ws !== ws) return;
+            w.ws = null;
+            lobbyShow(null, 'down');
+            if (!w.stopped) {
+              w.retry = setTimeout(connect, w.delay);
+              w.delay = Math.min(w.delay * 2, 5 * 60 * 1000);
+            }
+          };
+        }
+        connect();
+      }
+
+      function stopLobbyWatch() {
+        var w = lobbyWatch;
+        if (!w) return;
+        w.stopped = true;
+        clearTimeout(w.retry);
+        clearInterval(w.keepalive);
+        if (w.ws) {
+          var ws = w.ws;
+          w.ws = null;
+          try { ws.close(); } catch (e) {}
+        }
+      }
+
+      var hideZoneBeforeLobby = hideZone;
+      hideZone = function() {
+        stopLobbyWatch();
+        if (room.open) room.close();
+        hideZoneBeforeLobby();
+      };
+
+      if (document.documentElement.classList.contains('zone-open')) {
+        renderRoomCount();
+        if (window.jkLobbyMock)
+          window.jkLobbyMock.attach(lobbyShow);
+        else
+          startLobbyWatch();
+        if (location.hash === '#nar-shaddaa') openRoom();
+      }
+      window.addEventListener('hashchange', function() {
+        if (location.hash === '#nar-shaddaa' && document.documentElement.classList.contains('zone-open')) openRoom();
+      });
     </script>
   </body>
 </html>
