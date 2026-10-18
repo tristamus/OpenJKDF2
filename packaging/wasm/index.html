@@ -1727,9 +1727,10 @@
       }
 
       // ---- Graphics acceleration. With it off, the browser draws the game on
-      // the CPU (SwiftShader, or WARP on Windows) at a few frames per second,
-      // or can't draw it at all (Edge and Chrome since they dropped SwiftShader
-      // for web pages). Players are told how to turn it on, only when it's off.
+      // the CPU (SwiftShader, or WARP on Windows): 3 fps on a 4-core computer,
+      // half speed with 12 cores busy on a 24-thread one. Or it can't draw it at
+      // all (Edge and Chrome on Linux since they dropped SwiftShader for web
+      // pages). Players are told how to turn it on, only when it's off.
       var SOFTWARE_GL = /SwiftShader|llvmpipe|softpipe|lavapipe|Basic Render|\bWARP\b|Software Render|Software Rasterizer|Mesa OffScreen|GDI Generic/i;
       // Names a real graphics card or driver. Anything else (a hidden name,
       // as with Firefox's fingerprinting protection) is checked another way.
@@ -1808,8 +1809,8 @@
           ? '<h2>Turn on graphics acceleration to play</h2><p>' + name + " can't draw 3D graphics (WebGL 2) " +
             "right now, and the game needs them. Usually that's because graphics acceleration is turned off.</p>"
           : '<h2>Turn on graphics acceleration</h2><p>' + name + ' is drawing without your graphics card, ' +
-            "so the game will run at only a few frames per second. Usually that's because graphics " +
-            'acceleration is turned off.</p>';
+            'so the game runs slower and works your processor hard. On many computers that means only ' +
+            "a few frames per second. Usually that's because graphics acceleration is turned off.</p>";
         if (how) {
           html += '<ol><li>Open a new tab and go to <code>' + how.address + '</code>' +
                   '<button class="copy" type="button">Copy</button></li>' +
