@@ -50,6 +50,9 @@ jobs:
       # Screenshots: storing them, their names and the zip, with made-up pictures.
       - name: Test screenshots
         run: node packaging/wasm/test/screenshots-test.mjs
+      # The graphics acceleration notice, with a made-up browser.
+      - name: Test the graphics acceleration notice
+        run: node packaging/wasm/test/graphics-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

@@ -498,6 +498,32 @@
       #picker-result:empty { display: none; }
       #picker-result.error { color: var(--bad); font-weight: bold; }
 
+      /* Shown only when the browser draws without the graphics card. */
+      .gfx-notice {
+        margin: 8px;
+        padding: 10px 14px;
+        background-color: var(--teal-dark);
+        border: 1px solid #000;
+        border-left: 6px solid var(--gold);
+      }
+      #picker .gfx-notice { margin: 0 0 12px; }
+      .gfx-notice h2 { margin: 0 0 6px; font: bold 17px Verdana, Geneva, sans-serif; color: var(--gold); }
+      .gfx-notice p { margin: 0 0 6px; }
+      .gfx-notice ol { margin: 0 0 6px; padding-left: 22px; }
+      .gfx-notice li { margin-bottom: 4px; }
+      .gfx-notice code { font: bold 14px 'Courier New', monospace; color: var(--gold); overflow-wrap: anywhere; }
+      .gfx-notice .copy {
+        margin-left: 6px;
+        padding: 1px 8px;
+        border: 2px outset #9cc;
+        background-color: var(--teal-light);
+        color: #fff;
+        font: bold 12px Verdana, Geneva, sans-serif;
+        cursor: pointer;
+      }
+      .gfx-notice .copy:active { border-style: inset; }
+      .gfx-notice .fine { margin: 0; color: var(--muted); font-size: 13px; }
+
       /* Live counts in Standard Rooms, and Nar Shaddaa's room window, after
          the Zone's room list and its game room client: tables on black, a
          white list of who's on, a grey toolbar and status bar. */
@@ -851,6 +877,7 @@
           <a href="#help">Help</a>
         </nav>
         <p class="tagline">Free to play. No account needed.</p>
+        <section class="gfx-notice" id="gfx-notice" role="alert" hidden></section>
 
         <div class="layout">
           <aside class="sidebar">
@@ -1017,8 +1044,9 @@
                 <li>Use a current Chrome or Firefox on a computer. Phones and tablets can't open a game folder.</li>
                 <li>If the page says files are missing, you picked a folder one level too high or too low.
                   Pick the one that has <code>episode</code> and <code>resource</code> directly inside.</li>
-                <li>The game needs WebGL 2. If it won't start, turn on hardware acceleration in your
-                  browser's settings.</li>
+                <li>The game needs graphics acceleration. If it won't start, or runs at a few frames per
+                  second, turn on graphics acceleration in your browser's settings and restart the browser.
+                  This page tells you how when it's off.</li>
               </ul>
             </section>
           </main>
@@ -1050,6 +1078,7 @@
         </ul>
         <p class="fine picker-intro">Your browser may ask whether to "upload" the files. That's just its
           standard wording for letting this page read them. Choose Upload to continue.</p>
+        <section class="gfx-notice picker-intro" id="picker-gfx" role="alert" hidden></section>
         <div class="actions picker-intro">
           <label class="play" for="gamedir" tabindex="0" role="button">Choose game folder</label>
           <button class="cancel" type="button">Not now</button>
@@ -1657,6 +1686,7 @@
         picker.onclick = null;
         var problem = browserProblem();
         showPickerResult(problem || '', !!problem);
+        showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
         if (!picker.open) picker.showModal();
         chooseButton.focus();
       }
@@ -1693,14 +1723,132 @@
           return "This browser has WebAssembly turned off, and the game needs it. " +
                  "Use a current Chrome or Firefox.";
         }
-        var gl = null;
-        try { gl = document.createElement('canvas').getContext('webgl2'); } catch (e) {}
-        if (!gl) {
-          return "This browser can't draw with WebGL 2, which the game needs. " +
-                 "Turn on hardware acceleration in the browser's settings, or use a current Chrome or Firefox.";
-        }
         return null;
       }
+
+      // ---- Graphics acceleration. With it off, the browser draws the game on
+      // the CPU (SwiftShader, or WARP on Windows) at a few frames per second,
+      // or can't draw it at all (Edge and Chrome since they dropped SwiftShader
+      // for web pages). Players are told how to turn it on, only when it's off.
+      var SOFTWARE_GL = /SwiftShader|llvmpipe|softpipe|lavapipe|Basic Render|\bWARP\b|Software Render|Software Rasterizer|Mesa OffScreen|GDI Generic/i;
+      // Names a real graphics card or driver. Anything else (a hidden name,
+      // as with Firefox's fingerprinting protection) is checked another way.
+      var NAMED_GL = /ANGLE|NVIDIA|GeForce|Quadro|AMD|Radeon|Intel|Apple|Adreno|Mali|PowerVR|Mesa|Direct3D|OpenGL|Metal|Vulkan/i;
+
+      function webgl2(attrs) {
+        try { return document.createElement('canvas').getContext('webgl2', attrs); } catch (e) { return null; }
+      }
+
+      // Lets go of a test context now rather than when it's collected, as
+      // browsers only keep a few contexts alive and the game needs one.
+      function releaseGl(gl) {
+        var lose = gl.getExtension('WEBGL_lose_context');
+        if (lose) lose.loseContext();
+      }
+
+      // 'none': no WebGL 2 at all. 'software': drawn without the graphics card.
+      function graphicsCheck() {
+        var gl = webgl2();
+        if (!gl) return { state: 'none', renderer: '' };
+        var renderer = '';
+        try {
+          var info = gl.getExtension('WEBGL_debug_renderer_info');
+          renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+        } catch (e) {}
+        releaseGl(gl);
+        if (SOFTWARE_GL.test(renderer)) return { state: 'software', renderer: renderer };
+        if (!NAMED_GL.test(renderer)) {
+          var hw = webgl2({ failIfMajorPerformanceCaveat: true });
+          if (!hw) return { state: 'software', renderer: renderer };
+          releaseGl(hw);
+        }
+        return { state: 'ok', renderer: renderer };
+      }
+
+      // Where each browser keeps the setting, and how it restarts. Pages
+      // can't open these addresses, so players copy one into a new tab.
+      // Edge 155 shows no Restart button after the switch; edge://restart
+      // typed in the address bar restarts it with its tabs.
+      var GFX_HOW = {
+        edge: { name: 'Microsoft Edge', address: 'edge://settings/system/manageSystem',
+                toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                restart: 'Restart Edge: go to <code>edge://restart</code> the same way. Your tabs come back.' },
+        chrome: { name: 'Chrome', address: 'chrome://settings/system',
+                  toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                  restart: 'Click <b>Relaunch</b>.' },
+        brave: { name: 'Brave', address: 'brave://settings/system',
+                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                 restart: 'Click <b>Relaunch</b>.' },
+        firefox: { name: 'Firefox', address: 'about:preferences#general',
+                   toggle: 'Under Performance, untick <b>Use recommended performance settings</b>, ' +
+                           'then tick <b>Use hardware acceleration when available</b>.',
+                   restart: 'Close Firefox completely and open it again.' }
+      };
+
+      function browserKind() {
+        var brands = ((navigator.userAgentData && navigator.userAgentData.brands) || [])
+          .map(function(b) { return b.brand; });
+        var ua = navigator.userAgent;
+        if (brands.indexOf('Microsoft Edge') >= 0 || /\bEdg\//.test(ua)) return 'edge';
+        if (/Firefox\//.test(ua)) return 'firefox';
+        if (navigator.brave) return 'brave';
+        if (brands.indexOf('Google Chrome') >= 0) return 'chrome';
+        return null;
+      }
+
+      // Fills a notice with the steps for this browser, or hides it.
+      function showGfxNotice(el, gfx) {
+        if (!gfx || gfx.state === 'ok') {
+          el.hidden = true;
+          return;
+        }
+        var how = GFX_HOW[browserKind()];
+        var name = how ? how.name : 'Your browser';
+        var html = gfx.state === 'none'
+          ? '<h2>Turn on graphics acceleration to play</h2><p>' + name + " can't draw 3D graphics (WebGL 2) " +
+            "right now, and the game needs them. Usually that's because graphics acceleration is turned off.</p>"
+          : '<h2>Turn on graphics acceleration</h2><p>' + name + ' is drawing without your graphics card, ' +
+            "so the game will run at only a few frames per second. Usually that's because graphics " +
+            'acceleration is turned off.</p>';
+        if (how) {
+          html += '<ol><li>Open a new tab and go to <code>' + how.address + '</code>' +
+                  '<button class="copy" type="button">Copy</button></li>' +
+                  '<li>' + how.toggle + '</li>' +
+                  '<li>' + how.restart + ' Then come back to this page.</li></ol>';
+        } else {
+          html += "<p>Open your browser's settings, search for <b>acceleration</b>, turn on graphics " +
+                  '(hardware) acceleration, then restart the browser and come back to this page.</p>';
+        }
+        html += '<p class="fine">Already on? Update your graphics driver, then restart ' +
+                (how ? how.name : 'the browser') + '.<span class="renderer"></span></p>';
+        el.innerHTML = html;
+        if (gfx.renderer)
+          el.querySelector('.renderer').textContent = ' Drawing with: ' + gfx.renderer + '.';
+        var copy = el.querySelector('.copy');
+        if (copy) {
+          copy.addEventListener('click', function() {
+            var done = function() { copy.textContent = 'Copied'; };
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(how.address).then(done, function() { selectText(el.querySelector('code')); });
+            } else {
+              selectText(el.querySelector('code'));
+            }
+          });
+        }
+        el.hidden = false;
+      }
+
+      function selectText(node) {
+        var range = document.createRange();
+        range.selectNodeContents(node);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+
+      // Checked once, when the page opens; a restart of the browser reloads it.
+      var gfxCheck = browserProblem() ? null : graphicsCheck();
+      showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
 
       // Characters (player/<name>/: the .plr with controls, difficulty and
       // weapon settings, plus saved games) and OpenJKDF2's settings (persist/)
