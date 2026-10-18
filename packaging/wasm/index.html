@@ -471,6 +471,10 @@
         cursor: pointer;
       }
       #picker input[type=file] { display: none; }
+      #picker .picker-option { display: flex; gap: 10px; align-items: baseline; margin-top: 14px; cursor: pointer; }
+      #picker .picker-option[hidden] { display: none; }
+      #picker .picker-option input { accent-color: var(--gold); }
+      #picker .picker-option .fine { display: block; }
       #mod-choice fieldset { margin: 0 0 12px; padding: 0; border: 0; }
       #mod-choice legend { margin-bottom: 6px; padding: 0; font: bold 15px Verdana, Geneva, sans-serif; color: var(--gold); }
       #mod-choice label {
@@ -1054,6 +1058,8 @@
           <label class="play" for="gamedir" tabindex="0" role="button">Choose game folder</label>
           <button class="cancel" type="button">Not now</button>
         </div>
+        <label class="picker-intro picker-option"><input type="checkbox" id="fullscreen-option" checked>
+          <span>Play in fullscreen <span class="fine">The game fills the screen when you click it. Hold Esc to leave fullscreen.</span></span></label>
         <input type="file" id="gamedir" webkitdirectory multiple>
         <div id="mod-choice" hidden>
           <fieldset>
@@ -3079,6 +3085,45 @@
           try { ws.close(); } catch (e) {}
         }
       }
+
+      // Fullscreen. Browsers show their own "has control of your pointer"
+      // notice each time the game locks the mouse, and no page can hide it.
+      // Firefox leaves it out while the page is fullscreen, and Chrome folds it
+      // into its fullscreen notice. Keyboard lock also gives Esc (JK's menu key)
+      // to the game instead of the browser; holding Esc leaves fullscreen.
+      // Browsers only allow fullscreen right after a click or key press, so it
+      // starts on the first one in the game, and again after leaving it.
+      var FULLSCREEN_SETTING = 'jkdf2mp-fullscreen';
+      var fullscreenOption = document.getElementById('fullscreen-option');
+      try { fullscreenOption.checked = localStorage.getItem(FULLSCREEN_SETTING) !== 'off'; } catch (e) {}
+      fullscreenOption.addEventListener('change', function() {
+        try { localStorage.setItem(FULLSCREEN_SETTING, fullscreenOption.checked ? 'on' : 'off'); } catch (e) {}
+      });
+
+      function playFullscreen() {
+        if (!fullscreenOption.checked || document.fullscreenElement || !document.fullscreenEnabled) return;
+        if (!document.getElementById('zone').hidden || document.querySelector('dialog[open]')) return;
+        // Chrome and Edge give Esc to the page this way, only in fullscreen the
+        // page asked for. Firefox and Safari use keyboardLock below instead.
+        if (navigator.keyboard && navigator.keyboard.lock)
+          navigator.keyboard.lock(['Escape']).catch(function() {});
+        var request;
+        try {
+          request = document.documentElement.requestFullscreen({ keyboardLock: 'browser' });
+        } catch (e) { return; }
+        if (request && request.catch) request.catch(function() {});
+      }
+      window.addEventListener('pointerdown', function(ev) {
+        if (ev.target === Module.canvas) playFullscreen();
+      }, true);
+      window.addEventListener('keydown', function(ev) {
+        // Not Esc, which can't start fullscreen, nor Alt, Ctrl, Shift or Windows
+        // on their own or in a shortcut, so Alt+Tab doesn't go fullscreen on the
+        // way out.
+        if (ev.key === 'Escape' || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        if (/^(Alt|Control|Shift|Meta|OS|F\d+)$/.test(ev.key)) return;
+        playFullscreen();
+      }, true);
 
       var hideZoneBeforeLobby = hideZone;
       hideZone = function() {

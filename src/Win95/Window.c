@@ -405,6 +405,69 @@ int Window_menu_mouseY = 0;
 
 extern int jkGuiBuildMulti_bRendering;
 
+#ifdef ARCH_WASM
+// Added: browsers draw their own "has control of your pointer" notice each
+// time the game locks the mouse, and while it's locked they keep Esc for
+// themselves: Esc frees the mouse and never reaches the game. SDL isn't told
+// when that happens, so the game checks the browser every frame.
+EM_JS(int, Window_wasmIsPointerLocked, (), {
+  return document.pointerLockElement === Module.canvas ? 1 : 0;
+});
+
+// SDL waits for the next click or key before asking for the mouse lock. While
+// the page is fullscreen, Firefox allows the lock straight away, and so does
+// Chrome when the page let go of it itself (for a menu), so ask right away
+// there, at most twice a second. Elsewhere the browser refuses and SDL's
+// request still follows.
+EM_JS(void, Window_wasmLockPointerNow, (), {
+  var canvas = Module.canvas;
+  if (!document.fullscreenElement || !document.hasFocus() || !canvas.requestPointerLock) return;
+  var now = performance.now();
+  if (Module.jkLastPointerLockTry && now - Module.jkLastPointerLockTry < 500) return;
+  Module.jkLastPointerLockTry = now;
+  try {
+    var request = canvas.requestPointerLock();
+    if (request && request.catch) request.catch(function() {});
+  } catch (e) {}
+});
+
+static int Window_bWasmHadPointerLock = 0;
+static int Window_bWasmSentEsc = 0;
+
+// Every frame the game wants the mouse locked.
+static void Window_WasmKeepPointerLock()
+{
+    int bLocked = Window_wasmIsPointerLocked();
+
+    if (Window_bWasmHadPointerLock && !bLocked) {
+        // The browser let go of the mouse by itself, on Esc or on switching
+        // windows. Treat it as the Esc the game never got, so one press opens
+        // the menu (or closes chat) as players expect, and the menu frees the
+        // mouse instead of the view turning with the cursor.
+        stdPlatform_Printf("Browser released the mouse, sending Esc\n");
+        Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, 0);
+        Window_msg_main_handler(g_hWnd, WM_CHAR, VK_ESCAPE, 0);
+        Window_bWasmSentEsc = 1;
+    }
+    else if (bLocked) {
+        Window_bWasmSentEsc = 0;
+    }
+    else if (!Window_bWasmSentEsc) {
+        // Not locked yet: back from a menu, or just gone fullscreen
+        Window_wasmLockPointerNow();
+    }
+
+    Window_bWasmHadPointerLock = bLocked;
+}
+
+// Every frame the game frees the mouse itself.
+static void Window_WasmPointerLockReleased()
+{
+    Window_bWasmHadPointerLock = 0;
+    Window_bWasmSentEsc = 0;
+}
+#endif
+
 // map raw SDL window coords into the letterboxed 640x480 canvas.
 // The same 4:3 pillarbox math the GL present side uses (std3D_DrawMenu)
 static void Window_TranslateMouseToCanvas(int rawX, int rawY, int* pOutX, int* pOutY)
@@ -894,8 +957,16 @@ void Window_SdlUpdate()
                 //handleKey(&event.key.keysym, WM_KEYDOWN, 0x1);
                 if (event.key.key == SDLK_ESCAPE)
                 {
-                    Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, event.key.repeat & 0xFFFF);
-                    Window_msg_main_handler(g_hWnd, WM_CHAR, VK_ESCAPE, event.key.repeat & 0xFFFF);
+#ifdef ARCH_WASM
+                    // Added: holding Esc is how players leave fullscreen on the
+                    // web (index.html), so a held Esc mustn't keep opening and
+                    // closing the menu.
+                    if (!event.key.repeat)
+#endif
+                    {
+                        Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, event.key.repeat & 0xFFFF);
+                        Window_msg_main_handler(g_hWnd, WM_CHAR, VK_ESCAPE, event.key.repeat & 0xFFFF);
+                    }
                 }
                 else if (event.key.key == SDLK_PAGEUP)
                 {
@@ -1265,6 +1336,9 @@ void Window_SdlUpdate()
         }
 
         SDL_SetWindowRelativeMouseMode(displayWindow, false);
+#ifdef ARCH_WASM
+        Window_WasmPointerLockReleased();
+#endif
 
         if (!jkGuiBuildMulti_bRendering) {
             std3D_StartScene();
@@ -1334,10 +1408,16 @@ void Window_SdlUpdate()
         if (!jkQuakeConsole_bOpen && SDL_GetWindowFlags(displayWindow) & SDL_WINDOW_MOUSE_FOCUS) {
             SDL_SetWindowRelativeMouseMode(displayWindow, true);
             //SDL_WarpMouseInWindow(displayWindow, 100, 100);
+#ifdef ARCH_WASM
+            Window_WasmKeepPointerLock();
+#endif
         }
         else
         {
             SDL_SetWindowRelativeMouseMode(displayWindow, false);
+#ifdef ARCH_WASM
+            Window_WasmPointerLockReleased();
+#endif
         }
 #endif
     }
