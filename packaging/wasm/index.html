@@ -124,6 +124,21 @@
         --bad: #ffb199;
       }
       [hidden] { display: none !important; }
+      /* Over the game while Quit takes the player back to the lobby. */
+      .quit-note {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0 16px;
+        background-color: #000;
+        color: var(--gold);
+        font: bold 17px Verdana, Geneva, sans-serif;
+        text-align: center;
+      }
       html.zone-open, html.zone-open body { overflow: hidden; }
       #zone {
         position: fixed;
@@ -837,6 +852,7 @@
     <div class="emscripten_border">
       <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
     </div>
+    <p class="quit-note" id="quit-note" role="status" hidden>Saving your settings and going back to the lobby&hellip;</p>
 <div class="spinner" id='spinner'></div>
     <div class="emscripten" id="status">Downloading...</div>
 <div class="emscripten">
@@ -1730,6 +1746,56 @@
         document.getElementById('zone').hidden = true;
         document.documentElement.classList.remove('zone-open');
       }
+
+      // ---- Quit. The game's Quit (the main menu, or the Players screens
+      // shown at startup) brings the player back here, to the lobby, instead
+      // of starting the game again (main.c). By then the game has shut down
+      // and closed its files. The page reloads once the browser has stored
+      // them, or after QUIT_SAVE_MS if storing them hangs, so nobody is stuck.
+      var QUIT_SAVE_MS = 5000;
+
+      // The lobby's address: this page's, keeping any test options, with the
+      // room window the player started from, which the page opens again.
+      function lobbyAddress(loc, roomKey) {
+        return loc.pathname + loc.search + (roomKey ? '#' + roomKey : '');
+      }
+
+      // Stores the saves (sync), then calls leave once: when they're stored,
+      // or after waitMs, whichever comes first.
+      function saveThenLeave(sync, waitMs, leave) {
+        var left = false;
+        function go() {
+          if (left) return;
+          left = true;
+          clearTimeout(timer);
+          leave();
+        }
+        var timer = setTimeout(function() {
+          console.warn('OpenJKDF2: storing the saves is taking too long, going back to the lobby anyway');
+          go();
+        }, waitMs);
+        try {
+          sync(function(err) {
+            if (err) console.warn('OpenJKDF2: could not store the saves (' + err + ')');
+            go();
+          });
+        } catch (e) {
+          console.warn('OpenJKDF2: could not store the saves (' + e + ')');
+          go();
+        }
+      }
+
+      Module.jkQuitToLobby = function() {
+        leaveGuard = false;  // no "Leave site?" question: the player chose Quit
+        document.getElementById('quit-note').hidden = false;
+        // pickerWant is still the prompt the game was started from.
+        var roomKey = pickerWant && pickerWant.lobbyRoom;
+        saveThenLeave(function(done) { Module.FS.syncfs(false, done); }, QUIT_SAVE_MS, function() {
+          // A new hash alone doesn't load the page again.
+          history.replaceState(null, '', lobbyAddress(location, roomKey));
+          location.reload();
+        });
+      };
 
       // What the game can't run without, checked before anyone picks a folder,
       // so players see what's wrong instead of a page that never starts.
@@ -3251,7 +3317,8 @@
       // Joining hands the engine the room to select on its Join screen
       // (Module.jkJoinRoom).
       function roomAction(kind, id, label) {
-        var want = { game: ROOMS[lobbyLive.room].game, room: ROOMS[lobbyLive.room].name };
+        // lobbyRoom: Quit comes back to this room window (jkQuitToLobby).
+        var want = { game: ROOMS[lobbyLive.room].game, room: ROOMS[lobbyLive.room].name, lobbyRoom: lobbyLive.room };
         var quick = kind === 'quick-join';
         if (quick) {
           var pick = quickJoinGame();

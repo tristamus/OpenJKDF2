@@ -9,6 +9,7 @@ int32_t openjkdf2_bIsKVM = 1;
 int32_t openjkdf2_bIsLowMemoryPlatform = 0; // 32MiB
 int32_t openjkdf2_bIsExtraLowMemoryPlatform = 0; // 16MiB
 int32_t openjkdf2_restartMode = OPENJKDF2_RESTART_NONE;
+int32_t openjkdf2_bQuitToLobby = 0; // Added: the browser build's Quit (main.c)
 char openjkdf2_aOrigCwd[512];
 char openjkdf2_aRestartPath[256];
 char* openjkdf2_pExecutablePath = "";

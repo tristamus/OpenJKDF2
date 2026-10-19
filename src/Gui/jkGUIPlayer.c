@@ -21,6 +21,15 @@
 #include "General/stdFnames.h"
 #include "General/stdFileUtil.h"
 #include "World/jkPlayer.h"
+#include "Gui/jkGUIMain.h"
+
+// Added: in the browser build, a Quit button takes Cancel's place while
+// Cancel is hidden, so the startup screens have a way out (the main menu's
+// Quit, jkGuiMain_ConfirmQuit).
+#ifdef ARCH_WASM
+#define JKGUIPLAYER_QUIT_BUTTON
+#endif
+#define JKGUIPLAYER_QUIT (4)
 
 static int jkGuiPlayer_bInitted = 0;
 
@@ -30,7 +39,7 @@ static const char* jkGuiPlayer_GuiDifficulties[3] = {"GUI_EASY", "GUI_MED", "GUI
 static int32_t jkGuiPlayer_menuSelectIdk[2] = {0xFA, 0};
 static int32_t jkGuiPlayer_menuSelectIdk2[2] = {0xd, 0xe};
 
-static jkGuiElement jkGuiPlayer_menuSelectElements[8] = {
+static jkGuiElement jkGuiPlayer_menuSelectElements[] = {
     {ELEMENT_TEXT, 0, 0, 0, 3, {0, 410, 0x280, 0x14}, 1, 0, 0, 0, 0, 0, {0}, 0},
     {ELEMENT_TEXT, 0, 5, "GUI_CHOOSEPLAYER", 3, {0, 0x82, 0x280, 0x28}, 1, 0, 0, 0, 0, 0, {0}, 0},
     {ELEMENT_LISTBOX, 1, 0, 0, 0, {0x82, 0xC8, 0x17C, 0xB4}, 1, 0, 0, 0, 0, jkGuiPlayer_menuSelectIdk2, {0}, 0},
@@ -38,12 +47,15 @@ static jkGuiElement jkGuiPlayer_menuSelectElements[8] = {
     {ELEMENT_TEXTBUTTON, 2, 2, "GUI_NEWPLAYER", 3, {0xA0, 0x1AE, 0xA0, 0x28}, 1, 0, 0, 0, 0, 0, {0}, 0},
     {ELEMENT_TEXTBUTTON, 3, 2, "GUI_REMOVE", 3, {0x140, 0x1AE, 0xA0, 0x28}, 1, 0, 0, 0, 0, 0, {0}, 0},
     {ELEMENT_TEXTBUTTON, 1, 2, "GUI_OK", 3, {0x1E0, 0x1AE, 0xA0, 0x28}, 1, 0, 0, 0, 0, 0, {0}, 0},
+#ifdef JKGUIPLAYER_QUIT_BUTTON
+    {ELEMENT_TEXTBUTTON, JKGUIPLAYER_QUIT, 2, "GUI_QUIT", 3, {0, 0x1AE, 0xA0, 0x28}, 0, 0, 0, 0, 0, 0, {0}, 0}, // Added
+#endif
     {ELEMENT_END, 0, 0, 0, 0, {0}, 0, 0, 0, 0, 0, 0, {0}, 0},
 };
 
 static jkGuiMenu jkGuiPlayer_menuSelect = {jkGuiPlayer_menuSelectElements, 0, 0xFFFF, 0xFFFF, 0xF, 0, 0, jkGui_stdBitmaps, jkGui_stdFonts, (intptr_t)jkGuiPlayer_menuSelectIdk, 0, "thermloop01.wav", "thrmlpu2.wav", 0, 0, 0, 0, 0,0};
 
-static jkGuiElement jkGuiPlayer_menuNewElements[12] = {
+static jkGuiElement jkGuiPlayer_menuNewElements[] = {
     { ELEMENT_TEXT, 0, 0, 0, 3, {0, 410, 280, 14}, 1, 0, 0, 0, 0, 0, {0}, 0},
     { ELEMENT_TEXT, 0, 5, "GUI_NEWPLAYER", 3, {0, 0x82, 0x280, 0x28}, 1, 0, 0, 0, 0, 0, {0}, 0},
     { ELEMENT_TEXT, 0, 0, "GUI_NAME", 2, {0xC8, 0xD2, 0xC8, 0x14}, 1, 0, 0, 0, 0, 0, {0}, 0},
@@ -55,6 +67,9 @@ static jkGuiElement jkGuiPlayer_menuNewElements[12] = {
     { ELEMENT_TEXT, 0, 0, 0, 3, {0, 410, 0x280, 0x14}, 1, 0, 0, 0, 0, 0, {0}, 0},
     { ELEMENT_TEXTBUTTON, -1, 2, "GUI_CANCEL", 3, {0x14, 0x1AE, 0xC8, 0x28}, 1, 0, 0, 0, 0, 0, {0}, 0},
     { ELEMENT_TEXTBUTTON, 1, 2, "GUI_OK", 3, {0x1A4, 0x1AE, 0xC8, 0x28}, 1, 0, 0, 0, 0, 0, {0}, 0},
+#ifdef JKGUIPLAYER_QUIT_BUTTON
+    { ELEMENT_TEXTBUTTON, JKGUIPLAYER_QUIT, 2, "GUI_QUIT", 3, {0x14, 0x1AE, 0xC8, 0x28}, 0, 0, 0, 0, 0, 0, {0}, 0}, // Added
+#endif
     { ELEMENT_END, 0, 0, 0, 0, {0}, 0, 0, 0, 0, 0, 0, {0}, 0},
 };
 
@@ -223,11 +238,18 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
         v1 = jkGuiPlayer_sub_410640(&a1a, &jkGuiPlayer_menuSelectElements[2]);
         v14 = 0;
         jkGuiPlayer_menuSelectElements[3].bIsVisible = a1 == 0;
+#ifdef JKGUIPLAYER_QUIT_BUTTON
+        jkGuiPlayer_menuSelectElements[7].bIsVisible = a1 != 0; // Added
+#endif
         if ( v1 )
         {
             jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiPlayer_menuSelect, &jkGuiPlayer_menuSelectElements[6]);
             if ( a1 )
+#ifdef JKGUIPLAYER_QUIT_BUTTON
+                jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiPlayer_menuSelect, &jkGuiPlayer_menuSelectElements[7]); // Added
+#else
                 jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiPlayer_menuSelect, 0);
+#endif
             else
                 jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiPlayer_menuSelect, &jkGuiPlayer_menuSelectElements[3]);
             v2 = jkGuiRend_DisplayAndReturnClicked(&jkGuiPlayer_menuSelect);
@@ -282,6 +304,9 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
                 continue;
             case 2:
                 jkGuiPlayer_menuNewElements[9].bIsVisible = v15 == 0;
+#ifdef JKGUIPLAYER_QUIT_BUTTON
+                jkGuiPlayer_menuNewElements[11].bIsVisible = v15 != 0; // Added
+#endif
                 jkGuiPlayer_menuNewElements[3].wstr = jkGuiPlayer_awTmp_555D28;
                 _memset(jkGuiPlayer_awTmp_555D28, 0, 16 * sizeof(char16_t));
 #ifdef TARGET_DREAMCAST
@@ -309,6 +334,16 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
                 }
                 v14 = 1;
                 continue;
+#ifdef JKGUIPLAYER_QUIT_BUTTON
+            case JKGUIPLAYER_QUIT: // Added
+                if ( jkGuiMain_ConfirmQuit() )
+                {
+                    jkGuiRend_DarrayFree(&a1a);
+                    return;
+                }
+                v14 = 1;
+                continue;
+#endif
             default:
                 continue;
         }
@@ -318,7 +353,23 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
             jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiPlayer_menuNew, &jkGuiPlayer_menuNewElements[10]);
             if ( !v15 )
                 jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiPlayer_menuNew, &jkGuiPlayer_menuNewElements[9]);
+#ifdef JKGUIPLAYER_QUIT_BUTTON
+            else
+                jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiPlayer_menuNew, &jkGuiPlayer_menuNewElements[11]); // Added
+#endif
             v7 = jkGuiRend_DisplayAndReturnClicked(&jkGuiPlayer_menuNew);
+#ifdef JKGUIPLAYER_QUIT_BUTTON
+            if ( v7 == JKGUIPLAYER_QUIT ) // Added
+            {
+                if ( jkGuiMain_ConfirmQuit() )
+                {
+                    jkGuiRend_DarrayFree(&a1a);
+                    return;
+                }
+                v6 = 1;
+                continue;
+            }
+#endif
             if ( v7 == 1 )
             {
                 if ( jkGuiPlayer_awTmp_555D28[0] )
