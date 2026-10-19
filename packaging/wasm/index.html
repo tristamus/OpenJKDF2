@@ -1689,6 +1689,26 @@
                /\.(exe|dll|ico|ini|txt|url|pdf|htm|html)$/.test(lowerPath);
       }
 
+      // The picked files, by their path in the game folder: the characters
+      // in player/ (as <name>/...), and the rest. webkitRelativePath is
+      // "<picked folder>/episode/JK1.gob", so its first segment goes. Loose
+      // files in player/ aren't characters, and saved single-player games
+      // stay behind, since this build is multiplayer only.
+      function pickedFiles(fileList) {
+        var files = [], playerFiles = [];
+        for (var f of fileList) {
+          var rel = f.webkitRelativePath.split('/').slice(1).join('/');
+          if (!rel || isSkipped(rel.toLowerCase())) continue;
+          var m = rel.match(/^player\/([^\/]+\/.+)$/i);
+          if (m) {
+            if (!/\.jks$/i.test(m[1])) playerFiles.push({ path: m[1], file: f });
+          } else if (!/^player\//i.test(rel)) {
+            files.push({ path: rel, file: f });
+          }
+        }
+        return { files: files, playerFiles: playerFiles };
+      }
+
       function loadEngine(withBundledData) {
         leaveGuard = true;
         if (withBundledData) {
@@ -2122,6 +2142,54 @@
         '.goo': ['jkmremasteredassets.goo']
       };
 
+      // ---- What gets read. Only the files the engine opens are read into
+      // the tab: the rest of the folder (the MotS Remastered pack's jkgm
+      // textures, which this build can't use, backups, screenshots,
+      // launchers) is never read. detectMods finds the mods' files; these say
+      // which files of a mod, and which of the rest, the engine reads. Paths
+      // are lowercase and spelled one way.
+
+      // A file in a mod's folder that the engine reads when it runs the mod
+      // with -path: a GOB at its top, or a file in one of the game's resource
+      // folders, which it looks in before any GOB (jkRes_FileOpen).
+      function isModFile(rel, ext) {
+        var parts = rel.split('/');
+        if (parts.length === 1) return rel.endsWith(ext) && rel[0] !== '.';
+        return MOD_RESOURCE_DIRS.indexOf(parts[0]) >= 0;
+      }
+
+      // A file of the game folder itself that the engine reads
+      // (src/Main/jkRes.c, src/Main/jkEpisode.c):
+      // - episode/: its GOBs, and in each episode's own folder, episode.jk and
+      //   the resource folders, which come before the episode's GOB.
+      // - resource/: its GOBs, jk_.cd, and the resource folders in it.
+      // - mods/: its GOBs. The ones that are mods have moved under jkmods/.
+      // - the game's resource folders at the top: the engine looks there
+      //   before anywhere else, so a player's own loose cogs and the like
+      //   are there.
+      // - controls/: saved control setups.
+      // player/ is read on its own (importPlayers). modPath is a folder given
+      // with ?path= in the address, which is read like a mod.
+      function isGameFile(lower, ext, modPath) {
+        if (modPath && lower.startsWith(modPath + '/'))
+          return isModFile(lower.substring(modPath.length + 1), ext);
+        var parts = lower.split('/');
+        var last = parts[parts.length - 1];
+        var gob = last.endsWith(ext) && last[0] !== '.';
+        switch (parts[0]) {
+          case 'episode':
+            return parts.length === 2 ? gob :
+                   parts.length === 3 ? last === 'episode.jk' : MOD_RESOURCE_DIRS.indexOf(parts[2]) >= 0;
+          case 'resource':
+            return parts.length === 2 ? gob || last === 'jk_.cd' : MOD_RESOURCE_DIRS.indexOf(parts[1]) >= 0;
+          case 'mods':
+            return parts.length === 2 && gob;
+          case 'controls':
+            return parts.length > 1;
+        }
+        return parts.length > 1 && MOD_RESOURCE_DIRS.indexOf(parts[0]) >= 0;
+      }
+
       // The mods among the picked files, each with the files that belong to it,
       // in the order they take precedence, which is the original game's where
       // it has one (-path, then mods/, then resource/):
@@ -2209,10 +2277,13 @@
             var name = x.path.split('/').pop();
             if (zipRoots[k]) name = name.replace(/\.zip$/i, '');
             // A folder with one GOB or none is one mod, unless it also holds
-            // mod folders: then it's a collection, like a mod/ folder.
+            // mod folders: then it's a collection, like a mod/ folder. Its
+            // readmes, screenshots and the like aren't part of it.
             if (x.gobs.length < 2 && !inner.length) {
               mods.push({ rank: 1, from: x.path, name: name,
-                          rel: function(lower, path) { return mine(lower) ? path.substring(k.length + 1) : null; } });
+                          rel: function(lower, path) {
+                            return mine(lower) && isModFile(lower.substring(k.length + 1), ext) ? path.substring(k.length + 1) : null;
+                          } });
               return;
             }
             // Its resource folders first: the engine looks for a loose file
@@ -2244,6 +2315,30 @@
           m.path = 'jkmods/' + i + '-' + m.name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
           return m;
         });
+      }
+
+      // Moves each mod's files into its folder under jkmods/, marking them
+      // with the mod's place in the list (.mod) and their path in the mod
+      // (.rel).
+      function placeModFiles(files, mods) {
+        for (var e of files) {
+          var lower = e.path.toLowerCase();
+          for (var i = 0; i < mods.length; i++) {
+            var rel = mods[i].rel(lower, e.path);
+            if (rel) {
+              e.path = mods[i].path + '/' + rel;
+              e.mod = i;
+              e.rel = rel;
+              break;
+            }
+          }
+        }
+      }
+
+      // The files to read: every mod's, and the files of the game folder the
+      // engine opens. The rest of the folder is left unread.
+      function filesToRead(files, ext, modPath) {
+        return files.filter(function(e) { return e.mod !== undefined || isGameFile(e.path.toLowerCase(), ext, modPath); });
       }
 
       // ---- Mods kept as zip files. The game can't read a zip, so the page
@@ -2701,17 +2796,17 @@
       }
 
       async function onFolderPicked(fileList) {
-        // webkitRelativePath is "<picked folder>/episode/JK1.gob"; drop the first segment.
-        var files = [];
-        var playerFiles = [];
-        for (var f of fileList) {
-          var rel = f.webkitRelativePath.split('/').slice(1).join('/');
-          if (!rel || isSkipped(rel.toLowerCase())) continue;
-          // player/<name>/... only; loose files in player/ aren't characters.
-          var m = rel.match(/^player\/([^\/]+\/.+)$/i);
-          if (m) playerFiles.push({ path: m[1], file: f });
-          else if (!/^player\//i.test(rel)) files.push({ path: rel, file: f });
+        // How long each stage takes, for the console, so a slow start can be
+        // told apart on the player's own PC.
+        var clock = { at: performance.now(), stages: [] };
+        function lap(stage) {
+          var now = performance.now();
+          clock.stages.push(stage + ' ' + Math.round(now - clock.at) + ' ms');
+          clock.at = now;
         }
+        var sorted = pickedFiles(fileList);
+        var files = sorted.files;
+        var playerFiles = sorted.playerFiles;
 
         var byLower = {};
         for (var e of files) byLower[e.path.toLowerCase()] = e;
@@ -2735,10 +2830,12 @@
                            "\n\nPick the folder that has episode and resource directly inside, then try again.", true);
           return;
         }
+        lap('listing');
         // Zipped mods are opened first, so they're found and loaded like the rest.
         if (Module['arguments'].indexOf('-path') < 0 && files.some(function(e) { return /\.zip$/i.test(e.path); })) {
           showPickerResult('Opening zipped mods...');
           files = await openZips(files, isMots);
+          lap('opening zips');
         }
         // Windows folders ignore case but MEMFS doesn't, so "Episode/AODpc.gob" and
         // a renamed "episode/JK1MP.gob" would land in two sibling folders. The
@@ -2772,29 +2869,27 @@
         var game = isMots ? 'mots' : 'jk1';
         var ext = isMots ? '.goo' : '.gob';
         var picked = null, found = { clashes: {}, contents: [] };
-        if (Module['arguments'].indexOf('-path') < 0) {
+        var pathAt = Module['arguments'].indexOf('-path');
+        if (pathAt < 0) {
           var folderMods = detectMods(files, isMots);
           var saved = typeof indexedDB !== 'undefined' ? await storedMods(game) : [];
+          lap('finding mods');
           if (folderMods.length > 1) {
             showPickerResult('Looking through your mods...');
             found = await findClashes(folderMods, files, ext);
+            lap('comparing mods');
           }
-          for (var e of files) {
-            var lower = e.path.toLowerCase();
-            for (var i = 0; i < folderMods.length; i++) {
-              var rel = folderMods[i].rel(lower, e.path);
-              if (rel) {
-                e.path = folderMods[i].path + '/' + rel;
-                e.mod = i;
-                e.rel = rel;
-                break;
-              }
-            }
-          }
+          placeModFiles(files, folderMods);
           Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
-          if (folderMods.length || saved.length)
+          if (folderMods.length || saved.length) {
             picked = await chooseMods(folderMods, saved, found.clashes, game);
+            lap('choosing mods');
+          }
         }
+        // A folder given with ?path= is read like a mod.
+        var modPath = pathAt < 0 ? null : String(Module['arguments'][pathAt + 1] || '').replace(/\\/g, '/')
+          .replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
+        files = filesToRead(files, ext, modPath);
 
         readingFolder = true;
         chooseButton.setAttribute('aria-disabled', 'true');
@@ -2808,6 +2903,7 @@
           files[i].data = new Uint8Array(await files[i].file.arrayBuffer());
           loaded.push({ path: gameRoot + files[i].path, data: files[i].data });
         }
+        lap('reading');
         // One ticked mod runs from its own folder. Several are put together
         // in jkmods/set, sharing their files' data, unless only one of them
         // adds anything, as when they're all copies of one mod.
@@ -2816,6 +2912,7 @@
           start = picked[0];
         } else if (picked && picked.length > 1) {
           var set = await setFiles(picked, files, found.contents, ext);
+          lap('putting mods together');
           var from = picked.filter(function(o) { return set.some(function(e) { return e.mod === o.index; }); });
           if (from.length === 1) {
             start = from[0];
@@ -2840,9 +2937,16 @@
         var pickedPlayers = [];
         for (var e of playerFiles)
           pickedPlayers.push({ path: e.path, data: new Uint8Array(await e.file.arrayBuffer()) });
+        lap('characters');
+        // Not the whole folder's size: the browser looks up each file's size
+        // one by one, which takes a while in a big folder.
+        var readBytes = totalBytes + playerFiles.reduce((n, e) => n + e.file.size, 0);
+        console.log('OpenJKDF2: read ' + (files.length + playerFiles.length) + ' of the ' + fileList.length +
+                    ' files in the folder (' + megabytes(readBytes) + '): ' + clock.stages.join(', '));
 
         Module.preRun.push(function() {
           var FS = Module.FS;
+          var t = performance.now();
           FS.mkdirTree('/jk1');
           FS.mkdirTree('/mots');
           for (var e of loaded) {
@@ -2850,6 +2954,8 @@
             FS.writeFile(e.path, e.data, { canOwn: true });
           }
           loaded = null;
+          console.log('OpenJKDF2: the engine loaded ' + Math.round(t - clock.at) + ' ms after the folder was read, ' +
+                      'and took its files in ' + Math.round(performance.now() - t) + ' ms');
           mountSaves(FS, pickedPlayers, gameRoot);
         });
         if (isMots && Module['arguments'].indexOf('-motsCompat') < 0) {

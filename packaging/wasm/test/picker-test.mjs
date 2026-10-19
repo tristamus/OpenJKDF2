@@ -16,10 +16,10 @@ function cut(from, to) {
     assert.ok(a > 0 && b > a, 'index.html has ' + from);
     return html.substring(a, b);
 }
-const { openZips, detectMods, isSkipped } = new Function(
+const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
-    '\nreturn { openZips, detectMods, isSkipped };')();
+    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -178,6 +178,117 @@ test('a broken or blocked store leaves every mod ticked', () => {
     const { modsLeftOut, rememberModsLeftOut } = memory(blocked);
     assert.deepEqual(modsLeftOut('jk1'), []);
     rememberModsLeftOut('jk1', ['mod/sbx']);
+});
+
+// ---- What the page reads from a picked folder: the steps onFolderPicked
+// takes before reading anything, on folders laid out like real ones. Paths
+// are given as they are under the picked folder; GOBs are made up, other
+// files hold their own path.
+async function whatIsRead(folder, { mots = false, modPath = null } = {}) {
+    const ext = mots ? '.goo' : '.gob';
+    const fileList = Object.entries(folder).map(([path, bytes]) => {
+        const file = new Blob([bytes || (path.toLowerCase().endsWith(ext) ? gob('x', path) : Buffer.from(path))]);
+        file.webkitRelativePath = 'Picked/' + path;
+        return file;
+    });
+    const sorted = pickedFiles(fileList);
+    let files = sorted.files;
+    if (!modPath && files.some(e => /\.zip$/i.test(e.path)))
+        files = await openZips(files, mots);
+    const mods = modPath ? [] : detectMods(files, mots);
+    placeModFiles(files, mods);
+    return { read: filesToRead(files, ext, modPath).map(e => e.path).sort(),
+             players: sorted.playerFiles.map(e => e.path).sort(), mods };
+}
+
+// Antonio's Steam folders (2026-10-19), a few of each kind of file.
+const STEAM_JK = Object.fromEntries([
+    '32380_install.vdf', 'DeIsL1.isu', 'JediKnight.EXE', 'ipxwrapper.log', 'registry.json', 'openjkdf2_cvars.json',
+    'removeRegistry.bat', 'Controls/set0000.ctl', 'Episode/APG_Deathmatch_Castle.gob', 'Episode/JK1.GOB',
+    'Episode/JK1CTF.GOB', 'Episode/JK1MP.GOB', 'MUSIC/Track12.ogg', 'Resource/JK_.CD', 'Resource/Res1hi.gob',
+    'Resource/Res2.gob', 'Resource/VIDEO/01-02A.SMK', 'player/BahamutZero0o/BahamutZero0o.plr',
+    'player/BahamutZero0o/Tristamus.mpc', 'player/BahamutZero0o/openjkdf2.json', 'player/BahamutZero0o/save0000.jks',
+    'player/BahamutZero0o/_JKAUTO_01narshadda.jks', 'player/steam_autocloud.vdf',
+].map(p => [p, null]));
+const STEAM_JK_READ = ['Controls/set0000.ctl', 'Episode/APG_Deathmatch_Castle.gob', 'Episode/JK1.GOB', 'Episode/JK1CTF.GOB',
+                       'Episode/JK1MP.GOB', 'Resource/JK_.CD', 'Resource/Res1hi.gob', 'Resource/Res2.gob'];
+const STEAM_MOTS = Object.fromEntries([
+    '32390_install.vdf', 'JediKnightM.exe', 'JKMRemastered.bat', 'JediKnightM.RPT', 'Sith.doc', 'MysteriesOfTheSith.sdb',
+    'openjkdf2_cvars.json', 'registry.json', 'motsr.ico', 'Controls/MS SIDEWINDER GAMEPAD.CTM', 'Episode/JKM.GOO',
+    'Episode/JKM_KFY.GOO', 'Episode/JKM_MP.GOO', 'Episode/JKM_SABER.GOO', 'Episode/JKM/cog/s1l1_endlevel.cog',
+    'Episode/MotS Secret Level/episode.jk', 'Episode/MotS Secret Level/jkl/S6L1.jkl',
+    'Episode/MotS Secret Level/3do/mat/vader_cape.mat', 'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup',
+    'MUSIC/Track02.ogg', 'MUSIC/Backup/Track04.ogg', 'Mods/JKMRemasteredAssets.goo',
+    'Player/BahamutZero0o/BahamutZero0o.plr', 'Player/BahamutZero0o/Tristamus.mpc', 'Player/BahamutZero0o/quicksave.jks',
+    'Player/steam_autocloud.vdf', 'Resource/Backup Sounds/JKMSNDLO.GOO', 'Resource/JKMRES.GOO', 'Resource/JKMsndLO.goo',
+    'Resource/JK_.CD', 'Resource/VIDEO/CUTSCENES.ZIP', 'Resource/VIDEO/S1L1OCS.SAN', 'Resource/ui/BM/bkmain.bm',
+    'Resource/ui/credits.uni', 'doc/config.md', 'jkgm/materials/SABER19/saber19.mat.saber.albedo.png',
+    'jkgm/materials/MOTSGFXEXT1/metadata.json', 'jkgm/shaders/menu.frag', 'jkmcutscenes/JKM4B.GOO',
+].map(p => [p, null]));
+
+test('a Steam Jedi Knight folder reads only the game files and characters', async () => {
+    const { read, players, mods } = await whatIsRead(STEAM_JK);
+    assert.deepEqual(read, STEAM_JK_READ.slice().sort());
+    assert.deepEqual(players, ['BahamutZero0o/BahamutZero0o.plr', 'BahamutZero0o/Tristamus.mpc', 'BahamutZero0o/openjkdf2.json']);
+    assert.deepEqual(mods, []);
+});
+
+test('a Steam MotS folder with the Remastered pack leaves its textures, backups and docs unread', async () => {
+    const { read, players, mods } = await whatIsRead(STEAM_MOTS, { mots: true });
+    assert.deepEqual(read, [
+        'Controls/MS SIDEWINDER GAMEPAD.CTM', 'Episode/JKM.GOO', 'Episode/JKM/cog/s1l1_endlevel.cog', 'Episode/JKM_KFY.GOO',
+        'Episode/JKM_MP.GOO', 'Episode/JKM_SABER.GOO', 'Episode/MotS Secret Level/3do/mat/vader_cape.mat',
+        'Episode/MotS Secret Level/episode.jk', 'Episode/MotS Secret Level/jkl/S6L1.jkl',
+        'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo', 'Resource/JKMRES.GOO',
+        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni'].sort());
+    assert.deepEqual(players, ['BahamutZero0o/BahamutZero0o.plr', 'BahamutZero0o/Tristamus.mpc']);
+    assert.deepEqual(mods, []);
+});
+
+test('an install with upper-case names reads the same files', async () => {
+    const { read, players } = await whatIsRead(Object.fromEntries([
+        'JK.EXE', 'README.TXT', 'UNINST.ISU', 'EPISODE/JK1.GOB', 'EPISODE/JK1CTF.GOB', 'EPISODE/JK1MP.GOB',
+        'RESOURCE/RES1HI.GOB', 'RESOURCE/RES2.GOB', 'RESOURCE/JK_.CD', 'RESOURCE/VIDEO/01-02A.SMK',
+        'CONTROLS/SET0000.CTL', 'PLAYER/KYLE/KYLE.PLR', 'PLAYER/KYLE/SAVE0000.JKS',
+    ].map(p => [p, null])));
+    assert.deepEqual(read, ['CONTROLS/SET0000.CTL', 'EPISODE/JK1.GOB', 'EPISODE/JK1CTF.GOB', 'EPISODE/JK1MP.GOB',
+                            'RESOURCE/JK_.CD', 'RESOURCE/RES1HI.GOB', 'RESOURCE/RES2.GOB']);
+    assert.deepEqual(players, ['KYLE/KYLE.PLR']);
+});
+
+test('loose game files, mods and maps are read; screenshots, readmes and copies are not', async () => {
+    const { read, mods } = await whatIsRead({
+        ...STEAM_JK,
+        'cog/00_door.cog': null, 'mat/dflt.mat': null, 'JK1MP.GOB': null, 'Screenshots/shot0001.png': null,
+        'SBX/sbx.gob': null, 'SBX/cog/sbx.cog': null, 'SBX/readme.txt': null, 'SBX/screenshot.jpg': null,
+        'SBX/install.bat': null,
+        'mod/Blade.zip': makeZip([{ name: 'blade.gob', bytes: gob('cog\\b.cog', 'blade') },
+                                  { name: 'preview.png', bytes: Buffer.from('png') }]),
+        'mods/readme.md': null,
+        'episode/MyLevel.gob': null, 'episode/MyLevel.jpg': null, 'episode/MyEp/episode.jk': null,
+        'episode/MyEp/jkl/x.jkl': null, 'episode/MyEp/notes.doc': null, 'episode/MyEp/extra/a.gob': null,
+        'resource/cog/fix.cog': null, 'resource/Backup/Res2.gob': null, 'resource/notes.doc': null,
+    });
+    const sbx = mods.find(m => m.name === 'SBX'), blade = mods.find(m => m.name === 'Blade');
+    assert.ok(sbx && blade, mods.map(m => m.name).join(', '));
+    assert.deepEqual(read, STEAM_JK_READ.concat([
+        'cog/00_door.cog', 'mat/dflt.mat', sbx.path + '/sbx.gob', sbx.path + '/cog/sbx.cog', blade.path + '/blade.gob',
+        'episode/MyLevel.gob', 'episode/MyEp/episode.jk', 'episode/MyEp/jkl/x.jkl', 'resource/cog/fix.cog']).sort());
+    // The size shown for a mod is what's read of it.
+    assert.equal(sbx.bytes, gob('x', 'SBX/sbx.gob').length + 'SBX/cog/sbx.cog'.length);
+});
+
+test('a folder given with ?path= is read like a mod', async () => {
+    const { read } = await whatIsRead({ ...STEAM_JK, 'MyMod/x.gob': null, 'MyMod/cog/c.cog': null,
+                                        'MyMod/shot.jpg': null, 'Other/o.gob': null }, { modPath: 'mymod' });
+    assert.deepEqual(read, STEAM_JK_READ.concat(['MyMod/x.gob', 'MyMod/cog/c.cog']).sort());
+});
+
+test("the other game's GOBs aren't read", async () => {
+    const mots = await whatIsRead({ ...STEAM_MOTS, 'Episode/stray.gob': null }, { mots: true });
+    assert.ok(!mots.read.includes('Episode/stray.gob'));
+    const jk = await whatIsRead({ ...STEAM_JK, 'Episode/stray.goo': null });
+    assert.ok(!jk.read.includes('Episode/stray.goo'));
 });
 
 let failed = 0;
