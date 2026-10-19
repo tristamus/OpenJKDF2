@@ -889,6 +889,8 @@ int sithMulti_ProcessSyncPlayers(SithMessage *pMsg)
         if ( (v6->flags & 4) != 0 )
         {
             v8 = NETMSG_POPS32();
+            if ( v6->playerNetId != v8 )
+                sithComm_ForgetSender(v6->playerNetId); // Added: the slot's last player left
             v6->playerNetId = v8;
             if ( (v6->flags & 1) == 0 || (v7 & 1) != 0 || (g_submodeFlags & 8) != 0 )
             {
