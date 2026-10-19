@@ -314,6 +314,26 @@ LABEL_25:
     return v13;
 }
 
+// Added: forget the reliable messages seen from a player who left. Every
+// game numbers its messages from 1, and the next player given the same net id
+// (the lobby hands out the lowest free one) had their first messages taken
+// for repeats of the last player's and dropped, so in a quiet game a quick
+// rejoin timed out with "Server has left game".
+void sithComm_ForgetSender(int idx)
+{
+    if ( !idx )
+        return;
+
+    for (int i = 0; i < 0x80; i++)
+    {
+        if ( sithComm_aMsgPairs[i].idx == (uint32_t)idx )
+        {
+            sithComm_aMsgPairs[i].idx = 0;
+            sithComm_aMsgPairs[i].msgId = 0;
+        }
+    }
+}
+
 void sithMessage_StopProcessMessages()
 {
     sithMessage_bStopProcessMessages = 1;
@@ -385,6 +405,11 @@ void sithComm_ClearMsgTmpBuf()
     _memset(sithComm_MsgTmpBuf, 0, sizeof(sithComm_MsgTmpBuf));
 #endif
     sithComm_idk2 = 0;
+
+    // Added: also forget the messages seen in the last game, for the same
+    // reason as sithComm_ForgetSender: a host's next game reuses net ids.
+    _memset(sithComm_aMsgPairs, 0, sizeof(sithCogMsg_Pair) * 0x80);
+    sithComm_dword_847E84 = 0;
 }
 
 int sithComm_cogMsg_Reset(SithMessage *msg)

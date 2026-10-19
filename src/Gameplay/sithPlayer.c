@@ -21,6 +21,7 @@
 #include "General/stdFnames.h"
 #include "General/stdMath.h"
 #include "Dss/sithDSSThing.h"
+#include "Devices/sithComm.h"
 #include "jk.h"
 
 // Added: noclip
@@ -33,6 +34,7 @@ void sithPlayer_Startup(int idx)
 
     v1 = &jkPlayer_playerInfos[idx];
     v1->flags = jkPlayer_playerInfos[idx].flags & ~1u;
+    sithComm_ForgetSender(v1->playerNetId); // Added: see sithComm_ForgetSender
     v1->playerNetId = 0;
     v2 = jkPlayer_playerInfos[idx].pLocalPlayer;
     if ( v2 )
