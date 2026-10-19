@@ -1878,9 +1878,9 @@
       // just-in-time compiler, so the game's WebAssembly runs in an interpreter.
       // Pages can't ask whether it's on, so a short speed test in a worker
       // tells: a WebAssembly loop timed against the browser's own sort, which
-      // isn't slowed. In Edge 155 the loop took 0.7 times as long as the sort
-      // normally, 13 to 15 times on Strict, and 0.7 again once it was turned
-      // off for the site.
+      // isn't slowed. In Edge 155 the loop took 0.5 to 0.8 times as long as
+      // the sort normally, and on Strict 8 times on Windows and 13 to 15 on
+      // Linux; back to 0.8 once it was turned off for the site.
       var JIT_SLOW_RATIO = 4;
       var JIT_NOTICE_SETTING = 'jkdf2mp-jit-notice';
 
