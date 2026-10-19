@@ -439,12 +439,7 @@ static void Window_WasmKeepPointerLock()
 {
     int bLocked = Window_wasmIsPointerLocked();
 
-    if (!stdControl_bControlsActive) {
-        // The game let go of the mouse itself (stdControl_SetActivation) on
-        // its way to a menu, and this loop runs a few more frames before the
-        // menu takes over. That isn't the browser's doing.
-    }
-    else if (Window_bWasmHadPointerLock && !bLocked) {
+    if (Window_bWasmHadPointerLock && !bLocked) {
         // The browser let go of the mouse by itself, on Esc or on switching
         // windows. Treat it as the Esc the game never got, so one press opens
         // the menu (or closes chat) as players expect, and the menu frees the
@@ -1410,7 +1405,17 @@ void Window_SdlUpdate()
             SDL_SetWindowRelativeMouseMode(displayWindow, false);
         }
 
+#ifdef ARCH_WASM
+        // Added: on its way to a menu the game lets go of the mouse itself
+        // (stdControl_SetActivation), and this loop runs a few more frames
+        // before the menu takes over. Asking for the mouse in those frames
+        // isn't harmless in a browser: within a few seconds of a click it
+        // gets the lock, after the game's own release, and the menu opens
+        // with the mouse still locked.
+        if (!jkQuakeConsole_bOpen && SDL_GetWindowFlags(displayWindow) & SDL_WINDOW_MOUSE_FOCUS && stdControl_bControlsActive) {
+#else
         if (!jkQuakeConsole_bOpen && SDL_GetWindowFlags(displayWindow) & SDL_WINDOW_MOUSE_FOCUS) {
+#endif
             SDL_SetWindowRelativeMouseMode(displayWindow, true);
             //SDL_WarpMouseInWindow(displayWindow, 100, 100);
 #ifdef ARCH_WASM
