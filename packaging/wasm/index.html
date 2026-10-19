@@ -972,7 +972,7 @@
                   <h3>Sabers and screenshots</h3>
                   <ul>
                     <li>Sabers light their surroundings in the blade's color.</li>
-                    <li>F12 saves screenshots to <a href="#screenshots">Your Screenshots</a>.</li>
+                    <li>F8 or F12 saves screenshots to <a href="#screenshots">Your Screenshots</a>.</li>
                   </ul>
                 </div>
                 <div class="feature">
@@ -1029,8 +1029,8 @@
 
             <section id="screenshots" aria-labelledby="screenshots-title">
               <h2 class="ruled" id="screenshots-title">Your Screenshots <small id="shots-summary"></small></h2>
-              <p class="note">Press F12 in a game, or the key you set for screenshots, and the picture is
-                saved here, in this browser.</p>
+              <p class="note">Press F8 or F12 in a game, or the key you set for screenshots, and the picture
+                is saved here, in this browser. In Edge use F8: Edge keeps F12 for its developer tools.</p>
               <div class="shots-bar" id="shots-bar" hidden>
                 <button class="zone-button" type="button" id="shots-zip">Download all (.zip)</button>
                 <button class="zone-button" type="button" id="shots-clear">Delete all</button>
@@ -1213,10 +1213,22 @@
         // The status line sits under the canvas, so say it where players can see it.
         // Emscripten throws 'unwind' and ExitStatus on purpose; those aren't crashes.
         if (!/unwind|ExitStatus/.test(String(event))) {
+          leaveGuard = false;
           showProblem('The game stopped', String(event) +
                       '\n\nPress F12 and open Console for details. Click anywhere to hide this.');
         }
       };
+
+      // ---- Leaving mid-game. Ctrl fires and W walks forward, and Ctrl+W also
+      // closes the tab: outside fullscreen the browser keeps that shortcut for
+      // itself, so the page can't stop it. Once the game is running the
+      // browser asks first, as it does for a page with unsaved work.
+      var leaveGuard = false;
+      window.addEventListener('beforeunload', function(ev) {
+        if (!leaveGuard) return;
+        ev.preventDefault();
+        ev.returnValue = true;  // Chrome and Edge before 119
+      });
 
       window.onresize = function()
       {
@@ -1228,7 +1240,7 @@
       }
     </script>
     <script type='text/javascript'>
-      // ---- Screenshots: F12 in a game, or the key set for them. The engine
+      // ---- Screenshots: F8 or F12 in a game, or the key set for them. The engine
       // reads the finished frame back and hands it here
       // (jkGame_UpdateScreenshots in src/Main/jkGame.c). Each one is turned
       // into a PNG and kept in this browser's IndexedDB, in a database of its
@@ -1654,6 +1666,7 @@
       }
 
       function loadEngine(withBundledData) {
+        leaveGuard = true;
         if (withBundledData) {
           var data = document.createElement('script');
           data.src = 'openjkdf2_data.js';
