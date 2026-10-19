@@ -181,6 +181,15 @@ void do_hooks();
 
 #ifdef ARCH_WASM
 #include <emscripten.h>
+
+// Added: after Quit, hands the player back to the lobby page
+// (packaging/wasm/index.html), which reloads itself once the saves are
+// stored. Returns 0 if the page can't, as an older page can't.
+EM_JS(int, main_wasmQuitToLobby, (), {
+    if (typeof Module.jkQuitToLobby !== 'function') return 0;
+    Module.jkQuitToLobby();
+    return 1;
+});
 #endif // ARCH_WASM
 
 #ifdef WIN64_STANDALONE
@@ -810,6 +819,18 @@ int main(int argc, char** argv)
         }
 #ifndef ARCH_WASM
         break;
+#else
+        // Added: Quit (jkGuiMain_ConfirmQuit) goes back to the lobby page
+        // instead of starting the game again. The engine has shut down and
+        // closed its files; it waits here while the page stores the saves and
+        // reloads. A page that can't do that gets the game started again.
+        if (openjkdf2_bQuitToLobby) {
+            openjkdf2_bQuitToLobby = 0;
+            if (main_wasmQuitToLobby()) {
+                while (1)
+                    emscripten_sleep(1000);
+            }
+        }
 #endif
     }
 

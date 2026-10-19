@@ -85,8 +85,6 @@ static jkGuiMenu jkGuiMain_menu = {jkGuiMain_elements, -1, 0xFFFF, 0xFFFF, 0xF, 
 void jkGuiMain_Show()
 {
     int v1; // esi
-    char16_t *v2; // eax
-    char16_t *v4; // [esp-4h] [ebp-Ch]
 
 #ifdef JKGUI_SMOL_SCREEN
     for (int i = 0; i < 11; i++) {
@@ -198,19 +196,11 @@ void jkGuiMain_Show()
                     break;
 #endif
                 case 12:
-                    v4 = jkStrings_GetUniStringWithFallback("GUI_QUITCONFIRM_Q");
-                    v2 = jkStrings_GetUniStringWithFallback("GUI_QUITCONFIRM");
-                    if ( !jkGuiDialog_YesNoDialog(v2, v4) )
+                    // Added: moved to jkGuiMain_ConfirmQuit, which the Players
+                    // screens shown at startup use too
+                    if ( !jkGuiMain_ConfirmQuit() )
                         goto LABEL_12;
-
-                    // TODO proper shutdown?
-#ifdef WIN32_BLOBS
-                    jk_PostMessageA(stdGdi_GetHwnd(), 16, 0, 0);
-#else
-                    sithCvar_SaveGlobals();
-                    jkPlayer_WriteConf(jkPlayer_playerShortName); // Added
-                    g_should_exit = 1;
-                    //exit(0);
+#ifndef WIN32_BLOBS
                     return;
 #endif
                     break;
@@ -243,6 +233,35 @@ LABEL_12:
         while ( v1 == -1 );
     }
     jkGui_SetModeGame();
+}
+
+// Added: Quit's question, and what Yes does. Shared by the main menu and the
+// Players screens shown at startup (jkGUIPlayer.c). Returns 1 on Yes.
+int jkGuiMain_ConfirmQuit()
+{
+    char16_t *v2; // eax
+    char16_t *v4; // [esp-4h] [ebp-Ch]
+
+    v4 = jkStrings_GetUniStringWithFallback("GUI_QUITCONFIRM_Q");
+    v2 = jkStrings_GetUniStringWithFallback("GUI_QUITCONFIRM");
+    if ( !jkGuiDialog_YesNoDialog(v2, v4) )
+        return 0;
+
+    // TODO proper shutdown?
+#ifdef WIN32_BLOBS
+    jk_PostMessageA(stdGdi_GetHwnd(), 16, 0, 0);
+#else
+    sithCvar_SaveGlobals();
+    jkPlayer_WriteConf(jkPlayer_playerShortName); // Added
+    g_should_exit = 1;
+    //exit(0);
+#ifdef ARCH_WASM
+    // Added: the page takes the player back to the lobby, instead of main()
+    // starting the game again.
+    openjkdf2_bQuitToLobby = 1;
+#endif
+#endif
+    return 1;
 }
 
 void jkGuiMain_ShowCutscenes()

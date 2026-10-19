@@ -457,6 +457,7 @@ extern int32_t openjkdf2_bIsRunningFromExistingInstall;
 extern int32_t openjkdf2_bOrigWasRunningFromExistingInstall;
 extern int32_t openjkdf2_bOrigWasDF2;
 extern int32_t openjkdf2_restartMode;
+extern int32_t openjkdf2_bQuitToLobby;
 extern int32_t openjkdf2_bIsLowMemoryPlatform;
 extern int32_t openjkdf2_bIsExtraLowMemoryPlatform;
 extern char openjkdf2_aRestartPath[256];

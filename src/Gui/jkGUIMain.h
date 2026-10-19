@@ -16,5 +16,6 @@ void jkGuiMain_Startup();
 void jkGuiMain_Shutdown();
 void jkGuiMain_PopulateCutscenes(Darray *list, jkGuiElement *element);
 void jkGuiMain_FreeCutscenes(Darray *a1);
+int jkGuiMain_ConfirmQuit(); // Added
 
 #endif // _JKGUIMAIN_H
