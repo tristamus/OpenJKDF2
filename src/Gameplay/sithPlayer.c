@@ -21,6 +21,7 @@
 #include "General/stdFnames.h"
 #include "General/stdMath.h"
 #include "Dss/sithDSSThing.h"
+#include "Devices/sithComm.h"
 #include "jk.h"
 
 // Added: noclip
@@ -33,6 +34,7 @@ void sithPlayer_Startup(int idx)
 
     v1 = &jkPlayer_playerInfos[idx];
     v1->flags = jkPlayer_playerInfos[idx].flags & ~1u;
+    sithComm_ForgetSender(v1->playerNetId); // Added: see sithComm_ForgetSender
     v1->playerNetId = 0;
     v2 = jkPlayer_playerInfos[idx].pLocalPlayer;
     if ( v2 )
@@ -499,9 +501,21 @@ void sithPlayer_NewPlayer(SithThing *pPlayer)
     {
         if ( pPlayer->puppet )
         {
-            v3 = pPlayer->puppet->field_18;
-            if ( v3 >= 0 )
-                sithPuppet_StopKey(v1, v3, 0.0);
+            // Added: in multiplayer, drop every track, not only the death track
+            // in field_18. A player who joins into the slot of someone who left
+            // while dead gets that death pose from sithDSS_ProcessPuppetStatus,
+            // which doesn't record its track in field_18, so they ran around
+            // lying down until they died once.
+            if ( sithNet_isMulti )
+            {
+                sithPuppet_ResetTrack(pPlayer);
+            }
+            else
+            {
+                v3 = pPlayer->puppet->field_18;
+                if ( v3 >= 0 )
+                    sithPuppet_StopKey(v1, v3, 0.0);
+            }
         }
     }
     if ( !sithNet_isMulti || (pPlayer->flags & SITH_TF_INVULN) == 0 )
