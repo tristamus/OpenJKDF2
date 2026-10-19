@@ -439,7 +439,12 @@ static void Window_WasmKeepPointerLock()
 {
     int bLocked = Window_wasmIsPointerLocked();
 
-    if (Window_bWasmHadPointerLock && !bLocked) {
+    if (!stdControl_bControlsActive) {
+        // The game let go of the mouse itself (stdControl_SetActivation) on
+        // its way to a menu, and this loop runs a few more frames before the
+        // menu takes over. That isn't the browser's doing.
+    }
+    else if (Window_bWasmHadPointerLock && !bLocked) {
         // The browser let go of the mouse by itself, on Esc or on switching
         // windows. Treat it as the Esc the game never got, so one press opens
         // the menu (or closes chat) as players expect, and the menu frees the
