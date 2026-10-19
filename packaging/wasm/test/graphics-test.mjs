@@ -1,9 +1,11 @@
-// Tests for the graphics acceleration notice in packaging/wasm/index.html:
-// when the page says acceleration is off, and the steps it gives. In Node:
+// Tests for the graphics acceleration and Edge enhanced security notices in
+// packaging/wasm/index.html: when the page shows them, and the steps they
+// give. In Node:
 // node packaging/wasm/test/graphics-test.mjs
 //
 // The page's functions are taken from index.html as they are; the browser
-// (WebGL, user agent, the notice element) is made up by the test.
+// (WebGL, user agent, workers, storage, the notice element) is made up by
+// the test.
 
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
@@ -15,6 +17,7 @@ function cut(from, to) {
     return html.substring(a, b);
 }
 const code = cut('      // ---- Graphics acceleration', '      // Checked once, when the page opens');
+const jitCode = cut("      // ---- Edge's enhanced security", '      // Timed once, when the page opens');
 
 // A browser whose WebGL 2 draws with `renderer`, or has none (null). With
 // caveat set, asking for a context that needs the graphics card fails.
@@ -172,6 +175,132 @@ test('other browsers get general steps and no address', () => {
     assert.match(text(el), /Your browser is drawing without your graphics card/);
     assert.match(text(el), /search for acceleration/);
     assert.equal(el.copy, null);
+});
+
+// The enhanced security check, with browser parts the test can watch.
+// `worker` decides what the made-up worker does when started: post a number,
+// fail, or nothing.
+function jitPage({ ua = EDGE.ua, brands = EDGE.brands, stored = {}, storageThrows = false,
+                   worker = 'post', ratio = 0.7, workerThrows = false } = {}) {
+    const seen = { revoked: [], terminated: 0, sources: [], others: [] };
+    const localStorage = {
+        getItem(k) { if (storageThrows) throw new Error('blocked'); return k in stored ? stored[k] : null; },
+        setItem(k, v) { if (storageThrows) throw new Error('blocked'); stored[k] = v; },
+    };
+    class Blob { constructor(parts) { seen.sources.push(parts.join('')); } }
+    const URL = { createObjectURL: () => 'blob:test', revokeObjectURL: u => seen.revoked.push(u) };
+    class Worker {
+        constructor(url) { if (workerThrows) throw new Error('no workers'); this.url = url; }
+        postMessage() {
+            queueMicrotask(() => {
+                if (worker === 'post') this.onmessage({ data: ratio });
+                if (worker === 'fail') this.onerror(new Error('broke'));
+            });
+        }
+        terminate() { seen.terminated++; }
+    }
+    const document = { querySelectorAll: () => seen.others };
+    const navigator = { userAgent: ua, userAgentData: { brands: brands.map(brand => ({ brand })) } };
+    const fns = new Function('document', 'navigator', 'window', 'localStorage', 'Worker', 'URL', 'Blob',
+        code + jitCode + '\nreturn { jitBench, jitWorkerSource, jitCheck, showJitNotice, JIT_SLOW_RATIO };')(
+        document, navigator, {}, localStorage, Worker, URL, Blob);
+    return { ...fns, seen, stored };
+}
+
+function jitNotice() {
+    const el = { hidden: true, innerHTML: '', hide: null };
+    el.querySelector = sel => {
+        if (sel !== '.hide' || !el.innerHTML.includes('class="hide"')) return null;
+        return el.hide = { addEventListener(type, fn) { el.hide.click = fn; } };
+    };
+    return el;
+}
+
+test('the speed test is quick where WebAssembly is compiled', async () => {
+    const p = jitPage();
+    const ratio = await p.jitBench();
+    assert.ok(Number.isFinite(ratio) && ratio > 0, String(ratio));
+    assert.ok(ratio < p.JIT_SLOW_RATIO, 'Node compiles WebAssembly, ratio ' + ratio.toFixed(2));
+});
+
+test('the worker runs the speed test and posts the ratio', async () => {
+    const posted = await new Promise((resolve, reject) => {
+        const scope = {};
+        new Function('self', 'postMessage', 'performance', 'WebAssembly',
+            jitPage().jitWorkerSource() + '\nself.onmessage = onmessage;')(
+            scope, resolve, performance, WebAssembly);
+        scope.onmessage({ data: 'go' });
+        setTimeout(() => reject(new Error('no message')), 20000);
+    });
+    assert.equal(typeof posted, 'number');
+});
+
+test('the check gives the ratio and cleans up', async () => {
+    const p = jitPage({ ratio: 13.5 });
+    assert.equal(await p.jitCheck(), 13.5);
+    assert.equal(p.seen.terminated, 1);
+    assert.deepEqual(p.seen.revoked, ['blob:test']);
+    assert.match(p.seen.sources[0], /WebAssembly\.instantiate/);
+});
+
+test('the check gives null when the worker fails or is missing', async () => {
+    let p = jitPage({ worker: 'fail' });
+    assert.equal(await p.jitCheck(), null);
+    assert.equal(p.seen.terminated, 1);
+    p = jitPage({ workerThrows: true });
+    assert.equal(await p.jitCheck(), null);
+    assert.deepEqual(p.seen.revoked, ['blob:test']);
+    p = jitPage({ ratio: 'oops' });
+    assert.equal(await p.jitCheck(), null);
+});
+
+test('Edge with a slow test gets the enhanced security steps', () => {
+    const p = jitPage(), el = jitNotice();
+    p.showJitNotice(el, 13.5);
+    assert.equal(el.hidden, false);
+    const t = text(el);
+    assert.match(t, /Turn off enhanced security for this site/);
+    assert.match(t, /Click the lock at the left of the address bar/);
+    assert.match(t, /Click Enhanced security is active for this site/);
+    assert.match(t, /Turn off Use enhanced security for this site, then reload this page/);
+    assert.ok(el.hide, 'has a Hide button');
+});
+
+test('no enhanced security notice when the test is fast, failed, or not in Edge', () => {
+    const el = jitNotice();
+    for (const ratio of [0.7, 3.9, null, NaN]) {
+        el.hidden = false;
+        jitPage().showJitNotice(el, ratio);
+        assert.equal(el.hidden, true, String(ratio));
+    }
+    for (const b of [{ ua: 'Mozilla/5.0 Chrome/155.0.0.0', brands: ['Google Chrome', 'Chromium'] },
+                     { ua: 'Mozilla/5.0 Gecko/20100101 Firefox/140.0', brands: [] }]) {
+        el.hidden = false;
+        jitPage(b).showJitNotice(el, 13.5);
+        assert.equal(el.hidden, true, b.ua);
+    }
+});
+
+test('Hide keeps the enhanced security notice away', () => {
+    const p = jitPage(), el = jitNotice(), other = { hidden: false };
+    p.seen.others.push(el, other);
+    p.showJitNotice(el, 13.5);
+    el.hide.click();
+    assert.equal(p.stored['jkdf2mp-jit-notice'], 'hidden');
+    assert.equal(el.hidden, true);
+    assert.equal(other.hidden, true);
+    const again = jitNotice();
+    jitPage({ stored: { 'jkdf2mp-jit-notice': 'hidden' } }).showJitNotice(again, 13.5);
+    assert.equal(again.hidden, true);
+});
+
+test('blocked storage still shows the notice, and Hide still hides it', () => {
+    const p = jitPage({ storageThrows: true }), el = jitNotice();
+    p.seen.others.push(el);
+    p.showJitNotice(el, 13.5);
+    assert.equal(el.hidden, false);
+    el.hide.click();
+    assert.equal(el.hidden, true);
 });
 
 let failed = 0;

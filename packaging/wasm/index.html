@@ -516,7 +516,7 @@
       .gfx-notice ol { margin: 0 0 6px; padding-left: 22px; }
       .gfx-notice li { margin-bottom: 4px; }
       .gfx-notice code { font: bold 14px 'Courier New', monospace; color: var(--gold); overflow-wrap: anywhere; }
-      .gfx-notice .copy {
+      .gfx-notice .copy, .gfx-notice .hide {
         margin-left: 6px;
         padding: 1px 8px;
         border: 2px outset #9cc;
@@ -525,7 +525,7 @@
         font: bold 12px Verdana, Geneva, sans-serif;
         cursor: pointer;
       }
-      .gfx-notice .copy:active { border-style: inset; }
+      .gfx-notice .copy:active, .gfx-notice .hide:active { border-style: inset; }
       .gfx-notice .fine { margin: 0; color: var(--muted); font-size: 13px; }
 
       /* Live counts in Standard Rooms, and Nar Shaddaa's room window, after
@@ -882,6 +882,7 @@
         </nav>
         <p class="tagline">Free to play. No account needed.</p>
         <section class="gfx-notice" id="gfx-notice" role="alert" hidden></section>
+        <section class="gfx-notice jit-notice" id="jit-notice" role="status" hidden></section>
 
         <div class="layout">
           <aside class="sidebar">
@@ -1083,6 +1084,7 @@
         <p class="fine picker-intro">Your browser may ask whether to "upload" the files. That's just its
           standard wording for letting this page read them. Choose Upload to continue.</p>
         <section class="gfx-notice picker-intro" id="picker-gfx" role="alert" hidden></section>
+        <section class="gfx-notice jit-notice picker-intro" id="picker-jit" role="status" hidden></section>
         <div class="actions picker-intro">
           <label class="play" for="gamedir" tabindex="0" role="button">Choose game folder</label>
           <button class="cancel" type="button">Not now</button>
@@ -1706,6 +1708,7 @@
         var problem = browserProblem();
         showPickerResult(problem || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
+        showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio);
         if (!picker.open) picker.showModal();
         chooseButton.focus();
       }
@@ -1869,6 +1872,116 @@
       // Checked once, when the page opens; a restart of the browser reloads it.
       var gfxCheck = browserProblem() ? null : graphicsCheck();
       showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
+
+      // ---- Edge's enhanced security. Where it applies (every site on Strict,
+      // unfamiliar sites on Balanced; it's off by default) Edge turns off its
+      // just-in-time compiler, so the game's WebAssembly runs in an interpreter.
+      // Pages can't ask whether it's on, so a short speed test in a worker
+      // tells: a WebAssembly loop timed against the browser's own sort, which
+      // isn't slowed. In Edge 155 the loop took 0.7 times as long as the sort
+      // normally, 13 to 15 times on Strict, and 0.7 again once it was turned
+      // off for the site.
+      var JIT_SLOW_RATIO = 4;
+      var JIT_NOTICE_SETTING = 'jkdf2mp-jit-notice';
+
+      // Runs in the worker, so it uses nothing else from this page. f(n) is n
+      // rounds of add, multiply and xor.
+      function jitBench() {
+        var body = [0x01,0x02,0x7f, 0x02,0x40, 0x03,0x40,
+          0x20,0x02,0x20,0x00,0x4e,0x0d,0x01,
+          0x20,0x01,0x20,0x02,0x6a,0x41,0x03,0x6c,0x41,0x07,0x73,0x21,0x01,
+          0x20,0x02,0x41,0x01,0x6a,0x21,0x02,
+          0x0c,0x00, 0x0b,0x0b, 0x20,0x01,0x0b];
+        var bytes = new Uint8Array([0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+          0x01,0x06,0x01,0x60,0x01,0x7f,0x01,0x7f, 0x03,0x02,0x01,0x00,
+          0x07,0x05,0x01,0x01,0x66,0x00,0x00,
+          0x0a, body.length + 2, 0x01, body.length].concat(body));
+        function sortMs() {
+          var a = new Uint32Array(1 << 18), x = 12345;
+          for (var i = 0; i < a.length; i++) { x = (x * 1103515245 + 12345) >>> 0; a[i] = x; }
+          var t = performance.now();
+          a.sort();
+          return performance.now() - t;
+        }
+        return WebAssembly.instantiate(bytes).then(function(m) {
+          var f = m.instance.exports.f;
+          f(1000);
+          var loop = Infinity;
+          for (var i = 0; i < 3; i++) {
+            var t = performance.now();
+            f(4000000);
+            loop = Math.min(loop, performance.now() - t);
+          }
+          return loop / Math.max(Math.min(sortMs(), sortMs()), 0.1);
+        });
+      }
+
+      function jitWorkerSource() {
+        return 'onmessage = function() { (' + jitBench + ')().then(' +
+               'function(r) { postMessage(r); }, function() { postMessage(null); }); };';
+      }
+
+      // The loop's time over the sort's, or null when the test can't run or
+      // takes over 10 seconds.
+      function jitCheck() {
+        return new Promise(function(resolve) {
+          var url = null, worker = null, timer = null;
+          function done(r) {
+            clearTimeout(timer);
+            if (worker) worker.terminate();
+            if (url) URL.revokeObjectURL(url);
+            resolve(typeof r === 'number' && isFinite(r) ? r : null);
+          }
+          try {
+            url = URL.createObjectURL(new Blob([jitWorkerSource()], { type: 'text/javascript' }));
+            worker = new Worker(url);
+          } catch (e) {
+            done(null);
+            return;
+          }
+          worker.onmessage = function(ev) { done(ev.data); };
+          worker.onerror = function() { done(null); };
+          timer = setTimeout(function() { done(null); }, 10000);
+          worker.postMessage('go');
+        });
+      }
+
+      function jitNoticeHidden() {
+        try { return localStorage.getItem(JIT_NOTICE_SETTING) === 'hidden'; } catch (e) { return false; }
+      }
+
+      // Edge only: other browsers have no such setting, so a slow test there
+      // means something this notice can't fix.
+      function showJitNotice(el, ratio) {
+        if (!(ratio > JIT_SLOW_RATIO) || browserKind() !== 'edge' || jitNoticeHidden()) {
+          el.hidden = true;
+          return;
+        }
+        el.innerHTML = '<h2>Turn off enhanced security for this site</h2>' +
+          "<p>Microsoft Edge's enhanced security is on for this site. It turns off the part of Edge " +
+          'that makes web games like this one run fast, so the game runs slower than it should.</p>' +
+          '<ol><li>Click the lock at the left of the address bar.</li>' +
+          '<li>Click <b>Enhanced security is active for this site</b>.</li>' +
+          '<li>Turn off <b>Use enhanced security for this site</b>, then reload this page.</li></ol>' +
+          '<p class="fine">This comes from a quick speed test, which a busy computer can throw off. ' +
+          "If Edge doesn't show that option, enhanced security is already off here." +
+          '<button class="hide" type="button">Hide</button></p>';
+        el.querySelector('.hide').addEventListener('click', function() {
+          try { localStorage.setItem(JIT_NOTICE_SETTING, 'hidden'); } catch (e) {}
+          document.querySelectorAll('.jit-notice').forEach(function(n) { n.hidden = true; });
+        });
+        el.hidden = false;
+      }
+
+      // Timed once, when the page opens, in Edge only. The game folder prompt
+      // shows the notice too once the test is done.
+      var jitRatio = null;
+      if (!browserProblem() && browserKind() === 'edge') {
+        jitCheck().then(function(r) {
+          jitRatio = r;
+          showJitNotice(document.getElementById('jit-notice'), r);
+        });
+      }
 
       // Characters (player/<name>/: the .plr with controls, difficulty and
       // weapon settings, plus saved games) and OpenJKDF2's settings (persist/)

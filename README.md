@@ -61,6 +61,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 - A landing page in the style of early-2000s game lobby sites, with a Play button, "rooms", getting-started steps and a plain explanation of what happens to your files. Every room opens the same game; you host or join inside it.
 - The page tells you when your browser can't run the game, and why: a phone or tablet (they can't pick a folder), or missing WebAssembly or WebGL 2. If the game hits an error, it shows over the game instead of in a status line hidden behind it.
 - When the browser draws without the graphics card, usually because graphics acceleration is turned off, the page says so and how to turn it on in that browser. It says nothing when acceleration is on.
+- In Edge, when enhanced security is on for the site, the page says how to turn it off there. Enhanced security turns off Edge's just-in-time compiler, so the game's WebAssembly runs in an interpreter. Pages can't ask whether it's on, so a short speed test in a worker tells: a WebAssembly loop takes about 0.7 times as long as a sort normally, and 13 to 15 times as long with enhanced security on.
 - Once the game is running, the browser asks before the tab closes or reloads. Ctrl fires and W walks forward, and Ctrl+W closes the tab, which no page can stop outside fullscreen.
 - The browser build is multiplayer-only, so the main menu hides Single Player, View Cutscenes and Expansions & Mods. Choose Player, Credits and Setup share one row along the bottom.
 
