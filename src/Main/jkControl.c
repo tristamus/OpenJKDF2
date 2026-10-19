@@ -134,6 +134,13 @@ int jkControl_HandleHudKeys(SithThing *player, flex_t b)
         }
 
         sithControl_GetKey(INPUT_FUNC_SCREENSHOT, &v15);
+#ifdef ARCH_WASM
+        // Added: F8 takes screenshots too, unless the player bound it to
+        // something. Edge on Windows keeps F12 for its developer tools, so
+        // the game never sees F12 there.
+        if (!v15 && !sithControl_IsKeyBound(DIK_F8))
+            stdControl_ReadKey(DIK_F8, &v15);
+#endif
         if (v15 && sithThing_MotsTick(0xe,0,6.0))
         {
             jkGame_Screenshot();

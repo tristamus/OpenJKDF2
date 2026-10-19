@@ -502,6 +502,32 @@
       #picker-result:empty { display: none; }
       #picker-result.error { color: var(--bad); font-weight: bold; }
 
+      /* Shown only when the browser draws without the graphics card. */
+      .gfx-notice {
+        margin: 8px;
+        padding: 10px 14px;
+        background-color: var(--teal-dark);
+        border: 1px solid #000;
+        border-left: 6px solid var(--gold);
+      }
+      #picker .gfx-notice { margin: 0 0 12px; }
+      .gfx-notice h2 { margin: 0 0 6px; font: bold 17px Verdana, Geneva, sans-serif; color: var(--gold); }
+      .gfx-notice p { margin: 0 0 6px; }
+      .gfx-notice ol { margin: 0 0 6px; padding-left: 22px; }
+      .gfx-notice li { margin-bottom: 4px; }
+      .gfx-notice code { font: bold 14px 'Courier New', monospace; color: var(--gold); overflow-wrap: anywhere; }
+      .gfx-notice .copy, .gfx-notice .hide {
+        margin-left: 6px;
+        padding: 1px 8px;
+        border: 2px outset #9cc;
+        background-color: var(--teal-light);
+        color: #fff;
+        font: bold 12px Verdana, Geneva, sans-serif;
+        cursor: pointer;
+      }
+      .gfx-notice .copy:active, .gfx-notice .hide:active { border-style: inset; }
+      .gfx-notice .fine { margin: 0; color: var(--muted); font-size: 13px; }
+
       /* Live counts in Standard Rooms, and Nar Shaddaa's room window, after
          the Zone's room list and its game room client: tables on black, a
          white list of who's on, a grey toolbar and status bar. */
@@ -855,6 +881,8 @@
           <a href="#help">Help</a>
         </nav>
         <p class="tagline">Free to play. No account needed.</p>
+        <section class="gfx-notice" id="gfx-notice" role="alert" hidden></section>
+        <section class="gfx-notice jit-notice" id="jit-notice" role="status" hidden></section>
 
         <div class="layout">
           <aside class="sidebar">
@@ -949,7 +977,7 @@
                   <h3>Sabers and screenshots</h3>
                   <ul>
                     <li>Sabers light their surroundings in the blade's color.</li>
-                    <li>F12 saves screenshots to <a href="#screenshots">Your Screenshots</a>.</li>
+                    <li>F8 or F12 saves screenshots to <a href="#screenshots">Your Screenshots</a>.</li>
                   </ul>
                 </div>
                 <div class="feature">
@@ -1006,8 +1034,8 @@
 
             <section id="screenshots" aria-labelledby="screenshots-title">
               <h2 class="ruled" id="screenshots-title">Your Screenshots <small id="shots-summary"></small></h2>
-              <p class="note">Press F12 in a game, or the key you set for screenshots, and the picture is
-                saved here, in this browser.</p>
+              <p class="note">Press F8 or F12 in a game, or the key you set for screenshots, and the picture
+                is saved here, in this browser. In Edge use F8: Edge keeps F12 for its developer tools.</p>
               <div class="shots-bar" id="shots-bar" hidden>
                 <button class="zone-button" type="button" id="shots-zip">Download all (.zip)</button>
                 <button class="zone-button" type="button" id="shots-clear">Delete all</button>
@@ -1021,8 +1049,9 @@
                 <li>Use a current Chrome or Firefox on a computer. Phones and tablets can't open a game folder.</li>
                 <li>If the page says files are missing, you picked a folder one level too high or too low.
                   Pick the one that has <code>episode</code> and <code>resource</code> directly inside.</li>
-                <li>The game needs WebGL 2. If it won't start, turn on hardware acceleration in your
-                  browser's settings.</li>
+                <li>The game needs graphics acceleration. If it won't start, or runs at a few frames per
+                  second, turn on graphics acceleration in your browser's settings and restart the browser.
+                  This page tells you how when it's off.</li>
               </ul>
             </section>
           </main>
@@ -1054,6 +1083,8 @@
         </ul>
         <p class="fine picker-intro">Your browser may ask whether to "upload" the files. That's just its
           standard wording for letting this page read them. Choose Upload to continue.</p>
+        <section class="gfx-notice picker-intro" id="picker-gfx" role="alert" hidden></section>
+        <section class="gfx-notice jit-notice picker-intro" id="picker-jit" role="status" hidden></section>
         <div class="actions picker-intro">
           <label class="play" for="gamedir" tabindex="0" role="button">Choose game folder</label>
           <button class="cancel" type="button">Not now</button>
@@ -1190,10 +1221,22 @@
         // The status line sits under the canvas, so say it where players can see it.
         // Emscripten throws 'unwind' and ExitStatus on purpose; those aren't crashes.
         if (!/unwind|ExitStatus/.test(String(event))) {
+          leaveGuard = false;
           showProblem('The game stopped', String(event) +
                       '\n\nPress F12 and open Console for details. Click anywhere to hide this.');
         }
       };
+
+      // ---- Leaving mid-game. Ctrl fires and W walks forward, and Ctrl+W also
+      // closes the tab: outside fullscreen the browser keeps that shortcut for
+      // itself, so the page can't stop it. Once the game is running the
+      // browser asks first, as it does for a page with unsaved work.
+      var leaveGuard = false;
+      window.addEventListener('beforeunload', function(ev) {
+        if (!leaveGuard) return;
+        ev.preventDefault();
+        ev.returnValue = true;  // Chrome and Edge before 119
+      });
 
       window.onresize = function()
       {
@@ -1205,7 +1248,7 @@
       }
     </script>
     <script type='text/javascript'>
-      // ---- Screenshots: F12 in a game, or the key set for them. The engine
+      // ---- Screenshots: F8 or F12 in a game, or the key set for them. The engine
       // reads the finished frame back and hands it here
       // (jkGame_UpdateScreenshots in src/Main/jkGame.c). Each one is turned
       // into a PNG and kept in this browser's IndexedDB, in a database of its
@@ -1631,6 +1674,7 @@
       }
 
       function loadEngine(withBundledData) {
+        leaveGuard = true;
         if (withBundledData) {
           var data = document.createElement('script');
           data.src = 'openjkdf2_data.js';
@@ -1663,6 +1707,8 @@
         picker.onclick = null;
         var problem = browserProblem();
         showPickerResult(problem || '', !!problem);
+        showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
+        showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio);
         if (!picker.open) picker.showModal();
         chooseButton.focus();
       }
@@ -1699,13 +1745,242 @@
           return "This browser has WebAssembly turned off, and the game needs it. " +
                  "Use a current Chrome or Firefox.";
         }
-        var gl = null;
-        try { gl = document.createElement('canvas').getContext('webgl2'); } catch (e) {}
-        if (!gl) {
-          return "This browser can't draw with WebGL 2, which the game needs. " +
-                 "Turn on hardware acceleration in the browser's settings, or use a current Chrome or Firefox.";
-        }
         return null;
+      }
+
+      // ---- Graphics acceleration. With it off, the browser draws the game on
+      // the CPU (SwiftShader, or WARP on Windows): 3 fps on a 4-core computer,
+      // half speed with 12 cores busy on a 24-thread one. Or it can't draw it at
+      // all (Edge and Chrome on Linux since they dropped SwiftShader for web
+      // pages). Players are told how to turn it on, only when it's off.
+      var SOFTWARE_GL = /SwiftShader|llvmpipe|softpipe|lavapipe|Basic Render|\bWARP\b|Software Render|Software Rasterizer|Mesa OffScreen|GDI Generic/i;
+      // Names a real graphics card or driver. Anything else (a hidden name,
+      // as with Firefox's fingerprinting protection) is checked another way.
+      var NAMED_GL = /ANGLE|NVIDIA|GeForce|Quadro|AMD|Radeon|Intel|Apple|Adreno|Mali|PowerVR|Mesa|Direct3D|OpenGL|Metal|Vulkan/i;
+
+      function webgl2(attrs) {
+        try { return document.createElement('canvas').getContext('webgl2', attrs); } catch (e) { return null; }
+      }
+
+      // Lets go of a test context now rather than when it's collected, as
+      // browsers only keep a few contexts alive and the game needs one.
+      function releaseGl(gl) {
+        var lose = gl.getExtension('WEBGL_lose_context');
+        if (lose) lose.loseContext();
+      }
+
+      // 'none': no WebGL 2 at all. 'software': drawn without the graphics card.
+      function graphicsCheck() {
+        var gl = webgl2();
+        if (!gl) return { state: 'none', renderer: '' };
+        var renderer = '';
+        try {
+          var info = gl.getExtension('WEBGL_debug_renderer_info');
+          renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+        } catch (e) {}
+        releaseGl(gl);
+        if (SOFTWARE_GL.test(renderer)) return { state: 'software', renderer: renderer };
+        if (!NAMED_GL.test(renderer)) {
+          var hw = webgl2({ failIfMajorPerformanceCaveat: true });
+          if (!hw) return { state: 'software', renderer: renderer };
+          releaseGl(hw);
+        }
+        return { state: 'ok', renderer: renderer };
+      }
+
+      // Where each browser keeps the setting, and how it restarts. Pages
+      // can't open these addresses, so players copy one into a new tab.
+      // Edge 155 shows no Restart button after the switch; edge://restart
+      // typed in the address bar restarts it with its tabs.
+      var GFX_HOW = {
+        edge: { name: 'Microsoft Edge', address: 'edge://settings/system/manageSystem',
+                toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                restart: 'Restart Edge: go to <code>edge://restart</code> the same way. Your tabs reopen.' },
+        chrome: { name: 'Chrome', address: 'chrome://settings/system',
+                  toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                  restart: 'Click <b>Relaunch</b>.' },
+        brave: { name: 'Brave', address: 'brave://settings/system',
+                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                 restart: 'Click <b>Relaunch</b>.' },
+        firefox: { name: 'Firefox', address: 'about:preferences#general',
+                   toggle: 'Under Performance, untick <b>Use recommended performance settings</b>, ' +
+                           'then tick <b>Use hardware acceleration when available</b>.',
+                   restart: 'Close Firefox completely and open it again.' }
+      };
+
+      function browserKind() {
+        var brands = ((navigator.userAgentData && navigator.userAgentData.brands) || [])
+          .map(function(b) { return b.brand; });
+        var ua = navigator.userAgent;
+        if (brands.indexOf('Microsoft Edge') >= 0 || /\bEdg\//.test(ua)) return 'edge';
+        if (/Firefox\//.test(ua)) return 'firefox';
+        if (navigator.brave) return 'brave';
+        if (brands.indexOf('Google Chrome') >= 0) return 'chrome';
+        return null;
+      }
+
+      // Fills a notice with the steps for this browser, or hides it.
+      function showGfxNotice(el, gfx) {
+        if (!gfx || gfx.state === 'ok') {
+          el.hidden = true;
+          return;
+        }
+        var how = GFX_HOW[browserKind()];
+        var name = how ? how.name : 'Your browser';
+        var html = gfx.state === 'none'
+          ? '<h2>Turn on graphics acceleration to play</h2><p>' + name + " can't draw 3D graphics (WebGL 2) " +
+            "right now, and the game needs them. Usually that's because graphics acceleration is turned off.</p>"
+          : '<h2>Turn on graphics acceleration</h2><p>' + name + ' is drawing without your graphics card, ' +
+            'so the game runs slower and works your processor hard. On many computers that means only ' +
+            "a few frames per second. Usually that's because graphics acceleration is turned off.</p>";
+        if (how) {
+          html += '<ol><li>Open a new tab and go to <code>' + how.address + '</code>' +
+                  '<button class="copy" type="button">Copy</button></li>' +
+                  '<li>' + how.toggle + '</li>' +
+                  '<li>' + how.restart + ' Then come back to this page.</li></ol>';
+        } else {
+          html += "<p>Open your browser's settings, search for <b>acceleration</b>, turn on graphics " +
+                  '(hardware) acceleration, then restart the browser and come back to this page.</p>';
+        }
+        html += '<p class="fine">Already on? Update your graphics driver, then restart ' +
+                (how ? how.name : 'the browser') + '.<span class="renderer"></span></p>';
+        el.innerHTML = html;
+        if (gfx.renderer)
+          el.querySelector('.renderer').textContent = ' Drawing with: ' + gfx.renderer + '.';
+        var copy = el.querySelector('.copy');
+        if (copy) {
+          copy.addEventListener('click', function() {
+            var done = function() { copy.textContent = 'Copied'; };
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(how.address).then(done, function() { selectText(el.querySelector('code')); });
+            } else {
+              selectText(el.querySelector('code'));
+            }
+          });
+        }
+        el.hidden = false;
+      }
+
+      function selectText(node) {
+        var range = document.createRange();
+        range.selectNodeContents(node);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+
+      // Checked once, when the page opens; a restart of the browser reloads it.
+      var gfxCheck = browserProblem() ? null : graphicsCheck();
+      showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
+
+      // ---- Edge's enhanced security. Where it applies (every site on Strict,
+      // unfamiliar sites on Balanced; it's off by default) Edge turns off its
+      // just-in-time compiler, so the game's WebAssembly runs in an interpreter.
+      // Pages can't ask whether it's on, so a short speed test in a worker
+      // tells: a WebAssembly loop timed against the browser's own sort, which
+      // isn't slowed. In Edge 155 the loop took 0.5 to 0.8 times as long as
+      // the sort normally, and on Strict 8 times on Windows and 13 to 15 on
+      // Linux; back to 0.8 once it was turned off for the site.
+      var JIT_SLOW_RATIO = 4;
+      var JIT_NOTICE_SETTING = 'jkdf2mp-jit-notice';
+
+      // Runs in the worker, so it uses nothing else from this page. f(n) is n
+      // rounds of add, multiply and xor.
+      function jitBench() {
+        var body = [0x01,0x02,0x7f, 0x02,0x40, 0x03,0x40,
+          0x20,0x02,0x20,0x00,0x4e,0x0d,0x01,
+          0x20,0x01,0x20,0x02,0x6a,0x41,0x03,0x6c,0x41,0x07,0x73,0x21,0x01,
+          0x20,0x02,0x41,0x01,0x6a,0x21,0x02,
+          0x0c,0x00, 0x0b,0x0b, 0x20,0x01,0x0b];
+        var bytes = new Uint8Array([0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+          0x01,0x06,0x01,0x60,0x01,0x7f,0x01,0x7f, 0x03,0x02,0x01,0x00,
+          0x07,0x05,0x01,0x01,0x66,0x00,0x00,
+          0x0a, body.length + 2, 0x01, body.length].concat(body));
+        function sortMs() {
+          var a = new Uint32Array(1 << 18), x = 12345;
+          for (var i = 0; i < a.length; i++) { x = (x * 1103515245 + 12345) >>> 0; a[i] = x; }
+          var t = performance.now();
+          a.sort();
+          return performance.now() - t;
+        }
+        return WebAssembly.instantiate(bytes).then(function(m) {
+          var f = m.instance.exports.f;
+          f(1000);
+          var loop = Infinity;
+          for (var i = 0; i < 3; i++) {
+            var t = performance.now();
+            f(4000000);
+            loop = Math.min(loop, performance.now() - t);
+          }
+          return loop / Math.max(Math.min(sortMs(), sortMs()), 0.1);
+        });
+      }
+
+      function jitWorkerSource() {
+        return 'onmessage = function() { (' + jitBench + ')().then(' +
+               'function(r) { postMessage(r); }, function() { postMessage(null); }); };';
+      }
+
+      // The loop's time over the sort's, or null when the test can't run or
+      // takes over 10 seconds.
+      function jitCheck() {
+        return new Promise(function(resolve) {
+          var url = null, worker = null, timer = null;
+          function done(r) {
+            clearTimeout(timer);
+            if (worker) worker.terminate();
+            if (url) URL.revokeObjectURL(url);
+            resolve(typeof r === 'number' && isFinite(r) ? r : null);
+          }
+          try {
+            url = URL.createObjectURL(new Blob([jitWorkerSource()], { type: 'text/javascript' }));
+            worker = new Worker(url);
+          } catch (e) {
+            done(null);
+            return;
+          }
+          worker.onmessage = function(ev) { done(ev.data); };
+          worker.onerror = function() { done(null); };
+          timer = setTimeout(function() { done(null); }, 10000);
+          worker.postMessage('go');
+        });
+      }
+
+      function jitNoticeHidden() {
+        try { return localStorage.getItem(JIT_NOTICE_SETTING) === 'hidden'; } catch (e) { return false; }
+      }
+
+      // Edge only: other browsers have no such setting, so a slow test there
+      // means something this notice can't fix.
+      function showJitNotice(el, ratio) {
+        if (!(ratio > JIT_SLOW_RATIO) || browserKind() !== 'edge' || jitNoticeHidden()) {
+          el.hidden = true;
+          return;
+        }
+        el.innerHTML = '<h2>Turn off enhanced security for this site</h2>' +
+          "<p>Microsoft Edge's enhanced security is on for this site. It turns off the part of Edge " +
+          'that makes web games like this one run fast, so the game runs slower than it should.</p>' +
+          '<ol><li>Click the lock at the left of the address bar.</li>' +
+          '<li>Click <b>Enhanced security is active for this site</b>.</li>' +
+          '<li>Turn off <b>Use enhanced security for this site</b>, then reload this page.</li></ol>' +
+          '<p class="fine">This comes from a quick speed test, which a busy computer can throw off. ' +
+          "If Edge doesn't show that option, enhanced security is already off here." +
+          '<button class="hide" type="button">Hide</button></p>';
+        el.querySelector('.hide').addEventListener('click', function() {
+          try { localStorage.setItem(JIT_NOTICE_SETTING, 'hidden'); } catch (e) {}
+          document.querySelectorAll('.jit-notice').forEach(function(n) { n.hidden = true; });
+        });
+        el.hidden = false;
+      }
+
+      // Timed once, when the page opens, in Edge only. The game folder prompt
+      // shows the notice too once the test is done.
+      var jitRatio = null;
+      if (!browserProblem() && browserKind() === 'edge') {
+        jitCheck().then(function(r) {
+          jitRatio = r;
+          showJitNotice(document.getElementById('jit-notice'), r);
+        });
       }
 
       // Characters (player/<name>/: the .plr with controls, difficulty and

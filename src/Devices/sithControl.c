@@ -2478,6 +2478,23 @@ void sithControl_MapDefaultsJoystick() {
 #endif
 }
 
+// Added: whether any control has this key, so a key the game adds on its own
+// (the browser build's second screenshot key, in jkControl.c) gives way to
+// the player's bindings.
+int sithControl_IsKeyBound(int dxKeyNum)
+{
+    for (int i = 0; i < INPUT_FUNC_MAX; i++)
+    {
+        stdControlKeyInfo* pInfo = &sithControl_aInputFuncToKeyinfo[i];
+        for (uint32_t j = 0; j < pInfo->numEntries; j++)
+        {
+            if ((pInfo->aEntries[j].flags & INPUT_MAPPING_FLAG_DXKEY) && pInfo->aEntries[j].dxKeyNum == dxKeyNum)
+                return 1;
+        }
+    }
+    return 0;
+}
+
 // Common button for both items and force power usage for controllers
 #ifdef QOL_IMPROVEMENTS
 void sithControl_SetLastSelected(int which) {

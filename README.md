@@ -51,14 +51,18 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ### Screenshots
 
-- Press F12 in a game, or the key you set for screenshots, and the game saves exactly what's on screen, HUD included. Once the picture is stored it says "Screenshot saved to Your Screenshots on the main page", or that it wasn't saved. This works in both games.
+- Press F8 or F12 in a game, or the key you set for screenshots, and the game saves exactly what's on screen, HUD included. Once the picture is stored it says "Screenshot saved to Your Screenshots on the main page", or that it wasn't saved. This works in both games.
 - The pictures are kept in your browser. The landing page lists them under Your Screenshots, newest first, where you can open each one full size, download it or delete it, or download them all as a zip. Clearing the site's data in your browser deletes them, so download the ones you want to keep.
 - Before this, F12 said "Screenshot taken" but saved nothing: the browser build had no way to write the picture.
+- F8 is there for Edge on Windows, which keeps F12 for its developer tools ("Open Microsoft Edge Developer Tools?") so the game never sees it. F8 gives way if you bind it to something else in the game's controls.
 
 ### A landing page and clearer errors
 
 - A landing page in the style of early-2000s game lobby sites, with a Play button, "rooms", getting-started steps and a plain explanation of what happens to your files. Every room opens the same game; you host or join inside it.
 - The page tells you when your browser can't run the game, and why: a phone or tablet (they can't pick a folder), or missing WebAssembly or WebGL 2. If the game hits an error, it shows over the game instead of in a status line hidden behind it.
+- When the browser draws without the graphics card, usually because graphics acceleration is turned off, the page says so and how to turn it on in that browser. It says nothing when acceleration is on.
+- In Edge, when enhanced security is on for the site, the page says how to turn it off there. Enhanced security turns off Edge's just-in-time compiler, so the game's WebAssembly runs in an interpreter. Pages can't ask whether it's on, so a short speed test in a worker tells: a WebAssembly loop takes 0.5 to 0.8 times as long as a sort normally, and 8 to 15 times as long with enhanced security on (8 in Edge on Windows, 13 to 15 on Linux). The notice shows above 4.
+- Once the game is running, the browser asks before the tab closes or reloads. Ctrl fires and W walks forward, and Ctrl+W closes the tab, which no page can stop outside fullscreen.
 - The browser build is multiplayer-only, so the main menu hides Single Player, View Cutscenes and Expansions & Mods. Choose Player, Credits and Setup share one row along the bottom.
 
 ### Bug fixes
