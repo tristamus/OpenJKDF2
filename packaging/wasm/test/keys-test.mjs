@@ -85,6 +85,14 @@ test('Insert, Num Lock and the Menu key reach the game', () => {
     assert.equal(table[101], DIK.DIK_APPS);
 });
 
+test('a game key that two scancodes share is held while either is', () => {
+    // Page Up and SDL's Prior, the two backslash keys, Numpad = and its AS/400 twin.
+    const shared = [...new Set(table.filter((d, i) => d && table.indexOf(d) !== i))].sort((a, b) => a - b);
+    assert.deepEqual(shared, [DIK.DIK_BACKSLASH, DIK.DIK_NUMPADEQUALS, DIK.DIK_PRIOR]);
+    assert.ok(stdControlC.includes('aDikDown[stdControl_aSdlToDik[i]] |= s;'), 'held is or-ed per game key');
+    assert.ok(!stdControlC.includes('stdControl_SetSDLKeydown(i, s,'), 'no update per scancode that the other undoes');
+});
+
 test('the Controls screen has a name for each key of a standard keyboard', () => {
     const named = new Set([...namesC.matchAll(/\{\s*(DIK_\w+),\s*"DIK_\w+"\s*\}/g)].map(m => DIK[m[1]]));
     // Pause isn't in the original game's list of names. It still binds and works.
