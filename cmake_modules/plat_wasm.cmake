@@ -34,7 +34,7 @@ macro(plat_initialize)
     # player's own game files into MEMFS before main() runs. maps.js (map
     # downloads for joiners) and mods.js (the host's mod, built on maps.js, so
     # it comes second) are bundled in, so they always match the engine.
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ")
     set(CMAKE_EXECUTABLE_SUFFIX .js)
 
     # Added: jk.c's _wcslen(const char16_t*) is a plain `for(len=0;str[len];len++)` loop,

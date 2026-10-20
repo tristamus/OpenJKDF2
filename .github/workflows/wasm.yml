@@ -57,6 +57,10 @@ jobs:
       # Quit: back to the lobby once the saves are stored, with made-up storage.
       - name: Test Quit
         run: node packaging/wasm/test/quit-test.mjs
+      # Keys: every key of a standard keyboard reaches the game, and the
+      # default binds, read from the sources.
+      - name: Test keys and default binds
+        run: node packaging/wasm/test/keys-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build
