@@ -61,6 +61,7 @@ void sithControl_MapDefaultsDroidworks(void);
 void sithControl_UnbindFunctionIndex(int funcId, unsigned int bindIndex);
 void sithControl_UnbindControl(int flags, int controlId);
 int sithControl_ReadConf();
+void sithControl_FixNumpadTurn(); // Added
 int sithControl_WriteConf();
 
 void sithControl_ReadControls();
@@ -84,7 +85,6 @@ void sithControl_MapDefaultsJoystick();
 void sithControl_RestoreAxisBindings();
 // Added
 int sithControl_IsKeyBound(int dxKeyNum);
-void sithControl_FixNumpadTurn(); // Added
 
 #ifdef QOL_IMPROVEMENTS
 void sithControl_SetLastSelected(int which);
