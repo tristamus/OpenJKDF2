@@ -2517,6 +2517,23 @@ int sithControl_IsKeyBound(int dxKeyNum)
     return 0;
 }
 
+// Added: drops every binding of a key (INPUT_MAPPING_FLAG_DXKEY) or an axis
+// (INPUT_MAPPING_FLAG_AXIS), for the mouse wheel in jkGUIMouse.c.
+void sithControl_UnbindControlEverywhere(int flags, int controlId)
+{
+    for (int i = 0; i < INPUT_FUNC_MAX; i++)
+    {
+        stdControlKeyInfo* pInfo = &sithControl_aInputFuncToKeyinfo[i];
+        for (uint32_t j = 0; j < pInfo->numEntries; )
+        {
+            if ((pInfo->aEntries[j].flags & flags) && pInfo->aEntries[j].dxKeyNum == controlId)
+                sithControl_UnbindFunctionIndex(i, j);
+            else
+                j++;
+        }
+    }
+}
+
 // Common button for both items and force power usage for controllers
 #ifdef QOL_IMPROVEMENTS
 void sithControl_SetLastSelected(int which) {

@@ -85,6 +85,7 @@ void sithControl_MapDefaultsJoystick();
 void sithControl_RestoreAxisBindings();
 // Added
 int sithControl_IsKeyBound(int dxKeyNum);
+void sithControl_UnbindControlEverywhere(int flags, int controlId);
 
 #ifdef QOL_IMPROVEMENTS
 void sithControl_SetLastSelected(int which);

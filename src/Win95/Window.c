@@ -468,6 +468,36 @@ static void Window_WasmPointerLockReleased()
 }
 #endif
 
+// Added: browser wheel amounts to whole notches. Chrome and Edge send 1.0 per
+// notch, but Firefox and some Windows scroll settings send less, so an amount
+// of a quarter notch or more is at least one notch. Touchpads send many small
+// amounts, which add up to a notch per 1.0.
+static float Window_wheelRestX = 0.0f;
+static float Window_wheelRestY = 0.0f;
+
+static int Window_WheelNotches(float amount, float* pRest)
+{
+    int notches;
+
+    // A turn the other way starts afresh
+    if (amount * *pRest < 0.0f)
+        *pRest = 0.0f;
+
+    if (amount >= 0.25f || amount <= -0.25f)
+    {
+        notches = (int)amount;
+        if (!notches)
+            notches = amount > 0.0f ? 1 : -1;
+        *pRest = 0.0f;
+        return notches;
+    }
+
+    *pRest += amount;
+    notches = (int)*pRest;
+    *pRest -= notches;
+    return notches;
+}
+
 // map raw SDL window coords into the letterboxed 640x480 canvas.
 // The same 4:3 pillarbox math the GL present side uses (std3D_DrawMenu)
 static void Window_TranslateMouseToCanvas(int rawX, int rawY, int* pOutX, int* pOutY)
@@ -1193,6 +1223,19 @@ void Window_SdlUpdate()
                 msgl = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? WM_LBUTTONDOWN : WM_LBUTTONUP);
                 msgr = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? WM_RBUTTONDOWN : WM_RBUTTONUP);
 
+                // Middle mouse button activates the highlighted menu item.
+                if (mevent->button == SDL_BUTTON_MIDDLE &&
+                    jkGuiRend_IsMenuActive())
+                {
+                    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                        !jkQuakeConsole_bOpen)
+                    {
+                        Window_msg_main_handler(g_hWnd, WM_MBUTTONDOWN, 0, 0);
+                    }
+
+                    break;
+                }
+
                 if (jkQuakeConsole_bOpen) break; // Hijack all input to console
                 
                 if (hasLeft)
@@ -1205,11 +1248,45 @@ void Window_SdlUpdate()
 
                 break;
             case SDL_EVENT_MOUSE_WHEEL:
-                Window_mouseWheelY = (int)event.wheel.y;
-                Window_mouseWheelX = (int)event.wheel.x;
+            {
+                // Added: whole notches (Window_WheelNotches), added up until
+                // the game reads them rather than only the last amount kept
+                int wheelY = Window_WheelNotches(event.wheel.y, &Window_wheelRestY);
+                int wheelX = Window_WheelNotches(event.wheel.x, &Window_wheelRestX);
 
-                if (jkQuakeConsole_bOpen) break; // Hijack all input to console
+                // Preserve console scrolling.
+                if (jkQuakeConsole_bOpen)
+                {
+                    Window_mouseWheelY += wheelY;
+                    Window_mouseWheelX += wheelX;
+                    break;
+                }
+
+                // Send wheel movement to the active game menu.
+                if (jkGuiRend_IsMenuActive())
+                {
+                    int steps = wheelY > 0 ? wheelY : -wheelY;
+                    int key = wheelY > 0 ? VK_UP : VK_DOWN;
+
+                    for (int i = 0; i < steps; i++)
+                        Window_msg_main_handler(g_hWnd, WM_KEYFIRST, key, 0);
+
+                    // Prevent menu scrolling from reaching gameplay.
+                    Window_mouseWheelY = 0;
+                    Window_mouseWheelX = 0;
+                    break;
+                }
+
+                // Added: nothing reads the wheel while the game isn't taking
+                // mouse input (loading, cutscenes, mouse turned off), so notches
+                // mustn't pile up and fire all at once later.
+                if (!stdControl_bControlsActive || !stdControl_bReadMouse)
+                    break;
+
+                Window_mouseWheelY += wheelY;
+                Window_mouseWheelX += wheelX;
                 break;
+            }
 
             // HACK: Escape key for controllers
             case SDL_EVENT_JOYSTICK_BUTTON_DOWN:

@@ -1,4 +1,4 @@
-MSGS 115          # <--- DON'T FORGET TO UPDATE THIS COUNT
+MSGS 117          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
 #  "<key>"     <unused number>   "<string>"
 
@@ -161,6 +161,8 @@ MSGS 115          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "KEY_MOUSE_B6"                               0 "Mouse Button 6"
    "KEY_MOUSE_B7"                               0 "Mouse Button 7"
    "KEY_MOUSE_B8"                               0 "Mouse Button 8"
+   "KEY_MOUSE_WHEELUP"                          0 "Mouse Wheel Up"
+   "KEY_MOUSE_WHEELDOWN"                        0 "Mouse Wheel Down"
 
 #******************************
 #  Control Setup strings
