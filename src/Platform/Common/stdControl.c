@@ -234,7 +234,9 @@ const stdControlDikStrToNum stdControl_aDikNumToStr[JK_TOTAL_NUM_KEYS] =
   { KEY_MOUSE_B3,       "KEY_MOUSE_B3" },
   { KEY_MOUSE_B4,       "KEY_MOUSE_B4" },
 #ifdef SDL2_RENDER
-  { KEY_MOUSE_B5,       "KEY_MOUSE_B5" }
+  { KEY_MOUSE_B5,       "KEY_MOUSE_B5" },
+  { KEY_MOUSE_WHEELUP,  "KEY_MOUSE_WHEELUP" },
+  { KEY_MOUSE_WHEELDOWN, "KEY_MOUSE_WHEELDOWN" }
 #endif
 };
 

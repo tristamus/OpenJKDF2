@@ -1037,11 +1037,27 @@ void stdControl_ReadControls()
     stdControl_lastReadTime = stdControl_curReadTime;
 }
 
+// Added: a wheel direction as a button. Every notch is a press of its own,
+// even when the wheel also turned on the frame before (fast scrolling), so
+// each notch steps through weapons or force powers once.
+static void stdControl_UpdateWheelKey(int keyNum, int notches)
+{
+    if (notches > 0)
+        stdControl_UpdateKeyState(keyNum, 0, stdControl_curReadTime);
+    stdControl_UpdateKeyState(keyNum, notches > 0, stdControl_curReadTime);
+    if (notches > 1)
+        stdControl_aKeyPressed[keyNum] += notches - 1;
+}
+
 void stdControl_ReadMouse()
 {
     if (!stdControl_bReadMouse)
         return;
     if (jkQuakeConsole_bOpen) return; // Hijack input to console
+
+    // Treat mouse wheel movement as two virtual buttons.
+    stdControl_UpdateWheelKey(KEY_MOUSE_WHEELUP, Window_mouseWheelY > 0 ? Window_mouseWheelY : 0);
+    stdControl_UpdateWheelKey(KEY_MOUSE_WHEELDOWN, Window_mouseWheelY < 0 ? -Window_mouseWheelY : 0);
 
     stdControl_aAxes[AXIS_MOUSE_X].dwYoffs = 0;
     stdControl_aAxes[AXIS_MOUSE_X].uMaxVal = (__int64)(250.0 * (640.0 / Window_screenXSize));

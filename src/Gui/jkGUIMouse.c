@@ -39,7 +39,7 @@ static int32_t jkGuiMouse_dword_53032C = -1;
 #ifndef SDL2_RENDER
 #define NUM_MOUSE_ENTRIES (7)
 #else
-#define NUM_MOUSE_ENTRIES (7+1)
+#define NUM_MOUSE_ENTRIES (7+3)
 #endif
 
 static jkGuiMouseEntry jkGuiMouse_aEntries[NUM_MOUSE_ENTRIES+1] =
@@ -53,6 +53,8 @@ static jkGuiMouseEntry jkGuiMouse_aEntries[NUM_MOUSE_ENTRIES+1] =
   { KEY_MOUSE_B4, "KEY_MOUSE_B4",  0, 0, NULL, 0, 0  },
 #ifdef SDL2_RENDER
   { KEY_MOUSE_B5, "KEY_MOUSE_B5",  0, 0, NULL, 0, 0  },
+  { KEY_MOUSE_WHEELUP,   "KEY_MOUSE_WHEELUP",   0, 0, NULL, 0, 0 },
+  { KEY_MOUSE_WHEELDOWN, "KEY_MOUSE_WHEELDOWN", 0, 0, NULL, 0, 0 },
   //{ KEY_MOUSE_B6, "KEY_MOUSE_B6",  0, 0, NULL, 0, 0  },
   //{ KEY_MOUSE_B7, "KEY_MOUSE_B7",  0, 0, NULL, 0, 0  },
   //{ KEY_MOUSE_B8, "KEY_MOUSE_B8",  0, 0, NULL, 0, 0  },
@@ -96,6 +98,24 @@ static jkGuiElement jkGuiMouse_aElements[26] =
 };
 
 static jkGuiMenu jkGuiMouse_menu = {jkGuiMouse_aElements, 0, 225, 255, 15, NULL, NULL, jkGui_stdBitmaps, jkGui_stdFonts, (intptr_t)&jkGUIMouse_listbox_paddings, NULL, "thermloop01.wav", "thrmlpu2.wav", 0, 0, 0, 0, 0, 0};
+
+// Added: the wheel either turns as an axis (Mouse Z: look or move) or clicks
+// as two buttons (wheel up, wheel down). Binding it one way drops the other,
+// so a wheel that changes weapons doesn't also tilt the view.
+static void jkGuiMouse_FreeWheel(int32_t dxKeyNum)
+{
+#ifdef SDL2_RENDER
+    if (dxKeyNum == AXIS_MOUSE_Z)
+    {
+        sithControl_UnbindControlEverywhere(INPUT_MAPPING_FLAG_DXKEY, KEY_MOUSE_WHEELUP);
+        sithControl_UnbindControlEverywhere(INPUT_MAPPING_FLAG_DXKEY, KEY_MOUSE_WHEELDOWN);
+    }
+    else if (dxKeyNum == KEY_MOUSE_WHEELUP || dxKeyNum == KEY_MOUSE_WHEELDOWN)
+    {
+        sithControl_UnbindControlEverywhere(INPUT_MAPPING_FLAG_AXIS, AXIS_MOUSE_Z);
+    }
+#endif
+}
 
 void jkGuiMouse_SensitivityDraw(jkGuiElement *element, jkGuiMenu *menu, tVBuffer *vbuf, BOOL redraw)
 {
@@ -334,6 +354,7 @@ void jkGuiMouse_sub_417100(int a1, int a2)
         if ( (v9 & 8) != 0 )
             v8->flags = v10 | 8;
         v8->binaryAxisVal = v13;
+        jkGuiMouse_FreeWheel(dxKeyNum); // Added
         jkGuiMouse_sub_417210();
     }
     else
@@ -540,6 +561,7 @@ int jkGuiMouse_ListClicked3(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mo
             sithControl_UnbindFunctionIndex(v10, jkGuiMouse_aEntries[v9].bindIdx);
         if ( sithControl_BindControl(v13, v11, v12) )
         {
+            jkGuiMouse_FreeWheel(v11); // Added
             jkGuiMouse_sub_417210();
         }
         else
@@ -610,6 +632,7 @@ int jkGuiMouse_CancelOkClicked(jkGuiElement *pClickedElement, jkGuiMenu *pMenu, 
                 sithControl_UnbindFunctionIndex(v9, jkGuiMouse_aEntries[v8].bindIdx);
             if ( sithControl_BindControl(v12, v10, v11) )
             {
+                jkGuiMouse_FreeWheel(v10); // Added
                 jkGuiMouse_sub_417210();
             }
             else
