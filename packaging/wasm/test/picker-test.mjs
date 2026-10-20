@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { makeGob, makeZip } from './helpers.mjs';
+import { makeGob, makeZip, makeIDB } from './helpers.mjs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 function cut(from, to) {
@@ -16,10 +16,10 @@ function cut(from, to) {
     assert.ok(a > 0 && b > a, 'index.html has ' + from);
     return html.substring(a, b);
 }
-const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead } = new Function(
+const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
-    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead };')();
+    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -185,20 +185,29 @@ test('a broken or blocked store leaves every mod ticked', () => {
 // are given as they are under the picked folder; GOBs are made up, other
 // files hold their own path.
 async function whatIsRead(folder, { mots = false, modPath = null } = {}) {
+    return readFrom(folderFiles(folder, mots), { mots, modPath });
+}
+
+function folderFiles(folder, mots) {
     const ext = mots ? '.goo' : '.gob';
-    const fileList = Object.entries(folder).map(([path, bytes]) => {
+    return Object.entries(folder).map(([path, bytes]) => {
         const file = new Blob([bytes || (path.toLowerCase().endsWith(ext) ? gob('x', path) : Buffer.from(path))]);
         file.webkitRelativePath = 'Picked/' + path;
         return file;
     });
+}
+
+async function readFrom(fileList, { mots = false, modPath = null } = {}) {
+    const ext = mots ? '.goo' : '.gob';
     const sorted = pickedFiles(fileList);
     let files = sorted.files;
     if (!modPath && files.some(e => /\.zip$/i.test(e.path)))
         files = await openZips(files, mots);
     const mods = modPath ? [] : detectMods(files, mots);
     placeModFiles(files, mods);
-    return { read: filesToRead(files, ext, modPath).map(e => e.path).sort(),
-             players: sorted.playerFiles.map(e => e.path).sort(), mods };
+    const toRead = filesToRead(files, ext, modPath);
+    return { read: toRead.map(e => e.path).sort(), players: sorted.playerFiles.map(e => e.path).sort(), mods,
+             toSave: filesToSave(fileList, toRead, sorted.playerFiles) };
 }
 
 // Antonio's Steam folders (2026-10-19), a few of each kind of file.
@@ -289,6 +298,71 @@ test("the other game's GOBs aren't read", async () => {
     assert.ok(!mots.read.includes('Episode/stray.gob'));
     const jk = await whatIsRead({ ...STEAM_JK, 'Episode/stray.goo': null });
     assert.ok(!jk.read.includes('Episode/stray.goo'));
+});
+
+// ---- Saved in the browser for next time: the files read and the
+// characters, in the folder's order, which start the game just like the
+// folder does.
+const savedPaths = (files) => files.map(f => f.webkitRelativePath.substring('Picked/'.length));
+const MODS_AND_EXTRAS = {
+    'cog/00_door.cog': null, 'Screenshots/shot0001.png': null,
+    'SBX/sbx.gob': null, 'SBX/cog/sbx.cog': null, 'SBX/readme.txt': null, 'SBX/screenshot.jpg': null,
+    'mod/Blade.zip': makeZip([{ name: 'blade.gob', bytes: gob('cog\\b.cog', 'blade') },
+                              { name: 'preview.png', bytes: Buffer.from('png') }]),
+    'mod/notes.zip': makeZip([{ name: 'a.txt', bytes: Buffer.from('a') }]),
+    'episode/MyLevel.gob': null, 'episode/MyLevel.jpg': null,
+};
+
+for (const [name, folder, mots, saved] of [
+    ['Jedi Knight with mods, a zipped one and screenshots', { ...STEAM_JK, ...MODS_AND_EXTRAS }, false, [
+        ...STEAM_JK_READ, 'player/BahamutZero0o/BahamutZero0o.plr', 'player/BahamutZero0o/Tristamus.mpc',
+        'player/BahamutZero0o/openjkdf2.json', 'cog/00_door.cog', 'SBX/sbx.gob', 'SBX/cog/sbx.cog', 'mod/Blade.zip',
+        'episode/MyLevel.gob']],
+    ['MotS with the Remastered pack', STEAM_MOTS, true, [
+        'Controls/MS SIDEWINDER GAMEPAD.CTM', 'Episode/JKM.GOO', 'Episode/JKM_KFY.GOO', 'Episode/JKM_MP.GOO',
+        'Episode/JKM_SABER.GOO', 'Episode/JKM/cog/s1l1_endlevel.cog', 'Episode/MotS Secret Level/episode.jk',
+        'Episode/MotS Secret Level/jkl/S6L1.jkl', 'Episode/MotS Secret Level/3do/mat/vader_cape.mat',
+        'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo',
+        'Player/BahamutZero0o/BahamutZero0o.plr', 'Player/BahamutZero0o/Tristamus.mpc', 'Resource/JKMRES.GOO',
+        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni']],
+]) {
+    test('saving ' + name + ' keeps what is read, and starts the same from the browser', async () => {
+        const fileList = folderFiles(folder, mots);
+        const picked = await readFrom(fileList, { mots });
+        const kept = savedPaths(picked.toSave);
+        assert.deepEqual(kept, Object.keys(folder).filter(p => saved.includes(p)));
+        assert.equal(kept.length, saved.length);
+        const again = await readFrom(picked.toSave, { mots });
+        assert.deepEqual(again.read, picked.read);
+        assert.deepEqual(again.players, picked.players);
+        const mod = m => ({ name: m.name, from: m.from, path: m.path, bytes: m.bytes });
+        assert.deepEqual(again.mods.map(mod), picked.mods.map(mod));
+        assert.deepEqual(savedPaths(again.toSave), kept);
+    });
+}
+
+test('saved game files come back with their paths, and are replaced or removed per game', async () => {
+    const store = gameFileStore(makeIDB());
+    assert.equal(await store.info('jk1'), null);
+    const files = folderFiles({ 'Episode/JK1.GOB': null, 'mod/Blade.zip': Buffer.from('zip'),
+                                'player/Kyle/Kyle.plr': Buffer.from('kyle') }, false);
+    await store.save('jk1', files);
+    const info = await store.info('jk1');
+    assert.equal(info.folder, 'Picked');
+    assert.equal(info.files, 3);
+    assert.equal(info.bytes, files.reduce((n, f) => n + f.size, 0));
+    const back = await store.load('jk1');
+    assert.deepEqual(back.map(f => f.webkitRelativePath), files.map(f => f.webkitRelativePath));
+    for (let i = 0; i < files.length; i++)
+        assert.ok(Buffer.from(await back[i].arrayBuffer()).equals(Buffer.from(await files[i].arrayBuffer())));
+    assert.deepEqual(pickedFiles(back).playerFiles.map(e => e.path), ['Kyle/Kyle.plr']);
+    assert.equal(await store.info('mots'), null);
+    await store.save('jk1', files.slice(0, 1));
+    assert.equal((await store.info('jk1')).files, 1);
+    assert.equal((await store.load('jk1')).length, 1);
+    await store.forget('jk1');
+    assert.equal(await store.info('jk1'), null);
+    await assert.rejects(store.load('jk1'));
 });
 
 let failed = 0;

@@ -495,7 +495,23 @@
       #picker .fine { color: var(--muted); font-size: 13px; }
       #picker .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
       #picker label.play { display: inline-block; }
-      #picker label.play[aria-disabled=true] { opacity: 0.5; pointer-events: none; }
+      #picker label.play[aria-disabled=true],
+      #picker button.play:disabled { opacity: 0.5; pointer-events: none; }
+      #picker .play[hidden] { display: none; }
+      /* With files saved in this browser, choosing the folder comes second. */
+      #picker label.play.second {
+        padding: 7px 14px;
+        border-color: #9cc;
+        background: var(--teal-light);
+        color: #fff;
+        font-size: 14px;
+        text-shadow: none;
+      }
+      #picker label.play.second:hover { background: var(--teal-light); }
+      #picker .saved-files { padding: 8px 10px; border: 1px solid var(--gold); }
+      #picker .saved-files.gone { border-color: var(--bad); color: var(--bad); font-weight: bold; }
+      #mod-choice label.other-folder { margin: 0; padding: 0; background: none; border: 0; }
+      #picker.checking .picker-intro { display: none; }
       #picker .cancel {
         padding: 7px 14px;
         border: 2px outset #9cc;
@@ -1018,8 +1034,8 @@
                 <div class="feature">
                   <h3>Kept for next time</h3>
                   <ul>
-                    <li>Characters and controls come in from your game folder.</li>
-                    <li>Settings, maps, mods and which mods you ticked are saved in this browser.</li>
+                    <li>Pick your game folder once: the files the game needs are saved in this browser.</li>
+                    <li>Settings, characters, maps, mods and which mods you ticked are kept too.</li>
                   </ul>
                 </div>
               </div>
@@ -1061,9 +1077,15 @@
                 <li><b>About the browser's "upload" message.</b> Your browser may ask whether to "upload"
                   the files. That's its standard wording for letting a page read a folder. The files still
                   stay on your computer.</li>
+                <li><b>You only pick the folder once.</b> The game files it needs are saved in this browser
+                  (about 250 MB for Jedi Knight, 500 MB for Mysteries of the Sith, plus your mods), so next time
+                  the game starts without asking. If you add mods or maps to your game folder, choose it again
+                  from the mod list or from Play JKDF2. To keep no copy, untick "Save the game files in this
+                  browser" when you pick the folder.</li>
                 <li>Your characters and controls are saved in this browser, so they're there next time.</li>
                 <li>So are your screenshots, under <a href="#screenshots">Your Screenshots</a>. Clearing this
-                  site's data in your browser deletes them, so download the ones you want to keep.</li>
+                  site's data in your browser deletes them, so download the ones you want to keep. It deletes
+                  the saved game files too, and the page asks for your game folder again.</li>
               </ul>
             </section>
 
@@ -1120,12 +1142,19 @@
           standard wording for letting this page read them. Choose Upload to continue.</p>
         <section class="gfx-notice picker-intro" id="picker-gfx" role="alert" hidden></section>
         <section class="gfx-notice jit-notice picker-intro" id="picker-jit" role="status" hidden></section>
+        <p class="saved-files picker-intro" id="saved-files" hidden><span class="saved-text"></span>
+          <button class="text-button" type="button">Remove them</button></p>
         <div class="actions picker-intro">
+          <button class="play" type="button" id="play-saved" hidden>Play with saved files</button>
           <label class="play" for="gamedir" tabindex="0" role="button">Choose game folder</label>
           <button class="cancel" type="button">Not now</button>
         </div>
         <label class="picker-intro picker-option"><input type="checkbox" id="fullscreen-option" checked>
           <span>Play in fullscreen <span class="fine">The game fills the screen when you click it. Hold Esc to leave fullscreen.</span></span></label>
+        <label class="picker-intro picker-option"><input type="checkbox" id="save-option" checked>
+          <span>Save the game files in this browser <span class="fine">Next time you can play without choosing the
+            folder. Only the files the game uses are kept: about 250 MB for Jedi Knight or 500 MB for Mysteries
+            of the Sith, plus your mods.</span></span></label>
         <input type="file" id="gamedir" webkitdirectory multiple>
         <div id="mod-choice" hidden>
           <fieldset>
@@ -1141,6 +1170,7 @@
             own copy. If you join a game with different mods, the game restarts with those.</p>
           <div class="actions">
             <button class="play" type="button">Start</button>
+            <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Choose a different folder</label>
           </div>
         </div>
         <div id="picker-result" role="status"></div>
@@ -1730,6 +1760,90 @@
         return { files: files, playerFiles: playerFiles };
       }
 
+      // ---- Game files saved in this browser, so a player can start again
+      // without choosing the folder, which has the browser list every file
+      // in it first. Per game, the files the page read from the folder last
+      // time, with their paths in it.
+      function gameFileStore(idb) {
+        var dbPromise = null;
+
+        function open() {
+          if (!dbPromise) {
+            dbPromise = new Promise(function(resolve, reject) {
+              var req = idb.open('jkdf2mp-game-files', 1);
+              req.onupgradeneeded = function() {
+                req.result.createObjectStore('meta', { keyPath: 'game' });
+                req.result.createObjectStore('data');
+              };
+              req.onsuccess = function() { resolve(req.result); };
+              req.onerror = function() { reject(req.error); };
+              req.onblocked = function() { reject(new Error('the game file store is busy')); };
+            });
+            // Lets a later call try again.
+            dbPromise.catch(function() { dbPromise = null; });
+          }
+          return dbPromise;
+        }
+
+        function request(req) {
+          return new Promise(function(resolve, reject) {
+            req.onsuccess = function() { resolve(req.result); };
+            req.onerror = function() { reject(req.error); };
+          });
+        }
+
+        function done(tx) {
+          return new Promise(function(resolve, reject) {
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = tx.onabort = function() { reject(tx.error); };
+          });
+        }
+
+        // What's saved for a game, without its files:
+        // { game, folder, files, bytes, time }, or null.
+        async function info(game) {
+          var db = await open();
+          return (await request(db.transaction('meta').objectStore('meta').get(game))) || null;
+        }
+
+        // The saved files, each with its path in the folder as when it was
+        // picked, so the page takes them like a picked folder. A byte of
+        // each is read first: the browser may have lost some since, and the
+        // player is better asked for the folder before the mod list than after.
+        async function load(game) {
+          var db = await open();
+          var saved = await request(db.transaction('data').objectStore('data').get(game));
+          if (!saved) throw new Error('no ' + game + ' files are saved');
+          var files = saved.map(function(s) {
+            Object.defineProperty(s.file, 'webkitRelativePath', { value: s.path });
+            return s.file;
+          });
+          await Promise.all(files.map(function(f) { return f.slice(0, 1).arrayBuffer(); }));
+          return files;
+        }
+
+        // Replaces what's saved for the game.
+        async function save(game, files) {
+          var db = await open();
+          var tx = db.transaction(['meta', 'data'], 'readwrite');
+          tx.objectStore('data').put(files.map(function(f) { return { path: f.webkitRelativePath, file: f }; }), game);
+          tx.objectStore('meta').put({ game: game, folder: files[0].webkitRelativePath.split('/')[0],
+                                       files: files.length, bytes: files.reduce(function(n, f) { return n + f.size; }, 0),
+                                       time: Date.now() });
+          await done(tx);
+        }
+
+        async function forget(game) {
+          var db = await open();
+          var tx = db.transaction(['meta', 'data'], 'readwrite');
+          tx.objectStore('meta').delete(game);
+          tx.objectStore('data').delete(game);
+          await done(tx);
+        }
+
+        return { info: info, load: load, save: save, forget: forget };
+      }
+
       function loadEngine(withBundledData) {
         leaveGuard = true;
         if (withBundledData) {
@@ -1752,7 +1866,9 @@
       // open. Play JKDF2 takes either game.
       var pickerWant = null;
 
-      function openPicker(want) {
+      // A room's prompt starts its game from the files saved in the browser,
+      // if there are some, instead of asking for the folder (folderOnly asks).
+      function openPicker(want, folderOnly) {
         pickerWant = want && GAME_NAMES[want.game] ? want : null;
         pickerTitle.textContent = pickerWant ? 'Pick your ' + GAME_NAMES[pickerWant.game] + ' folder' :
                                                'Pick your game folder';
@@ -1768,6 +1884,12 @@
         showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio);
         if (!picker.open) picker.showModal();
         chooseButton.focus();
+        var start = !problem && !folderOnly && !!pickerWant && !!gameFiles && savedKnown[pickerWant.game] !== false;
+        // Blank while the browser looks, rather than the folder prompt flashing by.
+        picker.classList.toggle('checking', start);
+        if (start) pickerTitle.textContent = 'Starting ' + GAME_NAMES[pickerWant.game];
+        if (problem) hideSaved();
+        else offerSaved(pickerWant, start);
       }
 
       function closePicker() {
@@ -1775,6 +1897,7 @@
       }
 
       function showProblem(title, text) {
+        picker.classList.remove('checking');
         pickerTitle.textContent = title;
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
         modChoice.hidden = true;
@@ -2362,6 +2485,17 @@
         return files.filter(function(e) { return e.mod !== undefined || isGameFile(e.path.toLowerCase(), ext, modPath); });
       }
 
+      // The picked files to save in the browser for next time: the ones read,
+      // with a zipped mod's zip in place of the files in it, and the
+      // characters. They keep the folder's order, which decides which
+      // spelling of a folder's name is used and the order GOBs are loaded in.
+      function filesToSave(fileList, read, playerFiles) {
+        var keep = new Set();
+        for (var e of read) keep.add(e.zip || e.file);
+        for (var e of playerFiles) keep.add(e.file);
+        return fileList.filter(function(f) { return keep.has(f); });
+      }
+
       // ---- Mods kept as zip files. The game can't read a zip, so the page
       // opens each one that holds a mod and puts its files in a folder named
       // after it, as if it had been unzipped in place, like
@@ -2394,7 +2528,7 @@
           if (!inside) { out.push(e); continue; }
           console.log('OpenJKDF2: opened ' + e.path + ' (' + inside.length + ' files)');
           var depth = e.path.split('/').length;
-          for (var f of inside) out.push({ path: e.path + '/' + f.path, file: f.file, zipDepth: depth });
+          for (var f of inside) out.push({ path: e.path + '/' + f.path, file: f.file, zipDepth: depth, zip: e.file });
         }
         return out;
       }
@@ -2631,7 +2765,7 @@
       // apart from those left unticked last time. A mod saved from an online
       // game is that host's whole set, so it starts unticked and runs on its
       // own. Resolves to the ticked options, highest first.
-      function chooseMods(folderMods, saved, clashes, game) {
+      function chooseMods(folderMods, saved, clashes, game, fromBrowser) {
         var leftOut = modsLeftOut(game);
         var options = folderMods.map(function(m, i) {
           return { index: i, name: m.name, path: m.path, key: modKey(m),
@@ -2725,10 +2859,21 @@
         showPickerResult('');
         modChoice.hidden = false;
         var start = modChoice.querySelector('button.play');
+        // From the files saved in the browser, mods added to the folder since
+        // need the folder chosen again. The label opens the folder picker,
+        // over the folder prompt.
+        var otherFolder = modChoice.querySelector('.other-folder');
+        otherFolder.hidden = !fromBrowser;
         start.focus();
         return new Promise(function(resolve) {
+          otherFolder.onclick = function() {
+            start.onclick = otherFolder.onclick = null;
+            modChoice.hidden = true;
+            openPicker(pickerWant, true);
+            resolve(null);
+          };
           start.onclick = function() {
-            start.onclick = null;
+            start.onclick = otherFolder.onclick = null;
             modChoice.hidden = true;
             // A saved set says nothing about the folder's mods.
             if (!ticked().some(function(o) { return o.saved; }))
@@ -2816,7 +2961,9 @@
         el.className = isError ? 'error' : '';
       }
 
-      async function onFolderPicked(fileList) {
+      // fileList is the picked folder's files, or the ones saved in the
+      // browser last time (fromBrowser), which come in the same way.
+      async function onFolderPicked(fileList, fromBrowser) {
         // How long each stage takes, for the console, so a slow start can be
         // told apart on the player's own PC.
         var clock = { at: performance.now(), stages: [] };
@@ -2840,6 +2987,7 @@
         var required = isMots ? REQUIRED_MOTS : REQUIRED_JK;
         if (wantMots !== isMots) {
           if (isMots || required.every(r => byLower[r.toLowerCase()])) {
+            if (fromBrowser) throw new Error('the saved files are for the other game');
             showPickerResult(wrongGameText(pickerWant, isMots ? 'mots' : 'jk1'), true);
             return;
           }
@@ -2847,6 +2995,7 @@
         }
         var missing = required.filter(r => !byLower[r.toLowerCase()]);
         if (missing.length) {
+          if (fromBrowser) throw new Error('the saved files lack ' + missing.join(', '));
           showPickerResult("That folder doesn't have the game files we're looking for:\n" + missing.join("\n") +
                            "\n\nPick the folder that has episode and resource directly inside, then try again.", true);
           return;
@@ -2903,7 +3052,9 @@
           placeModFiles(files, folderMods);
           Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
           if (folderMods.length || saved.length) {
-            picked = await chooseMods(folderMods, saved, found.clashes, game);
+            picked = await chooseMods(folderMods, saved, found.clashes, game, fromBrowser);
+            // The player went to choose a different folder.
+            if (!picked) return;
             lap('choosing mods');
           }
         }
@@ -2911,6 +3062,7 @@
         var modPath = pathAt < 0 ? null : String(Module['arguments'][pathAt + 1] || '').replace(/\\/g, '/')
           .replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
         files = filesToRead(files, ext, modPath);
+        var toSave = fromBrowser || modPath ? null : filesToSave(fileList, files, playerFiles);
 
         readingFolder = true;
         chooseButton.setAttribute('aria-disabled', 'true');
@@ -2918,9 +3070,9 @@
         var gameRoot = isMots ? '/mots/' : '/jk1/';
         var loaded = [];
         for (var i = 0; i < files.length; i++) {
-          showPickerResult("Found your copy of " + (isMots ? "Mysteries of the Sith" : "Jedi Knight") +
-                           ". Loading it into this tab (" + (i + 1) + " of " + files.length + " files, " +
-                           Math.round(totalBytes / 1048576) + " MB)...");
+          showPickerResult((fromBrowser ? "Loading your " + GAME_NAMES[game] + " files saved in this browser (" :
+                            "Found your copy of " + GAME_NAMES[game] + ". Loading it into this tab (") +
+                           (i + 1) + " of " + files.length + " files, " + Math.round(totalBytes / 1048576) + " MB)...");
           files[i].data = new Uint8Array(await files[i].file.arrayBuffer());
           loaded.push({ path: gameRoot + files[i].path, data: files[i].data });
         }
@@ -2987,6 +3139,30 @@
         picker.close();
         hideZone();
         loadEngine(false);
+        if (toSave) saveForNextTime(game, toSave);
+      }
+
+      // Waits for onFolderPicked, showing what went wrong. Files saved in the
+      // browser that can't be used are forgotten, and the player is asked for
+      // the folder again.
+      function whilePicking(picked, game) {
+        chooseButton.setAttribute('aria-disabled', 'true');
+        playSaved.disabled = true;
+        picked.catch(function(err) {
+          if (!game) {
+            showPickerResult("Could not read that folder: " + err, true);
+            return;
+          }
+          console.warn('OpenJKDF2: could not use the saved ' + game + ' files (' + err + ')');
+          forgetSaved(game);
+          openPicker(pickerWant, true);
+          showSavedNote('Your ' + GAME_NAMES[game] + " files saved in this browser couldn't be found. " +
+                        'Choose your ' + GAME_NAMES[game] + ' folder again.', false);
+        }).finally(function() {
+          readingFolder = false;
+          chooseButton.removeAttribute('aria-disabled');
+          playSaved.disabled = false;
+        });
       }
 
       document.getElementById('gamedir').addEventListener('change', function(ev) {
@@ -2994,12 +3170,135 @@
         // picked again after fixing a problem.
         var fileList = Array.from(ev.target.files);
         ev.target.value = '';
-        onFolderPicked(fileList).catch(function(err) {
-          showPickerResult("Could not read that folder: " + err, true);
-        }).finally(function() {
-          readingFolder = false;
-          chooseButton.removeAttribute('aria-disabled');
+        whilePicking(onFolderPicked(fileList), null);
+      });
+
+      // ---- Starting with the files saved in the browser last time. A room
+      // starts its game from them straight away; Play JKDF2 offers them in
+      // the folder prompt, which is also where another folder can be chosen.
+      var gameFiles = typeof indexedDB !== 'undefined' ? gameFileStore(indexedDB) : null;
+      var SAVE_SETTING = 'jkdf2mp-save-game-files';
+      // How long saving waits once the engine has its files, so the copy
+      // doesn't compete with the game starting.
+      var SAVE_DELAY_MS = 2000;
+      var saveOption = document.getElementById('save-option');
+      var savedNote = document.getElementById('saved-files');
+      var playSaved = document.getElementById('play-saved');
+      var savedGame = null;
+      var savedAsked = 0;
+      // Which games have files saved, as far as this tab knows, so a room's
+      // prompt only waits on the browser when there may be some.
+      var savedKnown = {};
+      if (gameFiles) {
+        ['jk1', 'mots'].forEach(function(game) {
+          gameFiles.info(game).then(function(info) { savedKnown[game] = !!info; }, function() {});
         });
+      }
+      try { saveOption.checked = localStorage.getItem(SAVE_SETTING) !== 'off'; } catch (e) {}
+      saveOption.addEventListener('change', function() {
+        try { localStorage.setItem(SAVE_SETTING, saveOption.checked ? 'on' : 'off'); } catch (e) {}
+      });
+
+      // Replaces what's saved for the game with the files just read. With the
+      // option unticked, nothing is kept: an older copy goes too.
+      function saveForNextTime(game, files) {
+        if (!gameFiles || !files.length) return;
+        if (!saveOption.checked) {
+          forgetSaved(game);
+          return;
+        }
+        setTimeout(async function() {
+          var bytes = files.reduce(function(n, f) { return n + f.size; }, 0);
+          try {
+            if (navigator.storage && navigator.storage.estimate) {
+              var room = await navigator.storage.estimate();
+              if (room.quota - room.usage < bytes) {
+                console.warn('OpenJKDF2: not saving the game files (' + megabytes(bytes) + '): the browser has room for ' +
+                             megabytes(room.quota - room.usage));
+                return;
+              }
+            }
+            var t = performance.now();
+            await gameFiles.save(game, files);
+            savedKnown[game] = true;
+            console.log('OpenJKDF2: saved ' + files.length + ' game files (' + megabytes(bytes) + ') in this browser in ' +
+                        Math.round(performance.now() - t) + ' ms');
+          } catch (err) {
+            console.warn('OpenJKDF2: could not save the game files (' + err + ')');
+          }
+        }, SAVE_DELAY_MS);
+      }
+
+      function forgetSaved(game) {
+        savedKnown[game] = false;
+        if (savedGame === game) hideSaved();
+        gameFiles.forget(game).catch(function(err) {
+          console.warn('OpenJKDF2: could not remove the saved game files (' + err + ')');
+        });
+      }
+
+      function hideSaved() {
+        savedGame = null;
+        savedNote.hidden = playSaved.hidden = true;
+        chooseButton.classList.remove('second');
+      }
+
+      // canRemove: about files that are there, which can be removed.
+      function showSavedNote(text, canRemove) {
+        savedNote.querySelector('.saved-text').textContent = text;
+        savedNote.querySelector('button').hidden = !canRemove;
+        savedNote.classList.toggle('gone', !canRemove);
+        savedNote.hidden = false;
+      }
+
+      // Called as the prompt opens: starts the game from its saved files
+      // (start), or offers them. The browser answers a moment later, by when
+      // the prompt may show something else.
+      async function offerSaved(want, start) {
+        var asked = ++savedAsked;
+        hideSaved();
+        var found = [];
+        for (var game of !gameFiles ? [] : want ? [want.game] : ['jk1', 'mots']) {
+          try {
+            var info = await gameFiles.info(game);
+            savedKnown[game] = !!info;
+            if (info) found.push(info);
+          } catch (err) {
+            console.warn('OpenJKDF2: could not look for saved game files (' + err + ')');
+          }
+        }
+        if (asked !== savedAsked || !picker.open || readingFolder || !modChoice.hidden) return;
+        if (start && found.length) startSaved(found[0].game);
+        else if (start) pickerTitle.textContent = 'Pick your ' + GAME_NAMES[want.game] + ' folder';
+        picker.classList.remove('checking');
+        if (!found.length || start || picker.querySelector('.actions.picker-intro').hidden) return;
+        var info = found.sort(function(a, b) { return b.time - a.time; })[0];
+        savedGame = info.game;
+        showSavedNote('Your ' + GAME_NAMES[info.game] + ' files from ' +
+          new Date(info.time).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+          ' are saved in this browser (' + megabytes(info.bytes) + "). If you've added mods or maps since, " +
+          'choose the folder again.', true);
+        playSaved.hidden = false;
+        chooseButton.classList.add('second');
+        playSaved.focus();
+      }
+
+      function startSaved(game) {
+        if (readingFolder || !gameFiles) return;
+        picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
+        pickerTitle.textContent = 'Starting ' + GAME_NAMES[game];
+        showPickerResult('Opening your ' + GAME_NAMES[game] + ' files saved in this browser...');
+        whilePicking(gameFiles.load(game).then(function(files) { return onFolderPicked(files, true); }), game);
+      }
+
+      playSaved.addEventListener('click', function() {
+        if (savedGame) startSaved(savedGame);
+      });
+
+      savedNote.querySelector('button').addEventListener('click', function() {
+        if (!savedGame) return;
+        forgetSaved(savedGame);
+        chooseButton.focus();
       });
 
       // Play JKDF2 and every room open the folder prompt, a room's asking for
@@ -3021,12 +3320,14 @@
       picker.addEventListener('cancel', function(ev) {
         if (readingFolder) ev.preventDefault();
       });
-      // The label stands in for the hidden file input, so let the keyboard press it too.
-      chooseButton.addEventListener('keydown', function(ev) {
-        if (ev.key === 'Enter' || ev.key === ' ') {
-          ev.preventDefault();
-          chooseButton.click();
-        }
+      // The labels stand in for the hidden file input, so let the keyboard press them too.
+      [chooseButton, modChoice.querySelector('.other-folder')].forEach(function(label) {
+        label.addEventListener('keydown', function(ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            label.click();
+          }
+        });
       });
 
       // Local testing with a build made with -DOPENJKDF2_WASM_PRELOAD_DATA=ON:
