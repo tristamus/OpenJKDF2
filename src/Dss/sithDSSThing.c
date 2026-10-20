@@ -1372,7 +1372,10 @@ void sithDSSThing_Take(SithThing *pItem, SithThing *pThing, int outstream)
         return;
     }
     pActor2 = sithThing_GetGuidThing(sithComm_netMsgTmp.pktData[1]);
-    if ( pItemThing2 && pActor2 )
+    // Fixed: MoTS item cogs call TakeItem(item, -1), so there's no actor. JKM.EXE hands
+    // the host's own take to ProcessTake, which has no actor check; requiring one here
+    // meant other players never heard that the host took an item and kept seeing it.
+    if ( pItemThing2 && (pActor2 || Main_bMotsCompat) )
     {
         if ( sithComm_netMsgTmp.netMsg.cogMsgId != DSS_TAKEITEM1 )
         {
@@ -1462,7 +1465,10 @@ int sithDSSThing_ProcessCreateThing(SithMessage *pMsg)
         int pThing2Id = NETMSG_POPS32();
         if ( pThing2Id < 0 )
         {
-            SithSector* pSector = sithSector_GetPtrFromIdx(NETMSG_POPS16());
+            // Fixed: the sector goes out as 32 bits (sithDSSThing_CreateThing above,
+            // and MoTS's own reader). Reading 16 shifted the position and guid that
+            // follow, so other players' copy landed near the origin under a wrong guid.
+            SithSector* pSector = sithSector_GetPtrFromIdx(NETMSG_POPS32());
             if ( !pSector )
                 return 0;
             rdVector3 pos = NETMSG_POPVEC3();
