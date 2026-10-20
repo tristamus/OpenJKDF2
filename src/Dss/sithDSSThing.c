@@ -1462,7 +1462,10 @@ int sithDSSThing_ProcessCreateThing(SithMessage *pMsg)
         int pThing2Id = NETMSG_POPS32();
         if ( pThing2Id < 0 )
         {
-            SithSector* pSector = sithSector_GetPtrFromIdx(NETMSG_POPS16());
+            // Fixed: the sector goes out as 32 bits (sithDSSThing_CreateThing above,
+            // and MoTS's own reader). Reading 16 shifted the position and guid that
+            // follow, so other players' copy landed near the origin under a wrong guid.
+            SithSector* pSector = sithSector_GetPtrFromIdx(NETMSG_POPS32());
             if ( !pSector )
                 return 0;
             rdVector3 pos = NETMSG_POPVEC3();
