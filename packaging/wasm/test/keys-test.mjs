@@ -122,7 +122,7 @@ test('?keycheck is the page\'s own and is not passed to the engine, which quits 
     const at = html.indexOf("      Module['arguments'] = window.location.search");
     const code = html.substring(at, html.indexOf('\n      window.onerror', at));
     const Module = {};
-    new Function('window', 'Module', code)({ location: { search: '?keycheck&verbose&path=jkmods/x' } }, Module);
+    new Function('window', 'Module', code)({ location: { search: '?keycheck&verbose&path=jkmods/x&keycheck=1' } }, Module);
     assert.deepEqual(Module.arguments, ['-verbose', '-path', 'jkmods/x']);
 });
 

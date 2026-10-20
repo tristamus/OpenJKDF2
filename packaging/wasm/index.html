@@ -1246,7 +1246,7 @@
       // The address's options go to the engine, which quits on one it doesn't
       // know, so keycheck (the page's own) is left out.
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length && i !== 'keycheck')
+        .filter(i => i.length && i.split('=')[0] !== 'keycheck')
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
@@ -3605,7 +3605,7 @@
       // own key listener, on window from when the game starts, runs between
       // the two below: the first is added before it, the second as each key
       // goes down.
-      if (/[?&]keycheck(&|$)/.test(location.search)) (function() {
+      if (/[?&]keycheck(=|&|$)/.test(location.search)) (function() {
         var list = document.createElement('ol');
         list.className = 'key-check';
         document.body.appendChild(list);
