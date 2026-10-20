@@ -337,6 +337,18 @@ void jkSaber_UpdateLength(SithThing *thing)
         playerInfo->polyline.length = 0;
     }
 
+    // Added: MotS lights the saber at spawn with "force on" (0x81), which the owner's
+    // PC uses up in the same frame, before its flags go out. Other players then only
+    // ever see "on", so the blade stayed at length 0 (just the glow at the hilt).
+    // Another player's saber that is on and not retracting is out: grow it.
+    if (sithNet_isMulti && thing->type == SITH_THING_PLAYER
+        && thing != sithPlayer_g_pLocalPlayerThing
+        && !(thing->jkFlags & (JKFLAG_SABEREXTEND | JKFLAG_SABERRETRACT | JKFLAG_SABERFORCEON))
+        && playerInfo->polyline.length < playerInfo->length)
+    {
+        thing->jkFlags |= JKFLAG_SABEREXTEND;
+    }
+
     if ( thing->jkFlags & JKFLAG_SABEREXTEND)
     {
         flex_t newLength = playerInfo->polyline.length + (sithTime_g_frameTimeFlex * JKSABER_EXTENDTIME);
