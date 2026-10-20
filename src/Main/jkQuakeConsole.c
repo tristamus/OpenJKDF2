@@ -29,9 +29,13 @@
 #include "Platform/stdControl.h"
 #include "Platform/Common/stdUpdater.h"
 #include "Gameplay/sithPlayerActions.h"
+
 #include "Main/sithCvar.h"
 #include "Dw/dwConsoleAssets.h"
 #include "../jk.h"
+#ifdef ARCH_WASM
+#include <SDL3/SDL.h>
+#endif
 
 #ifdef PLATFORM_DROIDWORKS
 #include "Dw/dwGuiScreen.h"
@@ -811,7 +815,16 @@ int jkQuakeConsole_WmHandler(HWND a1, UINT msg, WPARAM wParam, HWND a4, LRESULT 
             if (wParam == VK_SHIFT || wParam == VK_LSHIFT || wParam == VK_RSHIFT) {
                 jkQuakeConsole_bShiftHeld = 1;
             }
+#ifdef ARCH_WASM
+            // Added: in the browser, Ctrl+Shift+` opens the console and ` or Esc
+            // closes it. Shift is the default Run key and ` the default Scores
+            // key, so Shift+` and Shift+Esc opened it mid-match by accident, and
+            // the game ignores every bind while it's open.
+            else if (!repeats && (jkQuakeConsole_bOpen ? (wParam == VK_OEM_3 || wParam == VK_ESCAPE)
+                                                       : (wParam == VK_OEM_3 && jkQuakeConsole_bShiftHeld && (SDL_GetModState() & SDL_KMOD_CTRL))))
+#else
             else if ((wParam == VK_OEM_3 || (wParam == VK_ESCAPE && jkQuakeConsole_bShiftHeld)) && !repeats && (!sithNet_isMulti || jkQuakeConsole_bShiftHeld)) // `/~ key
+#endif
             {
                 jkQuakeConsole_bOpen = !jkQuakeConsole_bOpen;
                 // Don't toggle SDL text input with the

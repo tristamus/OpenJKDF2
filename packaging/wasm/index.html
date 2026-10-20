@@ -139,6 +139,25 @@
         font: bold 17px Verdana, Geneva, sans-serif;
         text-align: center;
       }
+      /* ?keycheck: the keys pressed over the game, and what came of each. */
+      .key-check {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        z-index: 30;
+        max-width: calc(100% - 16px);
+        margin: 0;
+        padding: 6px 10px;
+        list-style: none;
+        background-color: rgba(0, 0, 0, 0.75);
+        color: var(--ink);
+        font: 13px/1.4 'Lucida Console', Monaco, monospace;
+        pointer-events: none;
+      }
+      .key-check:empty { display: none; }
+      .key-check .ok { color: var(--live); }
+      .key-check .bad { color: var(--bad); }
+      .key-check .also { color: var(--gold); }
       html.zone-open, html.zone-open body { overflow: hidden; }
       #zone {
         position: fixed;
@@ -1224,8 +1243,10 @@
         }
       };
       Module.setStatus('Downloading...');
+      // The address's options go to the engine, which quits on one it doesn't
+      // know, so keycheck (the page's own) is left out.
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length)
+        .filter(i => i.length && i !== 'keycheck')
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
@@ -3551,10 +3572,14 @@
       function playFullscreen() {
         if (!fullscreenOption.checked || document.fullscreenElement || !document.fullscreenEnabled) return;
         if (!document.getElementById('zone').hidden || document.querySelector('dialog[open]')) return;
-        // Chrome and Edge give Esc to the page this way, only in fullscreen the
-        // page asked for. Firefox and Safari use keyboardLock below instead.
+        // Chrome and Edge give these keys to the page this way, only in
+        // fullscreen the page asked for: Esc, and W, T and N with any of Ctrl,
+        // Shift and Alt, so Ctrl+W (Fire and Forward by default), Ctrl+T and
+        // Ctrl+N stay in the game instead of closing the tab or opening
+        // another. Tab, which Alt+Tab uses, is left to the browser. Firefox
+        // and Safari use keyboardLock below instead.
         if (navigator.keyboard && navigator.keyboard.lock)
-          navigator.keyboard.lock(['Escape']).catch(function() {});
+          navigator.keyboard.lock(['Escape', 'KeyW', 'KeyT', 'KeyN']).catch(function() {});
         var request;
         try {
           request = document.documentElement.requestFullscreen({ keyboardLock: 'browser' });
@@ -3572,6 +3597,93 @@
         if (/^(Alt|Control|Shift|Meta|OS|F\d+)$/.test(ev.key)) return;
         playFullscreen();
       }, true);
+
+      // Key check, with ?keycheck in the address: a list over the game of the
+      // keys pressed, whether the game gets each one, what it's bound to, what
+      // it did in a level, and whether the browser acted on it too. For
+      // finding out why a key or a bind doesn't work, in each browser. SDL's
+      // own key listener, on window from when the game starts, runs between
+      // the two below: the first is added before it, the second as each key
+      // goes down.
+      if (/[?&]keycheck(&|$)/.test(location.search)) (function() {
+        var list = document.createElement('ol');
+        list.className = 'key-check';
+        document.body.appendChild(list);
+        var checked = window.jkKeyCheck = [];
+        function heldKeys() {
+          var held = [];
+          for (var sc = 0; sc < 256; sc++)
+            if (Module._stdControl_WebKeyCheck(sc) & 0x100) held.push(sc);
+          return held;
+        }
+        function commandName(f) {
+          return Module.UTF8ToString(Module._sithControl_WebFunctionName(f));
+        }
+        function bindsOf(dik) {
+          var binds = [];
+          for (var f = Module._sithControl_WebKeyBinds(dik, -1); f >= 0; f = Module._sithControl_WebKeyBinds(dik, f))
+            binds.push(f);
+          return binds;
+        }
+        function show(entry) {
+          var li = entry.li || (entry.li = document.createElement('li'));
+          li.textContent = entry.code + ': ';
+          function add(text, cls) {
+            var span = document.createElement('span');
+            span.textContent = text;
+            if (cls) span.className = cls;
+            li.appendChild(span);
+          }
+          if (!entry.reached)
+            add('never reached the game', 'bad');
+          else if (!entry.key)
+            add('the game ignores this key', 'bad');
+          else
+            add('game key ' + entry.key + (entry.binds.length ? ', bound to ' + entry.binds.join(', ') : ', not bound'), 'ok');
+          if (entry.worked.length)
+            add(', worked: ' + entry.worked.join(', '), 'ok');
+          if (entry.browserToo)
+            add(', the browser acted on it too', 'also');
+          if (!li.parentNode) {
+            list.appendChild(li);
+            while (list.children.length > 12) list.removeChild(list.firstChild);
+          }
+        }
+        var afterSdl = null;
+        window.addEventListener('keydown', function(ev) {
+          // One left from a key that something stopped on its way.
+          if (afterSdl) window.removeEventListener('keydown', afterSdl);
+          afterSdl = null;
+          if (ev.repeat || !Module._stdControl_WebKeyCheck) return;
+          var before = heldKeys();
+          window.addEventListener('keydown', afterSdl = function() {
+            window.removeEventListener('keydown', afterSdl);
+            afterSdl = null;
+            var sc = heldKeys().filter(function(k) { return before.indexOf(k) < 0; })[0];
+            var dik = sc === undefined ? 0 : Module._stdControl_WebKeyCheck(sc) & 0xff;
+            var binds = dik ? bindsOf(dik) : [];
+            var entry = {
+              code: ev.code, reached: sc !== undefined, dik: dik,
+              key: dik ? Module.UTF8ToString(Module._stdControl_WebKeyName(dik)).replace(/^DIK_/, '') : '',
+              binds: binds.map(commandName), worked: [], browserToo: !ev.defaultPrevented
+            };
+            checked.push(entry);
+            show(entry);
+            // In a level, the commands it works, for as long as it's held.
+            var frames = 0;
+            (function watch() {
+              if (!dik || !(Module._stdControl_WebKeyCheck(sc) & 0x100) || ++frames > 600) return;
+              var worked = binds.filter(function(f) { return Module._sithControl_WebFunctionDown(f); }).map(commandName)
+                .filter(function(name) { return entry.worked.indexOf(name) < 0; });
+              if (worked.length) {
+                entry.worked = entry.worked.concat(worked);
+                show(entry);
+              }
+              requestAnimationFrame(watch);
+            })();
+          });
+        }, true);
+      })();
 
       var hideZoneBeforeLobby = hideZone;
       hideZone = function() {

@@ -24,6 +24,9 @@
 #include "Main/Main.h"
 #include "Dw/dwCog.h"
 #include "jk.h"
+#ifdef ARCH_WASM
+#include <emscripten.h>
+#endif
 
 // Added
 static int sithControl_followingPlayer = 0;
@@ -677,7 +680,28 @@ LABEL_30:
             }
         }
     }
+    sithControl_FixNumpadTurn(); // Added
     return 1;
+}
+
+// Added: profiles saved with the old default Turn binds have Numpad 4 turning
+// right and Numpad 6 doing nothing. Put Numpad 4 back to left and give Numpad 6
+// right, unless the player has used Numpad 6 for something else.
+void sithControl_FixNumpadTurn()
+{
+    stdControlKeyInfo* pTurn = &sithControl_aInputFuncToKeyinfo[INPUT_FUNC_TURN];
+    if (sithControl_IsKeyBound(DIK_NUMPAD6))
+        return;
+    for (uint32_t i = 0; i < pTurn->numEntries; i++)
+    {
+        stdControlKeyInfoEntry* pEntry = &pTurn->aEntries[i];
+        if ((pEntry->flags & INPUT_MAPPING_FLAG_DXKEY) && pEntry->dxKeyNum == DIK_NUMPAD4 && (pEntry->flags & INPUT_MAPPING_FLAG_AXIS_REVERSED))
+        {
+            pEntry->flags &= ~INPUT_MAPPING_FLAG_AXIS_REVERSED;
+            sithControl_BindControl(INPUT_FUNC_TURN, DIK_NUMPAD6, INPUT_MAPPING_FLAG_AXIS_REVERSED);
+            return;
+        }
+    }
 }
 
 int sithControl_WriteConf()
@@ -1828,9 +1852,7 @@ void sithControl_RegisterKeyboardBindings()
     sithControl_DefaultHelper(INPUT_FUNC_TURN, DIK_LEFT, 2);
     sithControl_DefaultHelper(INPUT_FUNC_TURN, DIK_RIGHT, 6);
     sithControl_DefaultHelper(INPUT_FUNC_TURN, DIK_NUMPAD4, 2);
-    sithControl_DefaultHelper(INPUT_FUNC_TURN, DIK_NUMPAD4, 6);
-    sithControl_DefaultHelper(INPUT_FUNC_TURN, DIK_LEFT, 2);
-    sithControl_DefaultHelper(INPUT_FUNC_TURN, DIK_RIGHT, 6);
+    sithControl_DefaultHelper(INPUT_FUNC_TURN, DIK_NUMPAD6, 6); // Fixed: was Numpad 4 again, then Left and Right again
 
     sithControl_DefaultHelper(INPUT_FUNC_FORWARD, DIK_UP, 2);
     sithControl_DefaultHelper(INPUT_FUNC_FORWARD, DIK_DOWN, 6);
@@ -2505,3 +2527,38 @@ int sithControl_GetLastSelected() {
     return sithControl_lastSelected;
 }
 #endif // QOL_IMPROVEMENTS
+
+#ifdef ARCH_WASM
+// Added: for the page's key check (index.html?keycheck), which shows players
+// what each key they press is bound to, and what it does in a level.
+
+// The next command after funcIdx that dxKeyNum is bound to, -1 when none is.
+EMSCRIPTEN_KEEPALIVE int sithControl_WebKeyBinds(int dxKeyNum, int funcIdx)
+{
+    for (int i = funcIdx + 1; i < INPUT_FUNC_MAX; i++)
+    {
+        stdControlKeyInfo* pInfo = &sithControl_aInputFuncToKeyinfo[i];
+        for (uint32_t j = 0; j < pInfo->numEntries; j++)
+        {
+            if ((pInfo->aEntries[j].flags & INPUT_MAPPING_FLAG_DXKEY) && pInfo->aEntries[j].dxKeyNum == dxKeyNum)
+                return i;
+        }
+    }
+    return -1;
+}
+
+// Whether a command is down right now, read as the game reads it in a level.
+EMSCRIPTEN_KEEPALIVE int sithControl_WebFunctionDown(int funcIdx)
+{
+    if (funcIdx < 0 || funcIdx >= INPUT_FUNC_MAX)
+        return 0;
+    return !!sithControl_GetKey(funcIdx, NULL);
+}
+
+EMSCRIPTEN_KEEPALIVE const char* sithControl_WebFunctionName(int funcIdx)
+{
+    if (funcIdx < 0 || funcIdx >= INPUT_FUNC_MAX)
+        return "";
+    return sithControl_aFunctionStrs[funcIdx];
+}
+#endif // ARCH_WASM
