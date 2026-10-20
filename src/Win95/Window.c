@@ -1701,6 +1701,14 @@ void Window_RecreateSDL2Window()
     SDL_GL_MakeCurrent(displayWindow, glWindowContext);
     SDL_GL_SetSwapInterval(jkPlayer_enableVsync); // Disable vsync
 #if !defined(TARGET_ANDROID) && !defined(TARGET_IOS)
+#ifdef ARCH_WASM
+    // Added: while SDL's text input is on, the browser still acts on most
+    // keys (Alt+D, Firefox's Quick Find on / and ', ...) and can take the
+    // keyboard from the game. Chat, the console and menu text boxes turn it on
+    // while they're open (stdControl_ShowSystemKeyboard); DroidWorks' text
+    // boxes need it on from the start.
+    if (Main_bDroidWorks)
+#endif
     SDL_StartTextInput(displayWindow);
 #endif
 
