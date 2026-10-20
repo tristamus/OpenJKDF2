@@ -1372,7 +1372,10 @@ void sithDSSThing_Take(SithThing *pItem, SithThing *pThing, int outstream)
         return;
     }
     pActor2 = sithThing_GetGuidThing(sithComm_netMsgTmp.pktData[1]);
-    if ( pItemThing2 && pActor2 )
+    // Fixed: MoTS item cogs call TakeItem(item, -1), so there's no actor. JKM.EXE hands
+    // the host's own take to ProcessTake, which has no actor check; requiring one here
+    // meant other players never heard that the host took an item and kept seeing it.
+    if ( pItemThing2 && (pActor2 || Main_bMotsCompat) )
     {
         if ( sithComm_netMsgTmp.netMsg.cogMsgId != DSS_TAKEITEM1 )
         {
