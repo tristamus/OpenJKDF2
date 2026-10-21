@@ -22,6 +22,10 @@
 //                                movement by the target's leg length
 //   feet k_lfoot k_rfoot         (optional) keeps the target's feet on the
 //                                ground in the source's rest pose
+//   damage always                (optional) the saber hurts on any touch:
+//                                each key turns damage on at its start, and
+//                                the source's damage markers are left out,
+//                                so an attack hits each thing once
 //   bones 2
 //   torso k_torso dir neck k_neck
 //   rsaber k_rhand blade
@@ -54,6 +58,14 @@ enum
     RT_BONE_REF = 0,
     RT_BONE_DIR = 1,
     RT_BONE_BLADE = 2,
+};
+
+// Key marker types sithPuppet acts on
+enum
+{
+    RT_MARKER_DAMAGE_ON = 4,
+    RT_MARKER_DAMAGE_OFF = 5,
+    RT_MARKER_DAMAGE_RESET = 14,
 };
 
 enum
@@ -110,6 +122,7 @@ typedef struct rtRecipe
     char legs[6][RT_NAME_LEN];
     int bHasFeet;
     char feet[2][RT_NAME_LEN];
+    int bDamageAlways;
     int numBones;
     rtBone bones[RT_MAX_BONES];
     int numKeys;
@@ -553,6 +566,10 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
             stdString_SafeStrCopy(pRecipe->feet[1], w[2], RT_NAME_LEN);
             pRecipe->bHasFeet = 1;
         }
+        else if (!strcmp(w[0], "damage") && n == 2 && !strcmp(w[1], "always"))
+        {
+            pRecipe->bDamageAlways = 1;
+        }
         else if (!strcmp(w[0], "bones") && n == 2)
         {
             count = _atoi(w[1]);
@@ -792,6 +809,25 @@ void sithKeyRetarget_Reset()
     sithKeyRetarget_state.state = RT_STATE_UNREAD;
 }
 
+// Damage on at frame 0, then the source's markers in order, without the
+// ones that turn damage on or off or start a new list of things hit
+static void sithKeyRetarget_DamageAlways(const rdKeyframe* pSrc, rdKeyframe* pKeyframe)
+{
+    int numMarkers = 0;
+
+    pKeyframe->markers.marker_float[numMarkers] = 0.0;
+    pKeyframe->markers.marker_int[numMarkers++] = RT_MARKER_DAMAGE_ON;
+    for (uint32_t i = 0; i < pSrc->numMarkers && numMarkers < 8; i++)
+    {
+        int32_t type = pSrc->markers.marker_int[i];
+        if (type == RT_MARKER_DAMAGE_ON || type == RT_MARKER_DAMAGE_OFF || type == RT_MARKER_DAMAGE_RESET)
+            continue;
+        pKeyframe->markers.marker_float[numMarkers] = pSrc->markers.marker_float[i];
+        pKeyframe->markers.marker_int[numMarkers++] = type;
+    }
+    pKeyframe->numMarkers = numMarkers;
+}
+
 static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
 {
     rtState* pState = &sithKeyRetarget_state;
@@ -847,6 +883,8 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
     pKeyframe->numFrames = src.numFrames;
     pKeyframe->numMarkers = src.numMarkers;
     pKeyframe->markers = src.markers;
+    if (pState->recipe.bDamageAlways)
+        sithKeyRetarget_DamageAlways(&src, pKeyframe);
 
     pKeyframe->aNodes = (rdJoint*)RDROID_ALLOC(sizeof(rdJoint) * (numNodes + 1));
     if (!pKeyframe->aNodes)
