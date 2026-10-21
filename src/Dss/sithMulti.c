@@ -743,6 +743,7 @@ int sithMulti_CheckPlayers(int32_t msecTime, SithEventParams* pParam)
             {
                 if ( (v1->flags & 1) != 0 && sithTime_g_msecGameTime > v1->msecLastCommTime + MULTI_TIMEOUT_MS )
                 {
+                    stdPlatform_Printf("OpenJKDF2: No packets from client id %x for %d s, dropping it.\n", v1->playerNetId, MULTI_TIMEOUT_MS / 1000); // Added
                     v2 = v1->playerNetId;
                     if ( sithNet_isServer )
                     {
@@ -786,6 +787,9 @@ int sithMulti_CheckPlayers(int32_t msecTime, SithEventParams* pParam)
     }
     else if ( sithTime_g_msecGameTime > jkPlayer_playerInfos[0].msecLastCommTime + MULTI_TIMEOUT_MS )
     {
+        // Added: the browser build offers its network log on this line.
+        if ( jkPlayer_playerInfos[0].playerNetId == sithNet_serverNetId )
+            stdPlatform_Printf("OpenJKDF2: Leaving the game: no packets from the host for %d s.\n", MULTI_TIMEOUT_MS / 1000);
         jkPlayer_playerInfos[0].msecLastCommTime = sithTime_g_msecGameTime;
         v6 = sithStrTable_GetUniStringWithFallback("%s_HAS_LEFT_THE_GAME");
         jk_snwprintf(a1, 0x80u, v6, jkPlayer_playerInfos);

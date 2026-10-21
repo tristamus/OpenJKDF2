@@ -155,6 +155,31 @@
         pointer-events: none;
       }
       .key-check:empty { display: none; }
+      /* "Save network log": after the network ended a match, or always with
+         ?netlog in the address. */
+      .net-log {
+        position: fixed;
+        right: 8px;
+        bottom: 8px;
+        z-index: 30;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        max-width: calc(100% - 16px);
+        padding: 6px 10px;
+        background-color: rgba(0, 0, 0, 0.8);
+        color: var(--ink);
+        font: 13px/1.4 Arial, Helvetica, sans-serif;
+      }
+      .net-log[hidden] { display: none; }
+      .net-log button {
+        padding: 3px 10px;
+        border: 1px solid var(--gold);
+        background-color: transparent;
+        color: var(--gold);
+        font: bold 13px Arial, Helvetica, sans-serif;
+        cursor: pointer;
+      }
       .key-check .ok { color: var(--live); }
       .key-check .bad { color: var(--bad); }
       .key-check .also { color: var(--gold); }
@@ -1226,6 +1251,7 @@
             //text = text.replace(/>/g, "&gt;");
             //text = text.replace('\n', '<br>', 'g');
             console.log(text);
+            if (/^OpenJKDF2: /.test(text)) netLogLine(text);
             if (element) {
               element.value += text + "\n";
               element.scrollTop = element.scrollHeight; // focus on bottom
@@ -1280,9 +1306,9 @@
       };
       Module.setStatus('Downloading...');
       // The address's options go to the engine, which quits on one it doesn't
-      // know, so keycheck (the page's own) is left out.
+      // know, so keycheck and netlog (the page's own) are left out.
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length && i.split('=')[0] !== 'keycheck')
+        .filter(i => i.length && i.split('=')[0] !== 'keycheck' && i.split('=')[0] !== 'netlog')
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
@@ -3919,6 +3945,53 @@
         if (/^(Alt|Control|Shift|Meta|OS|F\d+)$/.test(ev.key)) return;
         playFullscreen();
       }, true);
+
+      // ---- The network log (Module.jkNet.log, kept by stdComm_WSRelay.c):
+      // the relay, each direct link and, every 10 s in a game, how each link
+      // is doing. When the network ends a match ("OpenJKDF2: Leaving the
+      // game: ..."), the player can save it, to send to whoever looks into
+      // why. ?netlog in the address keeps the button up, for hosts.
+      var netLogBar = null;
+      function netLogLine(text) {
+        // Not the line per material a level frees as it ends, which would
+        // crowd out the rest.
+        if (Module.jkNet && !/^OpenJKDF2: rdMaterial_/.test(text)) Module.jkNet.note(text.replace(/^OpenJKDF2: /, 'engine: '));
+        if (/^OpenJKDF2: Leaving the game: /.test(text)) showNetLog(text.replace(/^OpenJKDF2: Leaving the game: /, ''));
+      }
+      function netLogText() {
+        var net = Module.jkNet;
+        return ['OpenJKDF2 network log, saved ' + new Date().toISOString(),
+                'Page: ' + location.href.split('#')[0],
+                'Browser: ' + navigator.userAgent,
+                'Times are UTC.', ''].concat(net ? net.log : ['(the game never connected to the relay)'])
+               .concat(net && net.session ? ['', 'now: ' + net.health()] : []).join('\r\n') + '\r\n';
+      }
+      function showNetLog(why) {
+        if (!netLogBar) {
+          netLogBar = document.createElement('div');
+          netLogBar.className = 'net-log';
+          netLogBar.hidden = true;
+          var label = document.createElement('span');
+          var save = document.createElement('button');
+          save.type = 'button';
+          save.textContent = 'Save network log';
+          save.onclick = function() {
+            var stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').substring(0, 15);
+            downloadFile(new TextEncoder().encode(netLogText()), 'jkdf2mp-network-log-' + stamp + '.txt', 'text/plain');
+          };
+          var close = document.createElement('button');
+          close.type = 'button';
+          close.textContent = '\u00d7';
+          close.setAttribute('aria-label', 'Hide');
+          close.onclick = function() { netLogBar.hidden = true; };
+          netLogBar.append(label, save, close);
+          document.body.appendChild(netLogBar);
+        }
+        netLogBar.firstChild.textContent = why ? 'Left the game: ' + why.replace(/\.$/, '') + '.' : 'Network log';
+        netLogBar.hidden = false;
+      }
+      window.jkNetLogText = netLogText;
+      if (/[?&]netlog(=|&|$)/.test(location.search)) showNetLog('');
 
       // Key check, with ?keycheck in the address: a list over the game of the
       // keys pressed, whether the game gets each one, what it's bound to, what
