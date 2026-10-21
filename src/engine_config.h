@@ -168,6 +168,18 @@
 #define TICKRATE_MAX (300)
 #endif
 
+// The host's tick rate until they change it (Host > Advanced), in ms. Under
+// 100, a match runs physics at 150 steps a second instead of 50
+// (TARGET_PHYSTICK_FPS), which is what makes it smooth in the browser, and
+// each player sends its position about 50 times a second instead of 5.
+// Desktop builds keep the original game's 180, since JK.EXE only takes 100-300.
+#define TICKRATE_ORIGINAL_DEFAULT (180)
+#ifdef ARCH_WASM
+#define TICKRATE_DEFAULT (16)
+#else
+#define TICKRATE_DEFAULT TICKRATE_ORIGINAL_DEFAULT
+#endif
+
 // Run game physics at a fixed timestep
 #define FIXED_TIMESTEP_PHYS
 

@@ -260,6 +260,19 @@ void jkGuiNetHost_LoadSettings()
     jkGuiNetHost_maxPlayers = wuRegistry_GetInt("maxPlayers", jkGuiNetHost_maxPlayers);
     jkGuiNetHost_tickRate = wuRegistry_GetInt("tickRate", jkGuiNetHost_tickRate);
 
+    // Added: the Host screen saves the tick rate every time it closes, so a
+    // new default would never reach anyone who has opened it. A saved value
+    // that is still the default this player was last given moves to the new
+    // one, once; a value they chose themselves stays.
+    int tickRateDefault = wuRegistry_GetInt("tickRateDefault", TICKRATE_ORIGINAL_DEFAULT);
+    if (tickRateDefault != TICKRATE_DEFAULT)
+    {
+        if (jkGuiNetHost_tickRate == tickRateDefault)
+            jkGuiNetHost_tickRate = TICKRATE_DEFAULT;
+        wuRegistry_SaveInt("tickRate", jkGuiNetHost_tickRate);
+        wuRegistry_SaveInt("tickRateDefault", TICKRATE_DEFAULT);
+    }
+
     // MOTS added:
     //if (jkGuiNetHost_maxRank > 8) {
     //    jkGuiNetHost_maxRank = 8;

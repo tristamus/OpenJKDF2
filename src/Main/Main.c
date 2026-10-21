@@ -295,7 +295,7 @@ int Main_Startup(const char *cmdline)
     jkGuiNetHost_scoreLimit = 100;
     jkGuiNetHost_timeLimit = 30;
     jkGuiNetHost_sessionFlags = 0;
-    jkGuiNetHost_tickRate = 180;
+    jkGuiNetHost_tickRate = TICKRATE_DEFAULT;
     Video_modeStruct.modeIdx = 0;
     Video_modeStruct.descIdx = 0;
     Video_modeStruct.Video_8605C8 = 0;
