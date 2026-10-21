@@ -139,6 +139,22 @@
         font: bold 17px Verdana, Geneva, sans-serif;
         text-align: center;
       }
+      /* Over the top of the game in a tab that another tab's game took the
+         saves from. It leaves the game playable underneath. */
+      .saves-elsewhere {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 25;
+        margin: 0;
+        padding: 8px 16px;
+        background-color: rgba(0, 0, 0, 0.85);
+        color: var(--gold);
+        font: bold 14px Verdana, Geneva, sans-serif;
+        text-align: center;
+        pointer-events: none;
+      }
       /* ?keycheck: the keys pressed over the game, and what came of each. */
       .key-check {
         position: fixed;
@@ -888,6 +904,7 @@
       <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
     </div>
     <p class="quit-note" id="quit-note" role="status" hidden>Saving your settings and going back to the lobby&hellip;</p>
+    <p class="saves-elsewhere" id="saves-elsewhere" role="status" hidden>The game was started in another tab, so this one no longer saves controls or games. Close this tab, or reload it to play and save here.</p>
 <div class="spinner" id='spinner'></div>
     <div class="emscripten" id="status">Downloading...</div>
 <div class="emscripten">
@@ -2227,6 +2244,7 @@
           FS.mkdirTree(dir);
           FS.mount(IDBFS, { autoPersist: true }, dir);
         }
+        takeSaves(IDBFS);
         Module.jkSavesMounted = true;  // main.c leaves them alone
         Module.addRunDependency('saves');
         FS.syncfs(true, function(err) {
@@ -2235,6 +2253,33 @@
           importPlayers(FS, picked, gameRoot + 'player');
           Module.removeRunDependency('saves');
         });
+      }
+
+      // One tab stores the saves at a time. Each tab loads its own copy when
+      // its game starts, and storing writes back every file in a folder whose
+      // copy differs from what's stored, not only the one just changed. So a
+      // tab opened earlier put back the controls (and saved games) it had
+      // loaded, over what a newer tab had stored since. The tab whose game
+      // started last stores from then on; the others stop and say so.
+      var savesChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('jkdf2mp-saves') : null;
+      var savesElsewhere = false;
+
+      function takeSaves(IDBFS) {
+        // The store after each write (autoPersist) and Quit's store both go
+        // through here. Loading (populate) is left alone.
+        var syncfs = IDBFS.syncfs;
+        IDBFS.syncfs = function(mount, populate, callback) {
+          if (savesElsewhere && !populate) return callback(null);
+          return syncfs.apply(this, arguments);
+        };
+        if (!savesChannel) return;
+        savesChannel.onmessage = function(ev) {
+          if (ev.data !== 'saves-taken' || savesElsewhere) return;
+          savesElsewhere = true;
+          console.warn('OpenJKDF2: the game was started in another tab, which stores the saves from now on');
+          document.getElementById('saves-elsewhere').hidden = false;
+        };
+        savesChannel.postMessage('saves-taken');
       }
 
       // Brings in the characters from the picked install's player folder, so
