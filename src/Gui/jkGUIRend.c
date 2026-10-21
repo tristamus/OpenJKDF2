@@ -38,10 +38,24 @@ int32_t jkGuiRend_menuNestDepth = 0;
 // loops know to unwind before the new state is entered. Cleared once the state
 // change is actually applied at depth 0, or by the menu loop itself.
 int32_t jkGuiRend_bStateChangePending = 0;
+#ifdef QOL_IMPROVEMENTS
+// Added: the element the Esc key is clicking right now, or NULL. See
+// jkGuiRend_IsEscapeKeyClick.
+static jkGuiElement *jkGuiRend_pEscapeKeyClicked = NULL;
+#endif
 static int32_t jkGuiRend_bIsSurfaceValid = 0;
 static int32_t jkGuiRend_bInitted = 0;
 static int32_t jkGuiRend_bOpen = 0;
 static int32_t jkGuiRend_HandlerIsSet = 0;
+#ifdef QOL_IMPROVEMENTS
+// Added: whether pElement is being clicked by the Esc key rather than by the
+// mouse, so a screen's Cancel button can treat Esc differently.
+int jkGuiRend_IsEscapeKeyClick(jkGuiElement *pElement)
+{
+    return pElement && pElement == jkGuiRend_pEscapeKeyClicked;
+}
+#endif
+
 int jkGuiRend_IsMenuActive(void)
 {
     return jkGuiRend_HandlerIsSet > 0;
@@ -1861,7 +1875,14 @@ LABEL_47:
                     }
                 }
             }
+#ifdef QOL_IMPROVEMENTS
+            if ( wParam == VK_ESCAPE )
+                jkGuiRend_pEscapeKeyClicked = v8; // Added: see jkGuiRend_IsEscapeKeyClick
+#endif
             jkGuiRend_InvokeClicked(v8, jkGuiRend_activeMenu, v8->rect.x + 1, v8->rect.y + 1, 0);
+#ifdef QOL_IMPROVEMENTS
+            jkGuiRend_pEscapeKeyClicked = NULL; // Added
+#endif
             jkGuiRend_lastKeyScancode = lParam & 0xFF0000;
             return 1;
 
