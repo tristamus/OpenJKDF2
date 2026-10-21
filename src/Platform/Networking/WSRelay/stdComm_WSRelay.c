@@ -106,8 +106,8 @@ EM_JS(void, wsrelay_js_connect, (), {
     var net = Module.jkNet;
     if (!net) {
         net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null,
-                               stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0 },
-                               log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000 };
+                               stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0 },
+                               log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {} };
 
         /* The network log the page saves ("Save network log" in index.html):
            what happened to the relay and each data channel, the engine's own
@@ -137,9 +137,10 @@ EM_JS(void, wsrelay_js_connect, (), {
                     ', channel ' + p.dc.readyState + ', ' + p.dc.bufferedAmount + ' bytes waiting)' : 'relay') +
                     ', heard ' + (heard ? ((now - heard) / 1000).toFixed(1) + ' s ago' : 'never');
             });
-            line += '; sent ' + (s.dcSent - was.dcSent) + ' direct, ' + (s.wsSent - was.wsSent) + ' relay; got ' +
+            line += '; sent ' + (s.dcSent - was.dcSent) + ' direct, ' + (s.wsSent - was.wsSent) + ' relay (' +
+                    (s.wsSkipped - was.wsSkipped) + ' positions skipped); got ' +
                     (s.dcRecv - was.dcRecv) + ' direct, ' + (s.wsRecv - was.wsRecv) + ' relay';
-            net.healthStats = { dcSent: s.dcSent, dcRecv: s.dcRecv, wsSent: s.wsSent, wsRecv: s.wsRecv };
+            net.healthStats = { dcSent: s.dcSent, dcRecv: s.dcRecv, wsSent: s.wsSent, wsRecv: s.wsRecv, wsSkipped: s.wsSkipped };
             return line;
         };
         setInterval(function() { if (net.session) net.note(net.health()); }, 10000);
@@ -261,9 +262,34 @@ EM_JS(void, wsrelay_js_connect, (), {
                 } catch (e) {}
             }
             if (net.state !== 1) return 0;
+            if (net.skipRelayedPos(bytes)) {
+                net.stats.wsSkipped++;
+                return 1;
+            }
             net.ws.send(bytes);
             net.stats.wsSent++;
             return 1;
+        };
+
+        /* Below a 100 ms tick rate every player sends its position each
+           physics step it's due, about 50 a second at the default 16 ms.
+           Through the relay each one counts against the lobby's daily limit,
+           so a player's position goes through it to each player at most every
+           200 ms, as at the original 180 ms, and the others are skipped. The
+           next one is never more than a tick away and replaces it. Only
+           those: DSS_THINGPOS (1) sent without resends (msgId 0), 52 or 64
+           bytes long, which only a player's is (sithDSSThing_Pos adds the
+           head pitch for players). Direct links get them all. */
+        net.skipRelayedPos = function(bytes) {
+            var n = bytes.byteLength;
+            if (n !== 8 + 4 + 52 && n !== 8 + 4 + 64) return false;
+            var dv = new DataView(bytes.buffer, bytes.byteOffset, n);
+            if (dv.getUint16(8, true) !== 1 || dv.getUint16(10, true) !== 0) return false;
+            var key = dv.getUint32(4, true) + ' ' + dv.getInt32(12, true);
+            var now = performance.now(), last = net.relayPosAt[key];
+            if (last !== undefined && now - last < 200) return true;
+            net.relayPosAt[key] = now;
+            return false;
         };
 
         /* Map download frames: over the map channel unless via is 'relay' or
@@ -479,6 +505,7 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     net.session = true;
     net.isHost = !!isHost;
     net.lastFrom = {};
+    net.relayPosAt = {};
     net.healthStats = null;
     net.note((isHost ? 'hosting' : 'joined') + ' room ' + (net.seat ? net.seat.room + ' as player ' + net.seat.id : '(no seat from the relay)'));
     if (!isHost && net.rtcEnabled()) net.offer(1);
@@ -1270,6 +1297,13 @@ BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)
 
     if (!wsrelay_bHosting && !wsrelay_bJoined)
         return stdComm_bIsServer ? 1 : 0;
+
+    // A host's sends to everyone include itself (slot 0, see
+    // stdComm_SendToPlayer). It has no link to itself, so these went to the
+    // relay, which dropped them but counted each one against the lobby's
+    // daily request limit.
+    if (stdComm_bIsServer && (idTo == 0 || idTo == 1))
+        return 1;
 
     if (dwDataSize > WSRELAY_MAX_PACKET-8) dwDataSize = WSRELAY_MAX_PACKET-8;
     *(uint32_t*)&wsrelay_sendBuf[0] = idFrom;
