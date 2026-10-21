@@ -3208,12 +3208,19 @@
         newsLine.textContent = text;
         newsLine.hidden = !newsLine.textContent;
 
+        // From the files saved in the browser, mods and maps added to the
+        // folder since need the folder chosen again, which the label does:
+        // it opens the folder picker, over the folder prompt.
+        var otherFolder = modChoice.querySelector('.other-folder');
+        otherFolder.hidden = !fromBrowser;
         var keepOffer = modChoice.querySelector('.keep-offer'), keepOn = modChoice.querySelector('.keep-on');
         function showKept() {
           var k = keptFolder[game];
           keepOn.querySelector('.keep-text').textContent = k ? 'Your folder "' + k.name + '" is checked at every start.' : '';
           keepOn.hidden = !k;
           keepOffer.hidden = !!k || !keptStore || !copyTime;
+          otherFolder.textContent = k && k.kind === 'extra' ?
+            'Check my game folder for new mods and maps' : 'Check my folder for new mods and maps';
         }
         showKept();
 
@@ -3223,13 +3230,6 @@
         showPickerResult('');
         modChoice.hidden = false;
         var start = modChoice.querySelector('button.play');
-        // From the files saved in the browser, mods and maps added to the
-        // folder since need the folder chosen again, which the label does:
-        // it opens the folder picker, over the folder prompt.
-        var otherFolder = modChoice.querySelector('.other-folder');
-        otherFolder.hidden = !fromBrowser;
-        otherFolder.textContent = keptFolder[game] && keptFolder[game].kind === 'extra' ?
-          'Check my game folder for new mods and maps' : 'Check my folder for new mods and maps';
         start.focus();
         return new Promise(function(resolve) {
           var keep = keepOffer.querySelector('button'), stop = keepOn.querySelector('button'), over = false;
