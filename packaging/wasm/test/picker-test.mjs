@@ -476,6 +476,13 @@ test('the same folder again has nothing new', async () => {
     assert.equal(text, 'Nothing new since ' + day + '.');
 });
 
+test("the game's own GOBs aren't maps, even when they change", async () => {
+    const { news, text, day } = await newsFor(STEAM_MOTS, STEAM_MOTS, { mots: true, times: {
+        'Episode/JKM.GOO': 2000, 'Episode/JKM_MP.GOO': 2000 } });
+    assert.deepEqual(news.maps, { added: [], updated: [] });
+    assert.equal(text, 'Nothing new since ' + day + '.');
+});
+
 test('several new maps are counted, with the first few named', async () => {
     const extra = Object.fromEntries(['A', 'B', 'C', 'D', 'E'].map(n => ['Episode/' + n + '.gob', null]));
     const { text, day } = await newsFor(STEAM_JK, { ...STEAM_JK, ...extra, 'Mod Two/two.gob': null, 'Mod One/one.gob': null });

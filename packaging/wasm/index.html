@@ -2589,8 +2589,9 @@
       // the files the page reads count. mods has a mod's place in folderMods
       // for each mod that's 'new' (none of its files were saved) or
       // 'updated'. maps has the names of new and updated maps: the GOBs at
-      // the top of episode/, and the episode folders, which have an
-      // episode.jk. Run once the mods are placed (placeModFiles).
+      // the top of episode/, apart from the game's own, and the episode
+      // folders, which have an episode.jk. Run once the mods are placed
+      // (placeModFiles).
       function whatsNew(saved, files, folderMods, ext) {
         function state(e) {
           var src = e.zip || e.file, rel = src.webkitRelativePath;
@@ -2598,6 +2599,7 @@
           return !was ? 'new' : was.size !== src.size || was.time !== src.lastModified ? 'changed' : 'same';
         }
         var byMod = folderMods.map(function() { return []; });
+        var own = REQUIRED_JK.concat(REQUIRED_MOTS).map(function(r) { return r.toLowerCase(); });
         var episodes = {}, maps = {}, names = [];
         for (var e of files) {
           var lower = e.path.toLowerCase().split('/');
@@ -2610,7 +2612,7 @@
             continue;
           }
           var parts = e.path.split('/'), lower = e.path.toLowerCase().split('/');
-          if (lower[0] !== 'episode' || !isGameFile(lower.join('/'), ext, null)) continue;
+          if (lower[0] !== 'episode' || own.indexOf(lower.join('/')) >= 0 || !isGameFile(lower.join('/'), ext, null)) continue;
           var name = lower.length === 2 ? (lower[1].endsWith(ext) ? parts[1].replace(/\.[^.]*$/, '') : null)
                                         : (episodes[lower[1]] ? parts[1] : null);
           if (!name) continue;
