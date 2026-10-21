@@ -19,16 +19,28 @@
 // Text frames are relay control lines, binary frames are game packets:
 //   us -> relay   list <game> | host <entry> | update <entry> | join <room>
 //                 welcome <id> <entry> | leave | signal <id> <data> | ping
-//                 hello <game> <name>
+//                 hello <game> <name> | rejoin <room> <id> <key>
+//                 rehost <room> <key> <entry>
 //   relay -> us   list (<room> <players> <entry>)* | hosted <room>
 //                 peer-joined <id> | peer-left <id> | welcome <id> <entry>
 //                 host-left | error <code> | signal <id> <data> | ice <data>
+//                 seat <room> <id> <key> | rejoined <room> <id> | rehosted <room>
+//                 peer-lost <id> | peer-back <id> | host-lost | host-back
 // list asks for the games this game can join: those hosted by the same game
 // (jk1 or mots), and any whose host hasn't said which it runs. <entry> is a
 // hex-encoded jkMultiEntry. <data> is base64 JSON: an SDP offer or answer
 // ({"d": ...}) or an ICE candidate ({"c": ...}) for signal, and the
 // RTCPeerConnection iceServers list for ice. The JS below handles signal and
 // ice itself; the engine never sees them.
+//
+// Game packets don't need the relay once the data channel is open, so losing
+// the socket mid-game doesn't end the match. The relay holds a seat whose
+// socket closed without leave for a while and tells the room (peer-lost,
+// host-lost); the JS reconnects and takes the seat back with the key the relay
+// gave it (seat), and the room hears peer-back or host-back. A seat nobody
+// takes back ends as before, with peer-left or host-left. A player only counts
+// as gone once the relay says so and its data channel is down too, or once
+// sithMulti's own timeout finds it silent.
 //
 // For the landing page's live counts, the JS also tells the relay this
 // player's name (base64 UTF-8) and game (jk1 or mots) with hello, from the
@@ -69,6 +81,10 @@
 // 32-byte fingerprint and a name of up to 63 characters (mods.js).
 #define WSRELAY_MAX_TAIL_HEX (256)
 
+// How long a joiner with no data channel to the host waits for a lost relay
+// to come back before it gives up on the host.
+#define WSRELAY_LOBBY_GRACE_MS (20000)
+
 #define WSRELAY_STATE_CONNECTING (0)
 #define WSRELAY_STATE_OPEN (1)
 #define WSRELAY_STATE_CLOSED (2)
@@ -90,7 +106,52 @@ EM_JS(void, wsrelay_js_connect, (), {
     var net = Module.jkNet;
     if (!net) {
         net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null,
-                               stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0 } };
+                               stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0 },
+                               log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000 };
+
+        /* The network log the page saves ("Save network log" in index.html):
+           what happened to the relay and each data channel, the engine's own
+           "OpenJKDF2:" lines (the page's print adds those), and every 10 s in
+           a game how each link is doing. Only the last 1000 lines are kept. */
+        net.note = function(text) {
+            net.log.push(new Date().toISOString().substring(11, 23) + ' ' + text);
+            if (net.log.length > 1000) net.log.splice(0, net.log.length - 1000);
+        };
+
+        net.event = function(text) {
+            net.note(text);
+            console.log('OpenJKDF2: ' + text);
+        };
+
+        /* One line per player we've heard from: the data channel's state, how
+           much is waiting in it, and how long since anything came from them,
+           then the packets sent and received each way since the last line. */
+        net.health = function() {
+            var now = performance.now(), s = net.stats, was = net.healthStats || s;
+            var ids = Object.keys(net.peers).concat(Object.keys(net.lastFrom))
+                .filter(function(id, i, all) { return all.indexOf(id) === i; });
+            var line = 'link check: relay ' + ['connecting', 'open', 'closed'][net.state];
+            ids.forEach(function(id) {
+                var p = net.peers[id], heard = net.lastFrom[id];
+                line += '; player ' + id + ' ' + (p ? (p.open ? 'direct' : 'relay') + ' (' + p.pc.connectionState +
+                    ', channel ' + p.dc.readyState + ', ' + p.dc.bufferedAmount + ' bytes waiting)' : 'relay') +
+                    ', heard ' + (heard ? ((now - heard) / 1000).toFixed(1) + ' s ago' : 'never');
+            });
+            line += '; sent ' + (s.dcSent - was.dcSent) + ' direct, ' + (s.wsSent - was.wsSent) + ' relay; got ' +
+                    (s.dcRecv - was.dcRecv) + ' direct, ' + (s.wsRecv - was.wsRecv) + ' relay';
+            net.healthStats = { dcSent: s.dcSent, dcRecv: s.dcRecv, wsSent: s.wsSent, wsRecv: s.wsRecv };
+            return line;
+        };
+        setInterval(function() { if (net.session) net.note(net.health()); }, 10000);
+
+        /* A tab closed in a game gives up its seat at once (a socket that
+           just closes keeps it for a while) and closes its data channels, so
+           the others don't wait on it. */
+        if (typeof window !== 'undefined') window.addEventListener('pagehide', function() {
+            if (!net.session) return;
+            if (net.state === 1) try { net.ws.send('leave'); } catch (e) {}
+            net.closeAll();
+        });
 
         net.rtcEnabled = function() {
             return Module['jkUseWebRTC'] !== false && typeof RTCPeerConnection !== 'undefined';
@@ -116,8 +177,8 @@ EM_JS(void, wsrelay_js_connect, (), {
                 var was = p.open;
                 var cs = pc.connectionState;
                 p.open = dc.readyState === 'open' && cs !== 'disconnected' && cs !== 'failed' && cs !== 'closed';
-                if (p.open && !was) console.log('OpenJKDF2: direct WebRTC link to player ' + id + ' is up');
-                if (!p.open && was) console.log('OpenJKDF2: direct link to player ' + id + ' is down, using the relay');
+                if (p.open && !was) net.event('direct WebRTC link to player ' + id + ' is up');
+                if (!p.open && was) net.event('direct link to player ' + id + ' is down (' + cs + ', channel ' + dc.readyState + '), using the relay');
             };
             dc.onopen = update;
             dc.onclose = update;
@@ -177,6 +238,7 @@ EM_JS(void, wsrelay_js_connect, (), {
         net.onPeerPacket = function(id, data) {
             if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
             net.stats.dcRecv++;
+            net.lastFrom[id] = performance.now();
             if (net.isHost) {
                 var dv = new DataView(data);
                 dv.setUint32(0, id, true);
@@ -240,8 +302,19 @@ EM_JS(void, wsrelay_js_connect, (), {
                 if (obj) net.onSignal(parseInt(parts[1], 10), obj);
                 return true;
             }
-            if (op === 'peer-left') net.closePeer(parseInt(text.substring(sp + 1), 10));
-            if (op === 'host-left') net.closeAll();
+            /* The seat to take back if the socket drops in a game. */
+            if (op === 'seat') {
+                var seat = text.split(' ');
+                net.seat = { room: parseInt(seat[1], 10), id: parseInt(seat[2], 10), key: seat[3] || "" };
+                return true;
+            }
+            /* A player whose data channel is still up is still playing: the
+               engine decides when they're gone (DirectPlay_Receive). */
+            var gone = op === 'peer-left' ? net.peers[parseInt(text.substring(sp + 1), 10)] : net.peers[1];
+            if ((op === 'peer-left' || op === 'host-left') && !(gone && gone.open)) {
+                if (op === 'peer-left') net.closePeer(parseInt(text.substring(sp + 1), 10));
+                else net.closeAll();
+            }
             return false;
         };
         /* The live counts: this player's name and game, sent when the socket
@@ -267,7 +340,7 @@ EM_JS(void, wsrelay_js_connect, (), {
 
         /* Outside a game, reconnects a lost socket after a while (the lobby
            restarts when it's updated), so the player stays counted. In a game,
-           losing the relay is the engine's to handle. */
+           see rejoinLater. */
         net.retryMs = 2000 + Math.random() * 4000;
         net.keepPresence = function() {
             if (!Module.jkPresence || net.session || net.retry || net.state !== 2) return;
@@ -278,7 +351,21 @@ EM_JS(void, wsrelay_js_connect, (), {
             net.retryMs = Math.min(net.retryMs * 2, 120000);
         };
 
-        net.connect = function() {
+        /* In a game, reconnects a lost socket soon, then takes this player's
+           seat back (ws.onopen). The match goes on meanwhile over the data
+           channels; the engine gives up on the host only if there's none. */
+        net.rejoinLater = function() {
+            if (net.retry) return;
+            net.retry = setTimeout(function() {
+                net.retry = null;
+                if (net.session && net.state === 2) net.connect(true);
+            }, net.rejoinMs);
+            net.rejoinMs = Math.min(net.rejoinMs * 2, 5000);
+        };
+
+        /* keepQueue: in a game, packets already in from the data channels
+           still go to the engine. */
+        net.connect = function(keepQueue) {
             if (net.ws && net.state !== 2) return;
             clearTimeout(net.retry);
             net.retry = null;
@@ -288,7 +375,7 @@ EM_JS(void, wsrelay_js_connect, (), {
             var url = Module['jkRelayUrl'];
             if (!url && typeof location !== 'undefined')
                 url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
-            net.queue = [];
+            if (!keepQueue) net.queue = [];
             net.state = 0;
             var ws;
             try {
@@ -309,11 +396,25 @@ EM_JS(void, wsrelay_js_connect, (), {
                 /* With game packets on WebRTC, the socket can sit idle for a whole
                    match, and proxies drop idle WebSockets. */
                 keepalive = setInterval(function() { if (ws.readyState === 1) ws.send('ping'); }, 25000);
+                net.rejoinMs = 1000;
+                var seat = net.session && net.seat;
+                if (seat) {
+                    ws.send(seat.id === 1 ? 'rehost ' + seat.room + ' ' + seat.key + (net.entry ? ' ' + net.entry : "")
+                                          : 'rejoin ' + seat.room + ' ' + seat.id + ' ' + seat.key);
+                    net.event('relay is back, taking back seat ' + seat.id + ' in room ' + seat.room);
+                } else if (net.session) {
+                    net.event('relay is back, but it never gave this game a seat to take back');
+                }
             };
-            ws.onclose = function() {
+            ws.onclose = function(ev) {
                 if (keepalive) clearInterval(keepalive);
                 if (net.ws !== ws) return;
                 net.state = 2;
+                if (net.session) {
+                    net.event('lost the relay (code ' + ev.code + (ev.reason ? ', ' + ev.reason : "") +
+                              '), trying again in ' + Math.round(net.rejoinMs / 1000) + ' s');
+                    net.rejoinLater();
+                }
                 net.keepPresence();
             };
             ws.onerror = function() {
@@ -330,6 +431,7 @@ EM_JS(void, wsrelay_js_connect, (), {
                     return;
                 } else {
                     net.stats.wsRecv++;
+                    if (ev.data.byteLength >= 8) net.lastFrom[new DataView(ev.data).getUint32(0, true)] = performance.now();
                 }
                 net.queue.push(ev.data);
             };
@@ -347,8 +449,16 @@ EM_JS(int, wsrelay_js_state, (), {
 
 EM_JS(int, wsrelay_js_send_text, (const char* pText), {
     var net = Module.jkNet;
-    if (!net || net.state !== 1) return 0;
-    net.ws.send(UTF8ToString(pText));
+    if (!net) return 0;
+    var text = UTF8ToString(pText);
+    var sp = text.indexOf(' ');
+    var op = sp < 0 ? text : text.substring(0, sp);
+    // A host's entry goes with rehost; hosting, joining or leaving ends the
+    // seat this game had.
+    if ((op === 'host' || op === 'update') && sp > 0) net.entry = text.substring(sp + 1);
+    if (op === 'host' || op === 'join' || op === 'leave') net.seat = null;
+    if (net.state !== 1) return 0;
+    net.ws.send(text);
     return 1;
 });
 
@@ -368,6 +478,9 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     net.closeAll();
     net.session = true;
     net.isHost = !!isHost;
+    net.lastFrom = {};
+    net.healthStats = null;
+    net.note((isHost ? 'hosting' : 'joined') + ' room ' + (net.seat ? net.seat.room + ' as player ' + net.seat.id : '(no seat from the relay)'));
     if (!isHost && net.rtcEnabled()) net.offer(1);
 });
 
@@ -375,9 +488,22 @@ EM_JS(void, wsrelay_js_rtc_end, (), {
     var net = Module.jkNet;
     if (!net) return;
     net.closeAll();
+    if (net.session) net.note('left the game');
     net.session = false;
     net.isHost = false;
+    net.seat = null;
+    net.rejoinMs = 1000;
+    clearTimeout(net.retry);
+    net.retry = null;
     net.keepPresence();
+});
+
+// Whether the data channel to player id is up, so game packets reach them
+// without the relay.
+EM_JS(int, wsrelay_js_direct_open, (int id), {
+    var net = Module.jkNet;
+    var p = net && net.peers[id];
+    return p && p.open ? 1 : 0;
 });
 
 // Where the engine keeps the player's name and whether it runs MotS, for the
@@ -489,14 +615,20 @@ static int wsrelay_bHosting = 0;      // our room is open on the relay
 static int wsrelay_bHostPending = 0;  // sent "host", waiting for "hosted"
 static int wsrelay_bJoining = 0;      // sent "join", waiting for "welcome"
 static int wsrelay_bJoined = 0;       // the host welcomed us into its room
-static int wsrelay_bHostLeft = 0;
-static int wsrelay_bLostReported = 0;
+static int wsrelay_bHostLeft = 0;      // the relay says the host left
+static int wsrelay_bSeatLost = 0;      // the relay wouldn't give our seat back
+static uint32_t wsrelay_msecRelayLost = 0; // when the relay went in a game, 0 while it's up
 static int wsrelay_joinError = 0;
 static int wsrelay_room = -1;
 static uint32_t wsrelay_id = 0xFFFFFFFF;
 
 static int wsrelay_aDisconnected[64];
 static int wsrelay_numDisconnected = 0;
+
+// A host's players the relay says left while their data channel is still up.
+// They count as gone once it goes down (or sithMulti times them out).
+static int wsrelay_aLeftPending[64];
+static int wsrelay_numLeftPending = 0;
 
 static jkMultiEntry wsrelay_storedEntry;      // the game we host
 static jkMultiEntry wsrelay_storedEntryEnum;  // the game we joined
@@ -600,11 +732,13 @@ static void wsrelay_ResetSession()
     wsrelay_bJoining = 0;
     wsrelay_bJoined = 0;
     wsrelay_bHostLeft = 0;
-    wsrelay_bLostReported = 0;
+    wsrelay_bSeatLost = 0;
+    wsrelay_msecRelayLost = 0;
     wsrelay_joinError = 0;
     wsrelay_room = -1;
     wsrelay_id = 0xFFFFFFFF;
     wsrelay_numDisconnected = 0;
+    wsrelay_numLeftPending = 0;
     wsrelay_js_rtc_end();
     wsrelay_js_map_unhost();
     wsrelay_js_mod_unhost();
@@ -656,6 +790,14 @@ static void wsrelay_PeerLeft(int id)
 {
     stdPlatform_Printf("OpenJKDF2: Client id %x has left.\n", id);
 
+    for (int i = 0; i < wsrelay_numLeftPending; )
+    {
+        if (wsrelay_aLeftPending[i] == id)
+            wsrelay_aLeftPending[i] = wsrelay_aLeftPending[--wsrelay_numLeftPending];
+        else
+            i++;
+    }
+
     // Only report players who finished joining, like GNSServer.
     for (int i = 0; i < jkPlayer_maxPlayers; i++)
     {
@@ -666,6 +808,40 @@ static void wsrelay_PeerLeft(int id)
                 wsrelay_aDisconnected[wsrelay_numDisconnected++] = id;
             break;
         }
+    }
+}
+
+// The relay says player id left. With their data channel still up they're
+// still playing (their socket to the relay dropped, or an older relay ended
+// their seat with it), so that waits until the channel goes down.
+static void wsrelay_PeerLeftOnRelay(int id)
+{
+    if (!wsrelay_js_direct_open(id))
+    {
+        wsrelay_PeerLeft(id);
+        return;
+    }
+
+    for (int i = 0; i < wsrelay_numLeftPending; i++)
+    {
+        if (wsrelay_aLeftPending[i] == id)
+            return;
+    }
+    if (wsrelay_numLeftPending < 64)
+        wsrelay_aLeftPending[wsrelay_numLeftPending++] = id;
+    stdPlatform_Printf("OpenJKDF2: The relay says client id %x left, but its direct link is up. Keeping it.\n", id);
+}
+
+// Pending players whose data channel went down have left.
+static void wsrelay_CheckLeftPending()
+{
+    for (int i = 0; i < wsrelay_numLeftPending; )
+    {
+        int id = wsrelay_aLeftPending[i];
+        if (wsrelay_js_direct_open(id))
+            i++;
+        else
+            wsrelay_PeerLeft(id); // takes it off the list
     }
 }
 
@@ -733,6 +909,15 @@ static void wsrelay_HandleText(char* pText)
         char* pId = strtok_r(NULL, " ", &pSave);
         if (wsrelay_bHosting && pId)
         {
+            // The relay gave this id to someone new, so whoever had it is gone.
+            for (int i = 0; i < wsrelay_numLeftPending; i++)
+            {
+                if (wsrelay_aLeftPending[i] == atoi(pId))
+                {
+                    wsrelay_PeerLeft(atoi(pId));
+                    break;
+                }
+            }
             wsrelay_WelcomePeer(atoi(pId));
             wsrelay_UpdateLobby();
         }
@@ -742,8 +927,40 @@ static void wsrelay_HandleText(char* pText)
         char* pId = strtok_r(NULL, " ", &pSave);
         if (wsrelay_bHosting && pId)
         {
-            wsrelay_PeerLeft(atoi(pId));
+            wsrelay_PeerLeftOnRelay(atoi(pId));
             wsrelay_UpdateLobby();
+        }
+    }
+    else if (!strcmp(pOp, "peer-lost") || !strcmp(pOp, "peer-back"))
+    {
+        char* pId = strtok_r(NULL, " ", &pSave);
+        if (wsrelay_bHosting && pId)
+        {
+            if (!strcmp(pOp, "peer-lost"))
+                stdPlatform_Printf("OpenJKDF2: Client id %x lost the relay; its seat is held (direct link %s).\n", atoi(pId), wsrelay_js_direct_open(atoi(pId)) ? "up" : "down");
+            else
+                stdPlatform_Printf("OpenJKDF2: Client id %x is back on the relay.\n", atoi(pId));
+        }
+    }
+    else if (!strcmp(pOp, "host-lost") || !strcmp(pOp, "host-back"))
+    {
+        if (wsrelay_bJoined)
+        {
+            if (!strcmp(pOp, "host-lost"))
+                stdPlatform_Printf("OpenJKDF2: The host lost the relay; its seat is held (direct link %s).\n", wsrelay_js_direct_open(1) ? "up" : "down");
+            else
+            {
+                stdPlatform_Printf("OpenJKDF2: The host is back on the relay.\n");
+                wsrelay_bHostLeft = 0;
+            }
+        }
+    }
+    else if (!strcmp(pOp, "rejoined") || !strcmp(pOp, "rehosted"))
+    {
+        if (wsrelay_bJoined || wsrelay_bHosting)
+        {
+            wsrelay_bSeatLost = 0;
+            stdPlatform_Printf("OpenJKDF2: Back in room %d on the relay.\n", wsrelay_room);
         }
     }
     else if (!strcmp(pOp, "welcome"))
@@ -774,7 +991,7 @@ static void wsrelay_HandleText(char* pText)
     {
         if (wsrelay_bJoined)
         {
-            stdPlatform_Printf("OpenJKDF2: Host has disconnected.\n");
+            stdPlatform_Printf("OpenJKDF2: Host has disconnected%s.\n", wsrelay_js_direct_open(1) ? ", says the relay, but its direct link is up" : "");
             wsrelay_bHostLeft = 1;
         }
     }
@@ -786,6 +1003,10 @@ static void wsrelay_HandleText(char* pText)
             wsrelay_joinError = (pCode && !strcmp(pCode, "full")) ? 2 : 1;
         if (wsrelay_bHostPending)
             wsrelay_bHostPending = 0;
+        // Our seat wasn't held (or not by this relay), so it can't reach
+        // the room for us any more.
+        if ((wsrelay_bJoined || wsrelay_bHosting) && pCode && !strcmp(pCode, "no-seat"))
+            wsrelay_bSeatLost = 1;
     }
 }
 
@@ -925,6 +1146,50 @@ void stdComm_WSRelay_Shutdown()
 {
 }
 
+// In a game, notes when the relay goes and when it's back. The JS reconnects
+// it and takes our seat back; game packets keep going over the data channels.
+static void wsrelay_WatchRelay()
+{
+    if (!wsrelay_bJoined && !wsrelay_bHosting)
+        return;
+
+    if (wsrelay_js_state() == WSRELAY_STATE_OPEN)
+    {
+        if (wsrelay_msecRelayLost)
+            stdPlatform_Printf("OpenJKDF2: The relay is back after %u ms.\n", stdPlatform_GetTimeMsec() - wsrelay_msecRelayLost);
+        wsrelay_msecRelayLost = 0;
+        return;
+    }
+    if (!wsrelay_msecRelayLost)
+    {
+        wsrelay_msecRelayLost = stdPlatform_GetTimeMsec();
+        if (!wsrelay_msecRelayLost)
+            wsrelay_msecRelayLost = 1;
+        if (stdComm_bIsServer)
+            stdPlatform_Printf("OpenJKDF2: Lost contact with the relay. Still hosting, reconnecting.\n");
+        else if (wsrelay_js_direct_open(1))
+            stdPlatform_Printf("OpenJKDF2: Lost contact with the relay. Still playing over the direct link to the host, reconnecting.\n");
+        else
+            stdPlatform_Printf("OpenJKDF2: Lost contact with the relay, and there's no direct link to the host. Reconnecting.\n");
+    }
+}
+
+// Why a joiner should give up on the host now, or NULL to keep playing. While
+// the data channel to the host is up, the host is still there whatever the
+// relay says; sithMulti_CheckPlayers still ends a match whose host goes quiet.
+static const char* wsrelay_HostGoneReason()
+{
+    if (stdComm_bIsServer || !wsrelay_bJoined || wsrelay_js_direct_open(1))
+        return NULL;
+    if (wsrelay_bHostLeft)
+        return "the relay says the host left";
+    if (wsrelay_bSeatLost)
+        return "the relay wouldn't take this player back into the room, and there's no direct link to the host";
+    if (wsrelay_msecRelayLost && stdPlatform_GetTimeMsec() - wsrelay_msecRelayLost >= WSRELAY_LOBBY_GRACE_MS)
+        return "lost contact with the relay, and there's no direct link to the host";
+    return NULL;
+}
+
 int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
 {
     int maxLen = *pLenOut;
@@ -932,6 +1197,10 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
     *pLenOut = 0;
 
     Hack_ResetClients();
+
+    wsrelay_WatchRelay();
+    if (stdComm_bIsServer)
+        wsrelay_CheckLeftPending();
 
     while (1)
     {
@@ -943,8 +1212,11 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
             return 2;
         }
 
-        if (!stdComm_bIsServer && wsrelay_bJoined && wsrelay_bHostLeft)
+        const char* pHostGone = wsrelay_HostGoneReason();
+        if (pHostGone)
         {
+            // index.html offers the network log on this line.
+            stdPlatform_Printf("OpenJKDF2: Leaving the game: %s.\n", pHostGone);
             wsrelay_bHostLeft = 0;
             wsrelay_bJoined = 0;
             *pIdOut = 1;
@@ -987,19 +1259,6 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
 
         wsrelay_verbosePrintf("Recv %x bytes from %x %x (%s, %x)\n", outsize, idFrom, idTo, sithDSS_IdToStr(*(uint32_t*)pMsgIdOut & 0xFF), *(uint32_t*)pMsgIdOut);
         return 0;
-    }
-
-    // Lost the relay mid-game. For a client that's the same as losing the host.
-    if ((wsrelay_bJoined || wsrelay_bHosting) && !wsrelay_bLostReported && wsrelay_js_state() == WSRELAY_STATE_CLOSED)
-    {
-        wsrelay_bLostReported = 1;
-        stdPlatform_Printf("OpenJKDF2: Lost contact with the relay.\n");
-        if (!stdComm_bIsServer)
-        {
-            wsrelay_bJoined = 0;
-            *pIdOut = 1;
-            return 2;
-        }
     }
 
     return -1;
