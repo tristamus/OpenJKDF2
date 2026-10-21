@@ -587,6 +587,8 @@
       #mod-choice .mod-count { margin-left: auto; color: var(--muted); font-size: 13px; }
       #mod-choice input { accent-color: var(--gold); }
       #mod-choice .where { display: block; color: var(--muted); font-size: 13px; }
+      #mod-choice .tag { padding: 0 5px; border: 1px solid var(--gold); color: var(--gold); font-size: 11px; font-weight: bold; text-transform: uppercase; }
+      #mod-choice .mod-news { margin: 0 0 12px; }
       #mod-choice .mod-clash { margin: 0 0 12px; padding: 7px 10px; border-left: 3px solid var(--gold); font-size: 14px; white-space: pre-line; }
       /* Full screen sits between the mods and Start, and on its own without mods. */
       #mod-choice .picker-option { margin: 0 0 14px; }
@@ -1200,6 +1202,7 @@
             of the Sith, plus your mods.</span></span></label>
         <input type="file" id="gamedir" webkitdirectory multiple>
         <div id="mod-choice" hidden>
+          <p class="mod-news" role="status" hidden></p>
           <div class="mods">
             <fieldset>
               <legend>Mods to play with</legend>
@@ -1218,7 +1221,7 @@
               fullscreen. This browser remembers your choice.</span></span></label>
           <div class="actions">
             <button class="play" type="button">Start</button>
-            <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Choose a different folder</label>
+            <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
           </div>
         </div>
         <div id="picker-result" role="status"></div>
@@ -1812,7 +1815,13 @@
       // ---- Game files saved in this browser, so a player can start again
       // without choosing the folder, which has the browser list every file
       // in it first. Per game, the files the page read from the folder last
-      // time, with their paths in it.
+      // time, with their paths in it: a meta record, whose list has each
+      // file's path in the folder, size and date modified in the folder's
+      // order, and a data record per file, keyed '<game>/<path, lowercase>'.
+      // Choosing the folder again only writes the files that changed.
+      // Copies saved before that (one data record per game, keyed by the
+      // game, holding every file) are still read, and replaced on the next
+      // save.
       function gameFileStore(idb) {
         var dbPromise = null;
 
@@ -1848,11 +1857,38 @@
           });
         }
 
+        // A file's path in the folder, without the picked folder's name.
+        function inFolder(path) {
+          return path.substring(path.indexOf('/') + 1);
+        }
+        function dataKey(game, path) {
+          return game + '/' + path.toLowerCase();
+        }
+
         // What's saved for a game, without its files:
-        // { game, folder, files, bytes, time }, or null.
+        // { game, folder, files, bytes, time, list }, or null.
         async function info(game) {
           var db = await open();
           return (await request(db.transaction('meta').objectStore('meta').get(game))) || null;
+        }
+
+        // When the saved files were saved or last checked, and each one's
+        // size and date modified by its path in the folder, lowercase,
+        // without reading them: { time, files: { path: { size, time } },
+        // whole }, or null. whole: they're saved the old way, so the next
+        // save writes them all.
+        async function index(game) {
+          var meta = await info(game);
+          if (!meta) return null;
+          var out = {};
+          if (meta.list) {
+            for (var e of meta.list) out[e.path.toLowerCase()] = { size: e.size, time: e.time };
+          } else {
+            var db = await open();
+            var saved = (await request(db.transaction('data').objectStore('data').get(game))) || [];
+            for (var s of saved) out[inFolder(s.path).toLowerCase()] = { size: s.file.size, time: s.file.lastModified };
+          }
+          return { time: meta.time, files: out, whole: !meta.list };
         }
 
         // The saved files, each with its path in the folder as when it was
@@ -1860,9 +1896,22 @@
         // each is read first: the browser may have lost some since, and the
         // player is better asked for the folder before the mod list than after.
         async function load(game) {
+          var meta = await info(game);
+          if (!meta) throw new Error('no ' + game + ' files are saved');
           var db = await open();
-          var saved = await request(db.transaction('data').objectStore('data').get(game));
-          if (!saved) throw new Error('no ' + game + ' files are saved');
+          var data = db.transaction('data').objectStore('data');
+          var saved;
+          if (meta.list) {
+            saved = await Promise.all(meta.list.map(function(e) {
+              return request(data.get(dataKey(game, e.path))).then(function(r) {
+                if (!r) throw new Error(e.path + ' is missing');
+                return { path: meta.folder + '/' + e.path, file: r.file };
+              });
+            }));
+          } else {
+            saved = await request(data.get(game));
+            if (!saved) throw new Error('no ' + game + ' files are saved');
+          }
           var files = saved.map(function(s) {
             Object.defineProperty(s.file, 'webkitRelativePath', { value: s.path });
             return s.file;
@@ -1871,26 +1920,58 @@
           return files;
         }
 
-        // Replaces what's saved for the game.
+        // Makes what's saved for the game these files: writes the ones that
+        // are new or changed since (by size and date modified), and removes
+        // the ones that are gone. Resolves to the bytes written.
         async function save(game, files) {
           var db = await open();
           var tx = db.transaction(['meta', 'data'], 'readwrite');
-          tx.objectStore('data').put(files.map(function(f) { return { path: f.webkitRelativePath, file: f }; }), game);
-          tx.objectStore('meta').put({ game: game, folder: files[0].webkitRelativePath.split('/')[0],
-                                       files: files.length, bytes: files.reduce(function(n, f) { return n + f.size; }, 0),
-                                       time: Date.now() });
+          var meta = tx.objectStore('meta'), data = tx.objectStore('data');
+          var written = 0;
+          var get = meta.get(game);
+          get.onsuccess = function() {
+            var old = get.result, had = {};
+            if (old && old.list) {
+              for (var e of old.list) had[e.path.toLowerCase()] = e;
+            } else if (old) {
+              data.delete(game);
+            }
+            var list = [], bytes = 0;
+            for (var f of files) {
+              var e = { path: inFolder(f.webkitRelativePath), size: f.size, time: f.lastModified };
+              var key = e.path.toLowerCase(), was = had[key];
+              list.push(e);
+              bytes += f.size;
+              delete had[key];
+              if (!was || was.size !== e.size || was.time !== e.time) {
+                data.put({ file: f }, dataKey(game, e.path));
+                written += f.size;
+              }
+            }
+            for (var key in had) data.delete(dataKey(game, had[key].path));
+            meta.put({ game: game, folder: files[0].webkitRelativePath.split('/')[0], files: files.length,
+                       bytes: bytes, time: Date.now(), list: list });
+          };
           await done(tx);
+          return written;
         }
 
         async function forget(game) {
           var db = await open();
           var tx = db.transaction(['meta', 'data'], 'readwrite');
-          tx.objectStore('meta').delete(game);
-          tx.objectStore('data').delete(game);
+          var meta = tx.objectStore('meta'), data = tx.objectStore('data');
+          var get = meta.get(game);
+          get.onsuccess = function() {
+            if (get.result && get.result.list) {
+              for (var e of get.result.list) data.delete(dataKey(game, e.path));
+            }
+            meta.delete(game);
+            data.delete(game);
+          };
           await done(tx);
         }
 
-        return { info: info, load: load, save: save, forget: forget };
+        return { info: info, index: index, load: load, save: save, forget: forget };
       }
 
       function loadEngine(withBundledData) {
@@ -2573,6 +2654,88 @@
         return fileList.filter(function(f) { return keep.has(f); });
       }
 
+      // ---- What's new in a picked folder since the files saved in the
+      // browser (saved: gameFileStore's index): the mods and maps with files
+      // that weren't saved, or whose size or date modified has changed. Only
+      // the files the page reads count. mods has a mod's place in folderMods
+      // for each mod that's 'new' (none of its files were saved) or
+      // 'updated'. maps has the names of new and updated maps: the GOBs at
+      // the top of episode/, apart from the game's own, and the episode
+      // folders, which have an episode.jk. Run once the mods are placed
+      // (placeModFiles).
+      function whatsNew(saved, files, folderMods, ext) {
+        function state(e) {
+          var src = e.zip || e.file, rel = src.webkitRelativePath;
+          var was = saved.files[rel.substring(rel.indexOf('/') + 1).toLowerCase()];
+          return !was ? 'new' : was.size !== src.size || was.time !== src.lastModified ? 'changed' : 'same';
+        }
+        var byMod = folderMods.map(function() { return []; });
+        var own = REQUIRED_JK.concat(REQUIRED_MOTS).map(function(r) { return r.toLowerCase(); });
+        var episodes = {}, maps = {}, names = [];
+        for (var e of files) {
+          var lower = e.path.toLowerCase().split('/');
+          if (e.mod === undefined && lower[0] === 'episode' && lower.length === 3 && lower[2] === 'episode.jk')
+            episodes[lower[1]] = true;
+        }
+        for (var e of files) {
+          if (e.mod !== undefined) {
+            byMod[e.mod].push(state(e));
+            continue;
+          }
+          var parts = e.path.split('/'), lower = e.path.toLowerCase().split('/');
+          if (lower[0] !== 'episode' || own.indexOf(lower.join('/')) >= 0 || !isGameFile(lower.join('/'), ext, null)) continue;
+          var name = lower.length === 2 ? (lower[1].endsWith(ext) ? parts[1].replace(/\.[^.]*$/, '') : null)
+                                        : (episodes[lower[1]] ? parts[1] : null);
+          if (!name) continue;
+          var key = name.toLowerCase(), s = state(e);
+          if (!maps[key]) {
+            maps[key] = { name: name, states: [], isNew: false };
+            names.push(key);
+          }
+          // A GOB is new when it is, an episode folder when its episode.jk is.
+          if (lower.length === 2 || lower[2] === 'episode.jk') maps[key].isNew = s === 'new';
+          maps[key].states.push(s);
+        }
+        var out = { mods: {}, maps: { added: [], updated: [] } };
+        byMod.forEach(function(states, i) {
+          if (states.length && states.every(function(s) { return s === 'new'; })) out.mods[i] = 'new';
+          else if (states.some(function(s) { return s !== 'same'; })) out.mods[i] = 'updated';
+        });
+        for (var key of names) {
+          var m = maps[key];
+          if (m.isNew) out.maps.added.push(m.name);
+          else if (m.states.some(function(s) { return s !== 'same'; })) out.maps.updated.push(m.name);
+        }
+        return out;
+      }
+
+      // The date files were saved in the browser, like "Oct 12".
+      function savedDay(time) {
+        return new Date(time).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      }
+
+      // One line on what whatsNew found, like "New since Oct 12: 2 maps
+      // (AODpc, Canyon) and mod Saber Battle X."
+      function newsText(news, folderMods, since) {
+        function names(kind, list) {
+          return list.length === 1 ? kind + ' ' + list[0] :
+                 list.length + ' ' + kind + 's (' + list.slice(0, 3).join(', ') + (list.length > 3 ? ', ...' : '') + ')';
+        }
+        function mods(state) {
+          return folderMods.filter(function(m, i) { return news.mods[i] === state; }).map(function(m) { return m.name; });
+        }
+        var added = [], updated = [];
+        if (news.maps.added.length) added.push(names('map', news.maps.added));
+        if (mods('new').length) added.push(names('mod', mods('new')));
+        if (news.maps.updated.length) updated.push(names('map', news.maps.updated));
+        if (mods('updated').length) updated.push(names('mod', mods('updated')));
+        var day = savedDay(since);
+        if (!added.length && !updated.length) return 'Nothing new since ' + day + '.';
+        return (added.length ? 'New since ' + day + ': ' + added.join(' and ') + '.' : '') +
+               (added.length && updated.length ? ' ' : '') +
+               (updated.length ? 'Updated' + (added.length ? '' : ' since ' + day) + ': ' + updated.join(' and ') + '.' : '');
+      }
+
       // ---- Mods kept as zip files. The game can't read a zip, so the page
       // opens each one that holds a mod and puts its files in a folder named
       // after it, as if it had been unzipped in place, like
@@ -2845,11 +3008,13 @@
       // time. A mod saved from an online game is that host's whole set, so it
       // starts unticked and runs on its own. Resolves to the ticked options,
       // highest first, or null when the player chooses a different folder or
-      // closes the prompt.
-      function chooseMods(folderMods, saved, clashes, game, fromBrowser) {
+      // closes the prompt. From the files saved in the browser, it says when
+      // they were saved (copyTime); with the folder chosen again, what's new
+      // since (news, from whatsNew), and tags those mods.
+      function chooseMods(folderMods, saved, clashes, game, fromBrowser, copyTime, news) {
         var leftOut = modsLeftOut(game);
         var options = folderMods.map(function(m, i) {
-          return { index: i, name: m.name, path: m.path, key: modKey(m),
+          return { index: i, name: m.name, path: m.path, key: modKey(m), news: news && news.mods[i],
                    where: (m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
                                     : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
                           (m.bytes > 100 * 1048576 ? ". Too big to send: players need their own copy" : '') };
@@ -2871,10 +3036,17 @@
           var text = document.createElement('span');
           var name = document.createElement('b');
           name.textContent = o.name;
+          text.append(name);
+          if (o.news) {
+            var tag = document.createElement('span');
+            tag.className = 'tag';
+            tag.textContent = o.news === 'new' ? 'New' : 'Updated';
+            text.append(' ', tag);
+          }
           var where = document.createElement('span');
           where.className = 'where';
           where.textContent = o.where;
-          text.append(name, where);
+          text.append(where);
           label.append(input, text);
           list.appendChild(label);
           return input;
@@ -2935,15 +3107,20 @@
         update();
         updateAll();
 
+        var newsLine = modChoice.querySelector('.mod-news');
+        newsLine.textContent = news ? newsText(news, folderMods, copyTime) :
+          fromBrowser && copyTime ? 'Using your ' + GAME_NAMES[game] + ' files saved ' + savedDay(copyTime) + '.' : '';
+        newsLine.hidden = !newsLine.textContent;
+
         pickerTitle.textContent = options.length ? 'Choose your mods' : 'Ready to play ' + GAME_NAMES[game];
         modChoice.querySelector('.mods').hidden = !options.length;
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
         showPickerResult('');
         modChoice.hidden = false;
         var start = modChoice.querySelector('button.play');
-        // From the files saved in the browser, mods added to the folder since
-        // need the folder chosen again. The label opens the folder picker,
-        // over the folder prompt.
+        // From the files saved in the browser, mods and maps added to the
+        // folder since need the folder chosen again, which the label does:
+        // it opens the folder picker, over the folder prompt.
         var otherFolder = modChoice.querySelector('.other-folder');
         otherFolder.hidden = !fromBrowser;
         start.focus();
@@ -3146,7 +3323,21 @@
           placeModFiles(files, folderMods);
           Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
         }
-        var picked = await chooseMods(folderMods, saved, found.clashes, game, fromBrowser);
+        // Started from the files saved in the browser: when they were saved.
+        // The folder chosen again with files saved: what's new since then.
+        var copy = null, news = null;
+        if (gameFiles && pathAt < 0) {
+          try {
+            copy = fromBrowser ? await gameFiles.info(game) : await gameFiles.index(game);
+          } catch (err) {
+            console.warn('OpenJKDF2: could not look at the saved game files (' + err + ')');
+          }
+          if (copy && !fromBrowser) {
+            news = whatsNew(copy, files, folderMods, ext);
+            lap('comparing with the saved files');
+          }
+        }
+        var picked = await chooseMods(folderMods, saved, found.clashes, game, fromBrowser, copy && copy.time, news);
         // The player went to choose a different folder, or closed the prompt.
         if (!picked) return;
         lap('start window');
@@ -3300,9 +3491,14 @@
           return;
         }
         setTimeout(async function() {
-          var bytes = files.reduce(function(n, f) { return n + f.size; }, 0);
           try {
-            if (navigator.storage && navigator.storage.estimate) {
+            // Only what's new or changed is written.
+            var had = await gameFiles.index(game);
+            var bytes = files.reduce(function(n, f) {
+              var rel = f.webkitRelativePath, was = had && !had.whole && had.files[rel.substring(rel.indexOf('/') + 1).toLowerCase()];
+              return n + (was && was.size === f.size && was.time === f.lastModified ? 0 : f.size);
+            }, 0);
+            if (bytes && navigator.storage && navigator.storage.estimate) {
               var room = await navigator.storage.estimate();
               if (room.quota - room.usage < bytes) {
                 console.warn('OpenJKDF2: not saving the game files (' + megabytes(bytes) + '): the browser has room for ' +
@@ -3311,10 +3507,10 @@
               }
             }
             var t = performance.now();
-            await gameFiles.save(game, files);
+            var written = await gameFiles.save(game, files);
             savedKnown[game] = true;
-            console.log('OpenJKDF2: saved ' + files.length + ' game files (' + megabytes(bytes) + ') in this browser in ' +
-                        Math.round(performance.now() - t) + ' ms');
+            console.log('OpenJKDF2: saved ' + files.length + ' game files in this browser, writing ' + megabytes(written) +
+                        ' in ' + Math.round(performance.now() - t) + ' ms');
           } catch (err) {
             console.warn('OpenJKDF2: could not save the game files (' + err + ')');
           }
@@ -3367,7 +3563,7 @@
         var info = found.sort(function(a, b) { return b.time - a.time; })[0];
         savedGame = info.game;
         showSavedNote('Your ' + GAME_NAMES[info.game] + ' files from ' +
-          new Date(info.time).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+          savedDay(info.time) +
           ' are saved in this browser (' + megabytes(info.bytes) + "). If you've added mods or maps since, " +
           'choose the folder again.', true);
         playSaved.hidden = false;

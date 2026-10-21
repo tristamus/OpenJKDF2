@@ -16,10 +16,12 @@ function cut(from, to) {
     assert.ok(a > 0 && b > a, 'index.html has ' + from);
     return html.substring(a, b);
 }
-const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore } = new Function(
+const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore,
+        whatsNew, newsText, savedDay } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
-    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore };')();
+    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore, ' +
+    'whatsNew, newsText, savedDay };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -363,6 +365,128 @@ test('saved game files come back with their paths, and are replaced or removed p
     await store.forget('jk1');
     assert.equal(await store.info('jk1'), null);
     await assert.rejects(store.load('jk1'));
+});
+
+// ---- Choosing the folder again: only what changed is saved, and what's
+// new since is named. Files carry their date modified, as a browser's do.
+function datedFiles(folder, mots, times = {}) {
+    const ext = mots ? '.goo' : '.gob';
+    return Object.entries(folder).map(([path, bytes]) => {
+        const file = new File([bytes || (path.toLowerCase().endsWith(ext) ? gob('x', path) : Buffer.from(path))],
+                              path.split('/').pop(), { lastModified: times[path] || 1000 });
+        file.webkitRelativePath = 'Picked/' + path;
+        return file;
+    });
+}
+const dataKeys = idb => [...idb.dbs.get('jkdf2mp-game-files').stores.get('data').data.keys()].sort();
+
+test('choosing the folder again only writes the files that changed, and removes the ones that are gone', async () => {
+    const idb = makeIDB(), store = gameFileStore(idb);
+    const first = datedFiles({ 'Episode/JK1.GOB': null, 'Episode/Old.gob': null, 'SBX/sbx.gob': null,
+                               'player/Kyle/Kyle.plr': Buffer.from('kyle') }, false);
+    assert.equal(await store.save('jk1', first), first.reduce((n, f) => n + f.size, 0));
+    const again = datedFiles({ 'Episode/JK1.GOB': null, 'SBX/sbx.gob': Buffer.from('a newer sbx'),
+                               'Episode/AODpc.gob': null, 'player/Kyle/Kyle.plr': Buffer.from('kyle') }, false,
+                             { 'SBX/sbx.gob': 2000 });
+    const written = await store.save('jk1', again);
+    assert.equal(written, again[1].size + again[2].size);
+    assert.deepEqual(dataKeys(idb), ['jk1/episode/aodpc.gob', 'jk1/episode/jk1.gob', 'jk1/player/kyle/kyle.plr',
+                                     'jk1/sbx/sbx.gob']);
+    const info = await store.info('jk1');
+    assert.equal(info.files, 4);
+    assert.equal(info.bytes, again.reduce((n, f) => n + f.size, 0));
+    // The files come back in the folder's order, with the newer copies.
+    const back = await store.load('jk1');
+    assert.deepEqual(back.map(f => f.webkitRelativePath), again.map(f => f.webkitRelativePath));
+    for (let i = 0; i < again.length; i++)
+        assert.ok(Buffer.from(await back[i].arrayBuffer()).equals(Buffer.from(await again[i].arrayBuffer())));
+    // Nothing changed: nothing is written.
+    assert.equal(await store.save('jk1', again), 0);
+    await store.save('mots', datedFiles({ 'Episode/JKM.GOO': null }, true));
+    await store.forget('jk1');
+    assert.deepEqual(dataKeys(idb), ['mots/episode/jkm.goo']);
+    assert.equal(await store.info('jk1'), null);
+});
+
+test('files saved the old way still start the game, and the next save moves them over', async () => {
+    const idb = makeIDB(), store = gameFileStore(idb);
+    assert.equal(await store.info('jk1'), null);
+    const old = datedFiles({ 'Episode/JK1.GOB': null, 'SBX/sbx.gob': null }, false);
+    const db = idb.dbs.get('jkdf2mp-game-files');
+    db.stores.get('data').data.set('jk1', old.map(f => ({ path: f.webkitRelativePath, file: f })));
+    db.stores.get('meta').data.set('jk1', { game: 'jk1', folder: 'Picked', files: 2, bytes: 10, time: 5000 });
+    const back = await store.load('jk1');
+    assert.deepEqual(back.map(f => f.webkitRelativePath), old.map(f => f.webkitRelativePath));
+    const index = await store.index('jk1');
+    assert.equal(index.time, 5000);
+    assert.ok(index.whole);
+    assert.deepEqual(Object.keys(index.files).sort(), ['episode/jk1.gob', 'sbx/sbx.gob']);
+    assert.equal(await store.save('jk1', old), old.reduce((n, f) => n + f.size, 0));
+    assert.deepEqual(dataKeys(idb), ['jk1/episode/jk1.gob', 'jk1/sbx/sbx.gob']);
+    assert.ok(!(await store.index('jk1')).whole);
+    assert.equal((await store.load('jk1')).length, 2);
+});
+
+// The steps onFolderPicked takes up to the mod window, then whatsNew
+// against what was saved from the first folder.
+async function newsFor(firstFolder, secondFolder, { mots = false, times = {} } = {}) {
+    const store = gameFileStore(makeIDB());
+    const first = await readFrom(datedFiles(firstFolder, mots), { mots });
+    await store.save(mots ? 'mots' : 'jk1', first.toSave);
+    const saved = await store.index(mots ? 'mots' : 'jk1');
+    const sorted = pickedFiles(datedFiles(secondFolder, mots, times));
+    let files = sorted.files;
+    if (files.some(e => /\.zip$/i.test(e.path)))
+        files = await openZips(files, mots);
+    const mods = detectMods(files, mots);
+    placeModFiles(files, mods);
+    const news = whatsNew(saved, files, mods, mots ? '.goo' : '.gob');
+    const tags = Object.fromEntries(mods.filter((m, i) => news.mods[i]).map(m => [m.name, news.mods[mods.indexOf(m)]]));
+    return { news, tags, text: newsText(news, mods, saved.time), day: savedDay(saved.time) };
+}
+
+test('a new map, a new mod and an updated mod are named, and nothing else', async () => {
+    const before = { ...STEAM_JK, 'SBX/sbx.gob': null, 'SBX/cog/sbx.cog': null, 'mod/Blade.gob': null,
+                     'episode/MyEp/episode.jk': null, 'episode/MyEp/jkl/x.jkl': null };
+    const { news, tags, text, day } = await newsFor(before, {
+        ...before, 'SBX/cog/sbx.cog': Buffer.from('changed'), 'SBX/readme.txt': null, 'Episode/AODpc.gob': null,
+        'mod/Saber Battle X.zip': makeZip([{ name: 'sbx2.gob', bytes: gob('cog\\s.cog', 'sbx2') }]),
+        'Screenshots/shot0002.png': null, 'episode/MyEp/notes.doc': null,
+    }, { times: { 'SBX/cog/sbx.cog': 2000 } });
+    assert.deepEqual(tags, { 'SBX': 'updated', 'Saber Battle X': 'new' });
+    assert.deepEqual(news.maps, { added: ['AODpc'], updated: [] });
+    assert.equal(text, 'New since ' + day + ': map AODpc and mod Saber Battle X. Updated: mod SBX.');
+});
+
+test('a new episode folder is a new map, and a changed level in it an updated one', async () => {
+    const before = { ...STEAM_JK, 'episode/Old/episode.jk': null, 'episode/Old/jkl/o.jkl': null };
+    const { news, text, day } = await newsFor(before, {
+        ...before, 'episode/Old/jkl/o.jkl': Buffer.from('v2'), 'episode/New Ep/episode.jk': null,
+        'episode/New Ep/jkl/n.jkl': null, 'Episode/JK1MP.GOB': null,
+    }, { times: { 'episode/Old/jkl/o.jkl': 3000 } });
+    assert.deepEqual(news.maps, { added: ['New Ep'], updated: ['Old'] });
+    assert.equal(text, 'New since ' + day + ': map New Ep. Updated: map Old.');
+});
+
+test('the same folder again has nothing new', async () => {
+    const folder = { ...STEAM_MOTS, 'Episode/ctf_test.goo': null };
+    const { news, tags, text, day } = await newsFor(folder, folder, { mots: true });
+    assert.deepEqual(tags, {});
+    assert.deepEqual(news.maps, { added: [], updated: [] });
+    assert.equal(text, 'Nothing new since ' + day + '.');
+});
+
+test("the game's own GOBs aren't maps, even when they change", async () => {
+    const { news, text, day } = await newsFor(STEAM_MOTS, STEAM_MOTS, { mots: true, times: {
+        'Episode/JKM.GOO': 2000, 'Episode/JKM_MP.GOO': 2000 } });
+    assert.deepEqual(news.maps, { added: [], updated: [] });
+    assert.equal(text, 'Nothing new since ' + day + '.');
+});
+
+test('several new maps are counted, with the first few named', async () => {
+    const extra = Object.fromEntries(['A', 'B', 'C', 'D', 'E'].map(n => ['Episode/' + n + '.gob', null]));
+    const { text, day } = await newsFor(STEAM_JK, { ...STEAM_JK, ...extra, 'Mod Two/two.gob': null, 'Mod One/one.gob': null });
+    assert.equal(text, 'New since ' + day + ': 5 maps (A, B, C, ...) and 2 mods (Mod One, Mod Two).');
 });
 
 let failed = 0;
