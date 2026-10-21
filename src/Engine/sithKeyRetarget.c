@@ -29,8 +29,17 @@
 //   bones 2
 //   torso k_torso dir neck k_neck
 //   rsaber k_rhand blade
-//   keys 1
+//   keys 3
 //   rt_bochop.key bochop.key 1.5   (optional) plays 1.5 times as fast
+//   rt_bocut.key bocut.key upper   (optional) moves only the upper body,
+//                                so the legs keep doing what another key
+//                                tells them, and it never makes the
+//                                player jump
+//   rt_bowalk.key bostand.key legs ls_walk.key   (optional) the hips and
+//                                legs, and the length, speed and markers,
+//                                come from a key made for the target (here
+//                                SBX's walk); the source's upper body plays
+//                                over it at its own speed, round and round
 //   end
 //
 // Bones are named, or @n for node n. Each source bone's world rotation
@@ -43,6 +52,10 @@
 //          saber held there points where the source's did
 // Target bones not listed keep their rest rotation, and every target node
 // keeps its rest position except the root, which follows the source's.
+//
+// The upper body is the nodes whose type is torso, an arm or the head
+// (RT_BODY_UPPER), as rdPuppet tells a key's high and low priority parts
+// apart; the rest (root, hips, legs) is the lower body.
 
 #define RT_RECIPE_PATH "misc\\keyretarget.dat"
 #define RT_MAX_NODES (64)
@@ -52,6 +65,8 @@
 #define RT_NAME_LEN (32)
 #define RT_PATH_LEN (128)
 #define RT_DEG (57.29577951308232)
+// Node types of the torso, arms and head (rdPuppet, rdHierarchyNode.type)
+#define RT_BODY_UPPER (0xF)
 
 enum
 {
@@ -65,6 +80,8 @@ enum
 {
     RT_MARKER_DAMAGE_ON = 4,
     RT_MARKER_DAMAGE_OFF = 5,
+    RT_MARKER_JUMP = 11,
+    RT_MARKER_JUMP_HIGH = 12,
     RT_MARKER_DAMAGE_RESET = 14,
 };
 
@@ -85,6 +102,7 @@ typedef struct rtMat
 typedef struct rtNode
 {
     int parent;
+    unsigned int type;
     double pos[3];
     double rot[3];
     char name[RT_NAME_LEN];
@@ -129,6 +147,8 @@ typedef struct rtRecipe
     char outKeys[RT_MAX_KEYS][RT_NAME_LEN];
     char srcKeys[RT_MAX_KEYS][RT_NAME_LEN];
     double speeds[RT_MAX_KEYS];
+    int bUpper[RT_MAX_KEYS];
+    char legKeys[RT_MAX_KEYS][RT_NAME_LEN];
 } rtRecipe;
 
 typedef struct rtState
@@ -149,6 +169,7 @@ typedef struct rtState
     // Scratch, kept here rather than on the stack
     rtPose srcPose;
     rtPose dstPose;
+    rtPose legsPose;
     rtMat srcWorld[RT_MAX_NODES];
     rtMat dstWorld[RT_MAX_NODES];
     double srcJoints[RT_MAX_NODES][3];
@@ -390,6 +411,7 @@ static int sithKeyRetarget_LoadSkel(rtSkel* pSkel, rtPose* pRest, const char* pP
                     &pivot[0], &pivot[1], &pivot[2], pNode->name) != 18)
             goto fail;
         pNode->parent = parent;
+        pNode->type = type;
         memcpy(pRest->pos[i], pNode->pos, sizeof(pNode->pos));
         memcpy(pRest->rot[i], pNode->rot, sizeof(pNode->rot));
     }
@@ -605,13 +627,29 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
             {
                 if (!stdConffile_ReadLine())
                     goto fail;
-                n = _sscanf(stdConffile_g_aLine, "%127s %127s %127s", w[0], w[1], w[2]);
+                n = _sscanf(stdConffile_g_aLine, "%127s %127s %127s %127s %127s", w[0], w[1], w[2], w[3], w[4]);
                 if (n < 2)
                     goto fail;
                 stdString_SafeStrCopy(pRecipe->outKeys[i], w[0], RT_NAME_LEN);
                 stdString_SafeStrCopy(pRecipe->srcKeys[i], w[1], RT_NAME_LEN);
-                pRecipe->speeds[i] = (n == 3) ? _atof(w[2]) : 1.0;
-                if (pRecipe->speeds[i] <= 0.0 || pRecipe->speeds[i] > 10.0)
+                pRecipe->speeds[i] = 1.0;
+                pRecipe->bUpper[i] = 0;
+                pRecipe->legKeys[i][0] = 0;
+                // Then a speed, and "upper" or "legs <key>", each optional
+                int at = 2;
+                if (at < n && strcmp(w[at], "upper") && strcmp(w[at], "legs"))
+                    pRecipe->speeds[i] = _atof(w[at++]);
+                if (at < n && !strcmp(w[at], "upper"))
+                {
+                    pRecipe->bUpper[i] = 1;
+                    at++;
+                }
+                else if (at + 1 < n && !strcmp(w[at], "legs"))
+                {
+                    stdString_SafeStrCopy(pRecipe->legKeys[i], w[at + 1], RT_NAME_LEN);
+                    at += 2;
+                }
+                if (at != n || pRecipe->speeds[i] <= 0.0 || pRecipe->speeds[i] > 10.0)
                     goto fail;
             }
             pRecipe->numKeys = count;
@@ -828,14 +866,33 @@ static void sithKeyRetarget_DamageAlways(const rdKeyframe* pSrc, rdKeyframe* pKe
     pKeyframe->numMarkers = numMarkers;
 }
 
+// An upper-body key leaves out the markers that make the player jump, which
+// would throw the whole body
+static void sithKeyRetarget_DropJumps(rdKeyframe* pKeyframe)
+{
+    int numMarkers = 0;
+
+    for (uint32_t i = 0; i < pKeyframe->numMarkers; i++)
+    {
+        int32_t type = pKeyframe->markers.marker_int[i];
+        if (type == RT_MARKER_JUMP || type == RT_MARKER_JUMP_HIGH)
+            continue;
+        pKeyframe->markers.marker_float[numMarkers] = pKeyframe->markers.marker_float[i];
+        pKeyframe->markers.marker_int[numMarkers++] = type;
+    }
+    pKeyframe->numMarkers = numMarkers;
+}
+
 static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
 {
     rtState* pState = &sithKeyRetarget_state;
     char name[RT_NAME_LEN];
     char srcPath[RT_PATH_LEN];
-    rdKeyframe src;
+    char legsPath[RT_PATH_LEN];
+    rdKeyframe src, legs;
+    rdKeyframe* pTiming = &src; // the key the output takes its length, speed and markers from
     double* pFrames = NULL;
-    int numNodes, numFrames, keyIdx;
+    int numNodes, numFrames, keyIdx, bLegs;
 
     // The name can be in a line buffer that loading reuses
     stdString_SafeStrCopy(name, pName, sizeof(name));
@@ -845,12 +902,25 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
         return 0;
 
     memset(&src, 0, sizeof(src));
+    memset(&legs, 0, sizeof(legs));
     stdString_snprintf(srcPath, sizeof(srcPath), "3do\\key\\%s", pState->recipe.srcKeys[keyIdx]);
     if (!rdKeyframe_LoadEntry(srcPath, &src))
         goto fail;
+    if (src.numFrames <= 0 || src.fps <= 0)
+        goto fail;
+
+    // The hips and legs from a key made for the target
+    bLegs = (pState->recipe.legKeys[keyIdx][0] != 0);
+    if (bLegs)
+    {
+        stdString_snprintf(legsPath, sizeof(legsPath), "3do\\key\\%s", pState->recipe.legKeys[keyIdx]);
+        if (!rdKeyframe_LoadEntry(legsPath, &legs) || legs.fps <= 0)
+            goto fail;
+        pTiming = &legs;
+    }
 
     numNodes = pState->dst.numNodes;
-    numFrames = (int)src.numFrames;
+    numFrames = (int)pTiming->numFrames;
     if (numFrames <= 0 || numFrames > RT_MAX_FRAMES)
         goto fail;
 
@@ -860,13 +930,23 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
         goto fail;
     for (int f = 0; f < numFrames; f++)
     {
-        sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, (double)f, &pState->srcPose);
+        double srcFrame = (double)f;
+        if (bLegs)
+        {
+            // The same moment in the source, at its own speed, round and round
+            srcFrame = fmod((double)f / (double)legs.fps * (double)src.fps * pState->recipe.speeds[keyIdx], (double)src.numFrames);
+            sithKeyRetarget_Sample(&pState->dst, &pState->dstRest, &legs, (double)f, &pState->legsPose);
+        }
+        sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, srcFrame, &pState->srcPose);
         sithKeyRetarget_Convert(pState, &pState->srcPose, &pState->dstPose);
         for (int i = 0; i < numNodes; i++)
         {
             double* pOut = &pFrames[(f * numNodes + i) * 6];
-            memcpy(&pOut[0], pState->dstPose.pos[i], sizeof(double) * 3);
-            memcpy(&pOut[3], pState->dstPose.rot[i], sizeof(double) * 3);
+            const rtPose* pPose = &pState->dstPose;
+            if (bLegs && !(pState->dst.nodes[i].type & RT_BODY_UPPER))
+                pPose = &pState->legsPose;
+            memcpy(&pOut[0], pPose->pos[i], sizeof(double) * 3);
+            memcpy(&pOut[3], pPose->rot[i], sizeof(double) * 3);
         }
     }
 
@@ -877,14 +957,25 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
 #ifdef STDHASHTABLE_CRC32_KEYS
     pKeyframe->namecrc = stdCrc32(name, strlen(name));
 #endif
-    pKeyframe->flags = src.flags;
+    pKeyframe->flags = pTiming->flags;
     pKeyframe->type = src.type;
     pKeyframe->fps = (flex_t)((double)src.fps * pState->recipe.speeds[keyIdx]);
-    pKeyframe->numFrames = src.numFrames;
-    pKeyframe->numMarkers = src.numMarkers;
-    pKeyframe->markers = src.markers;
+    if (bLegs)
+    {
+        pKeyframe->type = legs.type;
+        pKeyframe->fps = legs.fps;
+    }
+    else if (pState->recipe.bUpper[keyIdx])
+    {
+        pKeyframe->type = RT_BODY_UPPER;
+    }
+    pKeyframe->numFrames = pTiming->numFrames;
+    pKeyframe->numMarkers = pTiming->numMarkers;
+    pKeyframe->markers = pTiming->markers;
     if (pState->recipe.bDamageAlways)
-        sithKeyRetarget_DamageAlways(&src, pKeyframe);
+        sithKeyRetarget_DamageAlways(pTiming, pKeyframe);
+    if (pState->recipe.bUpper[keyIdx])
+        sithKeyRetarget_DropJumps(pKeyframe);
 
     pKeyframe->aNodes = (rdJoint*)RDROID_ALLOC(sizeof(rdJoint) * (numNodes + 1));
     if (!pKeyframe->aNodes)
@@ -932,7 +1023,10 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
 
     RDROID_FREE(pFrames);
     rdKeyframe_FreeEntry(&src);
-    stdPlatform_Printf("OpenJKDF2: Key retarget: made `%s` from `%s`, %d frames\n", name, pState->recipe.srcKeys[keyIdx], numFrames);
+    rdKeyframe_FreeEntry(&legs);
+    stdPlatform_Printf("OpenJKDF2: Key retarget: made `%s` from `%s`%s%s%s, %d frames\n", name, pState->recipe.srcKeys[keyIdx],
+                       bLegs ? " with legs from `" : (pState->recipe.bUpper[keyIdx] ? ", upper body" : ""),
+                       bLegs ? pState->recipe.legKeys[keyIdx] : "", bLegs ? "`" : "", numFrames);
     return 1;
 
 fail_built:
@@ -942,6 +1036,7 @@ fail:
     if (pFrames)
         RDROID_FREE(pFrames);
     rdKeyframe_FreeEntry(&src);
+    rdKeyframe_FreeEntry(&legs);
     return 0;
 }
 
