@@ -589,6 +589,8 @@
       #mod-choice .where { display: block; color: var(--muted); font-size: 13px; }
       #mod-choice .tag { padding: 0 5px; border: 1px solid var(--gold); color: var(--gold); font-size: 11px; font-weight: bold; text-transform: uppercase; }
       #mod-choice .mod-news { margin: 0 0 12px; }
+      #mod-choice .keep-folder { margin: 14px 0 0; }
+      #mod-choice .keep-folder .fine { display: block; margin-top: 4px; }
       #mod-choice .mod-clash { margin: 0 0 12px; padding: 7px 10px; border-left: 3px solid var(--gold); font-size: 14px; white-space: pre-line; }
       /* Full screen sits between the mods and Start, and on its own without mods. */
       #mod-choice .picker-option { margin: 0 0 14px; }
@@ -1223,6 +1225,12 @@
             <button class="play" type="button">Start</button>
             <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
           </div>
+          <p class="keep-folder keep-offer" hidden><button class="text-button" type="button">Keep my mods and maps up to date</button>
+            <span class="fine">Pick your game folder, and this browser checks it at every start. If it's in Program Files,
+              pick a folder for your mods and maps outside it: maps go in an Episode folder inside it, and mods at its
+              top.</span></p>
+          <p class="keep-folder keep-on" hidden><span class="keep-text"></span>
+            <button class="text-button" type="button">Stop checking</button></p>
         </div>
         <div id="picker-result" role="status"></div>
       </div>
@@ -1972,6 +1980,157 @@
         }
 
         return { info: info, index: index, load: load, save: save, forget: forget };
+      }
+
+      // ---- A folder the browser keeps for the page (Chrome, Edge and
+      // Opera), read again at every start from the saved files, so mods and
+      // maps added to it since come without choosing it. One per game:
+      // { game, handle, kind, name, time, seen }. kind 'game' is the game
+      // folder, read instead of the saved files. kind 'extra' is a folder of
+      // mods and maps, laid over them (keptMerge): Chrome won't keep a
+      // folder in Program Files, where Steam puts the games. time is when an
+      // 'extra' folder was last read, and seen has the size and date
+      // modified of each of its files then, by its path in the game folder,
+      // lowercase.
+      function keptFolderStore(idb) {
+        var dbPromise = null;
+
+        function open() {
+          if (!dbPromise) {
+            dbPromise = new Promise(function(resolve, reject) {
+              var req = idb.open('jkdf2mp-kept-folders', 1);
+              req.onupgradeneeded = function() {
+                req.result.createObjectStore('folders', { keyPath: 'game' });
+              };
+              req.onsuccess = function() { resolve(req.result); };
+              req.onerror = function() { reject(req.error); };
+              req.onblocked = function() { reject(new Error('the kept folder store is busy')); };
+            });
+            // Lets a later call try again.
+            dbPromise.catch(function() { dbPromise = null; });
+          }
+          return dbPromise;
+        }
+
+        function done(tx) {
+          return new Promise(function(resolve, reject) {
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = tx.onabort = function() { reject(tx.error); };
+          });
+        }
+
+        async function all() {
+          var db = await open();
+          var req = db.transaction('folders').objectStore('folders').getAll();
+          return new Promise(function(resolve, reject) {
+            req.onsuccess = function() { resolve(req.result); };
+            req.onerror = function() { reject(req.error); };
+          });
+        }
+
+        async function put(folder) {
+          var db = await open();
+          var tx = db.transaction('folders', 'readwrite');
+          tx.objectStore('folders').put(folder);
+          await done(tx);
+        }
+
+        async function remove(game) {
+          var db = await open();
+          var tx = db.transaction('folders', 'readwrite');
+          tx.objectStore('folders').delete(game);
+          await done(tx);
+        }
+
+        return { all: all, put: put, remove: remove };
+      }
+
+      // The files in a kept folder that a picked folder would bring
+      // (pickedFiles), as [{ path, file }] with their paths in it: each
+      // folder's files, then its folders', sorted by name ignoring case.
+      // Folders the page never reads aren't opened, so MotS's HD textures
+      // (jkgm/) aren't listed one by one, and nor is anything more than 8
+      // folders deep.
+      async function listFolder(dir) {
+        var out = [];
+        function byName(a, b) {
+          var p = a.name.toUpperCase(), q = b.name.toUpperCase();
+          return p < q ? -1 : p > q ? 1 : 0;
+        }
+        async function walk(dir, prefix, depth) {
+          var files = [], dirs = [];
+          for await (var entry of dir.values()) (entry.kind === 'file' ? files : dirs).push(entry);
+          files = files.sort(byName).filter(function(f) { return !isSkipped((prefix + f.name).toLowerCase()); });
+          var got = await Promise.all(files.map(function(f) { return f.getFile(); }));
+          got.forEach(function(file, i) { out.push({ path: prefix + files[i].name, file: file }); });
+          for (var d of dirs.sort(byName)) {
+            var lower = (prefix + d.name).toLowerCase();
+            if (depth < 8 && lower !== 'jkgm' && !isSkipped(lower + '/')) await walk(d, prefix + d.name + '/', depth + 1);
+          }
+        }
+        await walk(dir, '', 0);
+        return out;
+      }
+
+      // What a folder picked to keep is: 'game' when it has all of the
+      // game's files, 'other' when it has the other game's, 'some' when it
+      // has only some of the game's own, and 'extra' otherwise, a folder of
+      // mods and maps.
+      async function folderKind(dir, game) {
+        var listed = {};
+        async function has(rel) {
+          var parts = rel.toLowerCase().split('/'), at = dir, path = '';
+          for (var i = 0; i < parts.length; i++) {
+            if (!listed[path]) {
+              listed[path] = {};
+              for await (var entry of at.values()) listed[path][entry.name.toLowerCase()] = entry;
+            }
+            var next = listed[path][parts[i]];
+            if (!next || next.kind !== (i < parts.length - 1 ? 'directory' : 'file')) return false;
+            at = next;
+            path += '/' + parts[i];
+          }
+          return true;
+        }
+        async function count(list) {
+          var n = 0;
+          for (var r of list) if (await has(r)) n++;
+          return n;
+        }
+        var mine = game === 'mots' ? REQUIRED_MOTS : REQUIRED_JK, other = game === 'mots' ? REQUIRED_JK : REQUIRED_MOTS;
+        if (await count(mine) === mine.length) return 'game';
+        if (await count(other) === other.length) return 'other';
+        // jk_.cd is in both.
+        return await count(mine.filter(function(r) { return other.indexOf(r) < 0; })) ? 'some' : 'extra';
+      }
+
+      // Where a file in a kept folder of mods and maps goes in the game
+      // folder: what's in its episode folder goes in episode/, as maps, and
+      // the rest in mods/, where each GOB, zip or folder is a mod. A kept
+      // folder that is an episode folder is all maps.
+      function keptPath(path, folderName) {
+        if (folderName.toLowerCase() === 'episode') return 'episode/' + path;
+        var at = path.indexOf('/');
+        return at > 0 && path.substring(0, at).toLowerCase() === 'episode' ? 'episode' + path.substring(at) : 'mods/' + path;
+      }
+
+      // Saved or picked files (base) with a kept folder of mods and maps
+      // laid over them, as one picked folder's files. The kept folder's
+      // files ([{ path, file }], path in the game folder) come last, and
+      // replace a file of base with the same path. Files of base that came
+      // from the kept folder last time (seen) are left out, so the ones gone
+      // from it go.
+      function keptMerge(base, extras, seen) {
+        var folder = base[0].webkitRelativePath.split('/')[0], mine = {};
+        var files = extras.map(function(e) {
+          Object.defineProperty(e.file, 'webkitRelativePath', { value: folder + '/' + e.path });
+          mine[e.path.toLowerCase()] = true;
+          return e.file;
+        });
+        return base.filter(function(f) {
+          var rel = f.webkitRelativePath, lower = rel.substring(rel.indexOf('/') + 1).toLowerCase();
+          return !mine[lower] && !seen[lower];
+        }).concat(files);
       }
 
       function loadEngine(withBundledData) {
@@ -3010,12 +3169,15 @@
       // highest first, or null when the player chooses a different folder or
       // closes the prompt. From the files saved in the browser, it says when
       // they were saved (copyTime); with the folder chosen again, what's new
-      // since (news, from whatsNew), and tags those mods.
-      function chooseMods(folderMods, saved, clashes, game, fromBrowser, copyTime, news) {
+      // since (news, from whatsNew), and tags those mods. kept is
+      // onFolderPicked's. Once files are saved, the browser can keep a
+      // folder to read at every start, where it lets the page.
+      function chooseMods(folderMods, saved, clashes, game, fromBrowser, copyTime, news, kept) {
         var leftOut = modsLeftOut(game);
         var options = folderMods.map(function(m, i) {
           return { index: i, name: m.name, path: m.path, key: modKey(m), news: news && news.mods[i],
-                   where: (m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
+                   where: (m.kept ? 'In your folder "' + kept.name + '", ' :
+                           m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
                                     : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
                           (m.bytes > 100 * 1048576 ? ". Too big to send: players need their own copy" : '') };
         });
@@ -3108,9 +3270,30 @@
         updateAll();
 
         var newsLine = modChoice.querySelector('.mod-news');
-        newsLine.textContent = news ? newsText(news, folderMods, copyTime) :
+        var text = news ? newsText(news, folderMods, copyTime) :
           fromBrowser && copyTime ? 'Using your ' + GAME_NAMES[game] + ' files saved ' + savedDay(copyTime) + '.' : '';
+        if (kept && kept.failed)
+          text = "Couldn't open your folder \"" + kept.name + '", so this uses your files saved ' + savedDay(copyTime) + '.';
+        else if (kept)
+          text = ('Checked your folder "' + kept.name + '". ' + text).trim();
+        newsLine.textContent = text;
         newsLine.hidden = !newsLine.textContent;
+
+        // From the files saved in the browser, mods and maps added to the
+        // folder since need the folder chosen again, which the label does:
+        // it opens the folder picker, over the folder prompt.
+        var otherFolder = modChoice.querySelector('.other-folder');
+        otherFolder.hidden = !fromBrowser;
+        var keepOffer = modChoice.querySelector('.keep-offer'), keepOn = modChoice.querySelector('.keep-on');
+        function showKept() {
+          var k = keptFolder[game];
+          keepOn.querySelector('.keep-text').textContent = k ? 'Your folder "' + k.name + '" is checked at every start.' : '';
+          keepOn.hidden = !k;
+          keepOffer.hidden = !!k || !keptStore || !copyTime;
+          otherFolder.textContent = k && k.kind === 'extra' ?
+            'Check my game folder for new mods and maps' : 'Check my folder for new mods and maps';
+        }
+        showKept();
 
         pickerTitle.textContent = options.length ? 'Choose your mods' : 'Ready to play ' + GAME_NAMES[game];
         modChoice.querySelector('.mods').hidden = !options.length;
@@ -3118,15 +3301,12 @@
         showPickerResult('');
         modChoice.hidden = false;
         var start = modChoice.querySelector('button.play');
-        // From the files saved in the browser, mods and maps added to the
-        // folder since need the folder chosen again, which the label does:
-        // it opens the folder picker, over the folder prompt.
-        var otherFolder = modChoice.querySelector('.other-folder');
-        otherFolder.hidden = !fromBrowser;
         start.focus();
         return new Promise(function(resolve) {
+          var keep = keepOffer.querySelector('button'), stop = keepOn.querySelector('button'), over = false;
           function done() {
-            start.onclick = otherFolder.onclick = null;
+            over = true;
+            start.onclick = otherFolder.onclick = keep.onclick = stop.onclick = null;
             picker.removeEventListener('close', closed);
             modChoice.hidden = true;
           }
@@ -3141,6 +3321,19 @@
             done();
             openPicker(pickerWant, true);
             resolve(null);
+          };
+          // Once the folder is kept, the game starts again from it, after
+          // this start has wound down.
+          keep.onclick = async function() {
+            if (!(await keepFolder(game)) || over) return;
+            done();
+            resolve(null);
+            setTimeout(function() { startSaved(game); });
+          };
+          stop.onclick = function() {
+            forgetKept(game);
+            showKept();
+            showPickerResult('');
           };
           start.onclick = function() {
             done();
@@ -3232,8 +3425,14 @@
       }
 
       // fileList is the picked folder's files, or the ones saved in the
-      // browser last time (fromBrowser), which come in the same way.
-      async function onFolderPicked(fileList, fromBrowser) {
+      // browser last time (fromBrowser), which come in the same way. kept is
+      // set when a kept folder is used: { name, game: true } when fileList
+      // is a kept game folder's, { name, failed: true, seen } when the
+      // folder couldn't be read, so the saved files are used as they are, or
+      // { name, extras, seen, time } when the files of a kept folder of mods
+      // and maps (the set extras) are laid over fileList (keptMerge), with
+      // the record's seen and time.
+      async function onFolderPicked(fileList, fromBrowser, kept) {
         // How long each stage takes, for the console, so a slow start can be
         // told apart on the player's own PC.
         var clock = { at: performance.now(), stages: [] };
@@ -3269,6 +3468,18 @@
           showPickerResult("That folder doesn't have the game files we're looking for:\n" + missing.join("\n") +
                            "\n\nPick the folder that has episode and resource directly inside, then try again.", true);
           return;
+        }
+        var game = isMots ? 'mots' : 'jk1';
+        // The game folder chosen again while a folder of mods and maps is
+        // kept: that one's files come too, if the browser still lets the page
+        // read it without asking.
+        var keep = keptFolder[game];
+        if (!fromBrowser && !kept && keep && keep.kind === 'extra' && Module['arguments'].indexOf('-path') < 0) {
+          var listed = await keptList(keep, false);
+          if (listed) {
+            var over = withExtras(keep, fileList, listed, false);
+            return onFolderPicked(over.files, false, over.kept);
+          }
         }
         lap('listing');
         // Zipped mods are opened first, so they're found and loaded like the rest.
@@ -3306,11 +3517,11 @@
         // engine's command line can carry it. One ticked mod starts with -path
         // set to its folder; several are put together in jkmods/set. A path
         // given in the address (?path=...) is left as it is.
-        var game = isMots ? 'mots' : 'jk1';
         var ext = isMots ? '.goo' : '.gob';
         var found = { clashes: {}, contents: [] };
         var folderMods = [], saved = [];
         var pathAt = Module['arguments'].indexOf('-path');
+        var extras = kept && kept.extras;
         if (pathAt < 0) {
           folderMods = detectMods(files, isMots);
           saved = typeof indexedDB !== 'undefined' ? await storedMods(game) : [];
@@ -3322,30 +3533,48 @@
           }
           placeModFiles(files, folderMods);
           Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
+          // A mod all of whose files are from a kept folder of mods and maps
+          // says it's there, also when they're the saved copies.
+          var fromKept = function(e) {
+            var src = e.zip || e.file, rel = src.webkitRelativePath;
+            return extras ? extras.has(src) : !!kept.seen[rel.substring(rel.indexOf('/') + 1).toLowerCase()];
+          };
+          folderMods.forEach(function(m, i) {
+            var mine = kept && (extras || kept.seen) ? files.filter(function(e) { return e.mod === i; }) : [];
+            m.kept = mine.length > 0 && mine.every(fromKept);
+          });
         }
         // Started from the files saved in the browser: when they were saved.
-        // The folder chosen again with files saved: what's new since then.
+        // The folder chosen again with files saved, or read from where it's
+        // kept: what's new since then. A kept folder of mods and maps is
+        // compared with what it had last time too, since its files may not
+        // have been saved.
         var copy = null, news = null;
         if (gameFiles && pathAt < 0) {
           try {
-            copy = fromBrowser ? await gameFiles.info(game) : await gameFiles.index(game);
+            copy = fromBrowser && !extras ? await gameFiles.info(game) : await gameFiles.index(game);
           } catch (err) {
             console.warn('OpenJKDF2: could not look at the saved game files (' + err + ')');
           }
-          if (copy && !fromBrowser) {
+          if (copy && extras)
+            copy = { time: Math.max(copy.time, kept.time || 0), files: Object.assign({}, copy.files, kept.seen) };
+          if (copy && (!fromBrowser || extras)) {
             news = whatsNew(copy, files, folderMods, ext);
             lap('comparing with the saved files');
           }
         }
-        var picked = await chooseMods(folderMods, saved, found.clashes, game, fromBrowser, copy && copy.time, news);
+        var picked = await chooseMods(folderMods, saved, found.clashes, game, fromBrowser, copy && copy.time, news, kept);
         // The player went to choose a different folder, or closed the prompt.
         if (!picked) return;
         lap('start window');
+        if (extras) keptSeen(game, fileList, extras);
         // A folder given with ?path= is read like a mod.
         var modPath = pathAt < 0 ? null : String(Module['arguments'][pathAt + 1] || '').replace(/\\/g, '/')
           .replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
         files = filesToRead(files, ext, modPath);
-        var toSave = fromBrowser || modPath ? null : filesToSave(fileList, files, playerFiles);
+        // The saved files get a kept folder's new and changed files too, so
+        // they still have them when it can't be read.
+        var toSave = (fromBrowser && !extras) || modPath ? null : filesToSave(fileList, files, playerFiles);
 
         readingFolder = true;
         chooseButton.setAttribute('aria-disabled', 'true');
@@ -3427,13 +3656,20 @@
 
       // Waits for onFolderPicked, showing what went wrong. Files saved in the
       // browser that can't be used are forgotten, and the player is asked for
-      // the folder again.
+      // the folder again. A kept folder that fails (err.folder, folderError)
+      // says nothing about them, so they stay.
       function whilePicking(picked, game) {
         chooseButton.setAttribute('aria-disabled', 'true');
         playSaved.disabled = true;
         picked.catch(function(err) {
           if (!game) {
             showPickerResult("Could not read that folder: " + err, true);
+            return;
+          }
+          if (err && err.folder) {
+            console.warn('OpenJKDF2: could not start from the folder ' + err.folder + ' (' + err.message + ')');
+            openPicker(pickerWant, true);
+            showPickerResult("Couldn't read your folder \"" + err.folder + '": ' + err.message, true);
             return;
           }
           console.warn('OpenJKDF2: could not use the saved ' + game + ' files (' + err + ')');
@@ -3460,6 +3696,15 @@
       // starts its game from them straight away; Play JKDF2 offers them in
       // the folder prompt, which is also where another folder can be chosen.
       var gameFiles = typeof indexedDB !== 'undefined' ? gameFileStore(indexedDB) : null;
+      // The kept folders, read as the page opens, so a Join or Host click
+      // still counts when the browser asks whether to allow reading one.
+      var keptStore = gameFiles && typeof window.showDirectoryPicker === 'function' ? keptFolderStore(indexedDB) : null;
+      var keptFolder = {};
+      var keptReady = !keptStore ? Promise.resolve() : keptStore.all().then(function(list) {
+        for (var k of list) keptFolder[k.game] = k;
+      }, function(err) {
+        console.warn('OpenJKDF2: could not look for kept folders (' + err + ')');
+      });
       var SAVE_SETTING = 'jkdf2mp-save-game-files';
       // How long saving waits once the engine has its files, so the copy
       // doesn't compete with the game starting.
@@ -3487,7 +3732,7 @@
       function saveForNextTime(game, files) {
         if (!gameFiles || !files.length) return;
         if (!saveOption.checked) {
-          forgetSaved(game);
+          forgetSaved(game, true);
           return;
         }
         setTimeout(async function() {
@@ -3517,12 +3762,114 @@
         }, SAVE_DELAY_MS);
       }
 
-      function forgetSaved(game) {
+      // andKept: the kept folder goes too, since it's used with them.
+      function forgetSaved(game, andKept) {
         savedKnown[game] = false;
         if (savedGame === game) hideSaved();
+        if (andKept) forgetKept(game);
         gameFiles.forget(game).catch(function(err) {
           console.warn('OpenJKDF2: could not remove the saved game files (' + err + ')');
         });
+      }
+
+      function forgetKept(game) {
+        if (!keptFolder[game]) return;
+        delete keptFolder[game];
+        keptStore.remove(game).catch(function(err) {
+          console.warn('OpenJKDF2: could not forget the kept folder (' + err + ')');
+        });
+      }
+
+      // Asks for a folder to keep for the game, and keeps it if it's the
+      // game folder or a folder of mods and maps. Resolves to whether it
+      // did; what went wrong is shown.
+      async function keepFolder(game) {
+        var dir;
+        try {
+          dir = await window.showDirectoryPicker({ id: 'jkdf2mp-' + game, mode: 'read' });
+        } catch (err) {
+          // AbortError: the player closed the picker.
+          if (err.name !== 'AbortError') showPickerResult("Couldn't open that folder: " + err.message, true);
+          return false;
+        }
+        showPickerResult('Looking in your folder "' + dir.name + '"...');
+        try {
+          var kind = await folderKind(dir, game);
+          if (kind === 'other' || kind === 'some') {
+            showPickerResult((kind === 'other' ? 'That folder has ' + GAME_NAMES[game === 'mots' ? 'jk1' : 'mots'] + '. ' :
+                                                 'That folder has only some of the ' + GAME_NAMES[game] + ' files. ') +
+                             'Pick your ' + GAME_NAMES[game] + ' folder, the one with episode and resource directly inside, ' +
+                             'or a folder of your own for your mods and maps.', true);
+            return false;
+          }
+          var folder = { game: game, handle: dir, kind: kind, name: dir.name, time: 0, seen: {} };
+          await keptStore.put(folder);
+          keptFolder[game] = folder;
+          console.log('OpenJKDF2: keeping the folder ' + dir.name + ' for ' + game +
+                      (kind === 'game' ? ', the game folder' : ', a folder of mods and maps'));
+          return true;
+        } catch (err) {
+          showPickerResult("Couldn't keep that folder: " + err, true);
+          return false;
+        }
+      }
+
+      // A kept folder's files (listFolder), or null when it can't be read:
+      // the browser didn't allow it, or it's gone. ask: the browser may ask
+      // the player first, which it only does right after a click. Chrome
+      // offers "Allow on every visit", after which it doesn't ask again.
+      async function keptList(keep, ask) {
+        var t = performance.now();
+        try {
+          var mode = { mode: 'read' };
+          var state = await keep.handle.queryPermission(mode);
+          if (state !== 'granted' && ask) state = await keep.handle.requestPermission(mode);
+          if (state !== 'granted') throw new Error('the browser was not allowed to read it');
+          var listed = await listFolder(keep.handle);
+          console.log('OpenJKDF2: listed ' + listed.length + ' files in the folder ' + keep.name + ' in ' +
+                      Math.round(performance.now() - t) + ' ms');
+          return listed;
+        } catch (err) {
+          console.warn('OpenJKDF2: could not read the folder ' + keep.name + ' (' + err + ')');
+          return null;
+        }
+      }
+
+      // base (saved or picked files) with a kept folder of mods and maps
+      // laid over it: the files, and onFolderPicked's kept. fromCopy: base
+      // is the saved files, which may have the folder's files from last time.
+      function withExtras(keep, base, listed, fromCopy) {
+        var extras = listed.map(function(e) { return { path: keptPath(e.path, keep.name), file: e.file }; });
+        return { files: keptMerge(base, extras, fromCopy ? keep.seen : {}),
+                 kept: { name: keep.name, extras: new Set(extras.map(function(e) { return e.file; })),
+                         seen: keep.seen, time: keep.time } };
+      }
+
+      // What a kept folder of mods and maps had at this start, so the next
+      // one says what's new in it since.
+      function keptSeen(game, fileList, extras) {
+        var keep = keptFolder[game];
+        if (!keep) return;
+        var seen = {};
+        for (var f of fileList) {
+          if (!extras.has(f)) continue;
+          var rel = f.webkitRelativePath;
+          seen[rel.substring(rel.indexOf('/') + 1).toLowerCase()] = { size: f.size, time: f.lastModified };
+        }
+        keep.seen = seen;
+        keep.time = Date.now();
+        keptStore.put(keep).catch(function(err) {
+          console.warn('OpenJKDF2: could not update the kept folder (' + err + ')');
+        });
+      }
+
+      // An error starting from a kept folder, for whilePicking.
+      function folderError(name) {
+        return function(err) {
+          var e = new Error(err && err.message || String(err));
+          e.folder = name;
+          throw e;
+        };
       }
 
       function hideSaved() {
@@ -3545,6 +3892,7 @@
       async function offerSaved(want, start) {
         var asked = ++savedAsked;
         hideSaved();
+        await keptReady;
         var found = [];
         for (var game of !gameFiles ? [] : want ? [want.game] : ['jk1', 'mots']) {
           try {
@@ -3562,21 +3910,47 @@
         if (!found.length || start || picker.querySelector('.actions.picker-intro').hidden) return;
         var info = found.sort(function(a, b) { return b.time - a.time; })[0];
         savedGame = info.game;
+        var keep = keptFolder[info.game];
         showSavedNote('Your ' + GAME_NAMES[info.game] + ' files from ' +
           savedDay(info.time) +
-          ' are saved in this browser (' + megabytes(info.bytes) + "). If you've added mods or maps since, " +
-          'choose the folder again.', true);
+          ' are saved in this browser (' + megabytes(info.bytes) + ')' +
+          (keep ? ', and your folder "' + keep.name + '" is checked for new mods and maps at every start.' :
+                  ". If you've added mods or maps since, choose the folder again."), true);
         playSaved.hidden = false;
         chooseButton.classList.add('second');
         playSaved.focus();
       }
 
+      // With a kept folder, it's read first, while the click that started
+      // this still lets the browser ask whether to allow it. The saved files
+      // are used as they are when it can't be read.
       function startSaved(game) {
         if (readingFolder || !gameFiles) return;
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
         pickerTitle.textContent = 'Starting ' + GAME_NAMES[game];
-        showPickerResult('Opening your ' + GAME_NAMES[game] + ' files saved in this browser...');
-        whilePicking(gameFiles.load(game).then(function(files) { return onFolderPicked(files, true); }), game);
+        var keep = keptFolder[game];
+        showPickerResult(keep ? 'Checking your folder "' + keep.name + '"...' :
+                                'Opening your ' + GAME_NAMES[game] + ' files saved in this browser...');
+        whilePicking((async function() {
+          var listed = keep && await keptList(keep, true);
+          if (listed && keep.kind === 'game') {
+            var have = {};
+            for (var e of listed) have[e.path.toLowerCase()] = true;
+            if ((game === 'mots' ? REQUIRED_MOTS : REQUIRED_JK).every(function(r) { return have[r.toLowerCase()]; })) {
+              var files = listed.map(function(e) {
+                Object.defineProperty(e.file, 'webkitRelativePath', { value: keep.name + '/' + e.path });
+                return e.file;
+              });
+              return onFolderPicked(files, false, { name: keep.name, game: true }).catch(folderError(keep.name));
+            }
+            console.warn('OpenJKDF2: the folder ' + keep.name + " doesn't have the game files any more");
+            listed = null;
+          }
+          var saved = await gameFiles.load(game);
+          if (!listed) return onFolderPicked(saved, true, keep && { name: keep.name, failed: true, seen: keep.seen });
+          var over = withExtras(keep, saved, listed, true);
+          return onFolderPicked(over.files, true, over.kept).catch(folderError(keep.name));
+        })(), game);
       }
 
       playSaved.addEventListener('click', function() {
@@ -3585,7 +3959,7 @@
 
       savedNote.querySelector('button').addEventListener('click', function() {
         if (!savedGame) return;
-        forgetSaved(savedGame);
+        forgetSaved(savedGame, true);
         chooseButton.focus();
       });
 

@@ -17,11 +17,11 @@ function cut(from, to) {
     return html.substring(a, b);
 }
 const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore,
-        whatsNew, newsText, savedDay } = new Function(
+        whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
     '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore, ' +
-    'whatsNew, newsText, savedDay };')();
+    'whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -487,6 +487,148 @@ test('several new maps are counted, with the first few named', async () => {
     const extra = Object.fromEntries(['A', 'B', 'C', 'D', 'E'].map(n => ['Episode/' + n + '.gob', null]));
     const { text, day } = await newsFor(STEAM_JK, { ...STEAM_JK, ...extra, 'Mod Two/two.gob': null, 'Mod One/one.gob': null });
     assert.equal(text, 'New since ' + day + ': 5 maps (A, B, C, ...) and 2 mods (Mod One, Mod Two).');
+});
+
+// ---- A folder the browser keeps, read again at every start. A stand-in
+// for the browser's folder handle, from paths under the folder, which
+// notes the folders it lists and the files it opens.
+function folderHandle(name, folder, { mots = false, times = {} } = {}, log = { listed: [], opened: [] }, prefix = '') {
+    const ext = mots ? '.goo' : '.gob';
+    const inside = new Map();
+    for (const [path, bytes] of Object.entries(folder)) {
+        const at = path.indexOf('/');
+        if (at < 0) {
+            inside.set(path, { bytes, path: prefix + path });
+        } else {
+            const sub = inside.get(path.substring(0, at)) || { folder: {} };
+            sub.folder[path.substring(at + 1)] = bytes;
+            inside.set(path.substring(0, at), sub);
+        }
+    }
+    return {
+        kind: 'directory', name, log,
+        async *values() {
+            log.listed.push(prefix);
+            for (const [n, x] of inside) {
+                if (x.folder) {
+                    yield folderHandle(n, x.folder, { mots, times }, log, prefix + n + '/');
+                } else {
+                    yield { kind: 'file', name: n, async getFile() {
+                        log.opened.push(x.path);
+                        return new File([x.bytes || (n.toLowerCase().endsWith(ext) ? gob('x', x.path) : Buffer.from(x.path))], n,
+                                        { lastModified: times[x.path] || 1000 });
+                    } };
+                }
+            }
+        },
+    };
+}
+// listFolder's files as a picked folder named name gives them.
+function asPicked(name, listed) {
+    return listed.map(e => {
+        Object.defineProperty(e.file, 'webkitRelativePath', { value: name + '/' + e.path });
+        return e.file;
+    });
+}
+
+test("a kept folder brings what a picked one does, without opening the folders the game never reads", async () => {
+    const dir = folderHandle('Star Wars Jedi Knight Mysteries of the Sith', STEAM_MOTS, { mots: true });
+    const listed = await listFolder(dir);
+    const want = Object.keys(STEAM_MOTS).filter(p => !isSkipped(p.toLowerCase()) && !/^jkgm\//.test(p));
+    assert.deepEqual(listed.map(e => e.path).sort(), want.sort());
+    for (const skipped of ['jkgm/', 'MUSIC/', 'Resource/VIDEO/', 'jkmcutscenes/'])
+        assert.ok(!dir.log.listed.includes(skipped), skipped + ' was listed');
+    assert.ok(!dir.log.opened.some(p => /^jkgm|^MUSIC|VIDEO|\.exe$|\.ico$/i.test(p)), dir.log.opened.join(', '));
+    // Each folder's files by name, then its folders.
+    assert.deepEqual(listed.slice(0, 4).map(e => e.path), ['32390_install.vdf', 'JediKnightM.RPT', 'JKMRemastered.bat',
+                                                           'MysteriesOfTheSith.sdb']);
+    assert.equal(listed.find(e => e.path.includes('/')).path, 'Controls/MS SIDEWINDER GAMEPAD.CTM');
+    const kept = await readFrom(asPicked('Kept', listed), { mots: true });
+    const picked = await whatIsRead(STEAM_MOTS, { mots: true });
+    assert.deepEqual(kept.read, picked.read);
+    assert.deepEqual(kept.players, picked.players);
+});
+
+test('a folder picked to keep is the game folder, the other game, part of one, or mods and maps', async () => {
+    const kind = (folder, game) => folderKind(folderHandle('Picked', folder), game);
+    assert.equal(await kind(STEAM_JK, 'jk1'), 'game');
+    assert.equal(await kind(STEAM_MOTS, 'mots'), 'game');
+    assert.equal(await kind(STEAM_MOTS, 'jk1'), 'other');
+    assert.equal(await kind(STEAM_JK, 'mots'), 'other');
+    assert.equal(await kind({ 'EPISODE/jk1.gob': null, 'resource/JK_.CD': null }, 'jk1'), 'some');
+    assert.equal(await kind({ 'Episode/AODpc.gob': null, 'SBX.zip': null, 'resource/jk_.cd': null }, 'jk1'), 'extra');
+    assert.equal(await kind({ 'Episode/JK1.GOB/x': null, 'Episode/JK1CTF.GOB': null }, 'jk1'), 'some');
+});
+
+test("a kept folder's maps go in episode, and the rest is mods", () => {
+    assert.equal(keptPath('Episode/AODpc.gob', 'JKWEB mods'), 'episode/AODpc.gob');
+    assert.equal(keptPath('EPISODE/My Ep/episode.jk', 'mod'), 'episode/My Ep/episode.jk');
+    assert.equal(keptPath('SBX/cog/sbx.cog', 'mod'), 'mods/SBX/cog/sbx.cog');
+    assert.equal(keptPath('Saber.zip', 'mod'), 'mods/Saber.zip');
+    assert.equal(keptPath('Episodes/x.gob', 'mod'), 'mods/Episodes/x.gob');
+    assert.equal(keptPath('AODpc.gob', 'Episode'), 'episode/AODpc.gob');
+});
+
+test('a kept folder of mods and maps is laid over the saved files, and what is new in it named', async () => {
+    const store = gameFileStore(makeIDB());
+    const fromStart = async (copy, folder, seen, times) => {
+        const listed = await listFolder(folderHandle('My mods', folder, { times }));
+        const extras = listed.map(e => ({ path: keptPath(e.path, 'My mods'), file: e.file }));
+        const merged = keptMerge(copy, extras, seen);
+        const now = {};
+        for (const e of extras) now[e.path.toLowerCase()] = { size: e.file.size, time: e.file.lastModified };
+        return { merged, extras: new Set(extras.map(e => e.file)), seen: now };
+    };
+    const first = await readFrom(datedFiles(STEAM_JK, false));
+    await store.save('jk1', first.toSave);
+    // The first start: two mods and a map.
+    const one = await fromStart(await store.load('jk1'), {
+        'Old.gob': null, 'Episode/Gone.gob': null, 'Episode/JK1MP.GOB': Buffer.from('a copy'), 'readme.txt': null }, {});
+    const merged = one.merged.map(f => f.webkitRelativePath);
+    assert.ok(merged.includes('Picked/mods/Old.gob') && merged.includes('Picked/episode/Gone.gob'), merged.join(', '));
+    // The folder's file wins over the saved one with its path.
+    assert.equal(merged.filter(p => /episode\/jk1mp\.gob$/i.test(p)).length, 1);
+    assert.ok(one.extras.has(one.merged.find(f => /jk1mp/i.test(f.webkitRelativePath))));
+    assert.deepEqual(detectMods(pickedFiles(one.merged).files, false).map(m => m.name + ' (' + m.from + ')'), ['Old (mods)']);
+    await store.save('jk1', (await readFrom(one.merged)).toSave);
+    // The next start: Gone.gob is gone, Old.gob is the same, and there's a new map and two new mods.
+    const copy = await store.load('jk1');
+    assert.ok(copy.some(f => /Gone\.gob$/.test(f.webkitRelativePath)));
+    const two = await fromStart(copy, {
+        'Old.gob': null, 'Episode/JK1MP.GOB': Buffer.from('a copy'), 'Episode/AODpc.gob': null,
+        'SBX/sbx.gob': null, 'SBX/cog/sbx.cog': null,
+        'Blade.zip': makeZip([{ name: 'blade.gob', bytes: gob('cog\\b.cog', 'blade') }]) }, one.seen);
+    const paths = two.merged.map(f => f.webkitRelativePath);
+    assert.ok(!paths.some(p => /Gone/.test(p)), paths.join(', '));
+    assert.equal(paths.filter(p => /mods\/Old\.gob$/.test(p)).length, 1);
+    let files = await openZips(pickedFiles(two.merged).files, false);
+    const mods = detectMods(files, false);
+    placeModFiles(files, mods);
+    assert.deepEqual(mods.map(m => m.name + ' (' + m.from + ')'), ['Blade (mods/Blade.zip)', 'SBX (mods/SBX)', 'Old (mods)']);
+    const saved = await store.index('jk1');
+    const news = whatsNew({ time: saved.time, files: { ...saved.files, ...one.seen } }, files, mods, '.gob');
+    assert.deepEqual(news.maps, { added: ['AODpc'], updated: [] });
+    assert.deepEqual(news.mods, { 0: 'new', 1: 'new' });
+    assert.equal(newsText(news, mods, saved.time),
+                 'New since ' + savedDay(saved.time) + ': map AODpc and 2 mods (Blade, SBX).');
+    // Saved, the map that's gone goes from the saved files too.
+    await store.save('jk1', (await readFrom(two.merged)).toSave);
+    const keys = (await store.load('jk1')).map(f => f.webkitRelativePath.toLowerCase());
+    assert.ok(!keys.some(k => k.includes('gone')) && keys.includes('picked/episode/aodpc.gob') &&
+              keys.includes('picked/mods/blade.zip'), keys.join(', '));
+});
+
+test('kept folders are kept per game, and forgotten', async () => {
+    const store = keptFolderStore(makeIDB());
+    assert.deepEqual(await store.all(), []);
+    const folder = { game: 'jk1', handle: { name: 'mod' }, kind: 'extra', name: 'mod', time: 0, seen: {} };
+    await store.put(folder);
+    await store.put({ ...folder, game: 'mots', kind: 'game', name: 'MotS' });
+    await store.put({ ...folder, time: 5, seen: { 'mods/sbx.gob': { size: 3, time: 1000 } } });
+    const all = await store.all();
+    assert.deepEqual(all.map(f => f.game + ' ' + f.kind + ' ' + f.time).sort(), ['jk1 extra 5', 'mots game 0']);
+    await store.remove('jk1');
+    assert.deepEqual((await store.all()).map(f => f.game), ['mots']);
 });
 
 let failed = 0;
