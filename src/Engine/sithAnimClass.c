@@ -8,6 +8,7 @@
 #include "General/stdHashtbl.h"
 #include "Win95/std.h"
 #include "jk.h"
+#include "Engine/sithKeyRetarget.h"
 
 int sithAnimClass_Load(SithWorld *world, int a2)
 {
@@ -202,7 +203,7 @@ LABEL_39:
                         if ( v12 < world->sizeKeyframes )
                         {
                             keyframe = &world->aKeyframes[v12];
-                            if ( rdKeyframe_LoadEntry(keyframe_fpath, keyframe) )
+                            if ( sithKeyRetarget_LoadEntry(key_fname, keyframe_fpath, keyframe) ) // Added: or made from another skeleton's (sithKeyRetarget)
                             {
                                 keyframe->id = world->numKeyframes;
                                 if ( (world->level_type_maybe & 1) )

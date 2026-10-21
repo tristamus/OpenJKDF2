@@ -1080,6 +1080,14 @@ void jkPlayer_DrawPov()
     }
 }
 
+// Added: the hilt again, in the left hand. A model's joints are only worked
+// out once a frame, where it's first drawn, so they're redone for here.
+static void jkPlayer_DrawSecondHilt(jkPlayerInfo* playerInfo, rdMatrix34* pMat)
+{
+    playerInfo->rd_thing.rdFrameNum = rdroid_frameTrue - 1;
+    rdThing_Draw(&playerInfo->rd_thing, pMat);
+}
+
 void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
 {
     jkPlayerInfo* playerInfo = thing->playerInfo;
@@ -1125,6 +1133,17 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
     rdMatrix34* primaryMat = &thing->renderData.paJointMatrices[primary_mesh];
     rdMatrix34* secondaryMat = &thing->renderData.paJointMatrices[secondary_mesh];
 
+    // Added: with two sabers, a second hilt in the left hand. Only when the
+    // second blade is on a hand, so a staff's far end (SBX) gets no hilt.
+    int bSecondHilt = 0;
+    if ((thing->jkFlags & JKFLAG_DUALSABERS) && primary_mesh != secondary_mesh && thing->renderData.model3
+        && secondary_mesh >= 0 && secondary_mesh < thing->renderData.model3->numHNodes)
+    {
+        const char* pName = thing->renderData.model3->aHierarchyNodes[secondary_mesh].name;
+        int l = _strlen(pName);
+        bSecondHilt = (l >= 5 && !__strcmpi(pName + (l - 5), "lhand"));
+    }
+
     if (thing->jkFlags & JKFLAG_PERSUASION)
     {
         if ( sithPlayer_g_pLocalPlayer->aItems[SITHBIN_F_SEEING].state & SITHINVENTORY_ITEM_ACTIVATED )
@@ -1147,7 +1166,11 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
             thing->renderData.curGeoMode = oldGeoMode;
 
             if (playerInfo->rd_thing.model3)
+            {
                 rdThing_Draw(&playerInfo->rd_thing, primaryMat);
+                if (bSecondHilt)
+                    jkPlayer_DrawSecondHilt(playerInfo, secondaryMat); // Added
+            }
 
             if (thing->jkFlags & JKFLAG_SABERON)
             {
@@ -1165,7 +1188,11 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
     else if ( thing->renderData.curGeoMode > RD_GEOMETRY_NONE)
     {
         if (playerInfo->rd_thing.model3)
+        {
             rdThing_Draw(&playerInfo->rd_thing, primaryMat);
+            if (bSecondHilt)
+                jkPlayer_DrawSecondHilt(playerInfo, secondaryMat); // Added
+        }
         
         if (thing->jkFlags & JKFLAG_SABERON)
         {

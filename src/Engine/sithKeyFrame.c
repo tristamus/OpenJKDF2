@@ -4,6 +4,7 @@
 #include "World/sithWorld.h"
 #include "Engine/rdKeyframe.h"
 #include "Engine/sithPuppet.h"
+#include "Engine/sithKeyRetarget.h"
 #include "General/stdConffile.h"
 #include "stdPlatform.h"
 #include "jk.h"
@@ -102,7 +103,7 @@ rdKeyframe* sithKeyFrame_LoadEntry(const char *pName)
 
     // Allocate and load new keyframe
     keyframe = &world->aKeyframes[world->numKeyframes];
-    if ( !rdKeyframe_LoadEntry(key_fpath, keyframe) )
+    if ( !sithKeyRetarget_LoadEntry(pName, key_fpath, keyframe) ) // Added: or made from another skeleton's (sithKeyRetarget)
         return NULL;
 
     keyframe->id = world->numKeyframes;
@@ -122,6 +123,9 @@ rdKeyframe* sithKeyFrame_LoadEntry(const char *pName)
 
 int sithKeyFrame_New(SithWorld *pWorld, int size)
 {
+#ifdef SITH_KEY_RETARGET
+    sithKeyRetarget_Reset(); // Added: read the recipe again for each world
+#endif
     { TWL_EXTRAM_SUGGEST(pSithHS); // Added: rdKeyframe fields are word-width on RETRO
     pWorld->aKeyframes = (rdKeyframe *)SITH_ALLOC(sizeof(rdKeyframe) * size);
     TWL_EXTRAM_RESTORE(pSithHS); }

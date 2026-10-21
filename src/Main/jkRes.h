@@ -46,6 +46,8 @@ int jkRes_LoadNew(jkResGobDirectory *resGob, char *name, int a3);
 int jkRes_NewGob(jkResGobDirectory *gobFullpath, char *gobFolder, char *gobFname);
 int jkRes_LoadCD(int a1);
 
+extern int jkRes_bGameFilesOnly; // Added
+
 //static int (*jkRes_Startup)(HostServices *a1) = (void*)jkRes_Startup_ADDR;
 //static int (*jkRes_FileExists)(char *fpath, char *a2, int len) = (void*)jkRes_FileExists_ADDR;
 //static void (*jkRes_LoadGob)(char *a1) = (void*)jkRes_LoadGob_ADDR;
