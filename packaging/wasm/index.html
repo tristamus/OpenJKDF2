@@ -3987,7 +3987,7 @@
           netLogBar.append(label, save, close);
           document.body.appendChild(netLogBar);
         }
-        netLogBar.firstChild.textContent = why ? 'Left the game: ' + why + '.' : 'Network log';
+        netLogBar.firstChild.textContent = why ? 'Left the game: ' + why.replace(/\.$/, '') + '.' : 'Network log';
         netLogBar.hidden = false;
       }
       window.jkNetLogText = netLogText;
