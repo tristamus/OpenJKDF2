@@ -584,6 +584,12 @@
         border-color: transparent transparent var(--teal-light);
       }
       #mod-choice label.mod-all[hidden] { display: none; }
+      #mod-choice fieldset[hidden] { display: none; }
+      /* The folder's mods while a saved set is picked: kept as they are, not used. */
+      #mod-choice fieldset:disabled .mod-list, #mod-choice fieldset:disabled .mod-all b { opacity: 0.5; }
+      #mod-choice fieldset:disabled label { cursor: default; }
+      #mod-choice fieldset:disabled label:has(input:checked) { border-color: var(--teal-light); }
+      #mod-choice .saved-about { margin: 0 0 6px; }
       #mod-choice .mod-count { margin-left: auto; color: var(--muted); font-size: 13px; }
       #mod-choice input { accent-color: var(--gold); }
       #mod-choice .where { display: block; color: var(--muted); font-size: 13px; }
@@ -1106,7 +1112,8 @@
                   folder, each mod it finds has its own checkbox. They start ticked, and you can untick any,
                   or all of them at once with Select all. This browser remembers which you left unticked for
                   next time. Players who join you get them too, and if you join a game with other mods, yours
-                  are swapped for the host's.</li>
+                  are swapped for the host's. Those are saved in this browser, and you can pick one of them to
+                  play on its own next time.</li>
               </ol>
             </section>
 
@@ -1206,10 +1213,15 @@
         <div id="mod-choice" hidden>
           <p class="mod-news" role="status" hidden></p>
           <div class="mods">
-            <fieldset>
+            <fieldset class="folder-mods">
               <legend>Mods to play with</legend>
               <label class="mod-all" hidden><input type="checkbox"><b>Select all</b><span class="mod-count"></span></label>
               <div class="mod-list"></div>
+            </fieldset>
+            <fieldset class="saved-mods" hidden>
+              <legend>Saved from online games</legend>
+              <p class="fine saved-about"></p>
+              <div class="saved-list"></div>
             </fieldset>
             <p class="mod-clash" role="status" hidden></p>
             <p class="fine">Mods start the way you left them last time, and new ones start ticked.
@@ -3230,14 +3242,17 @@
       // It's shown before every start, so fullscreen can be turned on or off
       // after the first time; without mods it's just that and Start. Mods in
       // the game folder start ticked, apart from those left unticked last
-      // time. A mod saved from an online game is that host's whole set, so it
-      // starts unticked and runs on its own. Resolves to the ticked options,
-      // highest first, or null when the player chooses a different folder or
-      // closes the prompt. From the files saved in the browser, it says when
-      // they were saved (copyTime); with the folder chosen again, what's new
-      // since (news, from whatsNew), and tags those mods. kept is
-      // onFolderPicked's. Once files are saved, the browser can keep a
-      // folder to read at every start, where it lets the page.
+      // time. A mod saved from an online game is that host's whole set, and
+      // the engine starts it from where it's saved, on its own, so the saved
+      // ones are a choice of one below the folder's: picking one sets the
+      // folder's aside, ticks and all, until None is picked again. Resolves
+      // to the ticked options, highest first, or null when the player
+      // chooses a different folder or closes the prompt. From the files
+      // saved in the browser, it says when they were saved (copyTime); with
+      // the folder chosen again, what's new since (news, from whatsNew), and
+      // tags those mods. kept is onFolderPicked's. Once files are saved, the
+      // browser can keep a folder to read at every start, where it lets the
+      // page.
       function chooseMods(folderMods, saved, clashes, game, fromBrowser, copyTime, news, kept) {
         var leftOut = modsLeftOut(game);
         var options = folderMods.map(function(m, i) {
@@ -3245,43 +3260,72 @@
                    where: (m.kept ? 'In your folder "' + kept.name + '", ' :
                            m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
                                     : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
-                          (m.bytes > 100 * 1048576 ? ". Too big to send: players need their own copy" : '') };
+                          (m.bytes > 250 * 1048576 ? ". Too big to send: players need their own copy" : '') };
         });
         for (var s of saved) {
           options.push({ name: s.name, path: 'netmods/' + s.sha256.substring(0, 16), saved: true,
-                         where: 'Saved from an online game, ' + megabytes(s.size) + '. Runs on its own' });
+                         where: megabytes(s.size) });
         }
 
+        var folderSet = modChoice.querySelector('.folder-mods');
+        var savedSet = modChoice.querySelector('.saved-mods');
         var list = modChoice.querySelector('.mod-list');
+        var savedList = modChoice.querySelector('.saved-list');
         var note = modChoice.querySelector('.mod-clash');
-        list.textContent = '';
-        var inputs = options.map(function(o, i) {
+        list.textContent = savedList.textContent = '';
+        folderSet.disabled = false;
+        folderSet.hidden = !folderMods.length;
+        savedSet.hidden = !saved.length;
+        savedSet.querySelector('.saved-about').textContent = "Each is one host's mods, all together. " +
+          (folderMods.length ? 'Pick one to play it instead of the mods above.' : 'Pick one to play it.');
+        function row(parent, input, name, tagText, whereText) {
           var label = document.createElement('label');
-          var input = document.createElement('input');
-          input.type = 'checkbox';
-          input.value = String(i);
-          input.checked = !o.saved && leftOut.indexOf(o.key) < 0;
           var text = document.createElement('span');
-          var name = document.createElement('b');
-          name.textContent = o.name;
-          text.append(name);
-          if (o.news) {
+          var b = document.createElement('b');
+          b.textContent = name;
+          text.append(b);
+          if (tagText) {
             var tag = document.createElement('span');
             tag.className = 'tag';
-            tag.textContent = o.news === 'new' ? 'New' : 'Updated';
+            tag.textContent = tagText;
             text.append(' ', tag);
           }
           var where = document.createElement('span');
           where.className = 'where';
-          where.textContent = o.where;
+          where.textContent = whereText;
           text.append(where);
           label.append(input, text);
-          list.appendChild(label);
+          parent.appendChild(label);
+        }
+        // None comes first among the saved ones, and starts picked.
+        var none = document.createElement('input');
+        none.type = 'radio';
+        none.name = 'saved-mod';
+        none.value = '';
+        none.checked = true;
+        if (saved.length)
+          row(savedList, none, 'None', '', folderMods.length ? 'Play with the mods above' : 'Play without mods');
+        var inputs = options.map(function(o, i) {
+          var input = document.createElement('input');
+          input.type = o.saved ? 'radio' : 'checkbox';
+          input.value = String(i);
+          if (o.saved) input.name = 'saved-mod';
+          else input.checked = leftOut.indexOf(o.key) < 0;
+          row(o.saved ? savedList : list, input, o.name, o.news && (o.news === 'new' ? 'New' : 'Updated'), o.where);
           return input;
         });
 
+        // The saved set picked, if any.
+        function pickedSaved() {
+          for (var i = 0; i < options.length; i++) {
+            if (options[i].saved && inputs[i].checked) return options[i];
+          }
+          return null;
+        }
         function ticked() {
-          return options.filter(function(o, i) { return inputs[i].checked; });
+          var set = pickedSaved();
+          if (set) return [set];
+          return options.filter(function(o, i) { return !o.saved && inputs[i].checked; });
         }
         function update() {
           var on = ticked().filter(function(o) { return !o.saved; });
@@ -3310,28 +3354,27 @@
           var n = mine.filter(function(input) { return input.checked; }).length;
           allBox.checked = n === mine.length;
           allBox.indeterminate = n > 0 && n < mine.length;
-          all.querySelector('.mod-count').textContent = n + ' of ' + mine.length + ' ticked';
+          all.querySelector('.mod-count').textContent = folderSet.disabled ? 'Not used with a saved set' :
+            n + ' of ' + mine.length + ' ticked';
         }
         allBox.onchange = function() {
-          inputs.forEach(function(input, i) {
-            if (!options[i].saved) input.checked = allBox.checked;
-            else if (allBox.checked) input.checked = false;
-          });
+          mine.forEach(function(input) { input.checked = allBox.checked; });
           update();
           updateAll();
         };
+        // A saved set picked sets the folder's mods aside, ticks and all.
+        function pick() {
+          folderSet.disabled = !!pickedSaved();
+          update();
+          updateAll();
+        }
         inputs.forEach(function(input, i) {
-          input.onchange = function() {
-            // A saved set runs on its own.
-            if (input.checked) {
-              inputs.forEach(function(other, j) {
-                if (j !== i && (options[i].saved || options[j].saved)) other.checked = false;
-              });
-            }
+          input.onchange = options[i].saved ? pick : function() {
             update();
             updateAll();
           };
         });
+        none.onchange = pick;
         update();
         updateAll();
 
@@ -3366,6 +3409,15 @@
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
         showPickerResult('');
         modChoice.hidden = false;
+        // The prompt stays where it opened while the clash note comes and
+        // goes, so the rows don't move under the pointer. Its scrollbar's
+        // room is kept too: a scrollbar coming and going would rewrap rows.
+        if (picker.open) {
+          var openAt = picker.getBoundingClientRect().top;
+          picker.style.margin = openAt + 'px auto auto';
+          picker.style.maxHeight = 'calc(100vh - ' + (openAt + 16) + 'px)';
+          picker.style.scrollbarGutter = 'stable';
+        }
         var start = modChoice.querySelector('button.play');
         start.focus();
         return new Promise(function(resolve) {
@@ -3375,6 +3427,7 @@
             start.onclick = otherFolder.onclick = keep.onclick = stop.onclick = null;
             picker.removeEventListener('close', closed);
             modChoice.hidden = true;
+            picker.style.margin = picker.style.maxHeight = picker.style.scrollbarGutter = '';
           }
           // Closed with its close button or Esc: nothing starts, and the
           // folder prompt works again next time.
@@ -3405,7 +3458,7 @@
             done();
             // A saved set says nothing about the folder's mods, and nor does
             // a folder without any.
-            if (folderMods.length && !ticked().some(function(o) { return o.saved; }))
+            if (folderMods.length && !pickedSaved())
               rememberModsLeftOut(game, options.filter(function(o, i) { return !o.saved && !inputs[i].checked; })
                                                .map(function(o) { return o.key; }));
             resolve(ticked());
