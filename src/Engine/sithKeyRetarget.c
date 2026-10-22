@@ -40,6 +40,8 @@
 //                                come from a key made for the target (here
 //                                SBX's walk); the source's upper body plays
 //                                over it at its own speed, round and round
+//   rt_borun.key bostand.key 0 legs ls_run.key   with legs, a speed of 0
+//                                holds the source's first frame instead
 //   end
 //
 // Bones are named, or @n for node n. Each source bone's world rotation
@@ -649,7 +651,9 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
                     stdString_SafeStrCopy(pRecipe->legKeys[i], w[at + 1], RT_NAME_LEN);
                     at += 2;
                 }
-                if (at != n || pRecipe->speeds[i] <= 0.0 || pRecipe->speeds[i] > 10.0)
+                if (at != n || pRecipe->speeds[i] < 0.0 || pRecipe->speeds[i] > 10.0)
+                    goto fail;
+                if (pRecipe->speeds[i] == 0.0 && !pRecipe->legKeys[i][0])
                     goto fail;
             }
             pRecipe->numKeys = count;
