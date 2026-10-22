@@ -92,6 +92,8 @@ int sithDSSThing_ProcessPos(SithMessage *pMsg)
         pThing->physicsParams.flags = NETMSG_POPU32();
 
         pThing->physicsParams.vel = NETMSG_POPVEC3();
+        if ( pThing->type == SITH_THING_PLAYER )
+            sithPuppet_SetNetVelocity(pThing, &pThing->physicsParams.vel); // Added
         if ( attach_flags )
         {
             rdVector_Zero3(&pThing->physicsParams.angularVelocity);
