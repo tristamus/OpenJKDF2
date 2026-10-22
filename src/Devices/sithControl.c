@@ -2070,6 +2070,16 @@ stdControlKeyInfo* sithControl_EnumBindings(sithControlEnumFunc_t pfFunc, int a2
     {
         int flags = sithControl_inputFuncToControlType[v7];
 
+        // Added: leave out functions nothing registered, which can't take a
+        // control (sithControl_BindControl). Ex. a hotkey named in jkstrings.uni
+        // whose item sithInventory_KeybindInit gave no slot.
+        if ( (flags & 1) == 0 )
+        {
+            ++v7;
+            result = ++v20;
+            continue;
+        }
+
         v18 = 0;
         v19 = 0;
         v17 = 0;
