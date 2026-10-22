@@ -434,6 +434,24 @@ EM_JS(void, Window_wasmLockPointerNow, (), {
 static int Window_bWasmHadPointerLock = 0;
 static int Window_bWasmSentEsc = 0;
 
+// Added: the browser can report one big movement just after it takes the mouse
+// lock (the first click back in the game after a menu or another window), as
+// far as the cursor's trip to wherever it locks, which turns the player round.
+// Mouse movement from the first moments of a lock is left out.
+#define WINDOW_WASM_LOCK_SETTLE_MS (100)
+static int Window_bWasmMoveLocked = 0;
+static Uint64 Window_wasmLockedAtMs = 0;
+
+static int Window_WasmLockJustTaken()
+{
+    int bLocked = Window_wasmIsPointerLocked();
+
+    if (bLocked && !Window_bWasmMoveLocked)
+        Window_wasmLockedAtMs = SDL_GetTicks();
+    Window_bWasmMoveLocked = bLocked;
+    return bLocked && SDL_GetTicks() - Window_wasmLockedAtMs < WINDOW_WASM_LOCK_SETTLE_MS;
+}
+
 // Every frame the game wants the mouse locked.
 static void Window_WasmKeepPointerLock()
 {
@@ -456,6 +474,8 @@ static void Window_WasmKeepPointerLock()
         // Not locked yet: back from a menu, or just gone fullscreen
         Window_wasmLockPointerNow();
     }
+    if (!bLocked)
+        Window_bWasmMoveLocked = 0; // Added
 
     Window_bWasmHadPointerLock = bLocked;
 }
@@ -465,6 +485,7 @@ static void Window_WasmPointerLockReleased()
 {
     Window_bWasmHadPointerLock = 0;
     Window_bWasmSentEsc = 0;
+    Window_bWasmMoveLocked = 0; // Added
 }
 #endif
 
@@ -542,8 +563,13 @@ void Window_HandleMouseMove(SDL_MouseMotionEvent *event)
     // milliseconds to keep Window_lastSampleTime's units (set from SDL_GetTicks()).
     Window_lastSampleMs = (int)(event->timestamp / 1000000) - Window_lastSampleTime;
     //Window_lastSampleTime = event->timestamp;
-    Window_lastXRel += (int)event->xrel;
-    Window_lastYRel += (int)event->yrel;
+#ifdef ARCH_WASM
+    if (!Window_WasmLockJustTaken()) // Added
+#endif
+    {
+        Window_lastXRel += (int)event->xrel;
+        Window_lastYRel += (int)event->yrel;
+    }
 
     Window_msg_main_handler(g_hWnd, WM_MOUSEMOVE, 0, pos);
 }
