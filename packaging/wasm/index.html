@@ -3410,11 +3410,13 @@
         showPickerResult('');
         modChoice.hidden = false;
         // The prompt stays where it opened while the clash note comes and
-        // goes, so the rows don't move under the pointer.
+        // goes, so the rows don't move under the pointer. Its scrollbar's
+        // room is kept too: a scrollbar coming and going would rewrap rows.
         if (picker.open) {
           var openAt = picker.getBoundingClientRect().top;
           picker.style.margin = openAt + 'px auto auto';
           picker.style.maxHeight = 'calc(100vh - ' + (openAt + 16) + 'px)';
+          picker.style.scrollbarGutter = 'stable';
         }
         var start = modChoice.querySelector('button.play');
         start.focus();
@@ -3425,7 +3427,7 @@
             start.onclick = otherFolder.onclick = keep.onclick = stop.onclick = null;
             picker.removeEventListener('close', closed);
             modChoice.hidden = true;
-            picker.style.margin = picker.style.maxHeight = '';
+            picker.style.margin = picker.style.maxHeight = picker.style.scrollbarGutter = '';
           }
           // Closed with its close button or Esc: nothing starts, and the
           // folder prompt works again next time.
