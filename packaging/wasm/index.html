@@ -1782,11 +1782,76 @@
       // Files every install needs, spelled the way the engine opens them
       // (src/Main/InstallHelper.c, aRequiredAssets / aRequiredAssetsMots).
       // MEMFS is case-sensitive, so picked files are renamed to these spellings.
+      // jk_.cd is looked for anywhere in the folder, and made when it's not
+      // there (placeCdKey).
       var REQUIRED_JK = ["episode/JK1.gob", "episode/JK1CTF.gob", "episode/JK1MP.gob",
                          "resource/Res1hi.gob", "resource/Res2.gob", "resource/jk_.cd"];
       var REQUIRED_MOTS = ["episode/JKM_KFY.goo", "episode/JKM_MP.goo", "episode/JKM_SABER.goo",
                            "episode/JKM.goo", "resource/Jkmres.goo", "resource/JKMsndLO.goo",
                            "resource/jk_.cd"];
+
+      // jk_.cd is the 4-byte key both games keep in resource/, the one
+      // required file that isn't the game's own data. Some installs have it
+      // next to the game's EXE instead, where the engine looks first
+      // (jkRes_FileOpen), or somewhere else, so the whole folder is searched:
+      // resource/, then the top, then the rest, nearest the top first. The
+      // first with a key the engine takes at startup (jkRes_LoadCD,
+      // src/engine_config.h) goes in resource/. With none, the game starts
+      // with the standard key, the first here, which is what the desktop
+      // installer writes (InstallHelper.c): the game's own files are what
+      // show a player has the game.
+      var CD_KEY_PATH = "resource/jk_.cd";
+      var CD_KEYS = { jk1: [0x699232C4, 0x69973284, 0x69923384], mots: [0x3B426929] };
+
+      // The game's own files among a game's required files: all but jk_.cd.
+      function gameDataFiles(required) {
+        return required.filter(function(r) { return r !== CD_KEY_PATH; });
+      }
+      function hasGameData(required, byLower) {
+        return gameDataFiles(required).every(function(r) { return byLower[r.toLowerCase()]; });
+      }
+
+      // The picked file to use as jk_.cd for game, or null.
+      async function findCdKey(files, game) {
+        function rank(e) {
+          var lower = e.path.toLowerCase();
+          return lower === CD_KEY_PATH ? 0 : lower.indexOf('/') < 0 ? 1 : 1 + lower.split('/').length;
+        }
+        var found = files.filter(function(e) { return /(^|\/)jk_\.cd$/i.test(e.path); }).sort(function(a, b) {
+          var al = a.path.toLowerCase(), bl = b.path.toLowerCase();
+          return rank(a) - rank(b) || (al < bl ? -1 : al > bl ? 1 : 0);
+        });
+        for (var e of found) {
+          if (e.file.size < 4) continue;
+          try {
+            var key = new DataView(await e.file.slice(0, 4).arrayBuffer()).getUint32(0, true);
+            if (CD_KEYS[game].indexOf(key) >= 0) return e;
+          } catch (err) {
+            console.warn('OpenJKDF2: could not read ' + e.path + ' (' + err + ')');
+          }
+        }
+        return null;
+      }
+
+      // Puts the jk_.cd to use at resource/jk_.cd among the picked files,
+      // or the standard key when there's none, and leaves out any other
+      // file there. A copy elsewhere stays where it is, unread. Returns
+      // { files, cd }, cd being the entry now at resource/jk_.cd.
+      async function placeCdKey(files, game) {
+        var cd = await findCdKey(files, game);
+        if (!cd) {
+          var view = new DataView(new ArrayBuffer(4));
+          view.setUint32(0, CD_KEYS[game][0], true);
+          cd = { path: CD_KEY_PATH, file: new Blob([view.buffer]) };
+          files = files.concat([cd]);
+          console.log('OpenJKDF2: no jk_.cd with this game\'s key in the folder, so the standard key is used');
+        } else if (cd.path.toLowerCase() !== CD_KEY_PATH) {
+          console.log('OpenJKDF2: using ' + cd.path + ' as ' + CD_KEY_PATH);
+          cd.path = CD_KEY_PATH;
+        }
+        files = files.filter(function(e) { return e === cd || e.path.toLowerCase() !== CD_KEY_PATH; });
+        return { files: files, cd: cd };
+      }
 
       // Not copied into memory: the WASM build skips cutscenes (jkCutscene.c) and
       // has music disabled (stdMci.c), so videos and soundtrack only cost memory.
@@ -2097,11 +2162,12 @@
           for (var r of list) if (await has(r)) n++;
           return n;
         }
-        var mine = game === 'mots' ? REQUIRED_MOTS : REQUIRED_JK, other = game === 'mots' ? REQUIRED_JK : REQUIRED_MOTS;
+        // jk_.cd is left out: both games have it, and it can be anywhere.
+        var mine = gameDataFiles(game === 'mots' ? REQUIRED_MOTS : REQUIRED_JK);
+        var other = gameDataFiles(game === 'mots' ? REQUIRED_JK : REQUIRED_MOTS);
         if (await count(mine) === mine.length) return 'game';
         if (await count(other) === other.length) return 'other';
-        // jk_.cd is in both.
-        return await count(mine.filter(function(r) { return other.indexOf(r) < 0; })) ? 'some' : 'extra';
+        return await count(mine) ? 'some' : 'extra';
       }
 
       // Where a file in a kept folder of mods and maps goes in the game
@@ -3451,18 +3517,18 @@
         // A room starts one game: a folder with both starts the room's, and
         // the other game's folder sends the player to its own room.
         var wantMots = pickerWant ? pickerWant.game === 'mots' : isMots;
-        if (wantMots !== isMots && (wantMots ? REQUIRED_MOTS : REQUIRED_JK).every(r => byLower[r.toLowerCase()]))
+        if (wantMots !== isMots && hasGameData(wantMots ? REQUIRED_MOTS : REQUIRED_JK, byLower))
           isMots = wantMots;
         var required = isMots ? REQUIRED_MOTS : REQUIRED_JK;
         if (wantMots !== isMots) {
-          if (isMots || required.every(r => byLower[r.toLowerCase()])) {
+          if (isMots || hasGameData(required, byLower)) {
             if (fromBrowser) throw new Error('the saved files are for the other game');
             showPickerResult(wrongGameText(pickerWant, isMots ? 'mots' : 'jk1'), true);
             return;
           }
           required = REQUIRED_MOTS;
         }
-        var missing = required.filter(r => !byLower[r.toLowerCase()]);
+        var missing = gameDataFiles(required).filter(r => !byLower[r.toLowerCase()]);
         if (missing.length) {
           if (fromBrowser) throw new Error('the saved files lack ' + missing.join(', '));
           showPickerResult("That folder doesn't have the game files we're looking for:\n" + missing.join("\n") +
@@ -3481,6 +3547,9 @@
             return onFolderPicked(over.files, false, over.kept);
           }
         }
+        var placed = await placeCdKey(files, game);
+        files = placed.files;
+        byLower[CD_KEY_PATH] = placed.cd;
         lap('listing');
         // Zipped mods are opened first, so they're found and loaded like the rest.
         if (Module['arguments'].indexOf('-path') < 0 && files.some(function(e) { return /\.zip$/i.test(e.path); })) {
@@ -3936,7 +4005,7 @@
           if (listed && keep.kind === 'game') {
             var have = {};
             for (var e of listed) have[e.path.toLowerCase()] = true;
-            if ((game === 'mots' ? REQUIRED_MOTS : REQUIRED_JK).every(function(r) { return have[r.toLowerCase()]; })) {
+            if (hasGameData(game === 'mots' ? REQUIRED_MOTS : REQUIRED_JK, have)) {
               var files = listed.map(function(e) {
                 Object.defineProperty(e.file, 'webkitRelativePath', { value: keep.name + '/' + e.path });
                 return e.file;

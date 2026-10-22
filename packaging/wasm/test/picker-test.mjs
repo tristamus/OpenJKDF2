@@ -17,11 +17,13 @@ function cut(from, to) {
     return html.substring(a, b);
 }
 const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore,
-        whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge } = new Function(
+        whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge,
+        REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
     '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore, ' +
-    'whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge };')();
+    'whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge, ' +
+    'REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -190,10 +192,24 @@ async function whatIsRead(folder, { mots = false, modPath = null } = {}) {
     return readFrom(folderFiles(folder, mots), { mots, modPath });
 }
 
+// A jk_.cd key as the file holds it: Jedi Knight's on Steam, or MotS's.
+const JK_KEY = 0x699232C4, MOTS_KEY = 0x3B426929, OTHER_KEY = 0x12345678;
+function cdKey(key) {
+    const out = Buffer.alloc(4);
+    out.writeUInt32LE(key);
+    return out;
+}
+// What a made-up file holds when the test gives nothing: a GOB for the
+// game's GOBs, the game's key for jk_.cd, and its own path for the rest.
+function contents(path, bytes, mots) {
+    const lower = path.toLowerCase();
+    return bytes || (lower.endsWith(mots ? '.goo' : '.gob') ? gob('x', path) :
+                     /(^|\/)jk_\.cd$/.test(lower) ? cdKey(mots ? MOTS_KEY : JK_KEY) : Buffer.from(path));
+}
+
 function folderFiles(folder, mots) {
-    const ext = mots ? '.goo' : '.gob';
     return Object.entries(folder).map(([path, bytes]) => {
-        const file = new Blob([bytes || (path.toLowerCase().endsWith(ext) ? gob('x', path) : Buffer.from(path))]);
+        const file = new Blob([contents(path, bytes, mots)]);
         file.webkitRelativePath = 'Picked/' + path;
         return file;
     });
@@ -202,14 +218,15 @@ function folderFiles(folder, mots) {
 async function readFrom(fileList, { mots = false, modPath = null } = {}) {
     const ext = mots ? '.goo' : '.gob';
     const sorted = pickedFiles(fileList);
-    let files = sorted.files;
+    const placed = await placeCdKey(sorted.files, mots ? 'mots' : 'jk1');
+    let files = placed.files;
     if (!modPath && files.some(e => /\.zip$/i.test(e.path)))
         files = await openZips(files, mots);
     const mods = modPath ? [] : detectMods(files, mots);
     placeModFiles(files, mods);
     const toRead = filesToRead(files, ext, modPath);
     return { read: toRead.map(e => e.path).sort(), players: sorted.playerFiles.map(e => e.path).sort(), mods,
-             toSave: filesToSave(fileList, toRead, sorted.playerFiles) };
+             toSave: filesToSave(fileList, toRead, sorted.playerFiles), cd: placed.cd };
 }
 
 // Antonio's Steam folders (2026-10-19), a few of each kind of file.
@@ -302,6 +319,98 @@ test("the other game's GOBs aren't read", async () => {
     assert.ok(!jk.read.includes('Episode/stray.goo'));
 });
 
+// ---- jk_.cd, wherever it is in the folder. A player's CD install
+// (C:\GAMES\JK, 2026-10-22) keeps it next to JK.EXE, not in Resource.
+const CD_INSTALL = Object.fromEntries([
+    'JK.EXE', 'Jedi.EXE', 'JK_.CD', 'README.TXT', 'Episode/JK1.GOB', 'Episode/JK1CTF.GOB', 'Episode/JK1MP.GOB',
+    'Resource/Res1hi.gob', 'Resource/Res2.gob', 'Controls/set0000.ctl', 'player/Kyle/Kyle.plr',
+].map(p => [p, null]));
+const without = (folder, ...paths) => Object.fromEntries(Object.entries(folder).filter(([p]) => !paths.includes(p)));
+const keyOf = async (e) => Buffer.from(await e.file.arrayBuffer()).readUInt32LE(0);
+const cdRead = (read) => read.filter(p => /jk_\.cd$/i.test(p));
+
+test('jk_.cd next to the EXE is read as resource/jk_.cd', async () => {
+    const { read, cd } = await whatIsRead(CD_INSTALL);
+    assert.deepEqual(cdRead(read), ['resource/jk_.cd']);
+    assert.equal(cd.file.webkitRelativePath, 'Picked/JK_.CD');
+    assert.equal(await keyOf(cd), JK_KEY);
+});
+
+test('with none higher up, the copy nearest the top is used', async () => {
+    const { read, cd } = await whatIsRead({ ...without(CD_INSTALL, 'JK_.CD'),
+                                            'Backup/2015/Old/JK_.CD': null, 'GAMEDATA/RESOURCE/JK_.CD': null });
+    assert.equal(cd.file.webkitRelativePath, 'Picked/GAMEDATA/RESOURCE/JK_.CD');
+    assert.deepEqual(cdRead(read), ['resource/jk_.cd']);
+});
+
+test('Resource comes first, then the top, and a copy without a key the game takes is passed over', async () => {
+    let r = await whatIsRead({ ...CD_INSTALL, 'Resource/JK_.CD': null });
+    assert.equal(r.cd.file.webkitRelativePath, 'Picked/Resource/JK_.CD');
+    assert.deepEqual(cdRead(r.read), ['Resource/JK_.CD']);
+    // MotS's key in Resource: the one at the top, and Resource's isn't read.
+    r = await whatIsRead({ ...CD_INSTALL, 'Resource/JK_.CD': cdKey(MOTS_KEY) });
+    assert.equal(r.cd.file.webkitRelativePath, 'Picked/JK_.CD');
+    assert.deepEqual(cdRead(r.read), ['resource/jk_.cd']);
+    // Too short at the top and an unknown key in Resource: one further down.
+    r = await whatIsRead({ ...CD_INSTALL, 'JK_.CD': Buffer.from('ab'), 'Resource/JK_.CD': cdKey(OTHER_KEY),
+                           'Disc/JK_.CD': null });
+    assert.equal(r.cd.file.webkitRelativePath, 'Picked/Disc/JK_.CD');
+    // Each Jedi Knight key the engine takes at startup (src/engine_config.h).
+    for (const key of [0x69973284, 0x699232C4, 0x69923384]) {
+        r = await whatIsRead({ ...CD_INSTALL, 'JK_.CD': cdKey(key) });
+        assert.equal(r.cd.file.webkitRelativePath, 'Picked/JK_.CD', key.toString(16));
+    }
+});
+
+test('with no jk_.cd it can use, the game starts with the standard key', async () => {
+    for (const [folder, mots, key] of [
+        [without(CD_INSTALL, 'JK_.CD'), false, JK_KEY],
+        [{ ...CD_INSTALL, 'JK_.CD': cdKey(MOTS_KEY) }, false, JK_KEY],
+        [{ ...CD_INSTALL, 'JK_.CD': cdKey(0x69923284) }, false, JK_KEY],
+        [without(STEAM_MOTS, 'Resource/JK_.CD'), true, MOTS_KEY],
+        [{ ...STEAM_MOTS, 'Resource/JK_.CD': cdKey(JK_KEY) }, true, MOTS_KEY],
+    ]) {
+        const { read, cd } = await whatIsRead(folder, { mots });
+        assert.deepEqual(cdRead(read), ['resource/jk_.cd']);
+        assert.equal(cd.file.webkitRelativePath, undefined);
+        assert.deepEqual([...Buffer.from(await cd.file.arrayBuffer())], [...cdKey(key)]);
+    }
+});
+
+test('MotS takes jk_.cd from the top too', async () => {
+    const { read, cd } = await whatIsRead({ ...without(STEAM_MOTS, 'Resource/JK_.CD'), 'JK_.CD': null }, { mots: true });
+    assert.equal(cd.file.webkitRelativePath, 'Picked/JK_.CD');
+    assert.equal(await keyOf(cd), MOTS_KEY);
+    assert.deepEqual(cdRead(read), ['resource/jk_.cd']);
+});
+
+test('saved with jk_.cd next to the EXE, or with none, the game starts the same from the browser', async () => {
+    for (const folder of [CD_INSTALL, without(CD_INSTALL, 'JK_.CD')]) {
+        const store = gameFileStore(makeIDB());
+        const first = await readFrom(datedFiles(folder, false));
+        assert.equal(savedPaths(first.toSave).includes('JK_.CD'), 'JK_.CD' in folder);
+        await store.save('jk1', first.toSave);
+        const again = await readFrom(await store.load('jk1'));
+        assert.deepEqual(again.read, first.read);
+        assert.equal(await keyOf(again.cd), JK_KEY);
+    }
+});
+
+test('the game files alone say which game a folder has', () => {
+    const have = (folder) => Object.fromEntries(Object.keys(folder).map(p => [p.toLowerCase(), true]));
+    assert.ok(hasGameData(REQUIRED_JK, have(CD_INSTALL)));
+    assert.ok(hasGameData(REQUIRED_JK, have(without(CD_INSTALL, 'JK_.CD'))));
+    assert.ok(!hasGameData(REQUIRED_MOTS, have(CD_INSTALL)));
+    assert.ok(hasGameData(REQUIRED_MOTS, have(without(STEAM_MOTS, 'Resource/JK_.CD'))));
+    assert.ok(!hasGameData(REQUIRED_JK, have(without(CD_INSTALL, 'Resource/Res2.gob'))));
+});
+
+test('a kept folder with jk_.cd next to the EXE, or none, is still the game folder', async () => {
+    assert.equal(await folderKind(folderHandle('JK', CD_INSTALL), 'jk1'), 'game');
+    assert.equal(await folderKind(folderHandle('JK', without(CD_INSTALL, 'JK_.CD')), 'jk1'), 'game');
+    assert.equal(await folderKind(folderHandle('JK', CD_INSTALL), 'mots'), 'other');
+});
+
 // ---- Saved in the browser for next time: the files read and the
 // characters, in the folder's order, which start the game just like the
 // folder does.
@@ -370,10 +479,8 @@ test('saved game files come back with their paths, and are replaced or removed p
 // ---- Choosing the folder again: only what changed is saved, and what's
 // new since is named. Files carry their date modified, as a browser's do.
 function datedFiles(folder, mots, times = {}) {
-    const ext = mots ? '.goo' : '.gob';
     return Object.entries(folder).map(([path, bytes]) => {
-        const file = new File([bytes || (path.toLowerCase().endsWith(ext) ? gob('x', path) : Buffer.from(path))],
-                              path.split('/').pop(), { lastModified: times[path] || 1000 });
+        const file = new File([contents(path, bytes, mots)], path.split('/').pop(), { lastModified: times[path] || 1000 });
         file.webkitRelativePath = 'Picked/' + path;
         return file;
     });
@@ -493,7 +600,6 @@ test('several new maps are counted, with the first few named', async () => {
 // for the browser's folder handle, from paths under the folder, which
 // notes the folders it lists and the files it opens.
 function folderHandle(name, folder, { mots = false, times = {} } = {}, log = { listed: [], opened: [] }, prefix = '') {
-    const ext = mots ? '.goo' : '.gob';
     const inside = new Map();
     for (const [path, bytes] of Object.entries(folder)) {
         const at = path.indexOf('/');
@@ -515,8 +621,7 @@ function folderHandle(name, folder, { mots = false, times = {} } = {}, log = { l
                 } else {
                     yield { kind: 'file', name: n, async getFile() {
                         log.opened.push(x.path);
-                        return new File([x.bytes || (n.toLowerCase().endsWith(ext) ? gob('x', x.path) : Buffer.from(x.path))], n,
-                                        { lastModified: times[x.path] || 1000 });
+                        return new File([contents(x.path, x.bytes, mots)], n, { lastModified: times[x.path] || 1000 });
                     } };
                 }
             }
