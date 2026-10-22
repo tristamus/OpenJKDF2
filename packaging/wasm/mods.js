@@ -30,8 +30,8 @@
 // the order the engine numbers sounds, models and textures in, which is how
 // players' messages name them. So a game runs it as the host does: a joiner
 // needs it when the host runs it, and runs without theirs when the host
-// doesn't, restarting either way like for a mod. It's over MAX_MOD_BYTES, so
-// it isn't sent.
+// doesn't, restarting either way like for a mod. It's never sent: a joiner
+// needs their own copy.
 //
 // The lobby tail, hex-encoded after the 240-byte jkMultiEntry:
 //   "JKMD" <version u8> <flags u8> <name length u8>
@@ -53,9 +53,11 @@
     var TAIL_MOD = 1, TAIL_PACK = 2;
     var MAX_NAME = 63;
     var PACK_FP_BYTES = 16;
-    // What can be sent, like a map; bigger mods are still fingerprinted, so a
-    // joiner with the same folder can use theirs.
-    var MAX_MOD_BYTES = 100 * 1024 * 1024;
+    // What can be sent. Set by this page, not by the browser or the lobby, and
+    // higher than a map's, since a few mods ticked together soon pass 100 MB.
+    // Bigger mods are still fingerprinted, so a joiner with the same folder can
+    // use theirs.
+    var MAX_MOD_BYTES = 250 * 1024 * 1024;
     var MAX_MOD_FILES = 10000;
     var MAX_PACK_BYTES = 1024 * 1024 * 1024;
     var MAX_PACK_FILES = 50000;
@@ -456,7 +458,7 @@
     var MESSAGES = {
         'none': "The host's mod couldn't be read on their side.",
         'error': "The host couldn't get its mod ready to send.",
-        'too-big': 'This mod is over 100 MB, too big to send. To join, put your own copy of it in your game folder.',
+        'too-big': 'This mod is over 250 MB, too big to send. To join, put your own copy of it in your game folder.',
         'too-many-files': 'This mod has too many files to send.',
         'retail-only': "The host's mod is made only of original game files, so it isn't sent.",
         'corrupt': "The mod didn't arrive intact, so it wasn't installed.",
