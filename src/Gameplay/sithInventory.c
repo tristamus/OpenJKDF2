@@ -14,6 +14,11 @@
 #include "General/stdString.h"
 #include "Main/jkDev.h"
 
+// Added: as many hotkey items as the binding table has room for, 32 with the
+// MotS backports (JKM_DSS) instead of the original's 20. So a mod that already
+// uses all 20 hotkeys, like SBX, can add more.
+#define SITHINVENTORY_NUM_HOTKEYS (SITHINVENTORY_NUM_POWERKEYBINDS - 1)
+
 // MOTS added
 static int sithInventory_008d60f8;
 static int sithInventory_008d60fc;
@@ -1157,7 +1162,7 @@ int sithInventory_HandleInvSkillKeys(SithThing *player, flex_t deltaSecs)
             }
             v2++;
         }
-        while ( (intptr_t)v2 < (intptr_t)&sithInventory_powerKeybinds[20] );
+        while ( (intptr_t)v2 < (intptr_t)&sithInventory_powerKeybinds[SITHINVENTORY_NUM_HOTKEYS] );
         if ( sithInventory_g_bSendDeactivateMessage == 1 )
         {
             sithInventory_g_bSendDeactivateMessage = 0;
@@ -1400,7 +1405,7 @@ skip_cog:
             v20++;
             ++v40;
         }
-        while ( (intptr_t)v20 < (intptr_t)&sithInventory_powerKeybinds[20].idk );
+        while ( (intptr_t)v20 < (intptr_t)&sithInventory_powerKeybinds[SITHINVENTORY_NUM_HOTKEYS].idk );
 
         sithControl_GetKey(INPUT_FUNC_NEXTINV, &keyRead);
         while (keyRead--)
@@ -1546,7 +1551,7 @@ int sithInventory_KeybindInit()
     int v0; // ebx
 
     v0 = 0;
-    for (int i = 0; i < 20; i++)
+    for (int i = 0; i < SITHINVENTORY_NUM_HOTKEYS; i++)
     {
         sithInventory_powerKeybinds[i].enabled = 0;
     }
@@ -1561,7 +1566,7 @@ int sithInventory_KeybindInit()
             sithInventory_powerKeybinds[v0].idk = 0;
             ++v0;
             
-            if (v0 >= 20)
+            if (v0 >= SITHINVENTORY_NUM_HOTKEYS)
             {
                 break;
             }

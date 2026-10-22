@@ -228,6 +228,12 @@ static void dwDroidStats_InitAnimEntry(rdKeyframe* pEntry, const char* pName, in
     pEntry->flags = 3;
     pEntry->numJoints = numNodes;
     pEntry->numJoints2 = numNodes;
+    // Added: rdKeyframe's fields that aren't in the original (types.h)
+    pEntry->upperType = 0;
+    pEntry->upperNumFrames = 0;
+    pEntry->upperFps = 0.0f;
+    pEntry->upperSrc = 0;
+    pEntry->bTurnBlend = 0;
     pEntry->aNodes = (rdJoint*)dwMain_pHS->alloc(numNodes * sizeof(rdJoint));
     _memset(pEntry->aNodes, 0, numNodes * sizeof(rdJoint));
 }

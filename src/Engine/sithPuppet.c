@@ -14,9 +14,20 @@
 #include "World/sithSurface.h"
 #include "stdPlatform.h"
 #include "AI/sithAI.h"
+#include "Gameplay/sithPlayer.h"
 #include "jk.h"
 
 #include <math.h>
+
+// Added: the velocity each remote player's own game last sent, and when.
+// Between position updates their copy here only has a correction velocity,
+// often exactly zero, so animations picked from it (crouching backwards
+// most of all) flip back and forth and restart on every update.
+#define SITHPUPPET_NETVEL_PLAYERS (32)
+#define SITHPUPPET_NETVEL_MAX_AGE_MS (1000)
+static rdVector3 sithPuppet_aNetVel[SITHPUPPET_NETVEL_PLAYERS];
+static uint32_t sithPuppet_aNetVelMs[SITHPUPPET_NETVEL_PLAYERS];
+static int sithPuppet_aNetVelThing[SITHPUPPET_NETVEL_PLAYERS];
 
 static const char* sithPuppet_animNames[43+2] = {
     "--RESERVED--",
@@ -371,6 +382,38 @@ void sithPuppet_UpdatePuppet(SithThing *pThing, flex_t secDeltaTime)
     }
 }
 
+// Added
+void sithPuppet_SetNetVelocity(SithThing *pThing, const rdVector3 *pVel)
+{
+    int playerNum;
+
+    if ( !sithNet_isMulti || pThing == sithPlayer_g_pLocalPlayerThing )
+        return;
+    playerNum = sithPlayer_GetThingPlayerNum(pThing);
+    if ( playerNum < 0 || playerNum >= SITHPUPPET_NETVEL_PLAYERS )
+        return;
+    sithPuppet_aNetVel[playerNum] = *pVel;
+    sithPuppet_aNetVelMs[playerNum] = sithTime_g_msecGameTime;
+    sithPuppet_aNetVelThing[playerNum] = pThing->idx;
+}
+
+// Added: what a thing's walk animations follow. A remote player's is the
+// velocity their game sent, while it's recent.
+static const rdVector3* sithPuppet_GetAnimVelocity(SithThing *pThing)
+{
+    int playerNum;
+
+    if ( sithNet_isMulti && pThing->type == SITH_THING_PLAYER && pThing != sithPlayer_g_pLocalPlayerThing )
+    {
+        playerNum = sithPlayer_GetThingPlayerNum(pThing);
+        if ( playerNum >= 0 && playerNum < SITHPUPPET_NETVEL_PLAYERS
+          && sithPuppet_aNetVelThing[playerNum] == pThing->idx
+          && sithTime_g_msecGameTime - sithPuppet_aNetVelMs[playerNum] < SITHPUPPET_NETVEL_MAX_AGE_MS )
+            return &sithPuppet_aNetVel[playerNum];
+    }
+    return &pThing->physicsParams.vel;
+}
+
 flex_t sithPuppet_UpdateThingMove(SithThing *pThing)
 {
     flex_d_t v2; // st7
@@ -393,9 +436,10 @@ flex_t sithPuppet_UpdateThingMove(SithThing *pThing)
     flex_t thinga; // [esp+24h] [ebp+4h]
 
     SITH_ASSERTREL(pThing); // Added: ported from OpenJones3D sithPuppet_UpdateThingMove
+    const rdVector3* pVel = sithPuppet_GetAnimVelocity(pThing); // Added
     v23 = 0.5;
     if ( !pThing->sector
-      || rdVector_IsZero3(&pThing->physicsParams.vel) )
+      || rdVector_IsZero3(pVel) )
     {
         v2 = 0.0;
         thinga = 0.0;
@@ -403,7 +447,7 @@ flex_t sithPuppet_UpdateThingMove(SithThing *pThing)
     }
     else
     {
-        rdMatrix_TransformVectorOrtho34(&a1a, &pThing->physicsParams.vel, &pThing->orient);
+        rdMatrix_TransformVectorOrtho34(&a1a, pVel, &pThing->orient);
         if ( pThing->attach_flags || (pThing->physicsParams.flags & SITH_PF_FLY) != 0 || (pThing->sector->flags & SITH_ANIM_WALK) != 0 )
         {
             v2 = a1a.y;
@@ -424,7 +468,7 @@ flex_t sithPuppet_UpdateThingMove(SithThing *pThing)
         else
         {
             v2 = a1a.y;
-            thinga = pThing->physicsParams.vel.z;
+            thinga = pVel->z;
             v3 = SITH_ANIM_WALK;
         }
     }
@@ -572,6 +616,27 @@ LABEL_60:
     return thinga;
 }
 
+// Added: puts a track that just started at a point (0 to 1) of the key its
+// upper body comes from: on the keyframe's second clock if it has one, or
+// else on its own time
+static void sithPuppet_CarryOnUpper(rdPuppet *pPuppet, int track, flex_t phase)
+{
+    rdPuppetTrack *pTrack = &pPuppet->aTracks[track];
+    rdKeyframe *pKeyframe = pTrack->keyframe;
+
+    if (!pKeyframe || phase < 0.0 || phase >= 1.0)
+        return;
+    if (pKeyframe->upperNumFrames)
+    {
+        pTrack->upperFrame = phase * (flex_t)pKeyframe->upperNumFrames;
+    }
+    else
+    {
+        pTrack->field_120 = phase * (flex_t)pKeyframe->numFrames;
+        pTrack->field_124 = pTrack->field_120;
+    }
+}
+
 void sithPuppet_sub_4E4A20(SithThing *thing, SithPuppetClassSubmode *animClass)
 {
     rdPuppet *rdPup; // ecx
@@ -588,6 +653,20 @@ void sithPuppet_sub_4E4A20(SithThing *thing, SithPuppetClassSubmode *animClass)
         v4 = &sithPup->playingAnim->keyframe;
         if ( !v4 || *v4 != animClass->keyframe )
         {
+            // Added: a key carries on where the last one was, when both
+            // play the same key's upper body (rdKeyframe.upperSrc)
+            rdKeyframe* pLastKey = NULL;
+            flex_t lastPhase = 0.0;
+            if ( sithPup->otherTrack >= 0 && rdPup->aTracks[sithPup->otherTrack].keyframe )
+            {
+                rdPuppetTrack* pLast = &rdPup->aTracks[sithPup->otherTrack];
+                pLastKey = pLast->keyframe;
+                if ( pLastKey->upperNumFrames )
+                    lastPhase = pLast->upperFrame / (flex_t)pLastKey->upperNumFrames;
+                else if ( pLastKey->numFrames )
+                    lastPhase = pLast->field_120 / (flex_t)pLastKey->numFrames;
+            }
+
             sithPup->animStartedMs = sithTime_g_msecGameTime;
             v5 = sithPup->currentTrack;
             if ( v5 >= 0 )
@@ -616,6 +695,9 @@ void sithPuppet_sub_4E4A20(SithThing *thing, SithPuppetClassSubmode *animClass)
                                           animClass->highPri,
                                           animClass->flags,
                                           sithPuppet_DefaultCallback);
+                if ( sithPup->otherTrack >= 0 && pLastKey && pLastKey->upperSrc
+                     && pLastKey->upperSrc == animClass->keyframe->upperSrc )
+                    sithPuppet_CarryOnUpper(thing->renderData.puppet, sithPup->otherTrack, lastPhase);
             }
         }
         sithPup->playingAnim = animClass;

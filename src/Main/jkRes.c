@@ -17,6 +17,29 @@
 
 static int jkRes_bInit;
 
+// Added: when set, files open only from the game's own GOBs (Res2.gob and
+// the like), not loose files, mods or episodes. Reads the game's copy of a
+// file a mod replaces.
+int jkRes_bGameFilesOnly = 0;
+
+// Added: whether a GOB is one the game came with
+static int jkRes_IsGameGob(Gob* pGob)
+{
+    static const char* aNames[] = {"res1hi.gob", "res1low.gob", "res2.gob", "res1demo.gob", "jkmres.goo", "jkmsndlo.goo"};
+    const char* pName = pGob->fpath;
+    for (const char* p = pGob->fpath; *p; p++)
+    {
+        if (*p == '/' || *p == '\\')
+            pName = p + 1;
+    }
+    for (size_t i = 0; i < sizeof(aNames) / sizeof(aNames[0]); i++)
+    {
+        if (!__strcmpi(pName, aNames[i]))
+            return 1;
+    }
+    return 0;
+}
+
 int jkRes_Startup(HostServices *a1)
 {
     stdPlatform_Printf("OpenJKDF2: %s\n", __func__);
@@ -502,7 +525,7 @@ stdFile_t jkRes_FileOpen(const char *fpath, const char *mode)
 #ifndef TARGET_TWL
     // Try in the EXE root (not in resource/), ex "3do\key\kysabrf2.key"
     // This was also used for `player/...` and `controls/...`
-    hGobFile = pLowLevelHS->fileOpen(fpath, mode);
+    hGobFile = jkRes_bGameFilesOnly ? (stdFile_t)0 : pLowLevelHS->fileOpen(fpath, mode); // Added: jkRes_bGameFilesOnly
     if ( hGobFile )
     {
         v8 = resIdx;
@@ -515,7 +538,7 @@ stdFile_t jkRes_FileOpen(const char *fpath, const char *mode)
     else
 #endif
     {
-        for (v19 = 0; v19 < 5; v19++)
+        for (v19 = jkRes_bGameFilesOnly ? 3 : 0; v19 < 5; v19++) // Added: jkRes_bGameFilesOnly
         {
             v11 = jkRes_gCtx.aGobDirectories[v19].name;
             if (!v11 || !v11[0]) continue; // Added: Don't check in the root directory on Linux
@@ -523,7 +546,7 @@ stdFile_t jkRes_FileOpen(const char *fpath, const char *mode)
             // Try in episode/[episode name], resource/, etc
             // ex: "episode\JK1\3do\key\kysabrf2.key", "resource/3do\key\kysabrf2.key"
             stdString_snprintf(jkRes_idkGobPath, 0x80u, "%s%c%s", v11, LEC_PATH_SEPARATOR_CHR, fpath);
-            v12 = pLowLevelHS->fileOpen(jkRes_idkGobPath, mode);
+            v12 = jkRes_bGameFilesOnly ? (stdFile_t)0 : pLowLevelHS->fileOpen(jkRes_idkGobPath, mode); // Added: jkRes_bGameFilesOnly
             if ( v12 )
             {
                 v13 = resIdx;
@@ -542,6 +565,8 @@ stdFile_t jkRes_FileOpen(const char *fpath, const char *mode)
                     v17 = &jkRes_gCtx.aGobDirectories[v19].gobs[v18];
                     if ( v6 )
                         break;
+                    if (jkRes_bGameFilesOnly && !jkRes_IsGameGob(*v17)) // Added
+                        continue;
                     v14 = stdGob_FileOpen(*v17, fpath);
                     if ( v14 )
                     {

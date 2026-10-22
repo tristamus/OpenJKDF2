@@ -1080,6 +1080,99 @@ void jkPlayer_DrawPov()
     }
 }
 
+// Added: the hilt again, in the left hand. A model's joints are only worked
+// out once a frame, where it's first drawn, so they're redone for here.
+static void jkPlayer_DrawSecondHilt(jkPlayerInfo* playerInfo, rdMatrix34* pMat)
+{
+    playerInfo->rd_thing.rdFrameNum = rdroid_frameTrue - 1;
+    rdThing_Draw(&playerInfo->rd_thing, pMat);
+}
+
+// Added: with two sabers, a second hilt in the left hand. Only when the
+// second blade is on a hand, so a staff's far end (SBX) gets no hilt.
+int jkPlayer_HasSecondHilt(SithThing* thing)
+{
+    rdModel3* pModel = thing->renderData.model3;
+    int primary, secondary, l;
+    const char* pName;
+
+    if (!(thing->jkFlags & JKFLAG_DUALSABERS) || !thing->pPuppetClass || !pModel)
+        return 0;
+    primary = thing->pPuppetClass->aJoints[JOINTTYPE_PRIMARYWEAP];
+    secondary = thing->pPuppetClass->aJoints[JOINTTYPE_SECONDARYWEAP];
+    if (primary == secondary || secondary < 0 || secondary >= (int)pModel->numHNodes)
+        return 0;
+    pName = pModel->aHierarchyNodes[secondary].name;
+    l = _strlen(pName);
+    return (l >= 5 && !__strcmpi(pName + (l - 5), "lhand"));
+}
+
+// Added: with a hilt in each hand, how far along its blade a hilt is slid
+// so the hand holds it by the middle. A hilt's blade starts at the hand's
+// origin, and the hilt runs down from there; SBX's hand meshes put the
+// right fist at the top of the hilt, and the left fist (not made to hold
+// one) at the very top, around the emitter. 0 when there's no fist to go by.
+flex_t jkPlayer_GetGripOffset(SithThing* thing, int joint)
+{
+    rdModel3* pModel = thing->renderData.model3;
+    rdModel3* pHilt;
+    rdMesh* pHand;
+    uint32_t meshIdx;
+    flex_t handLow, handHigh, hiltLow = 0.0, offset;
+
+    if (!thing->playerInfo || !jkPlayer_HasSecondHilt(thing))
+        return 0.0;
+    pHilt = thing->playerInfo->rd_thing.model3;
+    if (!pHilt || !pHilt->numGeos || joint < 0 || joint >= (int)pModel->numHNodes || !pModel->numGeos)
+        return 0.0;
+    meshIdx = pModel->aHierarchyNodes[joint].meshIdx;
+    if (meshIdx >= pModel->aGeos[0].numMeshes)
+        return 0.0;
+    pHand = &pModel->aGeos[0].aMeshes[meshIdx];
+    if (pHand->numVertices <= 0 || !pHand->aVertices)
+        return 0.0;
+
+    handLow = handHigh = pHand->aVertices[0].y;
+    for (int i = 1; i < pHand->numVertices; i++)
+    {
+        if (pHand->aVertices[i].y < handLow)
+            handLow = pHand->aVertices[i].y;
+        if (pHand->aVertices[i].y > handHigh)
+            handHigh = pHand->aVertices[i].y;
+    }
+    for (uint32_t m = 0; m < pHilt->aGeos[0].numMeshes; m++)
+    {
+        rdMesh* pMesh = &pHilt->aGeos[0].aMeshes[m];
+        for (int i = 0; pMesh->aVertices && i < pMesh->numVertices; i++)
+        {
+            if (pMesh->aVertices[i].y < hiltLow)
+                hiltLow = pMesh->aVertices[i].y;
+        }
+    }
+    if (hiltLow >= 0.0)
+        return 0.0;
+
+    // From the hilt's middle to the fist's, never more than the hilt is long
+    offset = (handLow + handHigh) * 0.5 - hiltLow * 0.5;
+    if (offset > -hiltLow)
+        offset = -hiltLow;
+    if (offset < hiltLow)
+        offset = hiltLow;
+    return offset;
+}
+
+// Added: a joint's matrix, with its hilt slid to the middle of the hand
+static rdMatrix34* jkPlayer_GripMatrix(SithThing* thing, int joint, rdMatrix34* pJointMat, rdMatrix34* pOut)
+{
+    flex_t offset = jkPlayer_GetGripOffset(thing, joint);
+
+    if (offset == 0.0)
+        return pJointMat;
+    rdMatrix_Copy34(pOut, pJointMat);
+    rdVector_ScaleAdd3Acc(&pOut->scale, &pOut->lvec, offset);
+    return pOut;
+}
+
 void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
 {
     jkPlayerInfo* playerInfo = thing->playerInfo;
@@ -1125,6 +1218,16 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
     rdMatrix34* primaryMat = &thing->renderData.paJointMatrices[primary_mesh];
     rdMatrix34* secondaryMat = &thing->renderData.paJointMatrices[secondary_mesh];
 
+    // Added: with two sabers, a second hilt in the left hand, and each hand
+    // holds its hilt by the middle
+    rdMatrix34 primaryGrip, secondaryGrip;
+    int bSecondHilt = jkPlayer_HasSecondHilt(thing);
+    if (bSecondHilt)
+    {
+        primaryMat = jkPlayer_GripMatrix(thing, primary_mesh, primaryMat, &primaryGrip);
+        secondaryMat = jkPlayer_GripMatrix(thing, secondary_mesh, secondaryMat, &secondaryGrip);
+    }
+
     if (thing->jkFlags & JKFLAG_PERSUASION)
     {
         if ( sithPlayer_g_pLocalPlayer->aItems[SITHBIN_F_SEEING].state & SITHINVENTORY_ITEM_ACTIVATED )
@@ -1147,7 +1250,11 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
             thing->renderData.curGeoMode = oldGeoMode;
 
             if (playerInfo->rd_thing.model3)
+            {
                 rdThing_Draw(&playerInfo->rd_thing, primaryMat);
+                if (bSecondHilt)
+                    jkPlayer_DrawSecondHilt(playerInfo, secondaryMat); // Added
+            }
 
             if (thing->jkFlags & JKFLAG_SABERON)
             {
@@ -1165,7 +1272,11 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
     else if ( thing->renderData.curGeoMode > RD_GEOMETRY_NONE)
     {
         if (playerInfo->rd_thing.model3)
+        {
             rdThing_Draw(&playerInfo->rd_thing, primaryMat);
+            if (bSecondHilt)
+                jkPlayer_DrawSecondHilt(playerInfo, secondaryMat); // Added
+        }
         
         if (thing->jkFlags & JKFLAG_SABERON)
         {

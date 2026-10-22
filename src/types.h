@@ -639,6 +639,20 @@ typedef struct rdKeyframe
     rdJoint* aNodes;
     uint32_t numMarkers;
     rdMarkers markers;
+
+    // Added: the joints whose node type is in upperType run on a clock of
+    // their own, upperNumFrames long at upperFps, round and round, whatever
+    // moves the track (sithKeyRetarget's keys with legs from another key).
+    // upperSrc is a crc32 of the key that part comes from, 0 if none, so a
+    // track taking over from another made from the same key carries on.
+    uint32_t upperType;
+    uint32_t upperNumFrames;
+    flex_t upperFps;
+    uint32_t upperSrc;
+    // Added: rdPuppet blends this key with another by turning each joint the
+    // least way between them, not angle by angle, which can swing a joint far
+    // off when they're far apart (sithKeyRetarget's keys)
+    uint32_t bTurnBlend;
 } rdKeyframe;
 
 typedef struct rdClipFrustum
@@ -2584,6 +2598,7 @@ typedef struct rdPuppetTrack
     rdKeyframe *keyframe;
     rdPuppetTrackCallback_t callback;
     int32_t field_130;
+    flex_t upperFrame; // Added: the time of the keyframe's upperType joints
 } rdPuppetTrack;
 
 typedef struct rdPuppet
