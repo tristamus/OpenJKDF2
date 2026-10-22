@@ -39,7 +39,10 @@
 //                                legs, and the length, speed and markers,
 //                                come from a key made for the target (here
 //                                SBX's walk); the source's upper body plays
-//                                over it at its own speed, round and round
+//                                over it on a clock of its own, at its own
+//                                speed (times the speed given), round and
+//                                round, however fast the legs go (the walk
+//                                keys go as fast as the player moves)
 //   rt_borun.key bostand.key 0 legs ls_run.key   with legs, a speed of 0
 //                                holds the source's first frame instead
 //   end
@@ -67,6 +70,11 @@
 #define RT_NAME_LEN (32)
 #define RT_PATH_LEN (128)
 #define RT_DEG (57.29577951308232)
+// rdPuppet moves each angle linearly from one entry to the next, which can
+// stray far from the turn between them. A frame is split into up to this
+// many entries, until the angles stray less than RT_SPLIT_DEG degrees.
+#define RT_MAX_SPLIT (8)
+#define RT_SPLIT_DEG (3.0)
 // Node types of the torso, arms and head (rdPuppet, rdHierarchyNode.type)
 #define RT_BODY_UPPER (0xF)
 
@@ -308,6 +316,150 @@ static void sithKeyRetarget_Arc(rtMat* out, const double a[3], const double b[3]
             }
         }
     }
+}
+
+// A rotation as a unit quaternion (w, x, y, z)
+static void sithKeyRetarget_MatToQuat(double q[4], const rtMat* a)
+{
+    double tr = a->m[0][0] + a->m[1][1] + a->m[2][2], s;
+
+    if (tr > 0.0)
+    {
+        s = sqrt(tr + 1.0) * 2.0;
+        q[0] = 0.25 * s;
+        q[1] = (a->m[2][1] - a->m[1][2]) / s;
+        q[2] = (a->m[0][2] - a->m[2][0]) / s;
+        q[3] = (a->m[1][0] - a->m[0][1]) / s;
+    }
+    else if (a->m[0][0] > a->m[1][1] && a->m[0][0] > a->m[2][2])
+    {
+        s = sqrt(1.0 + a->m[0][0] - a->m[1][1] - a->m[2][2]) * 2.0;
+        q[0] = (a->m[2][1] - a->m[1][2]) / s;
+        q[1] = 0.25 * s;
+        q[2] = (a->m[0][1] + a->m[1][0]) / s;
+        q[3] = (a->m[0][2] + a->m[2][0]) / s;
+    }
+    else if (a->m[1][1] > a->m[2][2])
+    {
+        s = sqrt(1.0 + a->m[1][1] - a->m[0][0] - a->m[2][2]) * 2.0;
+        q[0] = (a->m[0][2] - a->m[2][0]) / s;
+        q[1] = (a->m[0][1] + a->m[1][0]) / s;
+        q[2] = 0.25 * s;
+        q[3] = (a->m[1][2] + a->m[2][1]) / s;
+    }
+    else
+    {
+        s = sqrt(1.0 + a->m[2][2] - a->m[0][0] - a->m[1][1]) * 2.0;
+        q[0] = (a->m[1][0] - a->m[0][1]) / s;
+        q[1] = (a->m[0][2] + a->m[2][0]) / s;
+        q[2] = (a->m[1][2] + a->m[2][1]) / s;
+        q[3] = 0.25 * s;
+    }
+}
+
+static void sithKeyRetarget_QuatToMat(rtMat* out, const double q[4])
+{
+    double w = q[0], x = q[1], y = q[2], z = q[3];
+
+    out->m[0][0] = 1.0 - 2.0 * (y * y + z * z);
+    out->m[0][1] = 2.0 * (x * y - z * w);
+    out->m[0][2] = 2.0 * (x * z + y * w);
+    out->m[1][0] = 2.0 * (x * y + z * w);
+    out->m[1][1] = 1.0 - 2.0 * (x * x + z * z);
+    out->m[1][2] = 2.0 * (y * z - x * w);
+    out->m[2][0] = 2.0 * (x * z - y * w);
+    out->m[2][1] = 2.0 * (y * z + x * w);
+    out->m[2][2] = 1.0 - 2.0 * (x * x + y * y);
+}
+
+// The rotation t of the way along the least turn from a to b
+static void sithKeyRetarget_Slerp(rtMat* out, const rtMat* a, const rtMat* b, double t)
+{
+    double qa[4], qb[4], q[4], d = 0.0, len = 0.0;
+
+    sithKeyRetarget_MatToQuat(qa, a);
+    sithKeyRetarget_MatToQuat(qb, b);
+    for (int i = 0; i < 4; i++)
+        d += qa[i] * qb[i];
+    if (d < 0.0)
+    {
+        d = -d;
+        for (int i = 0; i < 4; i++)
+            qb[i] = -qb[i];
+    }
+    if (d > 0.9995)
+    {
+        for (int i = 0; i < 4; i++)
+            q[i] = qa[i] + (qb[i] - qa[i]) * t;
+    }
+    else
+    {
+        double om = acos(d), so = sin(om);
+        double ka = sin((1.0 - t) * om) / so, kb = sin(t * om) / so;
+        for (int i = 0; i < 4; i++)
+            q[i] = qa[i] * ka + qb[i] * kb;
+    }
+    for (int i = 0; i < 4; i++)
+        len += q[i] * q[i];
+    len = sqrt(len);
+    for (int i = 0; i < 4; i++)
+        q[i] /= len;
+    sithKeyRetarget_QuatToMat(out, q);
+}
+
+// How far apart two rotations are, in degrees
+static double sithKeyRetarget_TurnBetween(const rtMat* a, const rtMat* b)
+{
+    rtMat d;
+    double c;
+
+    sithKeyRetarget_MulT(&d, a, b);
+    c = (d.m[0][0] + d.m[1][1] + d.m[2][2] - 1.0) * 0.5;
+    if (c > 1.0)
+        c = 1.0;
+    if (c < -1.0)
+        c = -1.0;
+    return acos(c) * RT_DEG;
+}
+
+static double sithKeyRetarget_WrapAngle(double a);
+
+// The angles for the same rotation as pyr nearest to near: either of the two
+// sets of angles for it, each angle moved by whole turns
+static void sithKeyRetarget_NearestAngles(double out[3], const double pyr[3], const double near[3])
+{
+    double sets[2][3] = {
+        {pyr[0], pyr[1], pyr[2]},
+        {180.0 - pyr[0], pyr[1] + 180.0, pyr[2] + 180.0},
+    };
+    double best = -1.0;
+
+    for (int s = 0; s < 2; s++)
+    {
+        double cand[3], dist = 0.0;
+        for (int i = 0; i < 3; i++)
+        {
+            cand[i] = near[i] + sithKeyRetarget_WrapAngle(sets[s][i] - near[i]);
+            dist += fabs(cand[i] - near[i]);
+        }
+        if (best < 0.0 || dist < best)
+        {
+            best = dist;
+            memcpy(out, cand, sizeof(cand));
+        }
+    }
+}
+
+// crc32 of a key's name in lowercase
+static uint32_t sithKeyRetarget_NameCrc(const char* pName)
+{
+    char lower[RT_NAME_LEN];
+    size_t len = 0;
+
+    for (; pName[len] && len < sizeof(lower) - 1; len++)
+        lower[len] = (pName[len] >= 'A' && pName[len] <= 'Z') ? (char)(pName[len] - 'A' + 'a') : pName[len];
+    lower[len] = 0;
+    return stdCrc32(lower, len);
 }
 
 static double sithKeyRetarget_WrapAngle(double a)
@@ -842,6 +994,116 @@ static void sithKeyRetarget_Sample(const rtSkel* pSkel, const rtPose* pRest, con
     }
 }
 
+// Writes a joint's entries from a pose a frame (pos then rot, for each of
+// numNodes nodes), each entry moving linearly to the next, as rdPuppet plays
+// them. bSmooth: the rotations were worked out here, so the angles are kept
+// close from one entry to the next, and a frame is split where moving its
+// angles linearly would stray from the turn between its poses. bLoop: the
+// last frame moves on to the first. Returns 0 on failure.
+static int sithKeyRetarget_WriteJoint(rdJoint* pJoint, const double* pFrames, int numNodes, int node, int numFrames, int bSmooth, int bLoop)
+{
+    rdAnimEntry* aEntries;
+    int numEntries = 0;
+    double angles[3];
+
+    aEntries = (rdAnimEntry*)RDROID_ALLOC(sizeof(rdAnimEntry) * (bSmooth ? numFrames * RT_MAX_SPLIT : numFrames) + 2);
+    if (!aEntries)
+        return 0;
+    memcpy(angles, &pFrames[node * 6 + 3], sizeof(angles));
+
+    for (int f = 0; f < numFrames; f++)
+    {
+        const double* pCur = &pFrames[(f * numNodes + node) * 6];
+        const double* pNext = (f + 1 < numFrames) ? &pFrames[((f + 1) * numNodes + node) * 6]
+                                                  : (bLoop ? &pFrames[node * 6] : pCur);
+        double sub[RT_MAX_SPLIT + 1][3];
+        int numSplit = 1;
+
+        if (!bSmooth)
+        {
+            memcpy(sub[0], &pCur[3], sizeof(sub[0]));
+            for (int i = 0; i < 3; i++)
+                sub[1][i] = pCur[3 + i] + sithKeyRetarget_WrapAngle(pNext[3 + i] - pCur[3 + i]);
+        }
+        else
+        {
+            rtMat from, to;
+            sithKeyRetarget_BuildMat(&from, &pCur[3]);
+            sithKeyRetarget_BuildMat(&to, &pNext[3]);
+            for (numSplit = 1; numSplit <= RT_MAX_SPLIT; numSplit++)
+            {
+                double worst = 0.0;
+                memcpy(sub[0], angles, sizeof(sub[0]));
+                for (int k = 1; k <= numSplit; k++)
+                {
+                    double pyr[3];
+                    if (k == numSplit)
+                    {
+                        memcpy(pyr, &pNext[3], sizeof(pyr));
+                    }
+                    else
+                    {
+                        rtMat mid;
+                        sithKeyRetarget_Slerp(&mid, &from, &to, (double)k / numSplit);
+                        sithKeyRetarget_Extract(pyr, &mid);
+                    }
+                    sithKeyRetarget_NearestAngles(sub[k], pyr, sub[k - 1]);
+                }
+                // Halfway along each piece, the linear angles against the turn
+                for (int k = 0; k < numSplit; k++)
+                {
+                    double halfway[3];
+                    rtMat lin, turn;
+                    for (int i = 0; i < 3; i++)
+                        halfway[i] = (sub[k][i] + sub[k + 1][i]) * 0.5;
+                    sithKeyRetarget_BuildMat(&lin, halfway);
+                    sithKeyRetarget_Slerp(&turn, &from, &to, (k + 0.5) / numSplit);
+                    double off = sithKeyRetarget_TurnBetween(&lin, &turn);
+                    if (off > worst)
+                        worst = off;
+                }
+                if (worst < RT_SPLIT_DEG || numSplit == RT_MAX_SPLIT)
+                    break;
+            }
+        }
+
+        for (int k = 0; k < numSplit; k++)
+        {
+            rdAnimEntry* pEntry = &aEntries[numEntries++];
+            double at = (double)k / numSplit;
+            int bLast = (f + 1 == numFrames && !bLoop);
+
+            pEntry->frameNum = (flex_t)(f + at);
+            pEntry->flags = 3;
+            pEntry->pos.x = (flex_t)(pCur[0] + (pNext[0] - pCur[0]) * at);
+            pEntry->pos.y = (flex_t)(pCur[1] + (pNext[1] - pCur[1]) * at);
+            pEntry->pos.z = (flex_t)(pCur[2] + (pNext[2] - pCur[2]) * at);
+            pEntry->orientation.x = (flex_t)sub[k][0];
+            pEntry->orientation.y = (flex_t)sub[k][1];
+            pEntry->orientation.z = (flex_t)sub[k][2];
+            pEntry->vel.x = (flex_t)(bLast ? 0.0 : pNext[0] - pCur[0]);
+            pEntry->vel.y = (flex_t)(bLast ? 0.0 : pNext[1] - pCur[1]);
+            pEntry->vel.z = (flex_t)(bLast ? 0.0 : pNext[2] - pCur[2]);
+            pEntry->angularVelocity.x = (flex_t)(bLast ? 0.0 : (sub[k + 1][0] - sub[k][0]) * numSplit);
+            pEntry->angularVelocity.y = (flex_t)(bLast ? 0.0 : (sub[k + 1][1] - sub[k][1]) * numSplit);
+            pEntry->angularVelocity.z = (flex_t)(bLast ? 0.0 : (sub[k + 1][2] - sub[k][2]) * numSplit);
+        }
+        memcpy(angles, sub[numSplit], sizeof(angles));
+    }
+
+    // Kept at the size used
+    pJoint->aEntries = (rdAnimEntry*)RDROID_ALLOC(sizeof(rdAnimEntry) * numEntries + 2);
+    if (!pJoint->aEntries)
+    {
+        RDROID_FREE(aEntries);
+        return 0;
+    }
+    memcpy(pJoint->aEntries, aEntries, sizeof(rdAnimEntry) * numEntries);
+    pJoint->numEntries = numEntries;
+    RDROID_FREE(aEntries);
+    return 1;
+}
+
 //
 // Public
 //
@@ -896,7 +1158,8 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
     rdKeyframe src, legs;
     rdKeyframe* pTiming = &src; // the key the output takes its length, speed and markers from
     double* pFrames = NULL;
-    int numNodes, numFrames, keyIdx, bLegs;
+    double* pUpper = NULL; // the source's upper body on its own clock, at its own frames
+    int numNodes, numFrames, numUpper, keyIdx, bLegs, bUpperClock;
 
     // The name can be in a line buffer that loading reuses
     stdString_SafeStrCopy(name, pName, sizeof(name));
@@ -928,6 +1191,14 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
     if (numFrames <= 0 || numFrames > RT_MAX_FRAMES)
         goto fail;
 
+    // With legs and a speed, the upper body is on a second clock, which
+    // rdPuppet runs on time (rdKeyframe.upperFps), and the source's frames
+    // are its own. Otherwise, with legs, the source's first frame is held.
+    bUpperClock = bLegs && pState->recipe.speeds[keyIdx] > 0.0;
+    numUpper = (int)src.numFrames;
+    if (numUpper > RT_MAX_FRAMES)
+        goto fail;
+
     // Every frame of the target pose: pos then rot, per node
     pFrames = (double*)RDROID_ALLOC(sizeof(double) * 6 * numNodes * numFrames);
     if (!pFrames)
@@ -937,8 +1208,7 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
         double srcFrame = (double)f;
         if (bLegs)
         {
-            // The same moment in the source, at its own speed, round and round
-            srcFrame = fmod((double)f / (double)legs.fps * (double)src.fps * pState->recipe.speeds[keyIdx], (double)src.numFrames);
+            srcFrame = 0.0;
             sithKeyRetarget_Sample(&pState->dst, &pState->dstRest, &legs, (double)f, &pState->legsPose);
         }
         sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, srcFrame, &pState->srcPose);
@@ -951,6 +1221,24 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
                 pPose = &pState->legsPose;
             memcpy(&pOut[0], pPose->pos[i], sizeof(double) * 3);
             memcpy(&pOut[3], pPose->rot[i], sizeof(double) * 3);
+        }
+    }
+
+    if (bUpperClock)
+    {
+        pUpper = (double*)RDROID_ALLOC(sizeof(double) * 6 * numNodes * numUpper);
+        if (!pUpper)
+            goto fail;
+        for (int f = 0; f < numUpper; f++)
+        {
+            sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, (double)f, &pState->srcPose);
+            sithKeyRetarget_Convert(pState, &pState->srcPose, &pState->dstPose);
+            for (int i = 0; i < numNodes; i++)
+            {
+                double* pOut = &pUpper[(f * numNodes + i) * 6];
+                memcpy(&pOut[0], pState->dstPose.pos[i], sizeof(double) * 3);
+                memcpy(&pOut[3], pState->dstPose.rot[i], sizeof(double) * 3);
+            }
         }
     }
 
@@ -980,6 +1268,18 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
         sithKeyRetarget_DamageAlways(pTiming, pKeyframe);
     if (pState->recipe.bUpper[keyIdx])
         sithKeyRetarget_DropJumps(pKeyframe);
+    if (bUpperClock)
+    {
+        pKeyframe->upperType = RT_BODY_UPPER;
+        pKeyframe->upperNumFrames = numUpper;
+        pKeyframe->upperFps = (flex_t)((double)src.fps * pState->recipe.speeds[keyIdx]);
+    }
+    // Its angles come from a solve, so they can be far from another key's
+    // for much the same pose
+    pKeyframe->bTurnBlend = 1;
+    // So sithPuppet can carry the source on from one key to the next
+    if (bUpperClock || (!bLegs && !pState->recipe.bUpper[keyIdx]))
+        pKeyframe->upperSrc = sithKeyRetarget_NameCrc(pState->recipe.srcKeys[keyIdx]);
 
     pKeyframe->aNodes = (rdJoint*)RDROID_ALLOC(sizeof(rdJoint) * (numNodes + 1));
     if (!pKeyframe->aNodes)
@@ -991,46 +1291,31 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
     for (int i = 0; i < numNodes; i++)
     {
         rdJoint* pJoint = &pKeyframe->aNodes[i];
+        // The upper body on the second clock, round and round
+        int bOwnClock = bUpperClock && (pState->dst.nodes[i].type & RT_BODY_UPPER);
+        const double* pNodeFrames = bOwnClock ? pUpper : pFrames;
+        int numEntries = bOwnClock ? numUpper : numFrames;
 
         pJoint->nodeNum = i;
 #ifdef SITH_DEBUG_STRUCT_NAMES
         stdString_SafeStrCopy(pJoint->aMeshName, pState->dst.nodes[i].name, 32);
 #endif
-        pJoint->aEntries = (rdAnimEntry*)RDROID_ALLOC(sizeof(rdAnimEntry) * numFrames + 2);
-        if (!pJoint->aEntries)
+        // Rotations worked out here are written smoothly; the legs from
+        // another key are copied as they are
+        if (!sithKeyRetarget_WriteJoint(pJoint, pNodeFrames, numNodes, i, numEntries,
+                                        !(bLegs && !(pState->dst.nodes[i].type & RT_BODY_UPPER)), bOwnClock))
             goto fail_built;
-        pJoint->numEntries = numFrames;
-
-        // An entry a frame, moving linearly to the next
-        for (int f = 0; f < numFrames; f++)
-        {
-            rdAnimEntry* pEntry = &pJoint->aEntries[f];
-            const double* pCur = &pFrames[(f * numNodes + i) * 6];
-            const double* pNext = (f + 1 < numFrames) ? &pFrames[((f + 1) * numNodes + i) * 6] : pCur;
-
-            pEntry->frameNum = (flex_t)f;
-            pEntry->flags = 3;
-            pEntry->pos.x = (flex_t)pCur[0];
-            pEntry->pos.y = (flex_t)pCur[1];
-            pEntry->pos.z = (flex_t)pCur[2];
-            pEntry->orientation.x = (flex_t)pCur[3];
-            pEntry->orientation.y = (flex_t)pCur[4];
-            pEntry->orientation.z = (flex_t)pCur[5];
-            pEntry->vel.x = (flex_t)(pNext[0] - pCur[0]);
-            pEntry->vel.y = (flex_t)(pNext[1] - pCur[1]);
-            pEntry->vel.z = (flex_t)(pNext[2] - pCur[2]);
-            pEntry->angularVelocity.x = (flex_t)sithKeyRetarget_WrapAngle(pNext[3] - pCur[3]);
-            pEntry->angularVelocity.y = (flex_t)sithKeyRetarget_WrapAngle(pNext[4] - pCur[4]);
-            pEntry->angularVelocity.z = (flex_t)sithKeyRetarget_WrapAngle(pNext[5] - pCur[5]);
-        }
     }
 
     RDROID_FREE(pFrames);
+    if (pUpper)
+        RDROID_FREE(pUpper);
     rdKeyframe_FreeEntry(&src);
     rdKeyframe_FreeEntry(&legs);
-    stdPlatform_Printf("OpenJKDF2: Key retarget: made `%s` from `%s`%s%s%s, %d frames\n", name, pState->recipe.srcKeys[keyIdx],
+    stdPlatform_Printf("OpenJKDF2: Key retarget: made `%s` from `%s`%s%s%s%s, %d frames\n", name, pState->recipe.srcKeys[keyIdx],
                        bLegs ? " with legs from `" : (pState->recipe.bUpper[keyIdx] ? ", upper body" : ""),
-                       bLegs ? pState->recipe.legKeys[keyIdx] : "", bLegs ? "`" : "", numFrames);
+                       bLegs ? pState->recipe.legKeys[keyIdx] : "", bLegs ? "`" : "",
+                       bUpperClock ? ", upper body on its own clock" : "", numFrames);
     return 1;
 
 fail_built:
@@ -1039,6 +1324,8 @@ fail:
     stdPlatform_Printf("OpenJKDF2: Key retarget: couldn't make `%s`\n", name);
     if (pFrames)
         RDROID_FREE(pFrames);
+    if (pUpper)
+        RDROID_FREE(pUpper);
     rdKeyframe_FreeEntry(&src);
     rdKeyframe_FreeEntry(&legs);
     return 0;

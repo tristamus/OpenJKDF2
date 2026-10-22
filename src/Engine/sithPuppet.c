@@ -616,6 +616,27 @@ LABEL_60:
     return thinga;
 }
 
+// Added: puts a track that just started at a point (0 to 1) of the key its
+// upper body comes from: on the keyframe's second clock if it has one, or
+// else on its own time
+static void sithPuppet_CarryOnUpper(rdPuppet *pPuppet, int track, flex_t phase)
+{
+    rdPuppetTrack *pTrack = &pPuppet->aTracks[track];
+    rdKeyframe *pKeyframe = pTrack->keyframe;
+
+    if (!pKeyframe || phase < 0.0 || phase >= 1.0)
+        return;
+    if (pKeyframe->upperNumFrames)
+    {
+        pTrack->upperFrame = phase * (flex_t)pKeyframe->upperNumFrames;
+    }
+    else
+    {
+        pTrack->field_120 = phase * (flex_t)pKeyframe->numFrames;
+        pTrack->field_124 = pTrack->field_120;
+    }
+}
+
 void sithPuppet_sub_4E4A20(SithThing *thing, SithPuppetClassSubmode *animClass)
 {
     rdPuppet *rdPup; // ecx
@@ -632,6 +653,20 @@ void sithPuppet_sub_4E4A20(SithThing *thing, SithPuppetClassSubmode *animClass)
         v4 = &sithPup->playingAnim->keyframe;
         if ( !v4 || *v4 != animClass->keyframe )
         {
+            // Added: a key carries on where the last one was, when both
+            // play the same key's upper body (rdKeyframe.upperSrc)
+            rdKeyframe* pLastKey = NULL;
+            flex_t lastPhase = 0.0;
+            if ( sithPup->otherTrack >= 0 && rdPup->aTracks[sithPup->otherTrack].keyframe )
+            {
+                rdPuppetTrack* pLast = &rdPup->aTracks[sithPup->otherTrack];
+                pLastKey = pLast->keyframe;
+                if ( pLastKey->upperNumFrames )
+                    lastPhase = pLast->upperFrame / (flex_t)pLastKey->upperNumFrames;
+                else if ( pLastKey->numFrames )
+                    lastPhase = pLast->field_120 / (flex_t)pLastKey->numFrames;
+            }
+
             sithPup->animStartedMs = sithTime_g_msecGameTime;
             v5 = sithPup->currentTrack;
             if ( v5 >= 0 )
@@ -660,6 +695,9 @@ void sithPuppet_sub_4E4A20(SithThing *thing, SithPuppetClassSubmode *animClass)
                                           animClass->highPri,
                                           animClass->flags,
                                           sithPuppet_DefaultCallback);
+                if ( sithPup->otherTrack >= 0 && pLastKey && pLastKey->upperSrc
+                     && pLastKey->upperSrc == animClass->keyframe->upperSrc )
+                    sithPuppet_CarryOnUpper(thing->renderData.puppet, sithPup->otherTrack, lastPhase);
             }
         }
         sithPup->playingAnim = animClass;
