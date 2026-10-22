@@ -567,6 +567,9 @@ void jkSaber_UpdateCollision(SithThing *player, int joint, int bSecondary)
     if ( !rdModel3_GetMeshMatrix(&player->renderData, &matrix, joint, &jointMat) )
         return;
 
+    // Added: the blade starts where its hilt is drawn (jkPlayer_GetGripOffset)
+    rdVector_ScaleAdd3Acc(&jointMat.scale, &jointMat.lvec, jkPlayer_GetGripOffset(player, joint));
+
     rdVector_Copy3(&player->actorParams.saberBladePos, &jointMat.scale);
     rdVector_ScaleAdd3Acc(&player->actorParams.saberBladePos, &jointMat.lvec, playerInfo->polyline.length);
 

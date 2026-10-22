@@ -45,6 +45,12 @@
 //                                keys go as fast as the player moves)
 //   rt_borun.key bostand.key 0 legs ls_run.key   with legs, a speed of 0
 //                                holds the source's first frame instead
+//   rt_bocut.key bocut.key upper steady 0.6   (optional, last) steadies
+//                                the torso: its turns are smoothed over a
+//                                few frames, and it turns only this much
+//                                (0 to 1) as far from its first frame; the
+//                                bones below it still point where the
+//                                source's do
 //   end
 //
 // Bones are named, or @n for node n. Each source bone's world rotation
@@ -77,6 +83,9 @@
 #define RT_SPLIT_DEG (3.0)
 // Node types of the torso, arms and head (rdPuppet, rdHierarchyNode.type)
 #define RT_BODY_UPPER (0xF)
+#define RT_BODY_TORSO (0x1)
+// A steadied torso is smoothed over this many frames each side
+#define RT_STEADY_FRAMES (3)
 
 enum
 {
@@ -159,6 +168,7 @@ typedef struct rtRecipe
     double speeds[RT_MAX_KEYS];
     int bUpper[RT_MAX_KEYS];
     char legKeys[RT_MAX_KEYS][RT_NAME_LEN];
+    double steady[RT_MAX_KEYS]; // how much of the torso's turn is kept, or < 0
 } rtRecipe;
 
 typedef struct rtState
@@ -610,8 +620,9 @@ static void sithKeyRetarget_World(const rtSkel* pSkel, const rtPose* pPose, rtMa
     }
 }
 
-// The target pose for a source pose
-static void sithKeyRetarget_Convert(rtState* pState, const rtPose* pSrc, rtPose* pOut)
+// The target pose for a source pose. pSteady, if there is one, is the
+// world rotation of each torso bone (sithKeyRetarget_Steady), in pair order.
+static void sithKeyRetarget_Convert(rtState* pState, const rtPose* pSrc, const rtMat* pSteady, rtPose* pOut)
 {
     rtSkel* pDst = &pState->dst;
     rtMat* srcWorld = pState->srcWorld;
@@ -626,6 +637,8 @@ static void sithKeyRetarget_Convert(rtState* pState, const rtPose* pSrc, rtPose*
     {
         int t = pState->pairDst[b];
         sithKeyRetarget_Mul(&goal[t], &srcWorld[pState->pairSrc[b]], &pState->corr[b]);
+        if (pSteady && (pDst->nodes[t].type & RT_BODY_TORSO))
+            goal[t] = pSteady[b];
         bDriven[t] = 1;
     }
 
@@ -781,7 +794,7 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
             {
                 if (!stdConffile_ReadLine())
                     goto fail;
-                n = _sscanf(stdConffile_g_aLine, "%127s %127s %127s %127s %127s", w[0], w[1], w[2], w[3], w[4]);
+                n = _sscanf(stdConffile_g_aLine, "%127s %127s %127s %127s %127s %127s %127s", w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
                 if (n < 2)
                     goto fail;
                 stdString_SafeStrCopy(pRecipe->outKeys[i], w[0], RT_NAME_LEN);
@@ -789,9 +802,11 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
                 pRecipe->speeds[i] = 1.0;
                 pRecipe->bUpper[i] = 0;
                 pRecipe->legKeys[i][0] = 0;
-                // Then a speed, and "upper" or "legs <key>", each optional
+                pRecipe->steady[i] = -1.0;
+                // Then a speed, "upper" or "legs <key>", and "steady <keep>",
+                // each optional
                 int at = 2;
-                if (at < n && strcmp(w[at], "upper") && strcmp(w[at], "legs"))
+                if (at < n && strcmp(w[at], "upper") && strcmp(w[at], "legs") && strcmp(w[at], "steady"))
                     pRecipe->speeds[i] = _atof(w[at++]);
                 if (at < n && !strcmp(w[at], "upper"))
                 {
@@ -801,6 +816,13 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
                 else if (at + 1 < n && !strcmp(w[at], "legs"))
                 {
                     stdString_SafeStrCopy(pRecipe->legKeys[i], w[at + 1], RT_NAME_LEN);
+                    at += 2;
+                }
+                if (at + 1 < n && !strcmp(w[at], "steady"))
+                {
+                    pRecipe->steady[i] = _atof(w[at + 1]);
+                    if (pRecipe->steady[i] < 0.0 || pRecipe->steady[i] > 1.0)
+                        goto fail;
                     at += 2;
                 }
                 if (at != n || pRecipe->speeds[i] < 0.0 || pRecipe->speeds[i] > 10.0)
@@ -942,7 +964,7 @@ static int sithKeyRetarget_Setup(rtState* pState)
         if (feet[0] >= 0 && feet[1] >= 0)
         {
             double restZ = sithKeyRetarget_LowestFoot(pState, &pState->dstRest, feet);
-            sithKeyRetarget_Convert(pState, &pState->srcRest, &pState->dstPose);
+            sithKeyRetarget_Convert(pState, &pState->srcRest, NULL, &pState->dstPose);
             pState->ground = restZ - sithKeyRetarget_LowestFoot(pState, &pState->dstPose, feet);
         }
     }
@@ -1149,6 +1171,66 @@ static void sithKeyRetarget_DropJumps(rdKeyframe* pKeyframe)
     pKeyframe->numMarkers = numMarkers;
 }
 
+// Each bone's world goal (as Convert works it out) at each of the source
+// key's frames, numPairs to a frame, with each torso bone's steadied: its
+// turns are smoothed over RT_STEADY_FRAMES frames each side, then only keep
+// of each turn away from its first frame is kept. The first and last frames
+// are smoothed less, so the key still starts and ends as it did.
+static void sithKeyRetarget_Steady(rtState* pState, const rdKeyframe* pSrc, int numFrames, double keep, rtMat* pOut)
+{
+    static double quats[RT_MAX_FRAMES][4];
+    int numPairs = pState->numPairs;
+
+    for (int f = 0; f < numFrames; f++)
+    {
+        sithKeyRetarget_Sample(&pState->src, &pState->srcRest, pSrc, (double)f, &pState->srcPose);
+        sithKeyRetarget_World(&pState->src, &pState->srcPose, pState->srcWorld, pState->srcJoints);
+        for (int b = 0; b < numPairs; b++)
+            sithKeyRetarget_Mul(&pOut[f * numPairs + b], &pState->srcWorld[pState->pairSrc[b]], &pState->corr[b]);
+    }
+
+    for (int b = 0; b < numPairs; b++)
+    {
+        rtMat first = pOut[b];
+
+        if (!(pState->dst.nodes[pState->pairDst[b]].type & RT_BODY_TORSO))
+            continue;
+        for (int f = 0; f < numFrames; f++)
+        {
+            double d = 0.0;
+            sithKeyRetarget_MatToQuat(quats[f], &pOut[f * numPairs + b]);
+            for (int c = 0; f > 0 && c < 4; c++)
+                d += quats[f][c] * quats[f - 1][c];
+            for (int c = 0; d < 0.0 && c < 4; c++)
+                quats[f][c] = -quats[f][c];
+        }
+        for (int f = 0; f < numFrames; f++)
+        {
+            int reach = RT_STEADY_FRAMES;
+            double q[4] = {0.0, 0.0, 0.0, 0.0}, len = 0.0;
+            rtMat smooth;
+
+            if (reach > f)
+                reach = f;
+            if (reach > numFrames - 1 - f)
+                reach = numFrames - 1 - f;
+            for (int k = -reach; k <= reach; k++)
+            {
+                double weight = RT_STEADY_FRAMES + 1 - (k < 0 ? -k : k);
+                for (int c = 0; c < 4; c++)
+                    q[c] += quats[f + k][c] * weight;
+            }
+            for (int c = 0; c < 4; c++)
+                len += q[c] * q[c];
+            len = sqrt(len);
+            for (int c = 0; c < 4; c++)
+                q[c] /= len;
+            sithKeyRetarget_QuatToMat(&smooth, q);
+            sithKeyRetarget_Slerp(&pOut[f * numPairs + b], &first, &smooth, keep);
+        }
+    }
+}
+
 static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
 {
     rtState* pState = &sithKeyRetarget_state;
@@ -1159,6 +1241,7 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
     rdKeyframe* pTiming = &src; // the key the output takes its length, speed and markers from
     double* pFrames = NULL;
     double* pUpper = NULL; // the source's upper body on its own clock, at its own frames
+    rtMat* pSteady = NULL; // with "steady", the bones' world goals at each source frame
     int numNodes, numFrames, numUpper, keyIdx, bLegs, bUpperClock;
 
     // The name can be in a line buffer that loading reuses
@@ -1199,6 +1282,14 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
     if (numUpper > RT_MAX_FRAMES)
         goto fail;
 
+    if (pState->recipe.steady[keyIdx] >= 0.0)
+    {
+        pSteady = (rtMat*)RDROID_ALLOC(sizeof(rtMat) * pState->numPairs * (numUpper > 0 ? numUpper : 1));
+        if (!pSteady)
+            goto fail;
+        sithKeyRetarget_Steady(pState, &src, numUpper, pState->recipe.steady[keyIdx], pSteady);
+    }
+
     // Every frame of the target pose: pos then rot, per node
     pFrames = (double*)RDROID_ALLOC(sizeof(double) * 6 * numNodes * numFrames);
     if (!pFrames)
@@ -1212,7 +1303,9 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
             sithKeyRetarget_Sample(&pState->dst, &pState->dstRest, &legs, (double)f, &pState->legsPose);
         }
         sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, srcFrame, &pState->srcPose);
-        sithKeyRetarget_Convert(pState, &pState->srcPose, &pState->dstPose);
+        sithKeyRetarget_Convert(pState, &pState->srcPose,
+                                (pSteady && (int)srcFrame < numUpper) ? &pSteady[(int)srcFrame * pState->numPairs] : NULL,
+                                &pState->dstPose);
         for (int i = 0; i < numNodes; i++)
         {
             double* pOut = &pFrames[(f * numNodes + i) * 6];
@@ -1232,7 +1325,7 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
         for (int f = 0; f < numUpper; f++)
         {
             sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, (double)f, &pState->srcPose);
-            sithKeyRetarget_Convert(pState, &pState->srcPose, &pState->dstPose);
+            sithKeyRetarget_Convert(pState, &pState->srcPose, pSteady ? &pSteady[f * pState->numPairs] : NULL, &pState->dstPose);
             for (int i = 0; i < numNodes; i++)
             {
                 double* pOut = &pUpper[(f * numNodes + i) * 6];
@@ -1310,12 +1403,15 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
     RDROID_FREE(pFrames);
     if (pUpper)
         RDROID_FREE(pUpper);
+    if (pSteady)
+        RDROID_FREE(pSteady);
     rdKeyframe_FreeEntry(&src);
     rdKeyframe_FreeEntry(&legs);
-    stdPlatform_Printf("OpenJKDF2: Key retarget: made `%s` from `%s`%s%s%s%s, %d frames\n", name, pState->recipe.srcKeys[keyIdx],
+    stdPlatform_Printf("OpenJKDF2: Key retarget: made `%s` from `%s`%s%s%s%s%s, %d frames\n", name, pState->recipe.srcKeys[keyIdx],
                        bLegs ? " with legs from `" : (pState->recipe.bUpper[keyIdx] ? ", upper body" : ""),
                        bLegs ? pState->recipe.legKeys[keyIdx] : "", bLegs ? "`" : "",
-                       bUpperClock ? ", upper body on its own clock" : "", numFrames);
+                       bUpperClock ? ", upper body on its own clock" : "",
+                       pSteady ? ", torso steadied" : "", numFrames);
     return 1;
 
 fail_built:
@@ -1326,6 +1422,8 @@ fail:
         RDROID_FREE(pFrames);
     if (pUpper)
         RDROID_FREE(pUpper);
+    if (pSteady)
+        RDROID_FREE(pSteady);
     rdKeyframe_FreeEntry(&src);
     rdKeyframe_FreeEntry(&legs);
     return 0;

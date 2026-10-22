@@ -99,6 +99,8 @@ void jkPlayer_SetPovModel(jkPlayerInfo *info, rdModel3 *model);
 MATH_FUNC void jkPlayer_DrawPov();
 MATH_FUNC void jkPlayer_renderSaberWeaponMesh(SithThing *a1);
 MATH_FUNC void jkPlayer_renderSaberTwinkle(SithThing *player);
+int jkPlayer_HasSecondHilt(SithThing* thing); // Added
+flex_t jkPlayer_GetGripOffset(SithThing* thing, int joint); // Added
 void jkPlayer_SetWaggle(SithThing *player, rdVector3 *waggleVec, flex_t waggleMag);
 int jkPlayer_VerifyWcharName(char16_t *name);
 int jkPlayer_VerifyCharName(char *name);
