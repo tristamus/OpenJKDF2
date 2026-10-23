@@ -555,6 +555,7 @@ void jkSaber_UpdateCollision(SithThing *player, int joint, int bSecondary)
     rdVector3 lerpPosDelta;
     rdVector3 lerpDirDelta;
     rdMatrix34 *pWhichLastJointMat;
+    rdMatrix34 *pGripMat; // Added
 
     playerInfo = player->playerInfo;
 
@@ -567,8 +568,11 @@ void jkSaber_UpdateCollision(SithThing *player, int joint, int bSecondary)
     if ( !rdModel3_GetMeshMatrix(&player->renderData, &matrix, joint, &jointMat) )
         return;
 
-    // Added: the blade starts where its hilt is drawn (jkPlayer_GetGripOffset)
-    rdVector_ScaleAdd3Acc(&jointMat.scale, &jointMat.lvec, jkPlayer_GetGripOffset(player, joint));
+    // Added: the blade starts where its hilt is drawn, and points the way it
+    // does (jkPlayer_GripMatrix)
+    pGripMat = jkPlayer_GripMatrix(player, joint, &jointMat, &tmpMat);
+    if (pGripMat != &jointMat)
+        rdMatrix_Copy34(&jointMat, pGripMat);
 
     rdVector_Copy3(&player->actorParams.saberBladePos, &jointMat.scale);
     rdVector_ScaleAdd3Acc(&player->actorParams.saberBladePos, &jointMat.lvec, playerInfo->polyline.length);
