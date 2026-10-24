@@ -431,6 +431,105 @@ EM_JS(void, Window_wasmLockPointerNow, (), {
   } catch (e) {}
 });
 
+// Added: how a frame ends in the browser. SDL's swap ended it with emscripten_sleep(0), a
+// setTimeout(0), which browsers hold for at least 4 ms once timers nest and which takes no
+// account of the screen or the graphics card: a fast machine drew frames nobody saw, and a
+// slow card let the game queue frames until the browser stopped everything for seconds to
+// catch up.
+// With Vsync on (the default), a frame waits for the next screen refresh, and the next
+// frame is drawn in it. With Vsync off, it yields through a MessageChannel, which has no
+// clamp, while the card has finished the frame before this one and for at most two frames
+// in a refresh; otherwise it waits for the refresh. A hidden tab gets no refreshes, so there
+// it waits on a timer as before, and a host's game keeps running, but also until the card
+// has drawn the frame: the browser doesn't slow timers in a tab playing sound, and the game
+// got seconds ahead of the card there, which came out as a freeze when the tab was shown.
+// Module.jkFrames keeps when the last in-game frames ended and when the game got the
+// thread back, for the page's slow-frame note and ?bench.
+EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame), {
+  var pace = Module.jkPace;
+  if (!pace) {
+    pace = Module.jkPace = { sinceRefresh: 0, refreshAsked: false, resume: null, channel: new MessageChannel(), fences: [] };
+    pace.channel.port1.onmessage = function() { var resume = pace.resume; pace.resume = null; if (resume) resume(); };
+  }
+  var frames = Module.jkFrames;
+  if (!frames) frames = Module.jkFrames = { size: 2048, count: 0, broken: true, ends: new Float64Array(2048),
+                                            resumes: new Float64Array(2048), joined: new Uint8Array(2048) };
+  var ended = performance.now();
+  var wasHidden = document.hidden;
+
+  /* A fence after each frame tells when the card has drawn it, the last two kept. Its state
+     only changes between tasks. */
+  var gl = Module.ctx;
+  function drawn(fence) {
+    try { return gl.isContextLost() || gl.getSyncParameter(fence, gl.SYNC_STATUS) === gl.SIGNALED; } catch (e) { return true; }
+  }
+  try {
+    if (wasHidden || !bVsync) {
+      pace.fences.push(gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0));
+      gl.flush();
+    }
+    while (pace.fences.length > (wasHidden || !bVsync ? 2 : 0)) gl.deleteSync(pace.fences.shift());
+  } catch (e) {
+    pace.fences = [];
+  }
+  var last = pace.fences[pace.fences.length - 1], before = pace.fences.length > 1 ? pace.fences[0] : null;
+
+  if (wasHidden) {
+    var started = performance.now();
+    do {
+      await new Promise(function(resolve) { setTimeout(resolve, 0); });
+    } while (last && document.hidden && performance.now() - started < 1000 && !drawn(last));
+  } else if (bVsync || pace.sinceRefresh >= 2 || (before && !drawn(before))) {
+    /* A tab hidden while it waits gets no refresh, so that ends the wait too. */
+    await new Promise(function(resolve) {
+      function done() { document.removeEventListener('visibilitychange', done); resolve(); }
+      document.addEventListener('visibilitychange', done);
+      requestAnimationFrame(done);
+    });
+    pace.sinceRefresh = 0;
+  } else {
+    if (!pace.refreshAsked) {
+      pace.refreshAsked = true;
+      requestAnimationFrame(function() { pace.refreshAsked = false; pace.sinceRefresh = 0; });
+    }
+    pace.sinceRefresh++;
+    await new Promise(function(resolve) { pace.resume = resolve; pace.channel.port2.postMessage(0); });
+  }
+
+  /* joined: the frame began when the game got the thread back from the one before, so the
+     time between the two is a frame time. Not after a menu, or a frame outside a level or in a
+     hidden tab. */
+  if (bInGame && !wasHidden && !document.hidden) {
+    var i = frames.count++ % frames.size;
+    frames.ends[i] = ended;
+    frames.resumes[i] = performance.now();
+    frames.joined[i] = frames.broken ? 0 : 1;
+    frames.broken = false;
+  } else {
+    frames.broken = true;
+  }
+});
+
+// Added: a menu drew a frame, so the next frame in a level doesn't count the time in menus.
+EM_JS(void, Window_wasmMenuFrame, (), {
+  if (Module.jkFrames) Module.jkFrames.broken = true;
+});
+
+// Added: for the page's slow-frame note and ?bench (index.html): the FPS limit (0 for none),
+// then the Display settings that cost the most to draw.
+EMSCRIPTEN_KEEPALIVE int Window_WebDisplaySetting(int which)
+{
+    switch (which)
+    {
+    case 0: return jkPlayer_fpslimit;
+    case 1: return (int)(jkPlayer_ssaaMultiple * 100 + 0.5); // SSAA Multiplier, in hundredths
+    case 2: return jkPlayer_enableSSAO;
+    case 3: return jkPlayer_enableBloom;
+    case 4: return jkPlayer_enableVsync;
+    }
+    return 0;
+}
+
 static int Window_bWasmHadPointerLock = 0;
 static int Window_bWasmSentEsc = 0;
 
@@ -1441,6 +1540,7 @@ void Window_SdlUpdate()
         SDL_SetWindowRelativeMouseMode(displayWindow, false);
 #ifdef ARCH_WASM
         Window_WasmPointerLockReleased();
+        Window_wasmMenuFrame();
 #endif
 
         if (!jkGuiBuildMulti_bRendering) {
@@ -1560,9 +1660,13 @@ void Window_SdlVblank()
     //static uint32_t roundtrip = 0;
     //uint32_t before = stdPlatform_GetTimeMsec();
 #ifdef ARCH_WASM
+    // The browser shows what was drawn once the page gives the thread back, so there's
+    // nothing to swap; SDL's swap only yielded, with a timer (see Window_wasmEndFrame).
     if (!jkGuiBuildMulti_bRendering)
-#endif
+        Window_wasmEndFrame(jkPlayer_enableVsync, jkGame_isDDraw);
+#else
     SDL_GL_SwapWindow(displayWindow);
+#endif
     //uint32_t after = stdPlatform_GetTimeMsec();
     //printf("%u %u\n", after-before, before-roundtrip);
 
