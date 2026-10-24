@@ -2476,6 +2476,12 @@
         brave: { name: 'Brave', address: 'brave://settings/system',
                  toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
                  restart: 'Click <b>Relaunch</b>.' },
+        opera: { name: 'Opera', address: 'opera://settings/system',
+                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                 restart: 'Click <b>Relaunch</b>.' },
+        operagx: { name: 'Opera GX', address: 'opera://settings/system',
+                   toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                   restart: 'Click <b>Relaunch</b>.' },
         firefox: { name: 'Firefox', address: 'about:preferences#general',
                    toggle: 'Under Performance, untick <b>Use recommended performance settings</b>, ' +
                            'then tick <b>Use hardware acceleration when available</b>.',
@@ -2493,6 +2499,9 @@
         if (brands.indexOf('Microsoft Edge') >= 0 || /\bEdg\//.test(ua)) return 'edge';
         if (/Firefox\//.test(ua)) return 'firefox';
         if (navigator.brave) return 'brave';
+        // Opera and Opera GX name themselves in the brands, and both in the user agent (OPR).
+        if (brands.indexOf('Opera GX') >= 0) return 'operagx';
+        if (brands.indexOf('Opera') >= 0 || /\bOPR\//.test(ua)) return 'opera';
         if (brands.indexOf('Google Chrome') >= 0) return 'chrome';
         if (/Version\/[\d.]+.*Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS|FxiOS|EdgiOS|OPR\//.test(ua)) return 'safari';
         return null;
@@ -5120,6 +5129,10 @@
           causes.push("Chrome's <b>Energy saver</b> lowers the frame rate of pages. Turn it off at <code>chrome://settings/performance</code>.");
         if (env.kind === 'edge')
           causes.push("Edge's <b>Efficiency mode</b> (Energy saver in newer versions) slows pages down. Search Edge's settings for it and turn it off.");
+        if (env.kind === 'opera' || env.kind === 'operagx')
+          causes.push("Opera's <b>Battery saver</b>, while it's on, can hold pages to 30 frames a second. Search Opera's settings for battery and turn it off.");
+        if (env.kind === 'operagx')
+          causes.push("GX Control's <b>CPU limiter</b> holds the browser to part of the processor. Turn it off or raise it while you play.");
         var display = [];
         if (env.scale > 1.25)
           display.push('turn off <b>Enable HiDPI</b> (it draws ' + Math.round(env.scale * env.scale * 10) / 10 + ' times the pixels)');
