@@ -174,6 +174,12 @@ test('each browser\'s power saving, battery and Low Power Mode', () => {
     c = p.slowCauses(env(WIN_EDGE, { kind: 'edge' })).map(strip).join('\n');
     assert.match(c, /Efficiency mode \(Energy saver in newer versions\)/);
     assert.doesNotMatch(c, /battery/);
+    c = p.slowCauses(env(WIN_EDGE, { kind: 'opera' })).map(strip).join('\n');
+    assert.match(c, /Opera's Battery saver, while it's on, can hold pages to 30 frames a second/);
+    assert.doesNotMatch(c, /CPU limiter/);
+    c = p.slowCauses(env(WIN_EDGE, { kind: 'operagx' })).map(strip).join('\n');
+    assert.match(c, /Opera's Battery saver/);
+    assert.match(c, /GX Control's CPU limiter holds the browser to part of the processor/);
     p = page(IPHONE);
     c = p.slowCauses(env(IPHONE, { kind: 'safari', battery: null })).map(strip).join('\n');
     assert.match(c, /Low Power Mode holds web pages to 30 frames a second on an iPhone or iPad/);
