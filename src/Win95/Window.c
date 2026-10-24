@@ -1926,6 +1926,16 @@ int Window_Main_Linux(int argc, char** argv)
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     SDL_SetHint(SDL_HINT_APP_NAME, "OpenJKDF2");
 
+#ifdef ARCH_WASM
+    // Added: while a mouse button is down SDL counts the mouse as captured and
+    // stops keeping its pointer inside the window. With the mouse locked, that
+    // pointer then wanders off with every turn made while firing, and the next
+    // click finds it outside: SDL says the mouse left the window, and the game
+    // lets go of the mouse lock and takes it again, a moment without mouse look.
+    // A page can't capture the mouse outside its window anyway.
+    SDL_SetHint(SDL_HINT_MOUSE_AUTO_CAPTURE, "0");
+#endif
+
 #if defined(TARGET_ANDROID)
     //SDL_SetHint(SDL_HINT_JOYSTICK_DEBUG, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
