@@ -126,11 +126,11 @@ test('Left Arrow and Numpad 4 turn left, Right Arrow and Numpad 6 turn right', (
     assert.ok(/sithControl_FixNumpadTurn\(\); \/\/ Added\s*return 1;/.test(sithControlC), 'profiles are repaired on load');
 });
 
-test('?keycheck is the page\'s own and is not passed to the engine, which quits on it', () => {
+test('?keycheck, ?netlog and ?bench are the page\'s own and not passed to the engine, which quits on them', () => {
     const at = html.indexOf("      Module['arguments'] = window.location.search");
     const code = html.substring(at, html.indexOf('\n      window.onerror', at));
     const Module = {};
-    new Function('window', 'Module', code)({ location: { search: '?keycheck&verbose&path=jkmods/x&keycheck=1' } }, Module);
+    new Function('window', 'Module', code)({ location: { search: '?keycheck&verbose&bench&path=jkmods/x&netlog&keycheck=1' } }, Module);
     assert.deepEqual(Module.arguments, ['-verbose', '-path', 'jkmods/x']);
 });
 

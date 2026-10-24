@@ -256,6 +256,10 @@ continue_menu:
         else {
             jkPlayer_ssaaMultiple = ftmp;
         }
+#ifdef ARCH_WASM
+        // Added: the most the browser build draws at (std3D_StartScene), so the box shows it next time.
+        if (jkPlayer_ssaaMultiple > WASM_MAX_SSAA_MULTIPLE) jkPlayer_ssaaMultiple = WASM_MAX_SSAA_MULTIPLE;
+#endif
 
         stdString_WcharToChar(tmp, gamma_level, 255);
         if(_sscanf(tmp, "%f", &ftmp) != 1) {

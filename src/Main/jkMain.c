@@ -60,6 +60,20 @@
 #define TICKRATE_MS (20) // 50fps
 #endif
 
+#ifdef ARCH_WASM
+#include <emscripten.h>
+
+// Added: with an FPS limit, the loop came back here until the next tick was due, without
+// drawing or yielding. A browser runs the page on one thread, so that spin kept a CPU core
+// busy and the browser waiting. Sleep for the rest of the wait instead.
+static void jkMain_WaitForTick(uint32_t now)
+{
+    uint32_t due = jkMain_lastTickMs + TICKRATE_MS + 1;
+    if (TICKRATE_MS && due > now)
+        emscripten_sleep(due - now);
+}
+#endif
+
 char jkMain_aLevelJklFnameMots[128];
 char jkMain_motsIdk[128];
 
@@ -239,6 +253,9 @@ void jkMain_GuiAdvance()
                     jkMain_lastTickMs = v1;
                     if (!sithUpdate()) return;
                 }
+#ifdef ARCH_WASM
+                else jkMain_WaitForTick(v1);
+#endif
                 
                 if ( g_sithMode == 5 )
                 {
@@ -364,6 +381,9 @@ void jkMain_EscapeMenuTick(int a2)
         jkMain_lastTickMs = v1;
         if (sithUpdate()) return;
     }
+#ifdef ARCH_WASM
+    else jkMain_WaitForTick(v1);
+#endif
     
     if ( g_sithMode == 5 )
     {
@@ -742,6 +762,9 @@ void jkMain_GameplayTick(int a2)
         jkMain_lastTickMs = v1;
         if (sithUpdate()) return;
     }
+#ifdef ARCH_WASM
+    else jkMain_WaitForTick(v1);
+#endif
     
     if ( g_sithMode == 5 )
     {
