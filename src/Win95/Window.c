@@ -551,6 +551,55 @@ static int Window_WasmLockJustTaken()
     return bLocked && SDL_GetTicks() - Window_wasmLockedAtMs < WINDOW_WASM_LOCK_SETTLE_MS;
 }
 
+// Added: Chromium (Chrome, Edge, Opera, Brave) on Windows and Linux keeps the
+// hidden cursor away from the page's edges by moving it back to the middle, unless
+// the lock has raw mouse input (index.html asks for it, and Windows has it). That
+// move can come through as one jump of about a third of the page against the way
+// the mouse is going, which snaps the view round 90 degrees or more (seen in Opera
+// on Linux). A hand can't turn that far back between two readings, so a jump of
+// a fifth of the page or more against the way the mouse went just before is left
+// out. A jump the same way as the mouse is kept, as it can be a real flick. Only
+// between readings at most 40 ms apart: when the game runs slower, one reading
+// holds a whole frame of movement, and a real quick turn the other way can be
+// that big.
+EM_JS(int, Window_wasmMouseMayJump, (), {
+  var raw = Module.jkRawMouse;
+  return raw && raw.warps && !raw.active && document.pointerLockElement === Module.canvas ? 1 : 0;
+});
+
+#define WINDOW_WASM_JUMP_FRACTION (0.2)
+#define WINDOW_WASM_JUMP_RECENT_MS (40)
+static int Window_wasmLastXRel = 0;
+static int Window_wasmLastYRel = 0;
+static Uint64 Window_wasmLastRelMs = 0;
+
+static int Window_WasmIsBackJump(int rel, int lastRel, int size)
+{
+    int limit = (int)(size * WINDOW_WASM_JUMP_FRACTION);
+
+    if (size <= 0 || lastRel <= -limit || lastRel >= limit)
+        return 0;
+    return (rel >= limit && lastRel < 0) || (rel <= -limit && lastRel > 0);
+}
+
+static int Window_WasmIsMouseJump(int xrel, int yrel, Uint64 timestampNs)
+{
+    Uint64 ms = timestampNs / 1000000;
+
+    if (Window_wasmLastRelMs && ms - Window_wasmLastRelMs < WINDOW_WASM_JUMP_RECENT_MS
+        && (Window_WasmIsBackJump(xrel, Window_wasmLastXRel, Window_screenXSize)
+            || Window_WasmIsBackJump(yrel, Window_wasmLastYRel, Window_screenYSize))
+        && Window_wasmMouseMayJump())
+    {
+        stdPlatform_Printf("Mouse: left out a jump of %d,%d\n", xrel, yrel);
+        return 1;
+    }
+    Window_wasmLastXRel = xrel;
+    Window_wasmLastYRel = yrel;
+    Window_wasmLastRelMs = ms;
+    return 0;
+}
+
 // Every frame the game wants the mouse locked.
 static void Window_WasmKeepPointerLock()
 {
@@ -573,8 +622,10 @@ static void Window_WasmKeepPointerLock()
         // Not locked yet: back from a menu, or just gone fullscreen
         Window_wasmLockPointerNow();
     }
-    if (!bLocked)
+    if (!bLocked) {
         Window_bWasmMoveLocked = 0; // Added
+        Window_wasmLastRelMs = 0; // Added
+    }
 
     Window_bWasmHadPointerLock = bLocked;
 }
@@ -585,6 +636,7 @@ static void Window_WasmPointerLockReleased()
     Window_bWasmHadPointerLock = 0;
     Window_bWasmSentEsc = 0;
     Window_bWasmMoveLocked = 0; // Added
+    Window_wasmLastRelMs = 0; // Added
 }
 #endif
 
@@ -663,7 +715,7 @@ void Window_HandleMouseMove(SDL_MouseMotionEvent *event)
     Window_lastSampleMs = (int)(event->timestamp / 1000000) - Window_lastSampleTime;
     //Window_lastSampleTime = event->timestamp;
 #ifdef ARCH_WASM
-    if (!Window_WasmLockJustTaken()) // Added
+    if (!Window_WasmLockJustTaken() && !Window_WasmIsMouseJump((int)event->xrel, (int)event->yrel, event->timestamp)) // Added
 #endif
     {
         Window_lastXRel += (int)event->xrel;

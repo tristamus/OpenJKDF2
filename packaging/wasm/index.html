@@ -1293,6 +1293,10 @@
           <label class="picker-option"><input type="checkbox" id="fullscreen-option" checked>
             <span>Play in fullscreen <span class="fine">The game fills the screen when you click it. Hold Esc to leave
               fullscreen. This browser remembers your choice.</span></span></label>
+          <label class="picker-option" id="raw-mouse-choice" hidden><input type="checkbox" id="raw-mouse-option" checked>
+            <span>Raw mouse input <span class="fine">Mouse look reads the mouse itself, without Windows' pointer speed and
+              Enhance pointer precision, so the view can't suddenly jolt round. Untick it if mouse look doesn't turn at all,
+              as over remote desktop or with a drawing tablet. This browser remembers your choice.</span></span></label>
           <div class="actions">
             <button class="play" type="button">Start</button>
             <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
@@ -1435,6 +1439,57 @@
                       '\n\nPress F12 and open Console for details. Click anywhere to hide this.');
         }
       };
+
+      // ---- Mouse look. Without raw mouse input, Chromium (Chrome, Edge, Opera,
+      // Brave) keeps the hidden cursor away from the page's edges by moving it
+      // back to the middle, and that move can come through as mouse movement:
+      // the view jolts round 90 or 180 degrees. On Windows, raw input reads the
+      // mouse itself, never moves the cursor, and skips Windows' pointer speed
+      // and acceleration, so every lock there asks for it (the engine's and
+      // SDL's both call the canvas's requestPointerLock), and the plain lock
+      // follows if the browser turns it down. Linux has no raw input: there,
+      // and on Windows without it, the engine leaves out the jumps it can tell
+      // (Window_WasmIsMouseJump). macOS, Firefox and Safari don't move the
+      // cursor this way. Module.jkRawMouse.warps says whether this browser
+      // moves it, and .active whether the current lock is raw.
+      var RAW_MOUSE_SETTING = 'jkdf2mp-raw-mouse';
+      var rawMousePlatform = navigator.userAgentData ? navigator.userAgentData.platform : '';
+      var rawMouse = Module.jkRawMouse = { warps: !!navigator.userAgentData && rawMousePlatform !== 'macOS',
+                                           want: true, supported: null, active: false };
+      var rawMouseWindows = rawMousePlatform === 'Windows';
+      var rawMouseOption = document.getElementById('raw-mouse-option');
+      try { rawMouse.want = rawMouseOption.checked = localStorage.getItem(RAW_MOUSE_SETTING) !== 'off'; } catch (e) {}
+      rawMouseOption.addEventListener('change', function() {
+        rawMouse.want = rawMouseOption.checked;
+        try { localStorage.setItem(RAW_MOUSE_SETTING, rawMouseOption.checked ? 'on' : 'off'); } catch (e) {}
+      });
+      document.getElementById('raw-mouse-choice').hidden = !rawMouseWindows;
+      (function() {
+        var canvas = Module.canvas, lock = canvas.requestPointerLock;
+        if (!lock || !rawMouseWindows) return;
+        canvas.requestPointerLock = function(options) {
+          if (!rawMouse.want || rawMouse.supported === false) return lock.call(canvas, options);
+          var request;
+          try {
+            request = lock.call(canvas, { unadjustedMovement: true });
+          } catch (e) {
+            return lock.call(canvas, options);
+          }
+          if (!request || !request.then) return request;
+          var locked = request.then(function() {
+            rawMouse.supported = rawMouse.active = true;
+          }, function(e) {
+            if (!e || e.name !== 'NotSupportedError') throw e;
+            rawMouse.supported = false;
+            return lock.call(canvas, options);
+          });
+          locked.catch(function() {});
+          return locked;
+        };
+        document.addEventListener('pointerlockchange', function() {
+          if (document.pointerLockElement !== canvas) rawMouse.active = false;
+        });
+      })();
 
       // ---- Leaving mid-game. Ctrl fires and W walks forward, and Ctrl+W also
       // closes the tab: outside fullscreen the browser keeps that shortcut for
