@@ -123,7 +123,10 @@ test('the browser is told apart', () => {
     assert.equal(browser({ brands: ['Google Chrome', 'Chromium'] }).browserKind(), 'chrome');
     assert.equal(browser({ ua: 'Mozilla/5.0 (Windows NT 10.0; rv:140.0) Gecko/20100101 Firefox/140.0' }).browserKind(), 'firefox');
     assert.equal(browser({ brands: ['Brave', 'Chromium'], brave: true }).browserKind(), 'brave');
-    assert.equal(browser({ brands: ['Opera', 'Chromium'], ua: 'Mozilla/5.0 Chrome/120 OPR/106' }).browserKind(), null);
+    assert.equal(browser({ brands: ['Opera', 'Chromium'], ua: 'Mozilla/5.0 Chrome/120 OPR/106' }).browserKind(), 'opera');
+    assert.equal(browser({ brands: ['Opera GX', 'Chromium'], ua: 'Mozilla/5.0 Chrome/120 OPR/106' }).browserKind(), 'operagx');
+    assert.equal(browser({ ua: 'Mozilla/5.0 Chrome/120 Safari/537.36 OPR/106.0' }).browserKind(), 'opera');
+    assert.equal(browser({ brands: ['Chromium'], ua: 'Mozilla/5.0 Chrome/120 Safari/537.36 Vivaldi/7.0' }).browserKind(), null);
     assert.equal(browser(SAFARI).browserKind(), 'safari');
     assert.equal(browser({ ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) ' +
                                'Version/18.0 Mobile/15E148 Safari/604.1' }).browserKind(), 'safari');
@@ -177,6 +180,18 @@ test('Chrome, Brave and Firefox get their own steps', () => {
     assert.match(text(el), /Close Firefox completely and open it again/);
 });
 
+test('Opera and Opera GX get their own steps', () => {
+    let el = notice();
+    browser({ brands: ['Opera'], ua: 'Mozilla/5.0 OPR/106' }).showGfxNotice(el, { state: 'software', renderer: 'SwiftShader' });
+    assert.match(text(el), /^Turn on graphics accelerationOpera is drawing without your graphics card/);
+    assert.match(text(el), /opera:\/\/settings\/system.*Click Relaunch\. Then come back to this page/);
+    assert.ok(el.copy, 'has a Copy button');
+    el = notice();
+    browser({ brands: ['Opera GX'], ua: 'Mozilla/5.0 OPR/106' }).showGfxNotice(el, { state: 'software', renderer: 'SwiftShader' });
+    assert.match(text(el), /Opera GX is drawing without your graphics card/);
+    assert.match(text(el), /opera:\/\/settings\/system/);
+});
+
 test('Safari without WebGL 2 is told to update, not to look for a setting', () => {
     const el = notice();
     browser(SAFARI).showGfxNotice(el, { state: 'none', renderer: '' });
@@ -190,7 +205,7 @@ test('Safari without WebGL 2 is told to update, not to look for a setting', () =
 
 test('other browsers get general steps and no address', () => {
     const el = notice();
-    browser({ brands: ['Opera'], ua: 'Mozilla/5.0 OPR/106' }).showGfxNotice(el, { state: 'software', renderer: 'SwiftShader' });
+    browser({ brands: ['Chromium'], ua: 'Mozilla/5.0 Vivaldi/7.0' }).showGfxNotice(el, { state: 'software', renderer: 'SwiftShader' });
     assert.match(text(el), /Your browser is drawing without your graphics card/);
     assert.match(text(el), /search for acceleration/);
     assert.equal(el.copy, null);

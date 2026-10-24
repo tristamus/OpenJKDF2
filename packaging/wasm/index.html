@@ -1293,6 +1293,10 @@
           <label class="picker-option"><input type="checkbox" id="fullscreen-option" checked>
             <span>Play in fullscreen <span class="fine">The game fills the screen when you click it. Hold Esc to leave
               fullscreen. This browser remembers your choice.</span></span></label>
+          <label class="picker-option" id="raw-mouse-choice" hidden><input type="checkbox" id="raw-mouse-option" checked>
+            <span>Raw mouse input <span class="fine">Mouse look reads the mouse itself, without Windows' pointer speed and
+              Enhance pointer precision, so the view can't suddenly jolt round. Untick it if mouse look doesn't turn at all,
+              as over remote desktop or with a drawing tablet. This browser remembers your choice.</span></span></label>
           <div class="actions">
             <button class="play" type="button">Start</button>
             <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
@@ -1435,6 +1439,81 @@
                       '\n\nPress F12 and open Console for details. Click anywhere to hide this.');
         }
       };
+
+      // ---- Mouse look. Without raw mouse input, Chromium (Chrome, Edge, Opera,
+      // Brave) keeps the hidden cursor away from the page's edges by moving it
+      // back to the middle, and that move can come through as mouse movement:
+      // the view jolts round 90 or 180 degrees. On Windows, raw input reads the
+      // mouse itself, never moves the cursor, and skips Windows' pointer speed
+      // and acceleration, so every lock there asks for it (the engine's and
+      // SDL's both call the canvas's requestPointerLock), and the plain lock
+      // follows if the browser turns it down. Linux has no raw input: there,
+      // and on Windows without it, the engine leaves out the jumps it can tell
+      // (Window_WasmIsMouseJump). macOS, Firefox and Safari don't move the
+      // cursor this way. Module.jkRawMouse.warps says whether this browser
+      // moves it, and .active whether the current lock is raw.
+      var RAW_MOUSE_SETTING = 'jkdf2mp-raw-mouse';
+      var rawMousePlatform = navigator.userAgentData ? navigator.userAgentData.platform : '';
+      var rawMouse = Module.jkRawMouse = { warps: !!navigator.userAgentData && rawMousePlatform !== 'macOS',
+                                           want: true, supported: null, active: false };
+      var rawMouseWindows = rawMousePlatform === 'Windows';
+      var rawMouseOption = document.getElementById('raw-mouse-option');
+      try { rawMouse.want = rawMouseOption.checked = localStorage.getItem(RAW_MOUSE_SETTING) !== 'off'; } catch (e) {}
+      rawMouseOption.addEventListener('change', function() {
+        rawMouse.want = rawMouseOption.checked;
+        try { localStorage.setItem(RAW_MOUSE_SETTING, rawMouseOption.checked ? 'on' : 'off'); } catch (e) {}
+      });
+      document.getElementById('raw-mouse-choice').hidden = !rawMouseWindows;
+      (function() {
+        var canvas = Module.canvas, lock = canvas.requestPointerLock;
+        if (!lock || !rawMouseWindows) return;
+        canvas.requestPointerLock = function(options) {
+          if (!rawMouse.want || rawMouse.supported === false) return lock.call(canvas, options);
+          var request;
+          try {
+            request = lock.call(canvas, { unadjustedMovement: true });
+          } catch (e) {
+            return lock.call(canvas, options);
+          }
+          if (!request || !request.then) return request;
+          var locked = request.then(function() {
+            rawMouse.supported = rawMouse.active = true;
+          }, function(e) {
+            if (!e || e.name !== 'NotSupportedError') throw e;
+            rawMouse.supported = false;
+            return lock.call(canvas, options);
+          });
+          locked.catch(function() {});
+          return locked;
+        };
+        document.addEventListener('pointerlockchange', function() {
+          if (document.pointerLockElement !== canvas) rawMouse.active = false;
+        });
+      })();
+
+      // Opera, with its mouse gestures turned on, keeps the right button's
+      // release from the page while the mouse is locked, and the game went on
+      // holding the button. Every mouse event says which buttons are down, so a
+      // button that went up unseen is let go before the event reaches the game
+      // (SDL takes a button change from any pointer event).
+      (function() {
+        var canvas = Module.canvas, held = 0;
+        var BIT = [1, 4, 2, 8, 16]; // event.button to its bit in event.buttons
+        function check(ev) {
+          if (!ev.isTrusted || ev.pointerType !== 'mouse' || ev.target !== canvas) return;
+          var gone = held & ~ev.buttons;
+          if (ev.button >= 0 && ev.button < BIT.length) gone &= ~BIT[ev.button]; // the event's own change
+          held = ev.buttons;
+          for (var b = 0; b < BIT.length; b++) {
+            if (!(gone & BIT[b])) continue;
+            Module.print('Mouse: button ' + b + ' went up unseen');
+            canvas.dispatchEvent(new PointerEvent('pointermove', {
+              pointerType: 'mouse', pointerId: ev.pointerId, isPrimary: ev.isPrimary, button: b, buttons: ev.buttons,
+              clientX: ev.clientX, clientY: ev.clientY, screenX: ev.screenX, screenY: ev.screenY, bubbles: true }));
+          }
+        }
+        ['pointerdown', 'pointermove', 'pointerup'].forEach(function(type) { window.addEventListener(type, check, true); });
+      })();
 
       // ---- Leaving mid-game. Ctrl fires and W walks forward, and Ctrl+W also
       // closes the tab: outside fullscreen the browser keeps that shortcut for
@@ -2476,6 +2555,12 @@
         brave: { name: 'Brave', address: 'brave://settings/system',
                  toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
                  restart: 'Click <b>Relaunch</b>.' },
+        opera: { name: 'Opera', address: 'opera://settings/system',
+                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                 restart: 'Click <b>Relaunch</b>.' },
+        operagx: { name: 'Opera GX', address: 'opera://settings/system',
+                   toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                   restart: 'Click <b>Relaunch</b>.' },
         firefox: { name: 'Firefox', address: 'about:preferences#general',
                    toggle: 'Under Performance, untick <b>Use recommended performance settings</b>, ' +
                            'then tick <b>Use hardware acceleration when available</b>.',
@@ -2493,6 +2578,9 @@
         if (brands.indexOf('Microsoft Edge') >= 0 || /\bEdg\//.test(ua)) return 'edge';
         if (/Firefox\//.test(ua)) return 'firefox';
         if (navigator.brave) return 'brave';
+        // Opera and Opera GX name themselves in the brands, and both in the user agent (OPR).
+        if (brands.indexOf('Opera GX') >= 0) return 'operagx';
+        if (brands.indexOf('Opera') >= 0 || /\bOPR\//.test(ua)) return 'opera';
         if (brands.indexOf('Google Chrome') >= 0) return 'chrome';
         if (/Version\/[\d.]+.*Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS|FxiOS|EdgiOS|OPR\//.test(ua)) return 'safari';
         return null;
@@ -5120,6 +5208,10 @@
           causes.push("Chrome's <b>Energy saver</b> lowers the frame rate of pages. Turn it off at <code>chrome://settings/performance</code>.");
         if (env.kind === 'edge')
           causes.push("Edge's <b>Efficiency mode</b> (Energy saver in newer versions) slows pages down. Search Edge's settings for it and turn it off.");
+        if (env.kind === 'opera' || env.kind === 'operagx')
+          causes.push("Opera's <b>Battery saver</b>, while it's on, can hold pages to 30 frames a second. Search Opera's settings for battery and turn it off.");
+        if (env.kind === 'operagx')
+          causes.push("GX Control's <b>CPU limiter</b> holds the browser to part of the processor. Turn it off or raise it while you play.");
         var display = [];
         if (env.scale > 1.25)
           display.push('turn off <b>Enable HiDPI</b> (it draws ' + Math.round(env.scale * env.scale * 10) / 10 + ' times the pixels)');
