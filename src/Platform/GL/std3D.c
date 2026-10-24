@@ -223,6 +223,15 @@ void std3D_deleteIntermediateFbo(std3DIntermediateFbo* pFbo)
     glDeleteRenderbuffers(1, &pFbo->rbo);
 }
 
+// Added: the position and normal targets (tex2, tex3) are only read by SSAO. With it off,
+// writing them every frame doubled the color bytes each pixel costs, so only the color and
+// glow targets are drawn to then, and the shader's other two outputs are dropped.
+static void std3D_SetSceneDrawBuffers()
+{
+    static const GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
+    glDrawBuffers(jkPlayer_enableSSAO ? 4 : 2, bufs);
+}
+
 void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* pFb)
 {
     // Generate the framebuffer
@@ -301,8 +310,7 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
 
     // Added: draw buffers are per framebuffer and were only set in DrawRenderList, so the
     // StartScene clear of a new buffer missed tex1-3 and its first frame had a black glow.
-    GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
-    glDrawBuffers(4, bufs);
+    std3D_SetSceneDrawBuffers();
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -759,6 +767,13 @@ int std3D_StartScene()
     std3D_swapFramebuffers();
     
     double supersample_level = jkPlayer_ssaaMultiple; // Can also be set lower
+#ifdef ARCH_WASM
+    // Added: the box takes any number, and since display settings are kept between
+    // visits, a high one stays. 0 or less made an empty buffer.
+    if (supersample_level > WASM_MAX_SSAA_MULTIPLE) supersample_level = WASM_MAX_SSAA_MULTIPLE;
+    if (supersample_level < 0.25) supersample_level = 0.25;
+    jkPlayer_ssaaMultiple = supersample_level; // the menu then shows, and saves, what's drawn
+#endif
     int32_t tex_w = (int32_t)((double)Window_xSize * supersample_level);
     int32_t tex_h = (int32_t)((double)Window_ySize * supersample_level);
 
@@ -771,6 +786,7 @@ int std3D_StartScene()
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+    std3D_SetSceneDrawBuffers(); // so the clear below covers tex2-3 when SSAO was just turned on
     glEnable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
@@ -1553,9 +1569,9 @@ void std3D_DrawMenu()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpTrisAmt * 3 * sizeof(GLushort), menu_data_elements, GL_STREAM_DRAW);
 
-    int tris_size = 0;  
-    glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &tris_size);
-    glDrawElements(GL_TRIANGLES, tris_size / sizeof(GLushort), GL_UNSIGNED_SHORT, 0);
+    // Draw the count just uploaded. Asking GL for the buffer's size waits on the GPU,
+    // which in a browser is a round trip to its GPU process every frame.
+    glDrawElements(GL_TRIANGLES, (GLsizei)(GL_tmpTrisAmt * 3), GL_UNSIGNED_SHORT, 0);
 
     glDisableVertexAttribArray(programMenu_attribute_v_uv);
     glDisableVertexAttribArray(programMenu_attribute_v_color);
@@ -1692,9 +1708,9 @@ void std3D_DrawMapOverlay()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpTrisAmt * 3 * sizeof(GLushort), menu_data_elements, GL_STREAM_DRAW);
 
-    int tris_size = 0;  
-    glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &tris_size);
-    glDrawElements(GL_TRIANGLES, tris_size / sizeof(GLushort), GL_UNSIGNED_SHORT, 0);
+    // Draw the count just uploaded. Asking GL for the buffer's size waits on the GPU,
+    // which in a browser is a round trip to its GPU process every frame.
+    glDrawElements(GL_TRIANGLES, (GLsizei)(GL_tmpTrisAmt * 3), GL_UNSIGNED_SHORT, 0);
 
     glDisableVertexAttribArray(programMenu_attribute_v_uv);
     glDisableVertexAttribArray(programMenu_attribute_v_color);
@@ -2354,9 +2370,9 @@ void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpTrisAmt * 3 * sizeof(GLushort), data_elements, GL_STREAM_DRAW);
 
-    int tris_size;  
-    glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &tris_size);
-    glDrawElements(GL_TRIANGLES, tris_size / sizeof(GLushort), GL_UNSIGNED_SHORT, 0);
+    // Draw the count just uploaded. Asking GL for the buffer's size waits on the GPU,
+    // which in a browser is a round trip to its GPU process every frame.
+    glDrawElements(GL_TRIANGLES, (GLsizei)(GL_tmpTrisAmt * 3), GL_UNSIGNED_SHORT, 0);
 
     glDisableVertexAttribArray(pStage->attribute_v_uv);
     glDisableVertexAttribArray(pStage->attribute_v_color);
@@ -2563,8 +2579,7 @@ void std3D_DrawRenderList()
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
     glUseProgram(programDefault);
 
-    GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
-    glDrawBuffers(4, bufs);
+    std3D_SetSceneDrawBuffers();
     
     last_tex = NULL;
 
@@ -2900,9 +2915,8 @@ void std3D_DrawRenderList()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, world_ibo_triangle);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpLinesAmt * 2 * sizeof(GLushort), world_data_elements, GL_STREAM_DRAW);
 
-    int lines_size;
-    glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &lines_size);
-    glDrawElements(GL_LINES, lines_size / sizeof(GLushort), GL_UNSIGNED_SHORT, 0);
+    // Draw the count just uploaded rather than asking GL for the buffer's size (a GPU wait).
+    glDrawElements(GL_LINES, (GLsizei)(GL_tmpLinesAmt * 2), GL_UNSIGNED_SHORT, 0);
 #endif
         
     // Done drawing    

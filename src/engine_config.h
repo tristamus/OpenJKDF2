@@ -180,6 +180,10 @@
 #define TICKRATE_DEFAULT TICKRATE_ORIGINAL_DEFAULT
 #endif
 
+// The most supersampling (Display > SSAA Multiplier) the browser build draws at. Each
+// step multiplies the pixels on both sides, so 2 is already four times the work.
+#define WASM_MAX_SSAA_MULTIPLE (2.0)
+
 // Run game physics at a fixed timestep
 #define FIXED_TIMESTEP_PHYS
 
