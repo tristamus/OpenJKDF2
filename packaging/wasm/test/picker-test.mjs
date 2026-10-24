@@ -16,14 +16,16 @@ function cut(from, to) {
     assert.ok(a > 0 && b > a, 'index.html has ' + from);
     return html.substring(a, b);
 }
-const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore,
-        whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge,
+const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, filesToSave,
+        gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge,
         REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
-    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore, ' +
-    'whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge, ' +
-    'REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey };')();
+    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, ' +
+    'filesToSave, gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, ' +
+    'keptMerge, REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey };')();
+const { checkGraphicsPack } = new Function(
+    cut('      async function gobTable', '      async function modContents') + '\nreturn { checkGraphicsPack };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -132,6 +134,83 @@ test('the MotS Remastered pack is loaded like the game, not listed', () => {
 test('MotS mods are still listed next to it', () => {
     assert.deepEqual(listMots(pickMots({ 'mods/More.goo': null, 'resource/Saber.goo': null, 'SBX/sbx.goo': null })),
                      ['SBX (SBX)', 'More (mods)', 'Saber (resource)']);
+});
+
+// ---- Graphics packs: optional by their file name alone (OPTIONAL_PACKS).
+
+const optional = (files, mots = false) => detectMods(files, mots).filter(m => m.optional).map(m => m.name + ' (' + m.from + ')');
+
+test('JKE.GOB, JKR.GOB and JK HD Models.gob are graphics packs in any case, listed last', () => {
+    const files = pick({ 'mods/JK HD Models.gob': null, 'resource/jke.gob': null, 'mod/JKR.GOB': null, 'mod/Other.gob': null,
+                         'SBX/sbx.gob': null, 'mods/Blade.gob': null });
+    assert.deepEqual(list(files), ['Other (mod)', 'SBX (SBX)', 'Blade (mods)',
+                                   'JKR (mod)', 'JK HD Models (mods)', 'jke (resource)']);
+    assert.deepEqual(optional(files), ['JKR (mod)', 'JK HD Models (mods)', 'jke (resource)']);
+    // Numbered in list order, like every mod.
+    assert.deepEqual(detectMods(files, false).map(m => m.path.split('-')[0]),
+                     [0, 1, 2, 3, 4, 5].map(i => 'jkmods/' + i));
+});
+
+test('a folder that holds only a named pack is one, and one with more files is a mod like any other', () => {
+    assert.deepEqual(optional(pick({ 'HD/JK HD Models.gob': null, 'HD/readme.txt': null })), ['HD (HD)']);
+    assert.deepEqual(optional(pick({ 'HD/JK HD Models.gob': null, 'HD/cog/x.cog': null })), []);
+    assert.deepEqual(optional(pick({ 'HD/JK HD Models.gob': null, 'HD/x.gob': null })), ['JK HD Models (HD)']);
+});
+
+test('only those names are graphics packs, and only for Jedi Knight', () => {
+    assert.deepEqual(optional(pick({ 'mods/JK HD Models SP.gob': null, 'mods/JKE2.gob': null, 'mods/HD Models.gob': null })), []);
+    assert.deepEqual(optional(pickMots({ 'mods/jke.goo': null, 'mods/JK HD Models.goo': null })), []);
+});
+
+test('ticked graphics packs go to mods/ in list order, and the other ticked mods are what the host shares', () => {
+    const files = pick({ 'mods/JK HD Models.gob': null, 'mod/JKE.GOB': null, 'mod/A.gob': null, 'SBX/sbx.gob': null,
+                         'SBX/cog/x.cog': null });
+    const mods = detectMods(files, false);
+    placeModFiles(files, mods);
+    const at = name => mods.findIndex(m => m.name === name);
+    const option = name => ({ index: at(name), name });
+    const picked = [option('SBX'), option('JKE'), option('JK HD Models')];
+    const split = placeGraphicsPacks(picked, mods, files);
+    assert.deepEqual(split.mods.map(o => o.name), ['SBX']);
+    assert.deepEqual(split.packs.map(o => o.name), ['JKE', 'JK HD Models']);
+    const paths = files.map(e => e.path);
+    assert.ok(paths.includes('mods/001-JKE.GOB'), paths.join(', '));
+    assert.ok(paths.includes('mods/002-JK HD Models.gob'), paths.join(', '));
+    assert.ok(paths.includes(mods[at('SBX')].path + '/cog/x.cog'));
+    // An unticked one stays in its own folder, where the engine doesn't look.
+    const alone = pick({ 'mods/JK HD Models.gob': null, 'mod/JKE.GOB': null, 'mod/B.gob': null });
+    const aloneMods = detectMods(alone, false);
+    placeModFiles(alone, aloneMods);
+    const jke = aloneMods.findIndex(m => m.name === 'JKE');
+    assert.deepEqual(placeGraphicsPacks([{ index: jke, name: 'JKE' }], aloneMods, alone).packs.length, 1);
+    assert.ok(alone.some(e => e.path === 'mods/001-JKE.GOB'));
+    assert.ok(alone.some(e => e.path.startsWith('jkmods/') && e.path.endsWith('/JK HD Models.gob')));
+    // A saved set is one host's mods, packs and all.
+    const saved = { name: 'Saved', path: 'netmods/0123456789abcdef', saved: true };
+    assert.deepEqual(placeGraphicsPacks([saved], aloneMods, alone), { mods: [saved], packs: [] });
+});
+
+test('a graphics pack with more than textures and models says so in the console, and still loads', async () => {
+    const warned = [];
+    const warn = console.warn;
+    console.warn = (...a) => { warned.push(a.join(' ')); };
+    try {
+        const pure = new Blob([makeGob([{ name: 'mat\\kyle.mat', bytes: Buffer.from('m') },
+                                        { name: '3do\\ky.3do', bytes: Buffer.from('k') },
+                                        { name: 'readme.txt', bytes: Buffer.from('r') }])]);
+        assert.deepEqual(await checkGraphicsPack('JK HD Models', pure), []);
+        assert.equal(warned.length, 0);
+        const mixed = new Blob([makeGob([{ name: 'mat\\kyle.mat', bytes: Buffer.from('m') },
+                                         { name: 'cog\\kyle.cog', bytes: Buffer.from('c') },
+                                         { name: 'sound\\hit.wav', bytes: Buffer.from('s') }])]);
+        assert.deepEqual(await checkGraphicsPack('JKE', mixed), ['cog/kyle.cog', 'sound/hit.wav']);
+        assert.equal(warned.length, 1);
+        assert.match(warned[0], /JKE also has 2 files besides textures and models.*cog\/kyle\.cog, sound\/hit\.wav/);
+        // A file that isn't a GOB has nothing to say.
+        assert.deepEqual(await checkGraphicsPack('JKR', new Blob([Buffer.from('not a gob')])), []);
+    } finally {
+        console.warn = warn;
+    }
 });
 
 // The page's memory of which mods were left unticked, with a stand-in for

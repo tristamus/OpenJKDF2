@@ -222,6 +222,16 @@ rdMaterial* sithMaterial_GetMaterialByIndex(int index)
     return result;
 }
 
+// Added: a material this PC has already loaded, by its file name (mat_fpath),
+// or NULL. Unlike its index, the name doesn't depend on the order this PC
+// loaded its materials in, which a graphics pack only one player runs changes.
+rdMaterial* sithMaterial_FindByName(const char *pName)
+{
+    if ( !sithMaterial_pHashtable || !pName || !pName[0] )
+        return NULL;
+    return (rdMaterial *)stdHashtbl_Find(sithMaterial_pHashtable, pName);
+}
+
 int sithMaterial_GetMemorySize(rdMaterial *mat)
 {
     int result; // eax

@@ -119,7 +119,11 @@ void sithDSS_SurfaceStatus(SithSurface *pSurf, int idTo, int outstream)
     {
         NETMSG_PUSHU32(pSurf->pAdjoin->flags);
     }
-    
+    // Added: the material's name as well, after what the original sends. Its
+    // index is the order this PC loaded it in, which a graphics pack only one
+    // player runs changes (packaging/wasm/index.html, OPTIONAL_PACKS).
+    NETMSG_PUSHSTR(pSurf->surfaceInfo.face.material ? pSurf->surfaceInfo.face.material->mat_fpath : "", 0x20);
+
     NETMSG_END(DSS_SURFACESTATUS);
     
     sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, idTo, outstream, 1);
@@ -143,10 +147,6 @@ int sithDSS_ProcessSurfaceStatus(SithMessage *pMsg)
     surface->surfaceInfo.face.material = sithMaterial_GetMaterialByIndex(NETMSG_POPS32());
 
     v4 = NETMSG_POPS16();
-    if ( v4 == -1 || !surface->surfaceInfo.face.material || v4 >= surface->surfaceInfo.face.material->num_texinfo )
-        surface->surfaceInfo.face.wallCel = -1;
-    else
-        surface->surfaceInfo.face.wallCel = v4;
 
     surface->surfaceInfo.face.texVertOffset = NETMSG_POPVEC2();
     surface->surfaceInfo.face.extraLight = NETMSG_POPF32();
@@ -157,6 +157,23 @@ int sithDSS_ProcessSurfaceStatus(SithMessage *pMsg)
 
     if ( surface->pAdjoin )
         surface->pAdjoin->flags = NETMSG_POPU32();
+
+    // Added: the material by name when the sender gave it, since its index
+    // can differ between two PCs (sithDSS_SurfaceStatus).
+    if ( NETMSG_IN_LEFT(pMsg) >= 0x20 )
+    {
+        char matName[0x20];
+        NETMSG_POPSTR(matName, 0x20);
+        rdMaterial* pByName = sithMaterial_FindByName(matName);
+        if ( pByName )
+            surface->surfaceInfo.face.material = pByName;
+    }
+
+    // Moved after the name: the cel is checked against the material used.
+    if ( v4 == -1 || !surface->surfaceInfo.face.material || v4 >= surface->surfaceInfo.face.material->num_texinfo )
+        surface->surfaceInfo.face.wallCel = -1;
+    else
+        surface->surfaceInfo.face.wallCel = v4;
 
     return 1;
 }
@@ -545,7 +562,11 @@ void sithDSS_AnimStatus(rdSurface *pAnim, int idTo, int outstream)
         NETMSG_PUSHS32(pAnim->material->id);
     if (pAnim->flags & 0x2000000)
         NETMSG_PUSHS32(pAnim->sector->id);
-    
+    // Added: the animated material's name as well, after what the original
+    // sends, as in sithDSS_SurfaceStatus.
+    if (pAnim->flags & 0x10000)
+        NETMSG_PUSHSTR(pAnim->material ? pAnim->material->mat_fpath : "", 0x20);
+
     NETMSG_END(DSS_SURFACE);
     
     sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, idTo, outstream, 1);
@@ -624,6 +645,16 @@ int sithDSS_ProcessAnimStatus(SithMessage *pMsg)
 
     if (rdsurface->flags & 0x2000000)
         rdsurface->sector = sithSector_GetPtrFromIdx(NETMSG_POPS32());
+
+    // Added: the material by name when the sender gave it (sithDSS_AnimStatus).
+    if ((rdsurface->flags & 0x10000) && NETMSG_IN_LEFT(pMsg) >= 0x20)
+    {
+        char matName[0x20];
+        NETMSG_POPSTR(matName, 0x20);
+        rdMaterial* pByName = sithMaterial_FindByName(matName);
+        if (pByName)
+            rdsurface->material = pByName;
+    }
 
     return 1;
 }
