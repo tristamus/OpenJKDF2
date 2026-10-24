@@ -19,6 +19,15 @@
 // Then the engine restarts into the mod in the same tab, and the player joins
 // again with the game already selected (stdComm_WSRelay.c).
 //
+// Graphics packs (index.html's OPTIONAL_PACKS, such as JK HD Models.gob) are
+// each player's own: the page puts the ones ticked in mods/, which the engine
+// loads after -path whatever mod the game runs, so they're never part of the
+// mod a host shares, a game with or without them needs no restart, and they
+// stay on through a restart into the host's mod. The engine names textures
+// in its messages by file name where a pack could shift their numbers
+// (sithDSS.c), and checks a face number from another player against its
+// own model (sithDSSThing.c), so players with and without one play together.
+
 // Mods that came from a host are kept in IndexedDB and unpacked into
 // netmods/<first 16 hex digits of the fingerprint> when needed, so they can
 // be chosen next time from the folder prompt.
@@ -506,6 +515,19 @@
 
     var REJOIN = ' When the main menu is back, join from Multiplayer again: this game will already be selected.';
 
+    // The graphics packs this player ticked (index.html), by name.
+    function graphicsPacks() {
+        return Array.isArray(Module.jkGraphicsPacks) ? Module.jkGraphicsPacks : [];
+    }
+
+    function graphicsText() {
+        var p = graphicsPacks();
+        if (!p.length)
+            return '';
+        return p.length === 1 ? ' Your graphics pack, ' + p[0] + ', stays on.' :
+               ' Your graphics packs (' + p.join(', ') + ') stay on.';
+    }
+
     async function runJob(j) {
         var want = j.want;
         if (want && want.bad)
@@ -524,9 +546,9 @@
             return core.STATE_READY;
 
         // The pack only changes with a restart, so it goes with the mod's.
-        var packText = wantPack === havePack ? '' : wantPack ?
+        var packText = (wantPack === havePack ? '' : wantPack ?
             ' It also loads your ' + PACK_TITLE + ', which the host uses.' :
-            " It also leaves out your " + PACK_TITLE + ", which the host doesn't use.";
+            " It also leaves out your " + PACK_TITLE + ", which the host doesn't use.") + graphicsText();
         var found;
         if (wantFp === have) {
             found = current ? { fp: current.fp, name: current.name, path: current.path } : { fp: null, name: null, path: '' };
@@ -534,7 +556,7 @@
                            PACK_TITLE,
                            (wantPack ? 'The host uses the ' + PACK_TITLE + ', so the game restarts to load yours.' :
                             "The host doesn't use the " + PACK_TITLE + ', so the game restarts without yours, ' +
-                            'since every player has to run the same files.') + REJOIN);
+                            'since every player has to run the same files.') + graphicsText() + REJOIN);
         } else if (!wantFp) {
             found = { fp: null, name: null, path: '' };
             core.ui.notice('Restarting without your mod', current.name,
@@ -713,6 +735,11 @@
         } else if (havePack) {
             pack = 'No Remastered pack';
             packWhy = ' (the game restarts without it)';
+        }
+        if (!pack && !mod) {
+            // A game without mods, for a player with graphics packs.
+            var p = graphicsPacks();
+            return !p.length ? '' : p.length === 1 ? 'Your graphics pack stays on' : 'Your graphics packs stay on';
         }
         if (!pack)
             return mod + modWhy;

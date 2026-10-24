@@ -260,6 +260,13 @@ int sithMulti_SendJoinRequest(int sendto_id)
     NETMSG_PUSHWSTR(jkPlayer_playerShortName, 0x10);
     NETMSG_PUSHWSTR(sithMulti_name, 0x20);
     NETMSG_PUSHU32(sithNet_checksum);
+    // Added: logged once, as the join request is sent again every 2 s while joining.
+    static uint32_t lastLoggedChecksum = 0;
+    if ( sithNet_checksum != lastLoggedChecksum )
+    {
+        stdPlatform_Printf("OpenJKDF2: asking to join with world checksum %x\n", sithNet_checksum);
+        lastLoggedChecksum = sithNet_checksum;
+    }
 
     NETMSG_END(DSS_JOINREQUEST);
     return sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, sendto_id, 1, 0);
@@ -1164,8 +1171,15 @@ int sithMulti_ProcessJoinRequest(SithMessage *pMsg)
 
             uint32_t popped_check = NETMSG_POPS32();
             v10 = sithNet_checksum;
-            if ( v10 != popped_check )
+            // Added: always logged, though a different one still joins, so a
+            // game that plays differently on two PCs can be told apart from
+            // one whose scripts and templates match (a graphics pack only one
+            // player runs leaves it the same).
+            if ( v10 == popped_check )
+                stdPlatform_Printf("OpenJKDF2: a joining player's world checksum matches ours (%x)\n", v10);
+            else
             {
+                stdPlatform_Printf("OpenJKDF2: a joining player's world checksum is %x, ours is %x\n", popped_check, v10);
                 sithMulti_verbosePrintf("Bad checksum %x vs %x\n", v10, popped_check);
 #if 0
                 NETMSG_START;
