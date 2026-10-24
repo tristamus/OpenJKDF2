@@ -1491,6 +1491,30 @@
         });
       })();
 
+      // Opera, with its mouse gestures turned on, keeps the right button's
+      // release from the page while the mouse is locked, and the game went on
+      // holding the button. Every mouse event says which buttons are down, so a
+      // button that went up unseen is let go before the event reaches the game
+      // (SDL takes a button change from any pointer event).
+      (function() {
+        var canvas = Module.canvas, held = 0;
+        var BIT = [1, 4, 2, 8, 16]; // event.button to its bit in event.buttons
+        function check(ev) {
+          if (!ev.isTrusted || ev.pointerType !== 'mouse' || ev.target !== canvas) return;
+          var gone = held & ~ev.buttons;
+          if (ev.button >= 0 && ev.button < BIT.length) gone &= ~BIT[ev.button]; // the event's own change
+          held = ev.buttons;
+          for (var b = 0; b < BIT.length; b++) {
+            if (!(gone & BIT[b])) continue;
+            Module.print('Mouse: button ' + b + ' went up unseen');
+            canvas.dispatchEvent(new PointerEvent('pointermove', {
+              pointerType: 'mouse', pointerId: ev.pointerId, isPrimary: ev.isPrimary, button: b, buttons: ev.buttons,
+              clientX: ev.clientX, clientY: ev.clientY, screenX: ev.screenX, screenY: ev.screenY, bubbles: true }));
+          }
+        }
+        ['pointerdown', 'pointermove', 'pointerup'].forEach(function(type) { window.addEventListener(type, check, true); });
+      })();
+
       // ---- Leaving mid-game. Ctrl fires and W walks forward, and Ctrl+W also
       // closes the tab: outside fullscreen the browser keeps that shortcut for
       // itself, so the page can't stop it. Once the game is running the
