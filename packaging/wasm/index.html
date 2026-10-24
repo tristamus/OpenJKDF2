@@ -1228,7 +1228,9 @@
               Untick any you don't want, or untick Select all and tick the few you want.
               When two mods change the same file, the one higher in the list is used. Players who join you
               get your mods, except files from the original game, which their browser fills in from their
-              own copy. If you join a game with different mods, the game restarts with those.</p>
+              own copy. If you join a game with different mods, the game restarts with those. Graphics
+              packs (JK HD Models, JKE and JKR) are the exception: each player plays with their own, or
+              none, so they're never sent and they stay on in every game.</p>
           </div>
           <label class="picker-option"><input type="checkbox" id="fullscreen-option" checked>
             <span>Play in fullscreen <span class="fine">The game fills the screen when you click it. Hold Esc to leave
@@ -2680,6 +2682,16 @@
         '.gob': [],
         '.goo': ['jkmremasteredassets.goo']
       };
+      // Graphics packs, by file name: a mod that is just one of these GOBs is
+      // each player's own. It isn't part of the mods a host shares, so
+      // players join with it or without it, and it stays on in the games
+      // they join. It loads after the other mods, which win where both
+      // change a file. Only the name counts, whatever the GOB holds
+      // (checkGraphicsPack).
+      var OPTIONAL_PACKS = {
+        '.gob': ['jke.gob', 'jkr.gob', 'jk hd models.gob'],
+        '.goo': []
+      };
 
       // ---- What gets read. Only the files the engine opens are read into
       // the tab: the rest of the folder (the MotS Remastered pack's jkgm
@@ -2745,6 +2757,9 @@
       //   besides the game's own and ALWAYS_LOADED. They move under jkmods/
       //   like the others, so they only load when ticked and a host always
       //   shares what it runs.
+      // - last, wherever they are, the graphics packs (OPTIONAL_PACKS), marked
+      //   .optional: each player's own, which the engine loads after the
+      //   others from mods/ (placeGraphicsPacks).
       // A zip with a mod in it is a folder of its own wherever it is, since
       // openZips has already opened it in place.
       // Paths are already spelled one way.
@@ -2843,12 +2858,22 @@
         }
         // Sorting is stable, so each kind keeps its order.
         mods.sort(function(a, b) { return a.rank - b.rank; });
+        var count = new Map(), only = new Map();
         for (var m of mods) m.bytes = 0;
         for (var e of files) {
-          var lower = e.path.toLowerCase();
-          var m = mods.find(function(m) { return m.rel(lower, e.path); });
-          if (m) m.bytes += e.file.size;
+          var lower = e.path.toLowerCase(), rel = null;
+          var m = mods.find(function(m) { return (rel = m.rel(lower, e.path)); });
+          if (m) {
+            m.bytes += e.file.size;
+            count.set(m, (count.get(m) || 0) + 1);
+            only.set(m, rel.toLowerCase());
+          }
         }
+        // A graphics pack is a mod that is one GOB named in OPTIONAL_PACKS
+        // and nothing else. Packs come last, since the other mods load ahead
+        // of them.
+        for (var m of mods) m.optional = count.get(m) === 1 && OPTIONAL_PACKS[ext].indexOf(only.get(m)) >= 0;
+        mods = mods.filter(function(m) { return !m.optional; }).concat(mods.filter(function(m) { return m.optional; }));
         return mods.map(function(m, i) {
           // No spaces: the engine splits its command line on them.
           m.path = 'jkmods/' + i + '-' + m.name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
@@ -2878,6 +2903,22 @@
       // engine opens. The rest of the folder is left unread.
       function filesToRead(files, ext, modPath) {
         return files.filter(function(e) { return e.mod !== undefined || isGameFile(e.path.toLowerCase(), ext, modPath); });
+      }
+
+      // The ticked graphics packs (chooseMods' options for folderMods marked
+      // .optional) go in mods/, which the engine always loads, after -path
+      // (jkRes_LoadNew): numbered in list order, since it looks in GOBs in the
+      // order they were added. That keeps them out of the mod a host shares,
+      // and on through a restart into a host's mod (mods.js). Moves their
+      // files, and returns the other ticked options as mods and the packs.
+      function placeGraphicsPacks(picked, folderMods, files) {
+        var packs = picked.filter(function(o) { return !o.saved && folderMods[o.index].optional; });
+        packs.forEach(function(o, r) {
+          for (var e of files) {
+            if (e.mod === o.index) e.path = 'mods/' + String(r + 1).padStart(3, '0') + '-' + e.rel;
+          }
+        });
+        return { mods: picked.filter(function(o) { return packs.indexOf(o) < 0; }), packs: packs };
       }
 
       // The picked files to save in the browser for next time: the ones read,
@@ -3111,6 +3152,23 @@
         }
       }
 
+      // A graphics pack is optional by its name alone (OPTIONAL_PACKS). One
+      // that holds more than textures and models, such as scripts, sounds or
+      // templates, can make the game play differently for players with and
+      // without it, so the console says which files, as a clue if a game
+      // ever does. Resolves to those files.
+      async function checkGraphicsPack(name, file) {
+        var table = await gobTable(file);
+        var others = (table || []).map(function(g) { return g.name.replace(/\\/g, '/'); }).filter(function(n) {
+          return !/\.(mat|3do|txt)$/i.test(n);
+        });
+        if (others.length)
+          console.warn('OpenJKDF2: the graphics pack ' + name + ' also has ' + others.length + ' file' +
+                       (others.length === 1 ? '' : 's') + ' besides textures and models, which players without it ' +
+                       "don't have: " + others.slice(0, 20).join(', ') + (others.length > 20 ? ', ...' : ''));
+        return others;
+      }
+
       async function modContents(mod, files, ext) {
         var out = {};
         for (var e of files) {
@@ -3260,7 +3318,9 @@
                    where: (m.kept ? 'In your folder "' + kept.name + '", ' :
                            m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
                                     : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
-                          (m.bytes > 250 * 1048576 ? ". Too big to send: players need their own copy" : '') };
+                          (m.optional ? ". Graphics pack: only you see it. Players joining you don't need it, " +
+                                        'and it stays on in games you join' :
+                           m.bytes > 250 * 1048576 ? ". Too big to send: players need their own copy" : '') };
         });
         for (var s of saved) {
           options.push({ name: s.name, path: 'netmods/' + s.sha256.substring(0, 16), saved: true,
@@ -3654,7 +3714,10 @@
             lap('comparing mods');
           }
           placeModFiles(files, folderMods);
-          Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
+          // Graphics packs are never a host's mod, so they're not looked in
+          // for one (mods.js).
+          Module.jkModFolders = folderMods.filter(function(m) { return !m.optional; })
+                                          .map(function(m) { return { name: m.name, path: m.path }; });
           // A mod all of whose files are from a kept folder of mods and maps
           // says it's there, also when they're the saved copies.
           var fromKept = function(e) {
@@ -3694,6 +3757,14 @@
         var modPath = pathAt < 0 ? null : String(Module['arguments'][pathAt + 1] || '').replace(/\\/g, '/')
           .replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
         files = filesToRead(files, ext, modPath);
+        var split = placeGraphicsPacks(picked, folderMods, files);
+        picked = split.mods;
+        Module.jkGraphicsPacks = split.packs.map(function(o) { return o.name; });
+        for (var o of split.packs) {
+          var pack = files.find(function(e) { return e.mod === o.index; });
+          console.log('OpenJKDF2: graphics pack ' + o.name + ' (' + pack.path + '), for this player only');
+          await checkGraphicsPack(o.name, pack.file);
+        }
         // The saved files get a kept folder's new and changed files too, so
         // they still have them when it can't be read.
         var toSave = (fromBrowser && !extras) || modPath ? null : filesToSave(fileList, files, playerFiles);
