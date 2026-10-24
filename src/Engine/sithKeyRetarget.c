@@ -53,6 +53,13 @@
 //                                source's do
 //   end
 //
+//   section: own                 (optional, after the first section's end,
+//   keys 2                       which older builds stop at) keys whose
+//   rt_rgstand.key rg_idle.key   source is a key made for the target
+//   rt_rgwalk.key rg_idle.key 1 legs ls_walk.key   itself, so it's played
+//   end                          as it is, not converted; the same options
+//                                but "steady"
+//
 // Bones are named, or @n for node n. Each source bone's world rotation
 // drives one target bone, through a fixed correction worked out from the
 // two models' rest poses (taken to be the same pose):
@@ -169,6 +176,7 @@ typedef struct rtRecipe
     int bUpper[RT_MAX_KEYS];
     char legKeys[RT_MAX_KEYS][RT_NAME_LEN];
     double steady[RT_MAX_KEYS]; // how much of the torso's turn is kept, or < 0
+    int bOwn[RT_MAX_KEYS]; // the source key is made for the target (section: own)
 } rtRecipe;
 
 typedef struct rtState
@@ -718,7 +726,8 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
 {
     char path[RT_PATH_LEN];
     char w[7][RT_PATH_LEN];
-    int count, n;
+    int count, n, base;
+    int bOwnSection = 0;
 
     memset(pRecipe, 0, sizeof(*pRecipe));
     stdString_SafeStrCopy(path, RT_RECIPE_PATH, sizeof(path));
@@ -728,10 +737,18 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
     while (stdConffile_ReadLine())
     {
         n = _sscanf(stdConffile_g_aLine, "%127s %127s %127s %127s %127s %127s %127s", w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
-        if (n <= 0 || !strcmp(w[0], "section:"))
+        if (n <= 0)
             continue;
+        if (!strcmp(w[0], "section:"))
+        {
+            bOwnSection = (n >= 2 && !strcmp(w[1], "own"));
+            continue;
+        }
         if (!strcmp(w[0], "end"))
-            break;
+            continue;
+        // The own section has keys only
+        if (bOwnSection && strcmp(w[0], "keys"))
+            goto fail;
 
         if (!strcmp(w[0], "source") && n >= 2)
         {
@@ -787,11 +804,14 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
         }
         else if (!strcmp(w[0], "keys") && n == 2)
         {
+            // Each section's keys go after the last section's
+            base = pRecipe->numKeys;
             count = _atoi(w[1]);
-            if (count <= 0 || count > RT_MAX_KEYS)
+            if (count <= 0 || count > RT_MAX_KEYS - base)
                 goto fail;
-            for (int i = 0; i < count; i++)
+            for (int k = 0; k < count; k++)
             {
+                int i = base + k;
                 if (!stdConffile_ReadLine())
                     goto fail;
                 n = _sscanf(stdConffile_g_aLine, "%127s %127s %127s %127s %127s %127s %127s", w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
@@ -803,6 +823,7 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
                 pRecipe->bUpper[i] = 0;
                 pRecipe->legKeys[i][0] = 0;
                 pRecipe->steady[i] = -1.0;
+                pRecipe->bOwn[i] = bOwnSection;
                 // Then a speed, "upper" or "legs <key>", and "steady <keep>",
                 // each optional
                 int at = 2;
@@ -818,7 +839,7 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
                     stdString_SafeStrCopy(pRecipe->legKeys[i], w[at + 1], RT_NAME_LEN);
                     at += 2;
                 }
-                if (at + 1 < n && !strcmp(w[at], "steady"))
+                if (at + 1 < n && !strcmp(w[at], "steady") && !bOwnSection)
                 {
                     pRecipe->steady[i] = _atof(w[at + 1]);
                     if (pRecipe->steady[i] < 0.0 || pRecipe->steady[i] > 1.0)
@@ -830,7 +851,7 @@ static int sithKeyRetarget_ReadRecipe(rtRecipe* pRecipe)
                 if (pRecipe->speeds[i] == 0.0 && !pRecipe->legKeys[i][0])
                     goto fail;
             }
-            pRecipe->numKeys = count;
+            pRecipe->numKeys = base + count;
         }
         else
         {
@@ -1242,7 +1263,7 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
     double* pFrames = NULL;
     double* pUpper = NULL; // the source's upper body on its own clock, at its own frames
     rtMat* pSteady = NULL; // with "steady", the bones' world goals at each source frame
-    int numNodes, numFrames, numUpper, keyIdx, bLegs, bUpperClock;
+    int numNodes, numFrames, numUpper, keyIdx, bLegs, bUpperClock, bOwn;
 
     // The name can be in a line buffer that loading reuses
     stdString_SafeStrCopy(name, pName, sizeof(name));
@@ -1258,6 +1279,8 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
         goto fail;
     if (src.numFrames <= 0 || src.fps <= 0)
         goto fail;
+    // A source made for the target is played as it is
+    bOwn = pState->recipe.bOwn[keyIdx];
 
     // The hips and legs from a key made for the target
     bLegs = (pState->recipe.legKeys[keyIdx][0] != 0);
@@ -1302,10 +1325,17 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
             srcFrame = 0.0;
             sithKeyRetarget_Sample(&pState->dst, &pState->dstRest, &legs, (double)f, &pState->legsPose);
         }
-        sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, srcFrame, &pState->srcPose);
-        sithKeyRetarget_Convert(pState, &pState->srcPose,
-                                (pSteady && (int)srcFrame < numUpper) ? &pSteady[(int)srcFrame * pState->numPairs] : NULL,
-                                &pState->dstPose);
+        if (bOwn)
+        {
+            sithKeyRetarget_Sample(&pState->dst, &pState->dstRest, &src, srcFrame, &pState->dstPose);
+        }
+        else
+        {
+            sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, srcFrame, &pState->srcPose);
+            sithKeyRetarget_Convert(pState, &pState->srcPose,
+                                    (pSteady && (int)srcFrame < numUpper) ? &pSteady[(int)srcFrame * pState->numPairs] : NULL,
+                                    &pState->dstPose);
+        }
         for (int i = 0; i < numNodes; i++)
         {
             double* pOut = &pFrames[(f * numNodes + i) * 6];
@@ -1324,8 +1354,15 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
             goto fail;
         for (int f = 0; f < numUpper; f++)
         {
-            sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, (double)f, &pState->srcPose);
-            sithKeyRetarget_Convert(pState, &pState->srcPose, pSteady ? &pSteady[f * pState->numPairs] : NULL, &pState->dstPose);
+            if (bOwn)
+            {
+                sithKeyRetarget_Sample(&pState->dst, &pState->dstRest, &src, (double)f, &pState->dstPose);
+            }
+            else
+            {
+                sithKeyRetarget_Sample(&pState->src, &pState->srcRest, &src, (double)f, &pState->srcPose);
+                sithKeyRetarget_Convert(pState, &pState->srcPose, pSteady ? &pSteady[f * pState->numPairs] : NULL, &pState->dstPose);
+            }
             for (int i = 0; i < numNodes; i++)
             {
                 double* pOut = &pUpper[(f * numNodes + i) * 6];
@@ -1394,9 +1431,10 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
         stdString_SafeStrCopy(pJoint->aMeshName, pState->dst.nodes[i].name, 32);
 #endif
         // Rotations worked out here are written smoothly; the legs from
-        // another key are copied as they are
+        // another key, and a source made for the target, are copied as
+        // they are
         if (!sithKeyRetarget_WriteJoint(pJoint, pNodeFrames, numNodes, i, numEntries,
-                                        !(bLegs && !(pState->dst.nodes[i].type & RT_BODY_UPPER)), bOwnClock))
+                                        !bOwn && !(bLegs && !(pState->dst.nodes[i].type & RT_BODY_UPPER)), bOwnClock))
             goto fail_built;
     }
 
@@ -1407,7 +1445,8 @@ static int sithKeyRetarget_Build(const char* pName, rdKeyframe* pKeyframe)
         RDROID_FREE(pSteady);
     rdKeyframe_FreeEntry(&src);
     rdKeyframe_FreeEntry(&legs);
-    stdPlatform_Printf("OpenJKDF2: Key retarget: made `%s` from `%s`%s%s%s%s%s, %d frames\n", name, pState->recipe.srcKeys[keyIdx],
+    stdPlatform_Printf("OpenJKDF2: Key retarget: made `%s` from `%s`%s%s%s%s%s%s, %d frames\n", name, pState->recipe.srcKeys[keyIdx],
+                       bOwn ? " as it is" : "",
                        bLegs ? " with legs from `" : (pState->recipe.bUpper[keyIdx] ? ", upper body" : ""),
                        bLegs ? pState->recipe.legKeys[keyIdx] : "", bLegs ? "`" : "",
                        bUpperClock ? ", upper body on its own clock" : "",
