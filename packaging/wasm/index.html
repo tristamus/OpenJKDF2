@@ -196,6 +196,64 @@
         font: bold 13px Arial, Helvetica, sans-serif;
         cursor: pointer;
       }
+      /* Over the top of the game when a level keeps running slowly: what
+         often causes it here. It hides itself after a while. */
+      .slow-note {
+        position: fixed;
+        top: 8px;
+        left: 50%;
+        z-index: 26;
+        box-sizing: border-box;
+        width: min(640px, calc(100% - 32px));
+        transform: translateX(-50%);
+        padding: 8px 40px 8px 14px;
+        background-color: rgba(0, 0, 0, 0.88);
+        color: var(--ink);
+        font: 14px/1.4 Arial, Helvetica, sans-serif;
+      }
+      .slow-note[hidden] { display: none; }
+      .slow-note p { margin: 0; }
+      .slow-note p > b:first-child { color: var(--gold); }
+      .slow-note ul { margin: 6px 0 0; padding-left: 20px; }
+      .slow-note li + li { margin-top: 3px; }
+      .slow-note code { color: var(--gold); user-select: all; }
+      .slow-note .close {
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        padding: 0 8px;
+        border: 0;
+        background: transparent;
+        color: var(--gold);
+        font: bold 20px Arial, Helvetica, sans-serif;
+        cursor: pointer;
+      }
+      /* ?bench: frame times over the game, once it's showing. Only the
+         buttons take clicks. */
+      .bench {
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        z-index: 30;
+        max-width: calc(100% - 16px);
+        padding: 6px 10px;
+        background-color: rgba(0, 0, 0, 0.8);
+        color: var(--ink);
+        font: 12px/1.4 'Lucida Console', Monaco, monospace;
+        pointer-events: none;
+      }
+      html.zone-open .bench { display: none; }
+      .bench pre { margin: 0 0 6px; font: inherit; white-space: pre-wrap; }
+      .bench button {
+        margin-right: 6px;
+        padding: 2px 8px;
+        border: 1px solid var(--gold);
+        background-color: transparent;
+        color: var(--gold);
+        font: bold 12px Arial, Helvetica, sans-serif;
+        cursor: pointer;
+        pointer-events: auto;
+      }
       .key-check .ok { color: var(--live); }
       .key-check .bad { color: var(--bad); }
       .key-check .also { color: var(--gold); }
@@ -1310,6 +1368,16 @@
           // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
           canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
 
+          // Ask for the faster graphics card on laptops that have two. The engine's
+          // context leaves powerPreference at "default", which lets the browser pick
+          // the one that saves power.
+          var getContext = canvas.getContext;
+          canvas.getContext = function(type, attrs) {
+            if (/^webgl/.test(type) && (!attrs || !attrs.powerPreference || attrs.powerPreference === 'default'))
+              attrs = Object.assign({}, attrs, { powerPreference: 'high-performance' });
+            return getContext.call(this, type, attrs);
+          };
+
           return canvas;
         })(),
         setStatus: function(text) {
@@ -1346,9 +1414,9 @@
       };
       Module.setStatus('Downloading...');
       // The address's options go to the engine, which quits on one it doesn't
-      // know, so keycheck and netlog (the page's own) are left out.
+      // know, so keycheck, netlog and bench (the page's own) are left out.
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length && i.split('=')[0] !== 'keycheck' && i.split('=')[0] !== 'netlog')
+        .filter(i => i.length && ['keycheck', 'netlog', 'bench'].indexOf(i.split('=')[0]) < 0)
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
@@ -2366,15 +2434,22 @@
         if (lose) lose.loseContext();
       }
 
+      // What draws for a WebGL context: the graphics card or driver, as far as
+      // the browser tells.
+      function glRenderer(gl) {
+        try {
+          var info = gl.getExtension('WEBGL_debug_renderer_info');
+          return String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+        } catch (e) {
+          return '';
+        }
+      }
+
       // 'none': no WebGL 2 at all. 'software': drawn without the graphics card.
       function graphicsCheck() {
         var gl = webgl2();
         if (!gl) return { state: 'none', renderer: '' };
-        var renderer = '';
-        try {
-          var info = gl.getExtension('WEBGL_debug_renderer_info');
-          renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
-        } catch (e) {}
+        var renderer = glRenderer(gl);
         releaseGl(gl);
         if (SOFTWARE_GL.test(renderer)) return { state: 'software', renderer: renderer };
         if (!NAMED_GL.test(renderer)) {
@@ -2402,7 +2477,11 @@
         firefox: { name: 'Firefox', address: 'about:preferences#general',
                    toggle: 'Under Performance, untick <b>Use recommended performance settings</b>, ' +
                            'then tick <b>Use hardware acceleration when available</b>.',
-                   restart: 'Close Firefox completely and open it again.' }
+                   restart: 'Close Firefox completely and open it again.' },
+        // Safari has WebGL 2 from version 15, and comes with macOS and iOS updates.
+        safari: { name: 'Safari', heading: 'Update Safari to play',
+                  steps: 'Safari 15 and later can draw it. Update macOS, or iOS on an iPhone or iPad, ' +
+                         'which updates Safari, then come back to this page.' }
       };
 
       function browserKind() {
@@ -2413,6 +2492,7 @@
         if (/Firefox\//.test(ua)) return 'firefox';
         if (navigator.brave) return 'brave';
         if (brands.indexOf('Google Chrome') >= 0) return 'chrome';
+        if (/Version\/[\d.]+.*Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS|FxiOS|EdgiOS|OPR\//.test(ua)) return 'safari';
         return null;
       }
 
@@ -2424,13 +2504,16 @@
         }
         var how = GFX_HOW[browserKind()];
         var name = how ? how.name : 'Your browser';
+        var usually = how && how.steps ? '' : " Usually that's because graphics acceleration is turned off.";
         var html = gfx.state === 'none'
-          ? '<h2>Turn on graphics acceleration to play</h2><p>' + name + " can't draw 3D graphics (WebGL 2) " +
-            "right now, and the game needs them. Usually that's because graphics acceleration is turned off.</p>"
-          : '<h2>Turn on graphics acceleration</h2><p>' + name + ' is drawing without your graphics card, ' +
-            'so the game runs slower and works your processor hard. On many computers that means only ' +
-            "a few frames per second. Usually that's because graphics acceleration is turned off.</p>";
-        if (how) {
+          ? '<h2>' + (how && how.heading || 'Turn on graphics acceleration to play') + '</h2><p>' + name +
+            " can't draw 3D graphics (WebGL 2) right now, and the game needs them." + usually + '</p>'
+          : '<h2>' + (how && how.heading || 'Turn on graphics acceleration') + '</h2><p>' + name +
+            ' is drawing without your graphics card, so the game runs slower and works your processor hard. ' +
+            'On many computers that means only a few frames per second.' + usually + '</p>';
+        if (how && how.steps) {
+          html += '<p>' + how.steps + '</p>';
+        } else if (how) {
           html += '<ol><li>Open a new tab and go to <code>' + how.address + '</code>' +
                   '<button class="copy" type="button">Copy</button></li>' +
                   '<li>' + how.toggle + '</li>' +
@@ -2439,8 +2522,8 @@
           html += "<p>Open your browser's settings, search for <b>acceleration</b>, turn on graphics " +
                   '(hardware) acceleration, then restart the browser and come back to this page.</p>';
         }
-        html += '<p class="fine">Already on? Update your graphics driver, then restart ' +
-                (how ? how.name : 'the browser') + '.<span class="renderer"></span></p>';
+        html += '<p class="fine">' + (how && how.steps ? '' : 'Already on? Update your graphics driver, then restart ' +
+                (how ? how.name : 'the browser') + '.') + '<span class="renderer"></span></p>';
         el.innerHTML = html;
         if (gfx.renderer)
           el.querySelector('.renderer').textContent = ' Drawing with: ' + gfx.renderer + '.';
@@ -4835,6 +4918,286 @@
       window.addEventListener('hashchange', function() {
         if (document.documentElement.classList.contains('zone-open')) openRoom(location.hash.substring(1));
       });
+    </script>
+    <script type='text/javascript'>
+      // ---- Frame times, from Module.jkFrames (Window.c): for each of the last
+      // frames drawn in a level, when the game finished it and when it got the
+      // thread back for the next one. A frame's time runs from one return to
+      // the next, and the game's own work in it from the return to the finish;
+      // the rest is the browser and the graphics card. From frame number from
+      // (frames.count counts them all), and only frames that ended after
+      // sinceMs (performance.now()).
+      function frameTimes(frames, from, sinceMs) {
+        var times = [], work = 0;
+        for (var n = Math.max(from, frames.count - frames.size + 1, 1); n < frames.count; n++) {
+          var i = n % frames.size, prev = (n - 1) % frames.size;
+          if (!frames.joined[i] || frames.resumes[i] < (sinceMs || 0)) continue;
+          times.push(frames.resumes[i] - frames.resumes[prev]);
+          work += frames.ends[i] - frames.resumes[prev];
+        }
+        return { times: times, work: work };
+      }
+
+      // Frames per second, the median, 95th percentile and slowest frame time,
+      // and the game's own milliseconds per frame. Null with no frames.
+      function frameStats(times, work) {
+        if (!times.length) return null;
+        var sorted = times.slice().sort(function(a, b) { return a - b; });
+        var total = sorted.reduce(function(a, b) { return a + b; }, 0);
+        var at = function(q) { return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]; };
+        return { frames: sorted.length, seconds: total / 1000, fps: sorted.length * 1000 / total,
+                 median: at(0.5), p95: at(0.95), worst: sorted[sorted.length - 1], work: work / sorted.length,
+                 over50: sorted.filter(function(t) { return t > 50; }).length };
+      }
+
+      // Every frame since a start, in 0.1 ms steps up to a second (longer ones
+      // count as a second, apart from the slowest), so a long run's
+      // percentiles take no sorting.
+      function frameTally() {
+        return { bins: new Uint32Array(10001), frames: 0, total: 0, work: 0, worst: 0, over50: 0 };
+      }
+
+      function tallyAdd(tally, times, work) {
+        for (var t of times) {
+          tally.bins[Math.min(10000, Math.round(t * 10))]++;
+          tally.frames++;
+          tally.total += t;
+          if (t > tally.worst) tally.worst = t;
+          if (t > 50) tally.over50++;
+        }
+        tally.work += work;
+      }
+
+      // As frameStats gives, for a tally.
+      function tallyStats(tally) {
+        if (!tally.frames) return null;
+        function at(q) {
+          var want = Math.min(tally.frames - 1, Math.floor(q * tally.frames)), seen = 0;
+          for (var b = 0; b < tally.bins.length; b++) {
+            seen += tally.bins[b];
+            if (seen > want) return b / 10;
+          }
+          return tally.worst;
+        }
+        return { frames: tally.frames, seconds: tally.total / 1000, fps: tally.frames * 1000 / tally.total,
+                 median: at(0.5), p95: at(0.95), worst: tally.worst, work: tally.work / tally.frames, over50: tally.over50 };
+      }
+
+      // The engine's FPS limit (0 for none) and the Display settings that cost
+      // the most to draw, or null before the game runs.
+      function displaySettings() {
+        var get = Module._Window_WebDisplaySetting;
+        if (!get || !Module.jkFrames) return null;
+        return { fpsLimit: get(0), ssaa: get(1) / 100, ssao: !!get(2), bloom: !!get(3), vsync: !!get(4) };
+      }
+
+      // How many times the window's size the game draws at, across: over 1
+      // with Enable HiDPI on a high-density screen.
+      function canvasScale() {
+        return Module.canvas && window.innerWidth ? Module.canvas.width / window.innerWidth : 1;
+      }
+
+      // Whether the computer runs on battery: null where the browser won't say
+      // (Firefox, Safari).
+      function onBattery() {
+        if (!navigator.getBattery) return Promise.resolve(null);
+        return navigator.getBattery().then(function(b) { return !b.charging; }, function() { return null; });
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"]/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+      }
+
+      // ---- Slow frames. When a level runs under SLOW_FPS for three 5-second
+      // stretches in a row, a note over the game says what commonly holds a
+      // browser game back on this computer. Once a visit, and not when the
+      // player's own FPS limit is about that low.
+      var SLOW_FPS = 32;  // Low Power Mode on an iPhone or iPad holds pages to 30
+      var SLOW_CHECK_MS = 5000;
+      var SLOW_CHECKS = 3;
+      var SLOW_NOTE_MS = 30000;
+      // The processor's own graphics. Intel's Arc and AMD's other Radeons are
+      // graphics cards.
+      var BUILT_IN_GPU = /\bIntel\b(?!.*\bArc\b)|Radeon(\(TM\))? (Vega \d+ )?Graphics|Radeon(\(TM\))? \d{3}M\b/i;
+
+      // What may be slowing the game, most likely first, as HTML. env: kind
+      // (browserKind()), ua, touch (navigator.maxTouchPoints), renderer (the
+      // game's), battery (onBattery()), settings (displaySettings()), scale
+      // (canvasScale()).
+      function slowCauses(env) {
+        var causes = [];
+        var how = GFX_HOW[env.kind];
+        var name = how ? how.name : 'your browser';
+        var windows = /Windows/.test(env.ua);
+        if (SOFTWARE_GL.test(env.renderer)) {
+          causes.push('<b>Graphics acceleration is off</b>, so ' + name + ' draws the game on the processor. ' +
+                      (how && how.address ? 'Turn it on at <code>' + how.address + '</code>' : "Turn it on in the browser's settings") +
+                      ', restart the browser and come back.');
+        }
+        if (/iPhone|iPad/.test(env.ua) || (/Macintosh/.test(env.ua) && env.touch > 1))
+          causes.push('<b>Low Power Mode</b> holds web pages to 30 frames a second on an iPhone or iPad. Turn it off in Settings &gt; Battery.');
+        if (windows && BUILT_IN_GPU.test(env.renderer)) {
+          causes.push("The processor's built-in graphics draw the game (" + escapeHtml(env.renderer) + '). If this computer ' +
+                      'also has an NVIDIA or AMD graphics card, open Windows Settings &gt; System &gt; Display &gt; Graphics, ' +
+                      'set ' + (how ? how.name : 'the browser') + ' to <b>High performance</b>, then restart the browser.');
+        }
+        if (env.battery) {
+          causes.push('This computer is on battery, and many laptops slow their graphics down then. Plug it in' +
+                      (windows ? ', or set Settings &gt; System &gt; Power &amp; battery &gt; Power mode to <b>Best performance</b>.' : '.'));
+        }
+        if (env.kind === 'chrome')
+          causes.push("Chrome's <b>Energy saver</b> lowers the frame rate of pages. Turn it off at <code>chrome://settings/performance</code>.");
+        if (env.kind === 'edge')
+          causes.push("Edge's <b>Efficiency mode</b> (Energy saver in newer versions) slows pages down. Search Edge's settings for it and turn it off.");
+        var display = [];
+        if (env.scale > 1.25)
+          display.push('turn off <b>Enable HiDPI</b> (it draws ' + Math.round(env.scale * env.scale * 10) / 10 + ' times the pixels)');
+        if (env.settings && env.settings.ssaa > 1)
+          display.push('set <b>SSAA Multiplier</b> to 1 (' + env.settings.ssaa + ' draws ' +
+                       Math.round(env.settings.ssaa * env.settings.ssaa * 10) / 10 + ' times the pixels)');
+        if (env.settings && env.settings.ssao) display.push('turn off <b>Enable SSAO</b>');
+        if (env.settings && env.settings.bloom) display.push('turn off <b>Enable Bloom</b>');
+        if (display.length)
+          causes.push("In the game's Setup &gt; Display, " + display.join(', ') + '.');
+        if (!causes.length)
+          causes.push('Close other tabs and programs that keep the computer busy, and update your graphics driver.');
+        return causes;
+      }
+
+      function slowNoteHtml(fps, causes) {
+        return '<p><b>The game is running slowly here, about ' + Math.round(fps) + ' frames a second.</b> ' +
+               'What often causes it:</p><ul><li>' + causes.join('</li><li>') + '</li></ul>';
+      }
+
+      function showSlowNote(fps, causes) {
+        var note = document.createElement('div');
+        note.className = 'slow-note';
+        note.setAttribute('role', 'status');
+        note.innerHTML = slowNoteHtml(fps, causes);
+        var close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'close';
+        close.textContent = '×';
+        close.setAttribute('aria-label', 'Hide');
+        close.onclick = function() { note.hidden = true; };
+        note.appendChild(close);
+        document.body.appendChild(note);
+        setTimeout(function() { note.hidden = true; }, SLOW_NOTE_MS);
+      }
+
+      (function() {
+        var streak = 0, seen = 0;
+        var timer = setInterval(function() {
+          var frames = Module.jkFrames;
+          if (!frames || document.hidden) return;
+          var t = frameTimes(frames, seen), stats = frameStats(t.times, t.work);
+          seen = frames.count;
+          // Mostly in a menu, or the tab was hidden: no say either way.
+          if (!stats || stats.seconds < SLOW_CHECK_MS / 2000) return;
+          var settings = displaySettings();
+          var limited = settings && settings.fpsLimit && settings.fpsLimit <= SLOW_FPS + 8;
+          if (stats.fps >= SLOW_FPS || limited) {
+            streak = 0;
+            return;
+          }
+          if (++streak < SLOW_CHECKS) return;
+          clearInterval(timer);
+          onBattery().then(function(battery) {
+            showSlowNote(stats.fps, slowCauses({
+              kind: browserKind(), ua: navigator.userAgent, touch: navigator.maxTouchPoints || 0,
+              renderer: Module.ctx ? glRenderer(Module.ctx) : '', battery: battery,
+              settings: settings, scale: canvasScale() }));
+          });
+        }, SLOW_CHECK_MS);
+      })();
+
+      // ---- ?bench in the address: frame times over the game, live, and a
+      // button that copies them, for comparing browsers, settings and builds.
+      // Since Reset counts every frame in a level from when Reset was last
+      // pressed (or the page opened).
+      function benchLines(recent, session, sessionMs, info) {
+        function ms(v) { return v.toFixed(1); }
+        function line(s) {
+          return s ? s.fps.toFixed(1) + ' fps | frame median ' + ms(s.median) + ' ms, 95% ' + ms(s.p95) +
+                     ', worst ' + ms(s.worst) + ' | game ' + ms(s.work) + ' ms | over 50 ms: ' + s.over50
+                   : 'no frames in a level yet';
+        }
+        var st = info.settings;
+        return [
+          'Last 5 s: ' + line(recent),
+          'Since Reset (' + Math.round(sessionMs / 1000) + ' s, ' + (session ? session.frames : 0) + ' frames): ' + line(session),
+          'Renderer: ' + (info.renderer || 'unknown'),
+          'Browser: ' + info.browser + ' | canvas ' + info.width + 'x' + info.height +
+            ' | devicePixelRatio ' + info.dpr,
+          'Settings: ' + (st ? 'Vsync ' + (st.vsync ? 'on' : 'off') + ', FPS limit ' + (st.fpsLimit || 'none') +
+            ', SSAA ' + st.ssaa + ', SSAO ' + (st.ssao ? 'on' : 'off') + ', Bloom ' + (st.bloom ? 'on' : 'off')
+            : 'not loaded yet')
+        ];
+      }
+
+      function browserLabel(ua) {
+        var m = ua.match(/Edg\/(\d+)/) || ua.match(/Firefox\/(\d+)/) || ua.match(/OPR\/(\d+)/) ||
+                ua.match(/Chrome\/(\d+)/) || ua.match(/Version\/(\d+)[\d.]* .*Safari\//);
+        var how = GFX_HOW[browserKind()];
+        var name = how ? how.name : /OPR\//.test(ua) ? 'Opera' : /Chrome\//.test(ua) ? 'Chromium' : 'Browser';
+        var os = /Windows/.test(ua) ? 'Windows' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'macOS' :
+                 /Android/.test(ua) ? 'Android' : /Linux|X11/.test(ua) ? 'Linux' : '';
+        return name + (m ? ' ' + m[1] : '') + (os ? ' on ' + os : '');
+      }
+
+      if (/[?&]bench(=|&|$)/.test(location.search)) (function() {
+        var box = document.createElement('div');
+        box.className = 'bench';
+        var text = document.createElement('pre');
+        var copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = 'Copy results';
+        var reset = document.createElement('button');
+        reset.type = 'button';
+        reset.textContent = 'Reset';
+        box.append(text, copy, reset);
+        document.body.appendChild(box);
+
+        var session = frameTally(), sessionStart = performance.now(), seen = 0, renderer = '';
+        // Read often enough that the 2048 kept frames never run out between.
+        setInterval(function() {
+          var frames = Module.jkFrames;
+          if (!frames) return;
+          var t = frameTimes(frames, seen);
+          seen = frames.count;
+          tallyAdd(session, t.times, t.work);
+        }, 250);
+
+        function lines() {
+          var frames = Module.jkFrames;
+          var recent = frames ? frameTimes(frames, 0, performance.now() - 5000) : { times: [], work: 0 };
+          if (!renderer && Module.ctx) renderer = glRenderer(Module.ctx);
+          return benchLines(frameStats(recent.times, recent.work), tallyStats(session),
+                            performance.now() - sessionStart, {
+            renderer: renderer, browser: browserLabel(navigator.userAgent),
+            width: Module.canvas.width, height: Module.canvas.height, dpr: window.devicePixelRatio,
+            settings: displaySettings() });
+        }
+        function show() { text.textContent = lines().join('\n'); }
+        show();
+        setInterval(show, 1000);
+
+        copy.onclick = function() {
+          var all = ['OpenJKDF2 frame times, ' + new Date().toISOString()].concat(lines(),
+                     ['Page: ' + location.href.split('#')[0], 'User agent: ' + navigator.userAgent]).join('\n');
+          var done = function() { copy.textContent = 'Copied'; setTimeout(function() { copy.textContent = 'Copy results'; }, 1500); };
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(all).then(done, function() { selectText(text); });
+          } else {
+            selectText(text);
+          }
+        };
+        reset.onclick = function() {
+          session = frameTally();
+          sessionStart = performance.now();
+          show();
+        };
+      })();
     </script>
   </body>
 </html>
