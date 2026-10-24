@@ -117,6 +117,11 @@ static jkGuiMenu jkGuiDisplay_menuAdvanced = { jkGuiDisplay_aElementsAdvanced, 0
 void jkGuiDisplay_Startup()
 {
     flex32_t ftmp;
+#ifndef TARGET_CAN_JKGM
+    // Added: jkgfxmod isn't built in, so its box would do nothing
+    jkGuiDisplay_aElementsAdvanced[9].bIsVisible = 0;
+    jkGuiDisplay_aElementsAdvanced[10].rect.y = 150;
+#endif
     jkGui_InitMenu(&jkGuiDisplay_menu, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
     jkGui_InitMenu(&jkGuiDisplay_menuAdvanced, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
     jkGuiDisplay_aElements[24].wstr = render_level;
