@@ -1616,10 +1616,18 @@ int sithKeyRetarget_LoadEntry(const char* pName, char* pPath, rdKeyframe* pKeyfr
 {
     char name[RT_NAME_LEN];
 
-    if (sithKeyRetarget_FindKey(pName) >= 0)
-        return sithKeyRetarget_Build(pName, pKeyframe);
     // The name can be in a line buffer that loading reuses
     stdString_SafeStrCopy(name, pName, sizeof(name));
+    if (sithKeyRetarget_FindKey(name) >= 0)
+    {
+        if (sithKeyRetarget_Build(name, pKeyframe))
+            return 1;
+        // A key the recipe can't make loads from its file if there is one, so it still takes
+        // its place in the world's key list. A mod can ship stand-ins for the keys it makes, which
+        // games without the recipe load too, so every game numbers the keys after them the same
+        // way and a key sent over the network by its number is the same key on every machine.
+        stdPlatform_Printf("OpenJKDF2: Key retarget: loading `%s` from its file instead\n", name);
+    }
     if (!rdKeyframe_LoadEntry(pPath, pKeyframe))
         return 0;
     sithKeyRetarget_AddMarkers(name, pKeyframe);
