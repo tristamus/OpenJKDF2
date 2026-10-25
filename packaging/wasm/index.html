@@ -3332,8 +3332,9 @@
           var lines = [];
           for (var x = 0; x < on.length; x++) {
             for (var y = x + 1; y < on.length; y++) {
-              var paths = clashes[on[x].index + ',' + on[y].index];
-              if (paths)
+              // Their ui/jkstrings.uni are put together (mergedStrings).
+              var paths = (clashes[on[x].index + ',' + on[y].index] || []).filter(function(p) { return p !== STRINGS_PATH; });
+              if (paths.length)
                 lines.push(on[x].name + ' and ' + on[y].name + ' both change ' +
                            (paths.length === 1 ? paths[0] + '. ' + on[x].name + "'s version is used"
                                                : paths.length + ' files, such as ' + paths[0] + '. ' + on[x].name + "'s versions are used") +
@@ -3476,14 +3477,123 @@
         return names[0].substring(0, 50) + ' + ' + (names.length - 1) + ' more';
       }
 
+      // ui/jkstrings.uni is the game's text for its menus: the names of the
+      // actions in Setup's Controls, of the weapons, the skins and so on. The
+      // engine reads one copy, the first it finds. A mod that adds an action
+      // or a skin ships the game's copy with its lines added, so of two such
+      // mods only the higher one's lines show: below a skin pack, SBX's
+      // actions are missing from Controls and can't be bound. So when two or
+      // more ticked mods have a copy, the set gets one with all their lines.
+      // Each is the highest mod's that changes it from the game's own copy,
+      // so a mod that ships a line as the game has it doesn't undo another
+      // mod's change to it.
+      var STRINGS_PATH = 'ui/jkstrings.uni';
+
+      // A string table as stdStrTable_Load reads it: the 'MSGS n' line, then
+      // up to n lines of "key" number "text" until END, skipping comments
+      // and blank lines. A key's first line is the one used. Each line is
+      // kept as it is, in Latin-1, which keeps every byte. null when the
+      // engine couldn't read it either.
+      function readStrings(bytes) {
+        var text = '';
+        for (var i = 0; i < bytes.length; i += 8192)
+          text += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        var lines = text.split('\n').filter(function(l) {
+          var t = l.replace(/^\s+/, '');
+          return t && t[0] !== '#';
+        });
+        var head = lines.length ? /^MSGS\s*([+-]?\d+)/.exec(lines[0]) : null;
+        if (!head) return null;
+        var table = { keys: [], lines: new Map(), texts: new Map() };
+        for (var n = 1; n <= +head[1] && n < lines.length; n++) {
+          var line = lines[n].replace(/\r$/, '');
+          if (/^end/i.test(line)) break;
+          var m = /"([^"]*)"[^"]*(?:"([^"]*)")?/.exec(line);
+          if (!m || table.lines.has(m[1])) continue;
+          table.keys.push(m[1]);
+          table.lines.set(m[1], line);
+          table.texts.set(m[1], m[2] || '');
+        }
+        return table;
+      }
+
+      // The set's ui/jkstrings.uni, as { data, mod, mods }: the highest
+      // mod with a copy, and every mod whose copy is in it. null when fewer
+      // than two of the ticked mods have one, or theirs are all the same.
+      async function mergedStrings(picked, files, ext) {
+        async function fromGob(file) {
+          var table = await gobTable(file);
+          var g = table && table.find(function(g) {
+            return g.name.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase() === STRINGS_PATH;
+          });
+          return g ? new Uint8Array(await file.slice(g.offset, g.offset + g.size).arrayBuffer()) : null;
+        }
+        function isGob(e) {
+          var lower = e.rel.toLowerCase();
+          return lower.indexOf('/') < 0 && lower.endsWith(ext);
+        }
+        function byPath(key) {
+          return function(a, b) { return key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0; };
+        }
+        // Each ticked mod's copy, highest first: its loose file, which the
+        // engine reads before any GOB, or else its first GOB's, in the order
+        // the set lists them.
+        var copies = [];
+        for (var o of picked) {
+          var mine = files.filter(function(e) { return e.mod === o.index; });
+          var loose = mine.find(function(e) { return e.rel.toLowerCase() === STRINGS_PATH; });
+          var bytes = loose ? loose.data : null;
+          var gobs = mine.filter(isGob).sort(byPath(function(e) { return e.rel; }));
+          for (var k = 0; !bytes && k < gobs.length; k++) bytes = await fromGob(gobs[k].file);
+          var table = bytes && readStrings(bytes);
+          if (table) copies.push({ mod: o.index, table: table, bytes: bytes });
+        }
+        if (copies.length < 2 || copies.every(function(c) {
+          var a = c.bytes, b = copies[0].bytes;
+          return a.length === b.length && a.every(function(x, i) { return x === b[i]; });
+        })) return null;
+        // The game's own copy, from its GOBs in resource/.
+        var base = null;
+        var own = files.filter(function(e) {
+          var parts = e.path.toLowerCase().split('/');
+          return e.mod === undefined && parts.length === 2 && parts[0] === 'resource' && parts[1].endsWith(ext);
+        }).sort(byPath(function(e) { return e.path.toLowerCase(); }));
+        for (var e of own) {
+          var b = await fromGob(e.file);
+          if (b && (base = readStrings(b))) break;
+        }
+        // The game's lines in its order, then each mod's new ones.
+        var tables = (base ? [base] : []).concat(copies.map(function(c) { return c.table; }));
+        var keys = [], seen = new Set(), lines = [];
+        for (var t of tables) {
+          for (var key of t.keys) {
+            if (!seen.has(key)) {
+              seen.add(key);
+              keys.push(key);
+            }
+          }
+        }
+        for (var key of keys) {
+          var was = base ? base.texts.get(key) : undefined;
+          var c = copies.find(function(c) { return c.table.texts.has(key) && c.table.texts.get(key) !== was; });
+          lines.push(c ? c.table.lines.get(key) : base.lines.get(key));
+        }
+        var text = "# The ticked mods' copies put together by the page, for its set of them.\r\n" +
+                   'MSGS ' + lines.length + '\r\n\r\n' + lines.join('\r\n') + '\r\n\r\nEND\r\n';
+        var data = new Uint8Array(text.length);
+        for (var i = 0; i < text.length; i++) data[i] = text.charCodeAt(i);
+        return { data: data, mod: copies[0].mod, mods: copies.map(function(c) { return c.mod; }) };
+      }
+
       // The ticked mods as one folder, since the engine takes one -path, as
       // [{ rel, data }]. The higher a mod is in the list, the more it wins:
       // its GOBs are numbered first, because the engine looks in GOBs in the
       // order they were added, and a lower mod's loose file is left out when
       // a higher mod has that file, because the engine reads loose files
       // before any GOB. A GOB that's an exact copy of one already in is left
-      // out. files carry .mod (the mod's index), .rel and .data, and so does
-      // what comes back.
+      // out. ui/jkstrings.uni is the mods' copies put together, as a loose
+      // file (mergedStrings), with .mods, the mods it's from. files carry
+      // .mod (the mod's index), .rel and .data, and so does what comes back.
       async function setFiles(picked, files, contents, ext) {
         var out = [], taken = {}, spelling = {}, gobs = [];
         var hash = typeof crypto !== 'undefined' && !!crypto.subtle;
@@ -3526,6 +3636,15 @@
               add(e.rel, e.data, i);
             }
           }
+        }
+        var strings = await mergedStrings(picked, files, ext);
+        if (strings) {
+          var at = out.findIndex(function(e) { return e.rel.toLowerCase() === STRINGS_PATH; });
+          if (at < 0) {
+            add(STRINGS_PATH, strings.data, strings.mod);
+            at = out.findIndex(function(e) { return e.rel.toLowerCase() === STRINGS_PATH; });
+          }
+          if (at >= 0) out[at] = { rel: out[at].rel, data: strings.data, mod: strings.mod, mods: strings.mods };
         }
         return out;
       }
@@ -3720,7 +3839,9 @@
         } else if (picked && picked.length > 1) {
           var set = await setFiles(picked, files, found.contents, ext);
           lap('putting mods together');
-          var from = picked.filter(function(o) { return set.some(function(e) { return e.mod === o.index; }); });
+          var from = picked.filter(function(o) {
+            return set.some(function(e) { return e.mod === o.index || (e.mods && e.mods.indexOf(o.index) >= 0); });
+          });
           if (from.length === 1) {
             start = from[0];
           } else if (from.length > 1) {

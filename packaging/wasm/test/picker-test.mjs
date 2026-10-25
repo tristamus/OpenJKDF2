@@ -736,6 +736,127 @@ test('kept folders are kept per game, and forgotten', async () => {
     assert.deepEqual((await store.all()).map(f => f.game), ['mots']);
 });
 
+// ---- Several ticked mods put together in one folder (setFiles), their
+// ui/jkstrings.uni with them.
+const { findClashes, setFiles, readStrings } = new Function(
+    cut('      // ---- Which files each mod changes', '      function wrongGameText') +
+    '\nreturn { findClashes, setFiles, readStrings };')();
+
+// A string table as the game's are laid out, in Latin-1.
+const uni = (lines) => Buffer.from('# made up\r\nMSGS ' + lines.length + '\r\n\r\n' +
+    lines.map(([k, v]) => `   "${k}"   0 "${v}"`).join('\r\n') + '\r\n\r\nEND\r\n', 'latin1');
+const stringsGob = (lines) => gob('ui\\jkstrings.uni', uni(lines));
+// The game's own, a skin pack's (the game's lines as they are, one changed,
+// and its skins), SBX's (labels changed, its actions added) and an add-on
+// to SBX (SBX's and one more action), as Continuum, SBX-JK and SBX Dual
+// Sabers were on 25 Oct 2026.
+const GAME_STRINGS = [['SELECT5', 'Bowcaster'], ['ACTIVATE14', 'Bacta Tank'], ['FIRE1', 'Fire'], ['KY', 'Katarn']];
+const SKIN_STRINGS = [['SELECT5', 'Bowcaster'], ['ACTIVATE14', 'Bacta Tank'], ['FIRE1', 'Fire'], ['KY', 'Kyle Katarn'],
+                      ['PADME', 'Padmé']];
+const SBX_STRINGS = [['SELECT5', 'Sith Lightsaber'], ['ACTIVATE14', 'Force Saber Throw'], ['FIRE1', 'Fire'], ['KY', 'Kyle'],
+                     ['ACTIVATE17', 'Evasion/Kick'], ['ACTIVATE19', 'Lightsaber Stance']];
+const ADDON_STRINGS = [...SBX_STRINGS, ['ACTIVATE20', 'Dual Sabers']];
+
+// The set made from a folder with every mod in it ticked, highest first.
+async function putTogether(extra) {
+    const folder = { ...Object.fromEntries(install.map(p => [p, null])), ...extra };
+    const files = Object.entries(folder).map(([path, bytes]) => ({
+        path, file: new Blob([bytes || (/\.gob$/i.test(path) ? gob('x', path) : Buffer.from(path))]) }));
+    // In the order onFolderPicked takes them.
+    const mods = detectMods(files, false);
+    const found = await findClashes(mods, files, '.gob');
+    placeModFiles(files, mods);
+    for (const e of files)
+        e.data = new Uint8Array(await e.file.arrayBuffer());
+    const set = await setFiles(mods.map((m, i) => ({ index: i, name: m.name, path: m.path })), files, found.contents, '.gob');
+    return { mods: mods.map(m => m.name), clashes: found.clashes, set };
+}
+const setStrings = (set) => set.filter(e => e.rel.toLowerCase() === 'ui/jkstrings.uni');
+
+test("the ticked mods' jkstrings.uni are put together, so a skin pack above SBX doesn't hide its actions", async () => {
+    const { mods, clashes, set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/continuum.gob': stringsGob(SKIN_STRINGS),
+        'resource/SBX Dual Sabers.gob': stringsGob(ADDON_STRINGS),
+        'resource/SBX-JK v31.gob': stringsGob(SBX_STRINGS),
+    });
+    assert.deepEqual(mods, ['continuum', 'SBX Dual Sabers', 'SBX-JK v31']);
+    assert.ok(clashes['0,1'].includes('ui/jkstrings.uni'));
+    assert.deepEqual(set.filter(e => e.rel.endsWith('.gob')).map(e => e.rel),
+                     ['001-continuum.gob', '002-SBX Dual Sabers.gob', '003-SBX-JK v31.gob']);
+    const loose = setStrings(set);
+    assert.equal(loose.length, 1);
+    assert.equal(loose[0].mod, 0);
+    assert.deepEqual(loose[0].mods, [0, 1, 2]);
+    const table = readStrings(loose[0].data);
+    assert.deepEqual(Object.fromEntries(table.texts), {
+        // The skin pack has the game's lines as they are, so SBX's changes
+        // stand; its own change wins, since it's higher.
+        SELECT5: 'Sith Lightsaber', ACTIVATE14: 'Force Saber Throw', FIRE1: 'Fire', KY: 'Kyle Katarn',
+        PADME: 'Padmé', ACTIVATE17: 'Evasion/Kick', ACTIVATE19: 'Lightsaber Stance', ACTIVATE20: 'Dual Sabers',
+    });
+    // The count is right, so the engine reads every line and finds END.
+    const text = Buffer.from(loose[0].data).toString('latin1');
+    assert.match(text, /^# [^\r\n]*\r\nMSGS 8\r\n/);
+    assert.match(text, /\r\nEND\r\n$/);
+    // Each line is the mod's own, byte for byte.
+    assert.ok(Buffer.from(loose[0].data).includes(Buffer.from('   "PADME"   0 "Padmé"', 'latin1')));
+});
+
+test('with one ticked mod that has jkstrings.uni, or copies of one, it is left as it is', async () => {
+    const one = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/Maps.gob': gob('jkl\\a.jkl', 'a'),
+        'resource/SBX-JK v31.gob': stringsGob(SBX_STRINGS),
+    });
+    assert.deepEqual(setStrings(one.set), []);
+    const copies = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/A.gob': makeGob([{ name: 'ui\\jkstrings.uni', bytes: uni(SBX_STRINGS) }, { name: 'cog\\a.cog', bytes: Buffer.from('a') }]),
+        'resource/B.gob': makeGob([{ name: 'ui\\jkstrings.uni', bytes: uni(SBX_STRINGS) }, { name: 'cog\\b.cog', bytes: Buffer.from('b') }]),
+    });
+    assert.deepEqual(setStrings(copies.set), []);
+});
+
+test("a mod's loose jkstrings.uni is its copy, and the set's takes its place", async () => {
+    const { mods, set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'Skins/ui/jkstrings.uni': uni(SKIN_STRINGS),
+        'Skins/3do/padme.3do': Buffer.from('3do'),
+        'resource/SBX-JK v31.gob': stringsGob(SBX_STRINGS),
+    });
+    assert.deepEqual(mods, ['Skins', 'SBX-JK v31']);
+    const loose = setStrings(set);
+    assert.deepEqual(loose.map(e => e.rel), ['ui/jkstrings.uni']);
+    assert.equal(readStrings(loose[0].data).texts.get('ACTIVATE17'), 'Evasion/Kick');
+    assert.equal(readStrings(loose[0].data).texts.get('PADME'), 'Padmé');
+});
+
+test('two mods that differ only in jkstrings.uni still make a set, which has both', async () => {
+    const { mods, set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'Skins/ui/jkstrings.uni': uni(SKIN_STRINGS),
+        'Names/ui/jkstrings.uni': uni(SBX_STRINGS),
+    });
+    assert.deepEqual(mods, ['Names', 'Skins']);
+    // Names's copy alone would leave Skins out of the set (onFolderPicked
+    // starts with the only mod that adds anything); the one put together is
+    // from both.
+    const loose = setStrings(set);
+    assert.deepEqual(set.map(e => e.rel), ['ui/jkstrings.uni']);
+    assert.deepEqual(loose[0].mods, [0, 1]);
+    assert.equal(readStrings(loose[0].data).texts.get('PADME'), 'Padmé');
+    assert.equal(readStrings(loose[0].data).texts.get('KY'), 'Kyle');
+});
+
+test('a string table is read as the engine reads it', () => {
+    const table = readStrings(Buffer.from('# c\r\n\r\nMSGS 3\r\n  # c\r\n"A" 0 "one"\r\n"A" 0 "again"\r\n\r\n"B"\t5\t"two"\r\n"C" 0 "past the count"\r\nEND\r\n', 'latin1'));
+    assert.deepEqual(table.keys, ['A', 'B']);
+    assert.equal(table.texts.get('A'), 'one');
+    assert.equal(table.texts.get('B'), 'two');
+    assert.equal(readStrings(Buffer.from('"A" 0 "no count"\r\n')), null);
+});
+
 let failed = 0;
 for (const t of tests) {
     try {
