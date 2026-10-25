@@ -681,9 +681,21 @@ static void Window_WasmKeepPointerLock()
     Window_bWasmHadPointerLock = bLocked;
 }
 
+// Added: Firefox can grant a lock after the game has already let go of the
+// mouse (it ignores a release that comes before the lock is granted), and SDL,
+// thinking it's free, never lets go again. The cursor stays hidden in the menu.
+EM_JS(int, Window_wasmFreeStrayPointerLock, (), {
+  if (document.pointerLockElement !== Module.canvas) return 0;
+  document.exitPointerLock();
+  return 1;
+});
+
 // Every frame the game frees the mouse itself.
 static void Window_WasmPointerLockReleased()
 {
+    if (Window_wasmFreeStrayPointerLock())
+        stdPlatform_Printf("Mouse: the browser locked it after the game let go, freeing it\n");
+
     Window_bWasmHadPointerLock = 0;
     Window_bWasmSentEsc = 0;
     Window_bWasmMoveLocked = 0; // Added
