@@ -61,6 +61,10 @@ jobs:
       # default binds, read from the sources.
       - name: Test keys and default binds
         run: node packaging/wasm/test/keys-test.mjs
+      # Frame times read from the game, the slow-frame note and ?bench, with
+      # made-up frames and browsers.
+      - name: Test frame times, the slow-frame note and ?bench
+        run: node packaging/wasm/test/frames-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

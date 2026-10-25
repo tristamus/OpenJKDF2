@@ -482,6 +482,79 @@ test('several mods ticked together are one mod to a joiner, named by the first',
     assert.deepEqual(filesUnder(vanilla, '/jk1/' + vanilla.jkMods.restart())['cog/alpha.cog'], Buffer.from('alpha'));
 });
 
+// ---- Graphics packs (index.html's OPTIONAL_PACKS): each player's own, in
+// mods/, which the engine loads whatever mod the game runs.
+
+const hdPack = makeGob([{ name: '3do\\ky.3do', bytes: randomBytes(9000) }, { name: 'mat\\kyhd.mat', bytes: randomBytes(4000) }]);
+const HD_AT = '/jk1/mods/001-JK HD Models.gob';
+
+// A tab whose player ticked JK HD Models, as the page starts it.
+function withHd(tab) {
+    tab.jkGraphicsPacks = ['JK HD Models'];
+    return tab;
+}
+
+// What core.ui.notice was asked to show.
+function notices(tab) {
+    const out = [];
+    tab.jkMaps.core.ui.notice = (heading, name, text) => out.push({ heading, name, text });
+    return out;
+}
+
+test('a host\'s graphics pack is left out of its mod: the same tail as without it', async () => {
+    const plain = await sbxHost();
+    const hd = withHd(await sbxHost({ [HD_AT]: hdPack }));
+    assert.equal(tailOf(hd), tailOf(plain));
+    assert.equal(tailOf(withHd(await makeTab({ files: { ...retailInstall, [HD_AT]: hdPack } }))), '');
+});
+
+test('players with and without a graphics pack join each other\'s games without mods straight away', async () => {
+    const hdHost = withHd(await makeTab({ files: { ...retailInstall, [HD_AT]: hdPack } }));
+    const plain = await makeTab({ files: { ...retailInstall } });
+    let link = connect(hdHost, plain);
+    assert.equal(plain.jkMods.describe(tailOf(hdHost)), '');
+    plain.jkMods.fetch(tailOf(hdHost));
+    assert.equal(await waitMod(plain), STATE_READY);
+    assert.equal(link.log.length, 0);
+
+    const hdJoin = withHd(await makeTab({ files: { ...retailInstall, [HD_AT]: hdPack } }));
+    link = connect(plain, hdJoin);
+    assert.equal(hdJoin.jkMods.describe(tailOf(plain)), 'Your graphics pack stays on');
+    hdJoin.jkMods.fetch(tailOf(plain));
+    assert.equal(await waitMod(hdJoin), STATE_READY);
+    assert.equal(link.log.length, 0);
+    assert.ok(hdJoin.FS.files.has(HD_AT));
+});
+
+test('a joiner with a graphics pack gets only the host\'s mod, and keeps the pack through the restart', async () => {
+    const host = withHd(await sbxHost({ [HD_AT]: hdPack }));
+    const join = withHd(await makeTab({ files: { ...retailInstall, [HD_AT]: hdPack } }));
+    const shown = notices(join);
+    connect(host, join);
+    host.jkMods.host();
+    await settle();
+    assert.equal(join.jkMods.describe(tailOf(host)), 'Mod: SBX (the game restarts to load it)');
+    join.jkMods.fetch(tailOf(host));
+    assert.equal(await waitMod(join), STATE_RESTART);
+    const path = join.jkMods.restart();
+    assert.deepEqual(Object.keys(filesUnder(join, '/jk1/' + path)).sort(), sbxWanted);
+    assert.deepEqual(join.FS.files.get(HD_AT), new Uint8Array(hdPack));
+    const last = shown[shown.length - 1];
+    assert.equal(last.heading, "Restarting with the host's mod");
+    assert.match(last.text, /Your graphics pack, JK HD Models, stays on\./);
+
+    // And back to a host without a mod: the mod goes, the packs stay.
+    const plainHost = await makeTab({ files: { ...retailInstall } });
+    connect(plainHost, join);
+    join.jkMods.fetch(tailOf(plainHost));
+    assert.equal(await waitMod(join), STATE_RESTART);
+    assert.equal(join.jkMods.restart(), '');
+    assert.match(shown[shown.length - 1].text, /without yours\. Your graphics pack, JK HD Models, stays on\./);
+    assert.ok(join.FS.files.has(HD_AT));
+    join.jkGraphicsPacks = ['JK HD Models', 'JKE'];
+    assert.equal(join.jkMods.describe(''), 'Your graphics packs stay on');
+});
+
 // ---- The MotS Remastered pack, which the engine loads from mods/ for
 // whoever has it.
 

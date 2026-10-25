@@ -16,14 +16,16 @@ function cut(from, to) {
     assert.ok(a > 0 && b > a, 'index.html has ' + from);
     return html.substring(a, b);
 }
-const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore,
-        whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge,
-        REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey } = new Function(
+const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, filesToSave,
+        gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge,
+        REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
-    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, filesToSave, gameFileStore, ' +
-    'whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge, ' +
-    'REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey };')();
+    '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, ' +
+    'filesToSave, gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, ' +
+    'keptMerge, REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows };')();
+const { checkGraphicsPack } = new Function(
+    cut('      async function gobTable', '      async function modContents') + '\nreturn { checkGraphicsPack };')();
 
 const gob = (name, text) => makeGob([{ name, bytes: Buffer.from(text) }]);
 const install = ['episode/JK1.gob', 'episode/JK1CTF.gob', 'episode/JK1MP.gob', 'resource/Res1hi.gob', 'resource/Res2.gob'];
@@ -132,6 +134,83 @@ test('the MotS Remastered pack is loaded like the game, not listed', () => {
 test('MotS mods are still listed next to it', () => {
     assert.deepEqual(listMots(pickMots({ 'mods/More.goo': null, 'resource/Saber.goo': null, 'SBX/sbx.goo': null })),
                      ['SBX (SBX)', 'More (mods)', 'Saber (resource)']);
+});
+
+// ---- Graphics packs: optional by their file name alone (OPTIONAL_PACKS).
+
+const optional = (files, mots = false) => detectMods(files, mots).filter(m => m.optional).map(m => m.name + ' (' + m.from + ')');
+
+test('JKE.GOB, JKR.GOB and JK HD Models.gob are graphics packs in any case, listed last', () => {
+    const files = pick({ 'mods/JK HD Models.gob': null, 'resource/jke.gob': null, 'mod/JKR.GOB': null, 'mod/Other.gob': null,
+                         'SBX/sbx.gob': null, 'mods/Blade.gob': null });
+    assert.deepEqual(list(files), ['Other (mod)', 'SBX (SBX)', 'Blade (mods)',
+                                   'JKR (mod)', 'JK HD Models (mods)', 'jke (resource)']);
+    assert.deepEqual(optional(files), ['JKR (mod)', 'JK HD Models (mods)', 'jke (resource)']);
+    // Numbered in list order, like every mod.
+    assert.deepEqual(detectMods(files, false).map(m => m.path.split('-')[0]),
+                     [0, 1, 2, 3, 4, 5].map(i => 'jkmods/' + i));
+});
+
+test('a folder that holds only a named pack is one, and one with more files is a mod like any other', () => {
+    assert.deepEqual(optional(pick({ 'HD/JK HD Models.gob': null, 'HD/readme.txt': null })), ['HD (HD)']);
+    assert.deepEqual(optional(pick({ 'HD/JK HD Models.gob': null, 'HD/cog/x.cog': null })), []);
+    assert.deepEqual(optional(pick({ 'HD/JK HD Models.gob': null, 'HD/x.gob': null })), ['JK HD Models (HD)']);
+});
+
+test('only those names are graphics packs, and only for Jedi Knight', () => {
+    assert.deepEqual(optional(pick({ 'mods/JK HD Models SP.gob': null, 'mods/JKE2.gob': null, 'mods/HD Models.gob': null })), []);
+    assert.deepEqual(optional(pickMots({ 'mods/jke.goo': null, 'mods/JK HD Models.goo': null })), []);
+});
+
+test('ticked graphics packs go to mods/ in list order, and the other ticked mods are what the host shares', () => {
+    const files = pick({ 'mods/JK HD Models.gob': null, 'mod/JKE.GOB': null, 'mod/A.gob': null, 'SBX/sbx.gob': null,
+                         'SBX/cog/x.cog': null });
+    const mods = detectMods(files, false);
+    placeModFiles(files, mods);
+    const at = name => mods.findIndex(m => m.name === name);
+    const option = name => ({ index: at(name), name });
+    const picked = [option('SBX'), option('JKE'), option('JK HD Models')];
+    const split = placeGraphicsPacks(picked, mods, files);
+    assert.deepEqual(split.mods.map(o => o.name), ['SBX']);
+    assert.deepEqual(split.packs.map(o => o.name), ['JKE', 'JK HD Models']);
+    const paths = files.map(e => e.path);
+    assert.ok(paths.includes('mods/001-JKE.GOB'), paths.join(', '));
+    assert.ok(paths.includes('mods/002-JK HD Models.gob'), paths.join(', '));
+    assert.ok(paths.includes(mods[at('SBX')].path + '/cog/x.cog'));
+    // An unticked one stays in its own folder, where the engine doesn't look.
+    const alone = pick({ 'mods/JK HD Models.gob': null, 'mod/JKE.GOB': null, 'mod/B.gob': null });
+    const aloneMods = detectMods(alone, false);
+    placeModFiles(alone, aloneMods);
+    const jke = aloneMods.findIndex(m => m.name === 'JKE');
+    assert.deepEqual(placeGraphicsPacks([{ index: jke, name: 'JKE' }], aloneMods, alone).packs.length, 1);
+    assert.ok(alone.some(e => e.path === 'mods/001-JKE.GOB'));
+    assert.ok(alone.some(e => e.path.startsWith('jkmods/') && e.path.endsWith('/JK HD Models.gob')));
+    // A saved set is one host's mods, packs and all.
+    const saved = { name: 'Saved', path: 'netmods/0123456789abcdef', saved: true };
+    assert.deepEqual(placeGraphicsPacks([saved], aloneMods, alone), { mods: [saved], packs: [] });
+});
+
+test('a graphics pack with more than textures and models says so in the console, and still loads', async () => {
+    const warned = [];
+    const warn = console.warn;
+    console.warn = (...a) => { warned.push(a.join(' ')); };
+    try {
+        const pure = new Blob([makeGob([{ name: 'mat\\kyle.mat', bytes: Buffer.from('m') },
+                                        { name: '3do\\ky.3do', bytes: Buffer.from('k') },
+                                        { name: 'readme.txt', bytes: Buffer.from('r') }])]);
+        assert.deepEqual(await checkGraphicsPack('JK HD Models', pure), []);
+        assert.equal(warned.length, 0);
+        const mixed = new Blob([makeGob([{ name: 'mat\\kyle.mat', bytes: Buffer.from('m') },
+                                         { name: 'cog\\kyle.cog', bytes: Buffer.from('c') },
+                                         { name: 'sound\\hit.wav', bytes: Buffer.from('s') }])]);
+        assert.deepEqual(await checkGraphicsPack('JKE', mixed), ['cog/kyle.cog', 'sound/hit.wav']);
+        assert.equal(warned.length, 1);
+        assert.match(warned[0], /JKE also has 2 files besides textures and models.*cog\/kyle\.cog, sound\/hit\.wav/);
+        // A file that isn't a GOB has nothing to say.
+        assert.deepEqual(await checkGraphicsPack('JKR', new Blob([Buffer.from('not a gob')])), []);
+    } finally {
+        console.warn = warn;
+    }
 });
 
 // The page's memory of which mods were left unticked, with a stand-in for
@@ -251,7 +330,9 @@ const STEAM_MOTS = Object.fromEntries([
     'Player/steam_autocloud.vdf', 'Resource/Backup Sounds/JKMSNDLO.GOO', 'Resource/JKMRES.GOO', 'Resource/JKMsndLO.goo',
     'Resource/JK_.CD', 'Resource/VIDEO/CUTSCENES.ZIP', 'Resource/VIDEO/S1L1OCS.SAN', 'Resource/ui/BM/bkmain.bm',
     'Resource/ui/credits.uni', 'doc/config.md', 'jkgm/materials/SABER19/saber19.mat.saber.albedo.png',
-    'jkgm/materials/MOTSGFXEXT1/metadata.json', 'jkgm/shaders/menu.frag', 'jkmcutscenes/JKM4B.GOO',
+    'jkgm/materials/SABER19/metadata.json', 'jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png',
+    'jkgm/materials/MOTSGFXEXT1/metadata.json', 'jkgm/materials/motsnup/jkmnup.bar.png', 'jkgm/shaders/menu.frag',
+    'jkmcutscenes/JKM4B.GOO',
 ].map(p => [p, null]));
 
 test('a Steam Jedi Knight folder reads only the game files and characters', async () => {
@@ -263,12 +344,15 @@ test('a Steam Jedi Knight folder reads only the game files and characters', asyn
 
 test('a Steam MotS folder with the Remastered pack leaves its textures, backups and docs unread', async () => {
     const { read, players, mods } = await whatIsRead(STEAM_MOTS, { mots: true });
+    // Of jkgm/, only the muzzle-flash glows' folder.
     assert.deepEqual(read, [
         'Controls/MS SIDEWINDER GAMEPAD.CTM', 'Episode/JKM.GOO', 'Episode/JKM/cog/s1l1_endlevel.cog', 'Episode/JKM_KFY.GOO',
         'Episode/JKM_MP.GOO', 'Episode/JKM_SABER.GOO', 'Episode/MotS Secret Level/3do/mat/vader_cape.mat',
         'Episode/MotS Secret Level/episode.jk', 'Episode/MotS Secret Level/jkl/S6L1.jkl',
         'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo', 'Resource/JKMRES.GOO',
-        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni'].sort());
+        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni',
+        'jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png', 'jkgm/materials/SABER19/metadata.json',
+        'jkgm/materials/SABER19/saber19.mat.saber.albedo.png'].sort());
     assert.deepEqual(players, ['BahamutZero0o/BahamutZero0o.plr', 'BahamutZero0o/Tristamus.mpc']);
     assert.deepEqual(mods, []);
 });
@@ -317,6 +401,69 @@ test("the other game's GOBs aren't read", async () => {
     assert.ok(!mots.read.includes('Episode/stray.gob'));
     const jk = await whatIsRead({ ...STEAM_JK, 'Episode/stray.goo': null });
     assert.ok(!jk.read.includes('Episode/stray.goo'));
+});
+
+test("Jedi Knight doesn't read the muzzle-flash glows, and MotS only their folder's metadata and pictures", async () => {
+    const glows = { 'jkgm/materials/saber19/metadata.json': null, 'jkgm/materials/saber19/a.png': null,
+                    'jkgm/materials/saber19/notes.doc': null, 'jkgm/materials/saber19/old/metadata.json': null,
+                    'jkgm/metadata.json': null };
+    const jk = await whatIsRead({ ...STEAM_JK, ...glows });
+    assert.deepEqual(jk.read, STEAM_JK_READ.slice().sort());
+    const mots = await whatIsRead({ ...STEAM_MOTS, ...glows }, { mots: true });
+    assert.deepEqual(mots.read.filter(p => /^jkgm\/materials\/saber19\//.test(p)),
+                     ['jkgm/materials/saber19/a.png', 'jkgm/materials/saber19/metadata.json']);
+});
+
+// ---- The muzzle-flash glows, as keepFlashGlows has them: the files read,
+// with their paths in the tab.
+const json = (o) => new TextEncoder().encode(JSON.stringify(o));
+const unjson = (b) => JSON.parse(new TextDecoder().decode(b));
+const GLOW_META = {
+    name: 'SABER19', description: 'Saber and Muzzle Flash Mod',
+    materials: [
+        { name: 'jknup.bry_e11.cel1', albedo_map: 'jknup.repeat_flsh.cel0.albedo.png', albedo_factor: [0, 0, 0, 0],
+          emissive_map: 'jknup.bry_e11.cel1.emissive.png', emissive_factor: [34.4, 0.6, 0.9],
+          replaces: [{ cel: 1, name: 'mat/bry_e11.mat' }], replaces_signatures: ['06169e27edb6c713f8b71967f63f7411'] },
+        { name: 'jknup.3rdflsh_blue.cel1', albedo_map: 'jknup.repeat_flsh.cel0.albedo.png',
+          emissive_map: 'jknup.3rdflsh_red.cel2.emissive.png', replaces: [{ cel: 1, name: 'mat/3rdflsh_blue.mat' }] },
+        { name: 'jknup.sabergreen0', albedo_map: 'jknup.sabergreen0.albedo.png',
+          emissive_map: 'jknup.sabergreen0.emissive.png', replaces: [{ cel: 0, name: 'mat/sabergreen0.mat' }] },
+        { name: 'mixed', albedo_map: 'mixed.png', replaces: [{ cel: 0, name: 'mat/bry_e11.mat' }, { cel: 0, name: 'mat/other.mat' }] },
+        { name: 'none', albedo_map: 'none.png', replaces: [] },
+        'not an entry',
+    ],
+};
+function glowFiles(meta, pictures, dir = '/mots/jkgm/materials/SABER19/') {
+    return [{ path: '/mots/episode/JKM_MP.GOO', data: 'goo' }]
+        .concat(meta === undefined ? [] : [{ path: dir + 'metadata.json', data: meta }])
+        .concat(pictures.map(n => ({ path: dir + n, data: 'png ' + n.toLowerCase() })));
+}
+
+test('the glows keep only the muzzle flashes, with the pictures they name', () => {
+    const out = keepFlashGlows(glowFiles(json(GLOW_META), [
+        'jknup.repeat_flsh.cel0.albedo.png', 'jknup.bry_e11.cel1.emissive.png', 'JKNUP.3RDFLSH_RED.CEL2.EMISSIVE.PNG',
+        'jknup.sabergreen0.albedo.png', 'jknup.sabergreen0.emissive.png', 'mixed.png', 'unused.png']), '/mots/');
+    const byPath = Object.fromEntries(out.map(e => [e.path, e.data]));
+    // The folder keeps its own spelling; the pictures take the metadata's,
+    // since the tab's files are case-sensitive.
+    assert.deepEqual(Object.keys(byPath).sort(), ['/mots/episode/JKM_MP.GOO', '/mots/jkgm/materials/SABER19/jknup.3rdflsh_red.cel2.emissive.png',
+        '/mots/jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png', '/mots/jkgm/materials/SABER19/jknup.repeat_flsh.cel0.albedo.png',
+        '/mots/jkgm/materials/SABER19/metadata.json']);
+    assert.equal(byPath['/mots/jkgm/materials/SABER19/jknup.3rdflsh_red.cel2.emissive.png'], 'png jknup.3rdflsh_red.cel2.emissive.png');
+    assert.equal(byPath['/mots/episode/JKM_MP.GOO'], 'goo');
+    const meta = unjson(byPath['/mots/jkgm/materials/SABER19/metadata.json']);
+    assert.deepEqual(meta.materials.map(m => m.name), ['jknup.bry_e11.cel1', 'jknup.3rdflsh_blue.cel1']);
+    assert.deepEqual(meta.materials[0], GLOW_META.materials[0]);
+    assert.equal(meta.name, 'SABER19');
+});
+
+test("without metadata the engine can read, the glows are left out", () => {
+    const only = ['/mots/episode/JKM_MP.GOO'];
+    for (const meta of [undefined, json({}), json({ materials: 'x' }), new TextEncoder().encode('{"materials": ['),
+                        json({ materials: [GLOW_META.materials[2]] })])
+        assert.deepEqual(keepFlashGlows(glowFiles(meta, ['jknup.bry_e11.cel1.emissive.png']), '/mots/').map(e => e.path), only);
+    const none = glowFiles(undefined, []);
+    assert.equal(keepFlashGlows(none, '/mots/'), none);
 });
 
 // ---- jk_.cd, wherever it is in the folder. A player's CD install
@@ -435,7 +582,9 @@ for (const [name, folder, mots, saved] of [
         'Episode/MotS Secret Level/jkl/S6L1.jkl', 'Episode/MotS Secret Level/3do/mat/vader_cape.mat',
         'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo',
         'Player/BahamutZero0o/BahamutZero0o.plr', 'Player/BahamutZero0o/Tristamus.mpc', 'Resource/JKMRES.GOO',
-        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni']],
+        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni',
+        'jkgm/materials/SABER19/saber19.mat.saber.albedo.png', 'jkgm/materials/SABER19/metadata.json',
+        'jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png']],
 ]) {
     test('saving ' + name + ' keeps what is read, and starts the same from the browser', async () => {
         const fileList = folderFiles(folder, mots);
@@ -639,11 +788,15 @@ function asPicked(name, listed) {
 test("a kept folder brings what a picked one does, without opening the folders the game never reads", async () => {
     const dir = folderHandle('Star Wars Jedi Knight Mysteries of the Sith', STEAM_MOTS, { mots: true });
     const listed = await listFolder(dir);
-    const want = Object.keys(STEAM_MOTS).filter(p => !isSkipped(p.toLowerCase()) && !/^jkgm\//.test(p));
+    // Of jkgm/, only the muzzle-flash glows' folder is listed.
+    const want = Object.keys(STEAM_MOTS).filter(p => !isSkipped(p.toLowerCase()) &&
+                                                     (!/^jkgm\//.test(p) || /^jkgm\/materials\/SABER19\//.test(p)));
     assert.deepEqual(listed.map(e => e.path).sort(), want.sort());
-    for (const skipped of ['jkgm/', 'MUSIC/', 'Resource/VIDEO/', 'jkmcutscenes/'])
+    for (const skipped of ['jkgm/shaders/', 'jkgm/materials/MOTSGFXEXT1/', 'jkgm/materials/motsnup/', 'MUSIC/',
+                           'Resource/VIDEO/', 'jkmcutscenes/'])
         assert.ok(!dir.log.listed.includes(skipped), skipped + ' was listed');
-    assert.ok(!dir.log.opened.some(p => /^jkgm|^MUSIC|VIDEO|\.exe$|\.ico$/i.test(p)), dir.log.opened.join(', '));
+    assert.ok(!dir.log.opened.some(p => /^jkgm\/(?!materials\/SABER19\/)|^MUSIC|VIDEO|\.exe$|\.ico$/i.test(p)),
+              dir.log.opened.join(', '));
     // Each folder's files by name, then its folders.
     assert.deepEqual(listed.slice(0, 4).map(e => e.path), ['32390_install.vdf', 'JediKnightM.RPT', 'JKMRemastered.bat',
                                                            'MysteriesOfTheSith.sdb']);

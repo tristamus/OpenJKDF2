@@ -1312,11 +1312,26 @@ int sithDSSThing_ProcessAttachment(SithMessage *pMsg)
             return 0;
         if (v3 & SITH_ATTACH_THINGFACE)
         {
+            // Added: the face is a number in the sender's copy of the model,
+            // which a graphics pack only one player runs can give more faces
+            // (packaging/wasm/index.html, OPTIONAL_PACKS). Past the end of
+            // ours, the thing is attached without a face, as when the model
+            // has no mesh to stand on.
+            int faceIdx = NETMSG_POPS16();
+            rdModel3* pModel = v9->renderData.type == RD_THING_MODEL3 ? v9->renderData.model3 : NULL;
+            rdMesh* pMesh = pModel && pModel->numGeos > 0 && pModel->aGeos[0].numMeshes > 0 ? pModel->aGeos[0].aMeshes : NULL;
+            if (!pMesh || faceIdx < 0 || faceIdx >= pMesh->numFaces)
+            {
+                stdPlatform_Printf("OpenJKDF2: a thing attached to face %d of a model with %d here, so attached without it\n",
+                                   faceIdx, pMesh ? pMesh->numFaces : 0);
+                sithThing_AttachThingToThing(v1, v9);
+                return 1;
+            }
             sithThing_AttachThingToThingFace(
                 v1,
                 v9,
-                &v9->renderData.model3->aGeos[0].aMeshes->faces[NETMSG_POPS16()],
-                v9->renderData.model3->aGeos[0].aMeshes->aVertices,
+                &pMesh->faces[faceIdx],
+                pMesh->aVertices,
                 1);
             v1->attach_flags = v3;
             return 1;

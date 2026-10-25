@@ -36,6 +36,10 @@ static int rdModel3_bMeshColored = 0;
 static flex_t* rdModel3_paColoredLight = NULL;
 static int rdModel3_coloredLightSize = 0;
 
+// Added: while set, rdModel3_LoadEntry reads a model's meshes and nodes but
+// loads none of its materials (for a look at a model that won't be drawn)
+int rdModel3_bSkipMaterials = 0;
+
 static int rdModel3_MeshLightsAreColored()
 {
     for (int i = 0; i < rdModel3_numMeshLights; i++)
@@ -199,6 +203,13 @@ int rdModel3_LoadEntry(char *pFilename, rdModel3 *pModel3)
 
         if ( _sscanf(stdConffile_g_aLine, " %d: %s", &geoset_num, std_g_genBuffer) != 2 )
             goto fail;
+
+        // Added: rdModel3_bSkipMaterials
+        if ( rdModel3_bSkipMaterials )
+        {
+            pModel3->aMaterials[i] = NULL;
+            continue;
+        }
 
         pModel3->aMaterials[i] = rdMaterial_Load(std_g_genBuffer, 0, 0);
 
@@ -706,6 +717,141 @@ fail:
 #endif
     stdConffile_Close();
     return 0;
+}
+
+// Added: whether a node draws anything, in any geoset
+static int rdModel3_NodeHasMesh(const rdModel3* pModel, const rdHierarchyNode* pNode)
+{
+    for (uint32_t i = 0; i < pModel->numGeos; i++)
+    {
+        const rdGeoset* pGeoset = &pModel->aGeos[i];
+        if ( pNode->meshIdx < pGeoset->numMeshes
+             && (pGeoset->aMeshes[pNode->meshIdx].numVertices > 0 || pGeoset->aMeshes[pNode->meshIdx].numFaces > 0) )
+            return 1;
+    }
+    return 0;
+}
+
+// Added: the first num nodes' resting pose (not their pivots) from pOther's
+static void rdModel3_CopyRestPose(rdHierarchyNode* aNodes, const rdModel3* pOther, uint32_t num)
+{
+    for (uint32_t i = 0; i < num; i++)
+    {
+        rdVector_Copy3(&aNodes[i].pos, &pOther->aHierarchyNodes[i].pos);
+        rdVector_Copy3(&aNodes[i].rot, &pOther->aHierarchyNodes[i].rot);
+    }
+}
+
+// Added: a node's parent's number, or -1
+static int rdModel3_ParentIdx(const rdHierarchyNode* pNode)
+{
+    return pNode->parent ? (int)pNode->parent->idx : -1;
+}
+
+// Added: whether pModel can stand in for pOther, another copy of the same
+// model, without moving a node that pOther's puppet, keyframes and scripts
+// point at by its number. It can when pOther has a single node, or pOther's
+// nodes start pModel's (same names, same parents). It can also when every
+// node pOther adds after the ones they share draws nothing: those are then
+// added to pModel under the same numbers, as nodes without a mesh, and
+// pModel's own nodes after the shared ones move up behind them.
+// The shared nodes also take pOther's resting pose, which keyframes are
+// blended from, so the model moves as pOther does; their meshes and pivots
+// stay pModel's.
+// For graphics packs (World/sithModel.c): SBX's Kyle adds two such nodes
+// after the original 18 (its secondary weapon fires from node 19), where
+// the HD pack's Kyle has its hair, and rests with its arms straight where
+// the HD Kyle rests like the original.
+int rdModel3_FitSkeleton(rdModel3* pModel, const rdModel3* pOther)
+{
+    uint32_t numShared = 0, numNodes, i;
+    rdHierarchyNode* aNodes;
+    int parentIdx;
+
+    if ( pOther->numHNodes <= 1 )
+        return 1;
+
+    while ( numShared < pOther->numHNodes && numShared < pModel->numHNodes
+            && !__strcmpi(pModel->aHierarchyNodes[numShared].name, pOther->aHierarchyNodes[numShared].name)
+            && rdModel3_ParentIdx(&pModel->aHierarchyNodes[numShared]) == rdModel3_ParentIdx(&pOther->aHierarchyNodes[numShared]) )
+        numShared++;
+    if ( !numShared )
+        return 0;
+    if ( numShared == pOther->numHNodes )
+    {
+        rdModel3_CopyRestPose(pModel->aHierarchyNodes, pOther, numShared);
+        return 1;
+    }
+    for (i = numShared; i < pOther->numHNodes; i++)
+    {
+        if ( rdModel3_NodeHasMesh(pOther, &pOther->aHierarchyNodes[i]) )
+            return 0;
+    }
+
+    numNodes = pOther->numHNodes + (pModel->numHNodes - numShared);
+    aNodes = (rdHierarchyNode *)RDROID_ALLOC(sizeof(rdHierarchyNode) * numNodes);
+    if ( !aNodes )
+        return 0;
+    _memset(aNodes, 0, sizeof(rdHierarchyNode) * numNodes);
+
+    // Copy the nodes, with each one's parent's new number in idx for now
+    for (i = 0; i < numNodes; i++)
+    {
+        const rdHierarchyNode* pSrc;
+        if ( i < numShared || i >= pOther->numHNodes )
+        {
+            pSrc = &pModel->aHierarchyNodes[i < numShared ? i : i - pOther->numHNodes + numShared];
+            parentIdx = rdModel3_ParentIdx(pSrc);
+            if ( parentIdx >= (int)numShared )
+                parentIdx += pOther->numHNodes - numShared;
+            _memcpy(&aNodes[i], pSrc, sizeof(rdHierarchyNode));
+        }
+        else
+        {
+            pSrc = &pOther->aHierarchyNodes[i];
+            parentIdx = rdModel3_ParentIdx(pSrc);
+            _memcpy(&aNodes[i], pSrc, sizeof(rdHierarchyNode));
+            aNodes[i].meshIdx = (uint32_t)-1;
+        }
+        aNodes[i].idx = (uint32_t)parentIdx;
+    }
+
+    // Then link them up again
+    for (i = 0; i < numNodes; i++)
+    {
+        parentIdx = (int)aNodes[i].idx;
+        aNodes[i].parent = (parentIdx >= 0 && parentIdx < (int)numNodes) ? &aNodes[parentIdx] : NULL;
+        aNodes[i].child = NULL;
+        aNodes[i].nextSibling = NULL;
+        aNodes[i].numChildren = 0;
+    }
+    for (i = 0; i < numNodes; i++)
+    {
+        rdHierarchyNode* pParent = aNodes[i].parent;
+        aNodes[i].idx = i;
+        if ( !pParent )
+            continue;
+        if ( !pParent->child )
+        {
+            pParent->child = &aNodes[i];
+        }
+        else
+        {
+            rdHierarchyNode* pLast = pParent->child;
+            while ( pLast->nextSibling )
+                pLast = pLast->nextSibling;
+            pLast->nextSibling = &aNodes[i];
+        }
+        pParent->numChildren++;
+    }
+
+    rdModel3_CopyRestPose(aNodes, pOther, numShared);
+
+    RDROID_FREE(pModel->aHierarchyNodes);
+    pModel->aHierarchyNodes = aNodes;
+    pModel->numHNodes = numNodes;
+    rdModel3_CalcNumParents(pModel);
+    return 1;
 }
 
 // from editor?

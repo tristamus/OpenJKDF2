@@ -65,6 +65,7 @@ const text = el => el.innerHTML.replace(/<[^>]+>/g, '');
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
+const SAFARI = { ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15' };
 const EDGE = { ua: 'Mozilla/5.0 (Windows NT 10.0) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0',
                brands: ['Microsoft Edge', 'Chromium', 'Not(A:Brand'] };
 
@@ -122,7 +123,17 @@ test('the browser is told apart', () => {
     assert.equal(browser({ brands: ['Google Chrome', 'Chromium'] }).browserKind(), 'chrome');
     assert.equal(browser({ ua: 'Mozilla/5.0 (Windows NT 10.0; rv:140.0) Gecko/20100101 Firefox/140.0' }).browserKind(), 'firefox');
     assert.equal(browser({ brands: ['Brave', 'Chromium'], brave: true }).browserKind(), 'brave');
-    assert.equal(browser({ brands: ['Opera', 'Chromium'], ua: 'Mozilla/5.0 Chrome/120 OPR/106' }).browserKind(), null);
+    assert.equal(browser({ brands: ['Opera', 'Chromium'], ua: 'Mozilla/5.0 Chrome/120 OPR/106' }).browserKind(), 'opera');
+    assert.equal(browser({ brands: ['Opera GX', 'Chromium'], ua: 'Mozilla/5.0 Chrome/120 OPR/106' }).browserKind(), 'operagx');
+    assert.equal(browser({ ua: 'Mozilla/5.0 Chrome/120 Safari/537.36 OPR/106.0' }).browserKind(), 'opera');
+    assert.equal(browser({ brands: ['Chromium'], ua: 'Mozilla/5.0 Chrome/120 Safari/537.36 Vivaldi/7.0' }).browserKind(), null);
+    assert.equal(browser(SAFARI).browserKind(), 'safari');
+    assert.equal(browser({ ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) ' +
+                               'Version/18.0 Mobile/15E148 Safari/604.1' }).browserKind(), 'safari');
+    // Chrome, Firefox and Edge on an iPhone draw with Safari's engine but say who they are.
+    for (const app of ['CriOS/130.0.6723.90', 'FxiOS/132.0', 'EdgiOS/130.0.2849.80'])
+        assert.equal(browser({ ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) ' +
+                                   app + ' Version/18.0 Mobile/15E148 Safari/604.1' }).browserKind(), null, app);
 });
 
 test('nothing shows when acceleration is on', () => {
@@ -169,9 +180,32 @@ test('Chrome, Brave and Firefox get their own steps', () => {
     assert.match(text(el), /Close Firefox completely and open it again/);
 });
 
+test('Opera and Opera GX get their own steps', () => {
+    let el = notice();
+    browser({ brands: ['Opera'], ua: 'Mozilla/5.0 OPR/106' }).showGfxNotice(el, { state: 'software', renderer: 'SwiftShader' });
+    assert.match(text(el), /^Turn on graphics accelerationOpera is drawing without your graphics card/);
+    assert.match(text(el), /opera:\/\/settings\/system.*Click Relaunch\. Then come back to this page/);
+    assert.ok(el.copy, 'has a Copy button');
+    el = notice();
+    browser({ brands: ['Opera GX'], ua: 'Mozilla/5.0 OPR/106' }).showGfxNotice(el, { state: 'software', renderer: 'SwiftShader' });
+    assert.match(text(el), /Opera GX is drawing without your graphics card/);
+    assert.match(text(el), /opera:\/\/settings\/system/);
+});
+
+test('Safari without WebGL 2 is told to update, not to look for a setting', () => {
+    const el = notice();
+    browser(SAFARI).showGfxNotice(el, { state: 'none', renderer: '' });
+    const t = text(el);
+    assert.match(t, /^Update Safari to play/);
+    assert.match(t, /Safari can't draw 3D graphics \(WebGL 2\) right now, and the game needs them\./);
+    assert.match(t, /Safari 15 and later can draw it\. Update macOS, or iOS on an iPhone or iPad/);
+    assert.doesNotMatch(t, /acceleration|graphics driver/);
+    assert.equal(el.copy, null);
+});
+
 test('other browsers get general steps and no address', () => {
     const el = notice();
-    browser({ brands: ['Opera'], ua: 'Mozilla/5.0 OPR/106' }).showGfxNotice(el, { state: 'software', renderer: 'SwiftShader' });
+    browser({ brands: ['Chromium'], ua: 'Mozilla/5.0 Vivaldi/7.0' }).showGfxNotice(el, { state: 'software', renderer: 'SwiftShader' });
     assert.match(text(el), /Your browser is drawing without your graphics card/);
     assert.match(text(el), /search for acceleration/);
     assert.equal(el.copy, null);

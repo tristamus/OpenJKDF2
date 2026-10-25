@@ -196,6 +196,64 @@
         font: bold 13px Arial, Helvetica, sans-serif;
         cursor: pointer;
       }
+      /* Over the top of the game when a level keeps running slowly: what
+         often causes it here. It hides itself after a while. */
+      .slow-note {
+        position: fixed;
+        top: 8px;
+        left: 50%;
+        z-index: 26;
+        box-sizing: border-box;
+        width: min(640px, calc(100% - 32px));
+        transform: translateX(-50%);
+        padding: 8px 40px 8px 14px;
+        background-color: rgba(0, 0, 0, 0.88);
+        color: var(--ink);
+        font: 14px/1.4 Arial, Helvetica, sans-serif;
+      }
+      .slow-note[hidden] { display: none; }
+      .slow-note p { margin: 0; }
+      .slow-note p > b:first-child { color: var(--gold); }
+      .slow-note ul { margin: 6px 0 0; padding-left: 20px; }
+      .slow-note li + li { margin-top: 3px; }
+      .slow-note code { color: var(--gold); user-select: all; }
+      .slow-note .close {
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        padding: 0 8px;
+        border: 0;
+        background: transparent;
+        color: var(--gold);
+        font: bold 20px Arial, Helvetica, sans-serif;
+        cursor: pointer;
+      }
+      /* ?bench: frame times over the game, once it's showing. Only the
+         buttons take clicks. */
+      .bench {
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        z-index: 30;
+        max-width: calc(100% - 16px);
+        padding: 6px 10px;
+        background-color: rgba(0, 0, 0, 0.8);
+        color: var(--ink);
+        font: 12px/1.4 'Lucida Console', Monaco, monospace;
+        pointer-events: none;
+      }
+      html.zone-open .bench { display: none; }
+      .bench pre { margin: 0 0 6px; font: inherit; white-space: pre-wrap; }
+      .bench button {
+        margin-right: 6px;
+        padding: 2px 8px;
+        border: 1px solid var(--gold);
+        background-color: transparent;
+        color: var(--gold);
+        font: bold 12px Arial, Helvetica, sans-serif;
+        cursor: pointer;
+        pointer-events: auto;
+      }
       .key-check .ok { color: var(--live); }
       .key-check .bad { color: var(--bad); }
       .key-check .also { color: var(--gold); }
@@ -618,7 +676,7 @@
       .gfx-notice ol { margin: 0 0 6px; padding-left: 22px; }
       .gfx-notice li { margin-bottom: 4px; }
       .gfx-notice code { font: bold 14px 'Courier New', monospace; color: var(--gold); overflow-wrap: anywhere; }
-      .gfx-notice .copy, .gfx-notice .hide {
+      .gfx-notice .copy, .gfx-notice .hide, .gfx-notice .reload {
         margin-left: 6px;
         padding: 1px 8px;
         border: 2px outset #9cc;
@@ -627,8 +685,23 @@
         font: bold 12px Verdana, Geneva, sans-serif;
         cursor: pointer;
       }
-      .gfx-notice .copy:active, .gfx-notice .hide:active { border-style: inset; }
+      .gfx-notice .copy:active, .gfx-notice .hide:active, .gfx-notice .reload:active { border-style: inset; }
       .gfx-notice .fine { margin: 0; color: var(--muted); font-size: 13px; }
+      .gfx-notice .fine:empty { display: none; }
+
+      /* SDL's error box, which the engine opens just before it stops; when it
+         couldn't get 3D graphics, with steps (showGlRefused). */
+      dialog.SDL3_messagebox {
+        max-width: 600px;
+        padding: 14px 18px;
+        background-color: var(--teal);
+        color: var(--ink);
+        border: 2px outset var(--teal-light);
+        font: 15px Verdana, Geneva, sans-serif;
+      }
+      dialog.SDL3_messagebox::backdrop { background-color: rgba(0, 0, 0, 0.6); }
+      dialog.SDL3_messagebox h1 { margin: 0 0 8px; font: bold 22px Verdana, Geneva, sans-serif; color: var(--gold); }
+      dialog.SDL3_messagebox .gfx-notice { margin: 0 0 12px; }
 
       /* Live counts in Standard Rooms, and Nar Shaddaa's room window, after
          the Zone's room list and its game room client: tables on black, a
@@ -1228,11 +1301,19 @@
               Untick any you don't want, or untick Select all and tick the few you want.
               When two mods change the same file, the one higher in the list is used. Players who join you
               get your mods, except files from the original game, which their browser fills in from their
-              own copy. If you join a game with different mods, the game restarts with those.</p>
+              own copy. If you join a game with different mods, the game restarts with those. Graphics
+              packs (JK HD Models, JKE and JKR) are the exception: each player plays with their own, or
+              none, so they're never sent and they stay on in every game.</p>
           </div>
           <label class="picker-option"><input type="checkbox" id="fullscreen-option" checked>
             <span>Play in fullscreen <span class="fine">The game fills the screen when you click it. Hold Esc to leave
               fullscreen. This browser remembers your choice.</span></span></label>
+          <label class="picker-option" id="raw-mouse-choice" hidden><input type="checkbox" id="raw-mouse-option" checked>
+            <span>Raw mouse input <span class="fine">Mouse look reads the mouse itself, without Windows' pointer speed and
+              Enhance pointer precision, so the view can't suddenly jolt round. Untick it to aim with your Windows mouse
+              settings, acceleration included (quick flicks turn further, slow movements stay fine), or if mouse look
+              doesn't turn at all, as over remote desktop or with a drawing tablet. This browser remembers your
+              choice.</span></span></label>
           <div class="actions">
             <button class="play" type="button">Start</button>
             <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
@@ -1310,6 +1391,28 @@
           // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
           canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
 
+          // Ask for the faster graphics card on laptops that have two. The engine's
+          // context leaves powerPreference at "default", which lets the browser pick
+          // the one that saves power. If the browser won't make that context, it's
+          // asked again just as the engine asked, and if it still says no, the
+          // engine's error box gets steps that help (showGlRefused). The browser's
+          // reason, where it gives one, is kept for that box.
+          canvas.addEventListener('webglcontextcreationerror', function(e) {
+            if (e.statusMessage) Module.jkGlRefused = e.statusMessage;
+          }, false);
+          var getContext = canvas.getContext;
+          canvas.getContext = function(type, attrs) {
+            if (!/^webgl/.test(type)) return getContext.call(this, type, attrs);
+            var gl = null;
+            if (!attrs || !attrs.powerPreference || attrs.powerPreference === 'default') {
+              gl = getContext.call(this, type, Object.assign({}, attrs, { powerPreference: 'high-performance' }));
+              if (!gl) console.warn('Graphics: no ' + type + ' context on the faster graphics card, asking for any');
+            }
+            if (!gl) gl = getContext.call(this, type, attrs);
+            if (!gl && typeof showGlRefused === 'function') showGlRefused();
+            return gl;
+          };
+
           return canvas;
         })(),
         setStatus: function(text) {
@@ -1346,9 +1449,9 @@
       };
       Module.setStatus('Downloading...');
       // The address's options go to the engine, which quits on one it doesn't
-      // know, so keycheck and netlog (the page's own) are left out.
+      // know, so keycheck, netlog and bench (the page's own) are left out.
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length && i.split('=')[0] !== 'keycheck' && i.split('=')[0] !== 'netlog')
+        .filter(i => i.length && ['keycheck', 'netlog', 'bench'].indexOf(i.split('=')[0]) < 0)
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
@@ -1365,6 +1468,81 @@
                       '\n\nPress F12 and open Console for details. Click anywhere to hide this.');
         }
       };
+
+      // ---- Mouse look. Without raw mouse input, Chromium (Chrome, Edge, Opera,
+      // Brave) keeps the hidden cursor away from the page's edges by moving it
+      // back to the middle, and that move can come through as mouse movement:
+      // the view jolts round 90 or 180 degrees. On Windows, raw input reads the
+      // mouse itself, never moves the cursor, and skips Windows' pointer speed
+      // and acceleration, so every lock there asks for it (the engine's and
+      // SDL's both call the canvas's requestPointerLock), and the plain lock
+      // follows if the browser turns it down. Linux has no raw input: there,
+      // and on Windows without it, the engine leaves out the jumps it can tell
+      // (Window_WasmIsMouseJump). macOS, Firefox and Safari don't move the
+      // cursor this way. Module.jkRawMouse.warps says whether this browser
+      // moves it, and .active whether the current lock is raw.
+      var RAW_MOUSE_SETTING = 'jkdf2mp-raw-mouse';
+      var rawMousePlatform = navigator.userAgentData ? navigator.userAgentData.platform : '';
+      var rawMouse = Module.jkRawMouse = { warps: !!navigator.userAgentData && rawMousePlatform !== 'macOS',
+                                           want: true, supported: null, active: false };
+      var rawMouseWindows = rawMousePlatform === 'Windows';
+      var rawMouseOption = document.getElementById('raw-mouse-option');
+      try { rawMouse.want = rawMouseOption.checked = localStorage.getItem(RAW_MOUSE_SETTING) !== 'off'; } catch (e) {}
+      rawMouseOption.addEventListener('change', function() {
+        rawMouse.want = rawMouseOption.checked;
+        try { localStorage.setItem(RAW_MOUSE_SETTING, rawMouseOption.checked ? 'on' : 'off'); } catch (e) {}
+      });
+      document.getElementById('raw-mouse-choice').hidden = !rawMouseWindows;
+      (function() {
+        var canvas = Module.canvas, lock = canvas.requestPointerLock;
+        if (!lock || !rawMouseWindows) return;
+        canvas.requestPointerLock = function(options) {
+          if (!rawMouse.want || rawMouse.supported === false) return lock.call(canvas, options);
+          var request;
+          try {
+            request = lock.call(canvas, { unadjustedMovement: true });
+          } catch (e) {
+            return lock.call(canvas, options);
+          }
+          if (!request || !request.then) return request;
+          var locked = request.then(function() {
+            rawMouse.supported = rawMouse.active = true;
+          }, function(e) {
+            if (!e || e.name !== 'NotSupportedError') throw e;
+            rawMouse.supported = false;
+            return lock.call(canvas, options);
+          });
+          locked.catch(function() {});
+          return locked;
+        };
+        document.addEventListener('pointerlockchange', function() {
+          if (document.pointerLockElement !== canvas) rawMouse.active = false;
+        });
+      })();
+
+      // Opera, with its mouse gestures turned on, keeps the right button's
+      // release from the page while the mouse is locked, and the game went on
+      // holding the button. Every mouse event says which buttons are down, so a
+      // button that went up unseen is let go before the event reaches the game
+      // (SDL takes a button change from any pointer event).
+      (function() {
+        var canvas = Module.canvas, held = 0;
+        var BIT = [1, 4, 2, 8, 16]; // event.button to its bit in event.buttons
+        function check(ev) {
+          if (!ev.isTrusted || ev.pointerType !== 'mouse' || ev.target !== canvas) return;
+          var gone = held & ~ev.buttons;
+          if (ev.button >= 0 && ev.button < BIT.length) gone &= ~BIT[ev.button]; // the event's own change
+          held = ev.buttons;
+          for (var b = 0; b < BIT.length; b++) {
+            if (!(gone & BIT[b])) continue;
+            Module.print('Mouse: button ' + b + ' went up unseen');
+            canvas.dispatchEvent(new PointerEvent('pointermove', {
+              pointerType: 'mouse', pointerId: ev.pointerId, isPrimary: ev.isPrimary, button: b, buttons: ev.buttons,
+              clientX: ev.clientX, clientY: ev.clientY, screenX: ev.screenX, screenY: ev.screenY, bubbles: true }));
+          }
+        }
+        ['pointerdown', 'pointermove', 'pointerup'].forEach(function(type) { window.addEventListener(type, check, true); });
+      })();
 
       // ---- Leaving mid-game. Ctrl fires and W walks forward, and Ctrl+W also
       // closes the tab: outside fullscreen the browser keeps that shortcut for
@@ -2126,8 +2304,15 @@
       // (pickedFiles), as [{ path, file }] with their paths in it: each
       // folder's files, then its folders', sorted by name ignoring case.
       // Folders the page never reads aren't opened, so MotS's HD textures
-      // (jkgm/) aren't listed one by one, and nor is anything more than 8
-      // folders deep.
+      // (jkgm/, but for the muzzle-flash glows in jkgm/materials/saber19)
+      // aren't listed one by one, and nor is anything more than 8 folders
+      // deep.
+      function isOpened(lower) {
+        if (lower === 'jkgm' || lower.startsWith('jkgm/'))
+          return (JKGM_FLASH_DIR + '/').startsWith(lower + '/');
+        return !isSkipped(lower + '/');
+      }
+
       async function listFolder(dir) {
         var out = [];
         function byName(a, b) {
@@ -2142,7 +2327,7 @@
           got.forEach(function(file, i) { out.push({ path: prefix + files[i].name, file: file }); });
           for (var d of dirs.sort(byName)) {
             var lower = (prefix + d.name).toLowerCase();
-            if (depth < 8 && lower !== 'jkgm' && !isSkipped(lower + '/')) await walk(d, prefix + d.name + '/', depth + 1);
+            if (depth < 8 && isOpened(lower)) await walk(d, prefix + d.name + '/', depth + 1);
           }
         }
         await walk(dir, '', 0);
@@ -2366,15 +2551,22 @@
         if (lose) lose.loseContext();
       }
 
+      // What draws for a WebGL context: the graphics card or driver, as far as
+      // the browser tells.
+      function glRenderer(gl) {
+        try {
+          var info = gl.getExtension('WEBGL_debug_renderer_info');
+          return String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+        } catch (e) {
+          return '';
+        }
+      }
+
       // 'none': no WebGL 2 at all. 'software': drawn without the graphics card.
       function graphicsCheck() {
         var gl = webgl2();
         if (!gl) return { state: 'none', renderer: '' };
-        var renderer = '';
-        try {
-          var info = gl.getExtension('WEBGL_debug_renderer_info');
-          renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
-        } catch (e) {}
+        var renderer = glRenderer(gl);
         releaseGl(gl);
         if (SOFTWARE_GL.test(renderer)) return { state: 'software', renderer: renderer };
         if (!NAMED_GL.test(renderer)) {
@@ -2399,10 +2591,20 @@
         brave: { name: 'Brave', address: 'brave://settings/system',
                  toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
                  restart: 'Click <b>Relaunch</b>.' },
+        opera: { name: 'Opera', address: 'opera://settings/system',
+                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                 restart: 'Click <b>Relaunch</b>.' },
+        operagx: { name: 'Opera GX', address: 'opera://settings/system',
+                   toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                   restart: 'Click <b>Relaunch</b>.' },
         firefox: { name: 'Firefox', address: 'about:preferences#general',
                    toggle: 'Under Performance, untick <b>Use recommended performance settings</b>, ' +
                            'then tick <b>Use hardware acceleration when available</b>.',
-                   restart: 'Close Firefox completely and open it again.' }
+                   restart: 'Close Firefox completely and open it again.' },
+        // Safari has WebGL 2 from version 15, and comes with macOS and iOS updates.
+        safari: { name: 'Safari', heading: 'Update Safari to play',
+                  steps: 'Safari 15 and later can draw it. Update macOS, or iOS on an iPhone or iPad, ' +
+                         'which updates Safari, then come back to this page.' }
       };
 
       function browserKind() {
@@ -2412,7 +2614,11 @@
         if (brands.indexOf('Microsoft Edge') >= 0 || /\bEdg\//.test(ua)) return 'edge';
         if (/Firefox\//.test(ua)) return 'firefox';
         if (navigator.brave) return 'brave';
+        // Opera and Opera GX name themselves in the brands, and both in the user agent (OPR).
+        if (brands.indexOf('Opera GX') >= 0) return 'operagx';
+        if (brands.indexOf('Opera') >= 0 || /\bOPR\//.test(ua)) return 'opera';
         if (brands.indexOf('Google Chrome') >= 0) return 'chrome';
+        if (/Version\/[\d.]+.*Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS|FxiOS|EdgiOS|OPR\//.test(ua)) return 'safari';
         return null;
       }
 
@@ -2424,13 +2630,16 @@
         }
         var how = GFX_HOW[browserKind()];
         var name = how ? how.name : 'Your browser';
+        var usually = how && how.steps ? '' : " Usually that's because graphics acceleration is turned off.";
         var html = gfx.state === 'none'
-          ? '<h2>Turn on graphics acceleration to play</h2><p>' + name + " can't draw 3D graphics (WebGL 2) " +
-            "right now, and the game needs them. Usually that's because graphics acceleration is turned off.</p>"
-          : '<h2>Turn on graphics acceleration</h2><p>' + name + ' is drawing without your graphics card, ' +
-            'so the game runs slower and works your processor hard. On many computers that means only ' +
-            "a few frames per second. Usually that's because graphics acceleration is turned off.</p>";
-        if (how) {
+          ? '<h2>' + (how && how.heading || 'Turn on graphics acceleration to play') + '</h2><p>' + name +
+            " can't draw 3D graphics (WebGL 2) right now, and the game needs them." + usually + '</p>'
+          : '<h2>' + (how && how.heading || 'Turn on graphics acceleration') + '</h2><p>' + name +
+            ' is drawing without your graphics card, so the game runs slower and works your processor hard. ' +
+            'On many computers that means only a few frames per second.' + usually + '</p>';
+        if (how && how.steps) {
+          html += '<p>' + how.steps + '</p>';
+        } else if (how) {
           html += '<ol><li>Open a new tab and go to <code>' + how.address + '</code>' +
                   '<button class="copy" type="button">Copy</button></li>' +
                   '<li>' + how.toggle + '</li>' +
@@ -2439,8 +2648,8 @@
           html += "<p>Open your browser's settings, search for <b>acceleration</b>, turn on graphics " +
                   '(hardware) acceleration, then restart the browser and come back to this page.</p>';
         }
-        html += '<p class="fine">Already on? Update your graphics driver, then restart ' +
-                (how ? how.name : 'the browser') + '.<span class="renderer"></span></p>';
+        html += '<p class="fine">' + (how && how.steps ? '' : 'Already on? Update your graphics driver, then restart ' +
+                (how ? how.name : 'the browser') + '.') + '<span class="renderer"></span></p>';
         el.innerHTML = html;
         if (gfx.renderer)
           el.querySelector('.renderer').textContent = ' Drawing with: ' + gfx.renderer + '.';
@@ -2469,6 +2678,49 @@
       // Checked once, when the page opens; a restart of the browser reloads it.
       var gfxCheck = browserProblem() ? null : graphicsCheck();
       showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
+
+      // ---- When the game can't get its 3D graphics (WebGL 2) at all, the
+      // engine opens SDL's error box ("Could not create webgl context") and
+      // stops. Often the browser turned the page down: after the graphics
+      // driver crashes or resets, Chrome, Edge and Opera refuse 3D graphics to
+      // the site until it's reloaded. Otherwise acceleration is off, or the
+      // graphics card or its driver is blocked for WebGL 2. The box gets steps
+      // for those, in that order, and the browser's own reason.
+      function showGlRefused() {
+        if (showGlRefused.done) return;
+        showGlRefused.done = true;
+        var how = GFX_HOW[browserKind()];
+        var steps = '<li>Reload this page.<button class="reload" type="button">Reload</button> After a graphics ' +
+                    "driver crash or reset, Chrome, Edge and Opera stop a site's 3D graphics until it's reloaded.</li>";
+        if (how && how.steps) {
+          steps += '<li>' + how.steps + '</li>';
+        } else {
+          steps += '<li>Close ' + (how ? how.name : 'the browser') + ' completely, every window, and open it again.</li>';
+          steps += how ? '<li>Check graphics acceleration is on: open a new tab and go to <code>' + how.address +
+                         '</code>. ' + how.toggle + ' ' + how.restart + '</li>'
+                       : "<li>Check graphics acceleration is on: open the browser's settings, search for " +
+                         '<b>acceleration</b>, turn it on and restart the browser.</li>';
+          steps += '<li>Update your graphics driver, then restart the computer.</li>';
+        }
+        var el = document.createElement('section');
+        el.className = 'gfx-notice';
+        el.innerHTML = '<p>' + (how ? how.name : 'Your browser') + " wouldn't let the game draw 3D graphics " +
+                       '(WebGL 2). Try these in order:</p><ol>' + steps + '</ol><p class="fine"></p>';
+        if (Module.jkGlRefused) el.querySelector('.fine').textContent = 'The browser said: ' + Module.jkGlRefused;
+        el.querySelector('.reload').addEventListener('click', function() {
+          leaveGuard = false;
+          location.reload();
+        });
+        console.warn('Graphics: no WebGL 2 context' + (Module.jkGlRefused ? ' (' + Module.jkGlRefused + ')' : ''));
+        // The box opens once the engine has tried every context it asks for. If
+        // a later try worked, there's no box and nothing to add.
+        var tries = 0;
+        (function place() {
+          var box = document.querySelector('dialog.SDL3_messagebox[open]');
+          if (box) box.insertBefore(el, box.querySelector('button'));
+          else if (++tries < 50) setTimeout(place, 100);
+        })();
+      }
 
       // ---- Edge's enhanced security. Where it applies (every site on Strict,
       // unfamiliar sites on Balanced; it's off by default) Edge turns off its
@@ -2680,11 +2932,21 @@
         '.gob': [],
         '.goo': ['jkmremasteredassets.goo']
       };
+      // Graphics packs, by file name: a mod that is just one of these GOBs is
+      // each player's own. It isn't part of the mods a host shares, so
+      // players join with it or without it, and it stays on in the games
+      // they join. It loads after the other mods, which win where both
+      // change a file. Only the name counts, whatever the GOB holds
+      // (checkGraphicsPack).
+      var OPTIONAL_PACKS = {
+        '.gob': ['jke.gob', 'jkr.gob', 'jk hd models.gob'],
+        '.goo': []
+      };
 
       // ---- What gets read. Only the files the engine opens are read into
       // the tab: the rest of the folder (the MotS Remastered pack's jkgm
-      // textures, which this build can't use, backups, screenshots,
-      // launchers) is never read. detectMods finds the mods' files; these say
+      // textures, about 1.8 GB, but for its muzzle-flash glows; backups,
+      // screenshots, launchers) is never read. detectMods finds the mods' files; these say
       // which files of a mod, and which of the rest, the engine reads. Paths
       // are lowercase and spelled one way.
 
@@ -2707,6 +2969,8 @@
       //   before anywhere else, so a player's own loose cogs and the like
       //   are there.
       // - controls/: saved control setups.
+      // - for MotS, jkgm/materials/saber19: the Remastered pack's muzzle-flash
+      //   glows (keepFlashGlows).
       // player/ is read on its own (importPlayers). modPath is a folder given
       // with ?path= in the address, which is read like a mod.
       function isGameFile(lower, ext, modPath) {
@@ -2725,8 +2989,64 @@
             return parts.length === 2 && gob;
           case 'controls':
             return parts.length > 1;
+          case 'jkgm':
+            return ext === '.goo' && parts.slice(0, -1).join('/') === JKGM_FLASH_DIR &&
+                   (last === 'metadata.json' || last.endsWith('.png'));
         }
         return parts.length > 1 && MOD_RESOURCE_DIRS.indexOf(parts[0]) >= 0;
+      }
+
+      // The MotS Remastered pack's muzzle flashes are grey placeholders, which
+      // the glows in jkgm/materials/saber19 replace by name: the engine reads
+      // the folder's metadata.json and the pictures it names
+      // (src/Platform/GL/jkgm.cpp). Only the flashes' entries are kept, so the
+      // folder's sabers stay as the game draws them. Each picture is put
+      // under the spelling the metadata gives it, since the tab's files are
+      // case-sensitive. Without a metadata.json the engine can read, the
+      // folder is left out and the engine hides the flashes. Takes and
+      // returns the list of { path, data } to write, paths under gameRoot.
+      var JKGM_FLASH_DIR = 'jkgm/materials/saber19';
+      var FLASH_MATS = ['bry_e11.mat', 'bry_flsh.mat', 'repeat_flsh.mat', 'bow_flsh.mat', 'conc_flsh.mat', 'radicon.mat',
+                        '3rdflsh_red.mat', '3rdflsh_yellow.mat', '3rdflsh_green.mat', '3rdflsh_blue.mat'];
+      function keepFlashGlows(loaded, gameRoot) {
+        var dir = gameRoot + JKGM_FLASH_DIR + '/';
+        function inDir(e) { return e.path.toLowerCase().startsWith(dir); }
+        var glows = loaded.filter(inDir);
+        if (!glows.length) return loaded;
+        var out = loaded.filter(function(e) { return !inDir(e); });
+        var meta = glows.find(function(e) { return e.path.toLowerCase() === dir + 'metadata.json'; });
+        var parsed = null;
+        try {
+          if (meta) parsed = JSON.parse(new TextDecoder().decode(meta.data));
+        } catch (err) {}
+        if (!parsed || !Array.isArray(parsed.materials)) {
+          console.warn('OpenJKDF2: no muzzle-flash glows, ' + (meta ? 'its metadata.json can\'t be read' : JKGM_FLASH_DIR + ' has no metadata.json'));
+          return out;
+        }
+        var folder = meta.path.substring(0, meta.path.length - 'metadata.json'.length);
+        var byName = {};
+        for (var e of glows) byName[e.path.substring(folder.length).toLowerCase()] = e;
+        function isFlash(r) {
+          return r && typeof r.name === 'string' && FLASH_MATS.indexOf(r.name.toLowerCase().replace(/^.*[\/\\]/, '')) >= 0;
+        }
+        var kept = [], pictures = {};
+        for (var m of parsed.materials) {
+          if (!m || !Array.isArray(m.replaces) || !m.replaces.length || !m.replaces.every(isFlash)) continue;
+          kept.push(m);
+          for (var key of ['albedo_map', 'emissive_map', 'displacement_map']) {
+            var picture = typeof m[key] === 'string' && byName[m[key].toLowerCase()];
+            if (picture && !pictures[m[key]]) pictures[m[key]] = picture.data;
+          }
+        }
+        if (!kept.length) {
+          console.warn('OpenJKDF2: no muzzle-flash glows, ' + JKGM_FLASH_DIR + '/metadata.json has none');
+          return out;
+        }
+        var json = JSON.stringify(Object.assign({}, parsed, { materials: kept }));
+        out.push({ path: folder + 'metadata.json', data: new TextEncoder().encode(json) });
+        for (var name in pictures) out.push({ path: folder + name, data: pictures[name] });
+        console.log('OpenJKDF2: muzzle-flash glows: ' + kept.length + ' entries, ' + Object.keys(pictures).length + ' pictures');
+        return out;
       }
 
       // The mods among the picked files, each with the files that belong to it,
@@ -2745,6 +3065,9 @@
       //   besides the game's own and ALWAYS_LOADED. They move under jkmods/
       //   like the others, so they only load when ticked and a host always
       //   shares what it runs.
+      // - last, wherever they are, the graphics packs (OPTIONAL_PACKS), marked
+      //   .optional: each player's own, which the engine loads after the
+      //   others from mods/ (placeGraphicsPacks).
       // A zip with a mod in it is a folder of its own wherever it is, since
       // openZips has already opened it in place.
       // Paths are already spelled one way.
@@ -2843,12 +3166,22 @@
         }
         // Sorting is stable, so each kind keeps its order.
         mods.sort(function(a, b) { return a.rank - b.rank; });
+        var count = new Map(), only = new Map();
         for (var m of mods) m.bytes = 0;
         for (var e of files) {
-          var lower = e.path.toLowerCase();
-          var m = mods.find(function(m) { return m.rel(lower, e.path); });
-          if (m) m.bytes += e.file.size;
+          var lower = e.path.toLowerCase(), rel = null;
+          var m = mods.find(function(m) { return (rel = m.rel(lower, e.path)); });
+          if (m) {
+            m.bytes += e.file.size;
+            count.set(m, (count.get(m) || 0) + 1);
+            only.set(m, rel.toLowerCase());
+          }
         }
+        // A graphics pack is a mod that is one GOB named in OPTIONAL_PACKS
+        // and nothing else. Packs come last, since the other mods load ahead
+        // of them.
+        for (var m of mods) m.optional = count.get(m) === 1 && OPTIONAL_PACKS[ext].indexOf(only.get(m)) >= 0;
+        mods = mods.filter(function(m) { return !m.optional; }).concat(mods.filter(function(m) { return m.optional; }));
         return mods.map(function(m, i) {
           // No spaces: the engine splits its command line on them.
           m.path = 'jkmods/' + i + '-' + m.name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40);
@@ -2878,6 +3211,22 @@
       // engine opens. The rest of the folder is left unread.
       function filesToRead(files, ext, modPath) {
         return files.filter(function(e) { return e.mod !== undefined || isGameFile(e.path.toLowerCase(), ext, modPath); });
+      }
+
+      // The ticked graphics packs (chooseMods' options for folderMods marked
+      // .optional) go in mods/, which the engine always loads, after -path
+      // (jkRes_LoadNew): numbered in list order, since it looks in GOBs in the
+      // order they were added. That keeps them out of the mod a host shares,
+      // and on through a restart into a host's mod (mods.js). Moves their
+      // files, and returns the other ticked options as mods and the packs.
+      function placeGraphicsPacks(picked, folderMods, files) {
+        var packs = picked.filter(function(o) { return !o.saved && folderMods[o.index].optional; });
+        packs.forEach(function(o, r) {
+          for (var e of files) {
+            if (e.mod === o.index) e.path = 'mods/' + String(r + 1).padStart(3, '0') + '-' + e.rel;
+          }
+        });
+        return { mods: picked.filter(function(o) { return packs.indexOf(o) < 0; }), packs: packs };
       }
 
       // The picked files to save in the browser for next time: the ones read,
@@ -3111,6 +3460,23 @@
         }
       }
 
+      // A graphics pack is optional by its name alone (OPTIONAL_PACKS). One
+      // that holds more than textures and models, such as scripts, sounds or
+      // templates, can make the game play differently for players with and
+      // without it, so the console says which files, as a clue if a game
+      // ever does. Resolves to those files.
+      async function checkGraphicsPack(name, file) {
+        var table = await gobTable(file);
+        var others = (table || []).map(function(g) { return g.name.replace(/\\/g, '/'); }).filter(function(n) {
+          return !/\.(mat|3do|txt)$/i.test(n);
+        });
+        if (others.length)
+          console.warn('OpenJKDF2: the graphics pack ' + name + ' also has ' + others.length + ' file' +
+                       (others.length === 1 ? '' : 's') + ' besides textures and models, which players without it ' +
+                       "don't have: " + others.slice(0, 20).join(', ') + (others.length > 20 ? ', ...' : ''));
+        return others;
+      }
+
       async function modContents(mod, files, ext) {
         var out = {};
         for (var e of files) {
@@ -3260,7 +3626,9 @@
                    where: (m.kept ? 'In your folder "' + kept.name + '", ' :
                            m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
                                     : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
-                          (m.bytes > 250 * 1048576 ? ". Too big to send: players need their own copy" : '') };
+                          (m.optional ? ". Graphics pack: only you see it. Players joining you don't need it, " +
+                                        'and it stays on in games you join' :
+                           m.bytes > 250 * 1048576 ? ". Too big to send: players need their own copy" : '') };
         });
         for (var s of saved) {
           options.push({ name: s.name, path: 'netmods/' + s.sha256.substring(0, 16), saved: true,
@@ -3863,7 +4231,10 @@
             lap('comparing mods');
           }
           placeModFiles(files, folderMods);
-          Module.jkModFolders = folderMods.map(function(m) { return { name: m.name, path: m.path }; });
+          // Graphics packs are never a host's mod, so they're not looked in
+          // for one (mods.js).
+          Module.jkModFolders = folderMods.filter(function(m) { return !m.optional; })
+                                          .map(function(m) { return { name: m.name, path: m.path }; });
           // A mod all of whose files are from a kept folder of mods and maps
           // says it's there, also when they're the saved copies.
           var fromKept = function(e) {
@@ -3903,6 +4274,14 @@
         var modPath = pathAt < 0 ? null : String(Module['arguments'][pathAt + 1] || '').replace(/\\/g, '/')
           .replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
         files = filesToRead(files, ext, modPath);
+        var split = placeGraphicsPacks(picked, folderMods, files);
+        picked = split.mods;
+        Module.jkGraphicsPacks = split.packs.map(function(o) { return o.name; });
+        for (var o of split.packs) {
+          var pack = files.find(function(e) { return e.mod === o.index; });
+          console.log('OpenJKDF2: graphics pack ' + o.name + ' (' + pack.path + '), for this player only');
+          await checkGraphicsPack(o.name, pack.file);
+        }
         // The saved files get a kept folder's new and changed files too, so
         // they still have them when it can't be read.
         var toSave = (fromBrowser && !extras) || modPath ? null : filesToSave(fileList, files, playerFiles);
@@ -3919,6 +4298,7 @@
           files[i].data = new Uint8Array(await files[i].file.arrayBuffer());
           loaded.push({ path: gameRoot + files[i].path, data: files[i].data });
         }
+        if (isMots) loaded = keepFlashGlows(loaded, gameRoot);
         lap('reading');
         // One ticked mod runs from its own folder. Several are put together
         // in jkmods/set, sharing their files' data, unless only one of them
@@ -5046,6 +5426,290 @@
       window.addEventListener('hashchange', function() {
         if (document.documentElement.classList.contains('zone-open')) openRoom(location.hash.substring(1));
       });
+    </script>
+    <script type='text/javascript'>
+      // ---- Frame times, from Module.jkFrames (Window.c): for each of the last
+      // frames drawn in a level, when the game finished it and when it got the
+      // thread back for the next one. A frame's time runs from one return to
+      // the next, and the game's own work in it from the return to the finish;
+      // the rest is the browser and the graphics card. From frame number from
+      // (frames.count counts them all), and only frames that ended after
+      // sinceMs (performance.now()).
+      function frameTimes(frames, from, sinceMs) {
+        var times = [], work = 0;
+        for (var n = Math.max(from, frames.count - frames.size + 1, 1); n < frames.count; n++) {
+          var i = n % frames.size, prev = (n - 1) % frames.size;
+          if (!frames.joined[i] || frames.resumes[i] < (sinceMs || 0)) continue;
+          times.push(frames.resumes[i] - frames.resumes[prev]);
+          work += frames.ends[i] - frames.resumes[prev];
+        }
+        return { times: times, work: work };
+      }
+
+      // Frames per second, the median, 95th percentile and slowest frame time,
+      // and the game's own milliseconds per frame. Null with no frames.
+      function frameStats(times, work) {
+        if (!times.length) return null;
+        var sorted = times.slice().sort(function(a, b) { return a - b; });
+        var total = sorted.reduce(function(a, b) { return a + b; }, 0);
+        var at = function(q) { return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]; };
+        return { frames: sorted.length, seconds: total / 1000, fps: sorted.length * 1000 / total,
+                 median: at(0.5), p95: at(0.95), worst: sorted[sorted.length - 1], work: work / sorted.length,
+                 over50: sorted.filter(function(t) { return t > 50; }).length };
+      }
+
+      // Every frame since a start, in 0.1 ms steps up to a second (longer ones
+      // count as a second, apart from the slowest), so a long run's
+      // percentiles take no sorting.
+      function frameTally() {
+        return { bins: new Uint32Array(10001), frames: 0, total: 0, work: 0, worst: 0, over50: 0 };
+      }
+
+      function tallyAdd(tally, times, work) {
+        for (var t of times) {
+          tally.bins[Math.min(10000, Math.round(t * 10))]++;
+          tally.frames++;
+          tally.total += t;
+          if (t > tally.worst) tally.worst = t;
+          if (t > 50) tally.over50++;
+        }
+        tally.work += work;
+      }
+
+      // As frameStats gives, for a tally.
+      function tallyStats(tally) {
+        if (!tally.frames) return null;
+        function at(q) {
+          var want = Math.min(tally.frames - 1, Math.floor(q * tally.frames)), seen = 0;
+          for (var b = 0; b < tally.bins.length; b++) {
+            seen += tally.bins[b];
+            if (seen > want) return b / 10;
+          }
+          return tally.worst;
+        }
+        return { frames: tally.frames, seconds: tally.total / 1000, fps: tally.frames * 1000 / tally.total,
+                 median: at(0.5), p95: at(0.95), worst: tally.worst, work: tally.work / tally.frames, over50: tally.over50 };
+      }
+
+      // The engine's FPS limit (0 for none) and the Display settings that cost
+      // the most to draw, or null before the game runs.
+      function displaySettings() {
+        var get = Module._Window_WebDisplaySetting;
+        if (!get || !Module.jkFrames) return null;
+        return { fpsLimit: get(0), ssaa: get(1) / 100, ssao: !!get(2), bloom: !!get(3), vsync: !!get(4) };
+      }
+
+      // How many times the window's size the game draws at, across: over 1
+      // with Enable HiDPI on a high-density screen.
+      function canvasScale() {
+        return Module.canvas && window.innerWidth ? Module.canvas.width / window.innerWidth : 1;
+      }
+
+      // Whether the computer runs on battery: null where the browser won't say
+      // (Firefox, Safari).
+      function onBattery() {
+        if (!navigator.getBattery) return Promise.resolve(null);
+        return navigator.getBattery().then(function(b) { return !b.charging; }, function() { return null; });
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"]/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+      }
+
+      // ---- Slow frames. When a level runs under SLOW_FPS for three 5-second
+      // stretches in a row, a note over the game says what commonly holds a
+      // browser game back on this computer. Once a visit, and not when the
+      // player's own FPS limit is about that low.
+      var SLOW_FPS = 32;  // Low Power Mode on an iPhone or iPad holds pages to 30
+      var SLOW_CHECK_MS = 5000;
+      var SLOW_CHECKS = 3;
+      var SLOW_NOTE_MS = 30000;
+      // The processor's own graphics. Intel's Arc and AMD's other Radeons are
+      // graphics cards.
+      var BUILT_IN_GPU = /\bIntel\b(?!.*\bArc\b)|Radeon(\(TM\))? (Vega \d+ )?Graphics|Radeon(\(TM\))? \d{3}M\b/i;
+
+      // What may be slowing the game, most likely first, as HTML. env: kind
+      // (browserKind()), ua, touch (navigator.maxTouchPoints), renderer (the
+      // game's), battery (onBattery()), settings (displaySettings()), scale
+      // (canvasScale()).
+      function slowCauses(env) {
+        var causes = [];
+        var how = GFX_HOW[env.kind];
+        var name = how ? how.name : 'your browser';
+        var windows = /Windows/.test(env.ua);
+        if (SOFTWARE_GL.test(env.renderer)) {
+          causes.push('<b>Graphics acceleration is off</b>, so ' + name + ' draws the game on the processor. ' +
+                      (how && how.address ? 'Turn it on at <code>' + how.address + '</code>' : "Turn it on in the browser's settings") +
+                      ', restart the browser and come back.');
+        }
+        if (/iPhone|iPad/.test(env.ua) || (/Macintosh/.test(env.ua) && env.touch > 1))
+          causes.push('<b>Low Power Mode</b> holds web pages to 30 frames a second on an iPhone or iPad. Turn it off in Settings &gt; Battery.');
+        if (windows && BUILT_IN_GPU.test(env.renderer)) {
+          causes.push("The processor's built-in graphics draw the game (" + escapeHtml(env.renderer) + '). If this computer ' +
+                      'also has an NVIDIA or AMD graphics card, open Windows Settings &gt; System &gt; Display &gt; Graphics, ' +
+                      'set ' + (how ? how.name : 'the browser') + ' to <b>High performance</b>, then restart the browser.');
+        }
+        if (env.battery) {
+          causes.push('This computer is on battery, and many laptops slow their graphics down then. Plug it in' +
+                      (windows ? ', or set Settings &gt; System &gt; Power &amp; battery &gt; Power mode to <b>Best performance</b>.' : '.'));
+        }
+        if (env.kind === 'chrome')
+          causes.push("Chrome's <b>Energy saver</b> lowers the frame rate of pages. Turn it off at <code>chrome://settings/performance</code>.");
+        if (env.kind === 'edge')
+          causes.push("Edge's <b>Efficiency mode</b> (Energy saver in newer versions) slows pages down. Search Edge's settings for it and turn it off.");
+        if (env.kind === 'opera' || env.kind === 'operagx')
+          causes.push("Opera's <b>Battery saver</b>, while it's on, can hold pages to 30 frames a second. Search Opera's settings for battery and turn it off.");
+        if (env.kind === 'operagx')
+          causes.push("GX Control's <b>CPU limiter</b> holds the browser to part of the processor. Turn it off or raise it while you play.");
+        var display = [];
+        if (env.scale > 1.25)
+          display.push('turn off <b>Enable HiDPI</b> (it draws ' + Math.round(env.scale * env.scale * 10) / 10 + ' times the pixels)');
+        if (env.settings && env.settings.ssaa > 1)
+          display.push('set <b>SSAA Multiplier</b> to 1 (' + env.settings.ssaa + ' draws ' +
+                       Math.round(env.settings.ssaa * env.settings.ssaa * 10) / 10 + ' times the pixels)');
+        if (env.settings && env.settings.ssao) display.push('turn off <b>Enable SSAO</b>');
+        if (env.settings && env.settings.bloom) display.push('turn off <b>Enable Bloom</b>');
+        if (display.length)
+          causes.push("In the game's Setup &gt; Display, " + display.join(', ') + '.');
+        if (!causes.length)
+          causes.push('Close other tabs and programs that keep the computer busy, and update your graphics driver.');
+        return causes;
+      }
+
+      function slowNoteHtml(fps, causes) {
+        return '<p><b>The game is running slowly here, about ' + Math.round(fps) + ' frames a second.</b> ' +
+               'What often causes it:</p><ul><li>' + causes.join('</li><li>') + '</li></ul>';
+      }
+
+      function showSlowNote(fps, causes) {
+        var note = document.createElement('div');
+        note.className = 'slow-note';
+        note.setAttribute('role', 'status');
+        note.innerHTML = slowNoteHtml(fps, causes);
+        var close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'close';
+        close.textContent = '×';
+        close.setAttribute('aria-label', 'Hide');
+        close.onclick = function() { note.hidden = true; };
+        note.appendChild(close);
+        document.body.appendChild(note);
+        setTimeout(function() { note.hidden = true; }, SLOW_NOTE_MS);
+      }
+
+      (function() {
+        var streak = 0, seen = 0;
+        var timer = setInterval(function() {
+          var frames = Module.jkFrames;
+          if (!frames || document.hidden) return;
+          var t = frameTimes(frames, seen), stats = frameStats(t.times, t.work);
+          seen = frames.count;
+          // Mostly in a menu, or the tab was hidden: no say either way.
+          if (!stats || stats.seconds < SLOW_CHECK_MS / 2000) return;
+          var settings = displaySettings();
+          var limited = settings && settings.fpsLimit && settings.fpsLimit <= SLOW_FPS + 8;
+          if (stats.fps >= SLOW_FPS || limited) {
+            streak = 0;
+            return;
+          }
+          if (++streak < SLOW_CHECKS) return;
+          clearInterval(timer);
+          onBattery().then(function(battery) {
+            showSlowNote(stats.fps, slowCauses({
+              kind: browserKind(), ua: navigator.userAgent, touch: navigator.maxTouchPoints || 0,
+              renderer: Module.ctx ? glRenderer(Module.ctx) : '', battery: battery,
+              settings: settings, scale: canvasScale() }));
+          });
+        }, SLOW_CHECK_MS);
+      })();
+
+      // ---- ?bench in the address: frame times over the game, live, and a
+      // button that copies them, for comparing browsers, settings and builds.
+      // Since Reset counts every frame in a level from when Reset was last
+      // pressed (or the page opened).
+      function benchLines(recent, session, sessionMs, info) {
+        function ms(v) { return v.toFixed(1); }
+        function line(s) {
+          return s ? s.fps.toFixed(1) + ' fps | frame median ' + ms(s.median) + ' ms, 95% ' + ms(s.p95) +
+                     ', worst ' + ms(s.worst) + ' | game ' + ms(s.work) + ' ms | over 50 ms: ' + s.over50
+                   : 'no frames in a level yet';
+        }
+        var st = info.settings;
+        return [
+          'Last 5 s: ' + line(recent),
+          'Since Reset (' + Math.round(sessionMs / 1000) + ' s, ' + (session ? session.frames : 0) + ' frames): ' + line(session),
+          'Renderer: ' + (info.renderer || 'unknown'),
+          'Browser: ' + info.browser + ' | canvas ' + info.width + 'x' + info.height +
+            ' | devicePixelRatio ' + info.dpr,
+          'Settings: ' + (st ? 'Vsync ' + (st.vsync ? 'on' : 'off') + ', FPS limit ' + (st.fpsLimit || 'none') +
+            ', SSAA ' + st.ssaa + ', SSAO ' + (st.ssao ? 'on' : 'off') + ', Bloom ' + (st.bloom ? 'on' : 'off')
+            : 'not loaded yet')
+        ];
+      }
+
+      function browserLabel(ua) {
+        var m = ua.match(/Edg\/(\d+)/) || ua.match(/Firefox\/(\d+)/) || ua.match(/OPR\/(\d+)/) ||
+                ua.match(/Chrome\/(\d+)/) || ua.match(/Version\/(\d+)[\d.]* .*Safari\//);
+        var how = GFX_HOW[browserKind()];
+        var name = how ? how.name : /OPR\//.test(ua) ? 'Opera' : /Chrome\//.test(ua) ? 'Chromium' : 'Browser';
+        var os = /Windows/.test(ua) ? 'Windows' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'macOS' :
+                 /Android/.test(ua) ? 'Android' : /Linux|X11/.test(ua) ? 'Linux' : '';
+        return name + (m ? ' ' + m[1] : '') + (os ? ' on ' + os : '');
+      }
+
+      if (/[?&]bench(=|&|$)/.test(location.search)) (function() {
+        var box = document.createElement('div');
+        box.className = 'bench';
+        var text = document.createElement('pre');
+        var copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = 'Copy results';
+        var reset = document.createElement('button');
+        reset.type = 'button';
+        reset.textContent = 'Reset';
+        box.append(text, copy, reset);
+        document.body.appendChild(box);
+
+        var session = frameTally(), sessionStart = performance.now(), seen = 0, renderer = '';
+        // Read often enough that the 2048 kept frames never run out between.
+        setInterval(function() {
+          var frames = Module.jkFrames;
+          if (!frames) return;
+          var t = frameTimes(frames, seen);
+          seen = frames.count;
+          tallyAdd(session, t.times, t.work);
+        }, 250);
+
+        function lines() {
+          var frames = Module.jkFrames;
+          var recent = frames ? frameTimes(frames, 0, performance.now() - 5000) : { times: [], work: 0 };
+          if (!renderer && Module.ctx) renderer = glRenderer(Module.ctx);
+          return benchLines(frameStats(recent.times, recent.work), tallyStats(session),
+                            performance.now() - sessionStart, {
+            renderer: renderer, browser: browserLabel(navigator.userAgent),
+            width: Module.canvas.width, height: Module.canvas.height, dpr: window.devicePixelRatio,
+            settings: displaySettings() });
+        }
+        function show() { text.textContent = lines().join('\n'); }
+        show();
+        setInterval(show, 1000);
+
+        copy.onclick = function() {
+          var all = ['OpenJKDF2 frame times, ' + new Date().toISOString()].concat(lines(),
+                     ['Page: ' + location.href.split('#')[0], 'User agent: ' + navigator.userAgent]).join('\n');
+          var done = function() { copy.textContent = 'Copied'; setTimeout(function() { copy.textContent = 'Copy results'; }, 1500); };
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(all).then(done, function() { selectText(text); });
+          } else {
+            selectText(text);
+          }
+        };
+        reset.onclick = function() {
+          session = frameTally();
+          sessionStart = performance.now();
+          show();
+        };
+      })();
     </script>
   </body>
 </html>

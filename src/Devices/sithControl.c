@@ -41,6 +41,50 @@ static int sithControl_008d7f54 = 0;
 static int sithControl_008d7f58 = 0;
 static int sithControl_008d7f5c = 0;
 
+#ifdef QOL_IMPROVEMENTS
+// Added: mouse look without "Map directly to axis value" (Setup > Controls >
+// Mouse) reads the mouse's movement over a frame as a share of the player's
+// full turning speed, and the player turns at that speed for the frame. JK.EXE
+// held the game to 50 frames a second, so a movement always came to the same
+// turn there. OpenJKDF2 runs as fast as the screen refreshes: at 144 frames a
+// second the same flick turned about a third as far, and by a different amount
+// each frame as frame times changed. The mouse's share now turns the player as
+// far as it did in one of JK.EXE's frames, whatever the frame rate, so the view
+// follows each movement as it comes, as "Map directly" does, and a quick flick
+// (with Windows' pointer acceleration, when the browser passes it on) turns far.
+#define SITHCONTROL_MOUSE_AXIS_SECS (1.0 / 50.0)
+
+flex_t sithControl_turnSecs = 0.0;
+static flex_t sithControl_turnCarry = 0.0;
+
+// The mouse's X and Y axes bound to turning or looking without "Map directly".
+static int sithControl_IsMouseLook(int axisId, int dxKeyNum)
+{
+    return (axisId == INPUT_FUNC_TURN || axisId == INPUT_FUNC_PITCH)
+        && (dxKeyNum == AXIS_MOUSE_X || dxKeyNum == AXIS_MOUSE_Y);
+}
+
+// The turn speed (degrees a second) that turns the player by `degrees` in this
+// frame. The game turns the player with physics, which runs in fixed steps,
+// and a frame gets a whole number of them, so a turn worked out for the frame's
+// own time came out too far or too short. With the browser's 150 steps a
+// second, at 60 frames a second every other frame turned a fifth too far and
+// the rest a fifth short, and above 150 frames a second some frames got no
+// step and their mouse movement was lost. The turn is now spread over the steps
+// the frame gets, and a frame without any passes it on to the next.
+static flex_t sithControl_TurnSpeed(flex_t degrees)
+{
+    degrees += sithControl_turnCarry;
+    sithControl_turnCarry = 0.0;
+    if (sithControl_turnSecs <= 0.0)
+    {
+        sithControl_turnCarry = degrees;
+        return 0.0;
+    }
+    return degrees / sithControl_turnSecs;
+}
+#endif
+
 static const char *sithControl_aFunctionStrs[INPUT_FUNC_MAX+1] =
 {
     "FORWARD",
@@ -866,7 +910,11 @@ flex_t sithControl_GetKeyAsAxis(int axisId)
             {
                 if ( (v3 & INPUT_MAPPING_FLAG_AXIS) != 0 )
                 {
-                    if ( (sithWeapon_controlOptions & 0x20) == 0 || v2->dxKeyNum >= AXIS_MOUSE_X )
+                    if ( ((sithWeapon_controlOptions & 0x20) == 0 || v2->dxKeyNum >= AXIS_MOUSE_X)
+#ifdef QOL_IMPROVEMENTS
+                         && !sithControl_IsMouseLook(axisId, v2->dxKeyNum) // Added: read by sithControl_GetMouseLook
+#endif
+                       )
                     {
                         v4 = stdControl_ReadAxis(v2->dxKeyNum);
                         goto LABEL_12;
@@ -895,6 +943,34 @@ LABEL_18:
     }
     return v6;
 }
+
+#ifdef QOL_IMPROVEMENTS
+// Added: what sithControl_GetKeyAsAxis leaves out for turning and looking, the
+// mouse without "Map directly to axis value": its movement this frame as a
+// share of full speed, read the same way. The callers turn it into degrees
+// with SITHCONTROL_MOUSE_AXIS_SECS.
+static flex_t sithControl_GetMouseLook(int axisId)
+{
+    flex_t total = 0.0;
+    stdControlKeyInfo* pInfo = &sithControl_aInputFuncToKeyinfo[axisId];
+
+    for (uint32_t i = 0; i < pInfo->numEntries; i++)
+    {
+        stdControlKeyInfoEntry* pEntry = &pInfo->aEntries[i];
+        if ((pEntry->flags & (INPUT_MAPPING_FLAG_AXIS | INPUT_MAPPING_FLAG_RAW_AXIS)) != INPUT_MAPPING_FLAG_AXIS
+            || !sithControl_IsMouseLook(axisId, pEntry->dxKeyNum))
+            continue;
+
+        flex_t val = stdControl_ReadAxis(pEntry->dxKeyNum);
+        if (pEntry->flags & INPUT_MAPPING_FLAG_AXIS_REVERSED)
+            val = -val;
+        if (pEntry->binaryAxisVal != 0.0)
+            val *= pEntry->binaryAxisVal;
+        total += val;
+    }
+    return total;
+}
+#endif
 
 flex_t sithControl_GetAxis(int axisId)
 {
@@ -1196,6 +1272,11 @@ debug_controls:
 #endif
         a3a.y = v18 * sithControl_GetKeyAsAxis(INPUT_FUNC_TURN);
         a3a.x = v18 * sithControl_GetKeyAsAxis(INPUT_FUNC_PITCH); // I really need to sort out what needs the adjustments and what doesn't
+#ifdef QOL_IMPROVEMENTS
+        // Added: the mouse without "Map directly", left out of the two above
+        a3a.y += 90.0 * SITHCONTROL_MOUSE_AXIS_SECS * sithControl_GetMouseLook(INPUT_FUNC_TURN);
+        a3a.x += 90.0 * SITHCONTROL_MOUSE_AXIS_SECS * sithControl_GetMouseLook(INPUT_FUNC_PITCH);
+#endif
         a3a.z = 0.0;
         if (!rdVector_IsZero3(&a3a))
         {
@@ -1280,6 +1361,10 @@ void sithControl_PlayerLook(SithThing *player, flex_t deltaSecs)
 
             // Map directly to axis, the value we have is an angular velocity
             v5 = sithControl_GetAxis(INPUT_FUNC_PITCH);
+#ifdef QOL_IMPROVEMENTS
+            // Added: the mouse without "Map directly" looks as far as in one of JK.EXE's frames
+            v5 += sithControl_GetMouseLook(INPUT_FUNC_PITCH) * 90.0 * SITHCONTROL_MOUSE_AXIS_SECS;
+#endif
 
             if ( v5 != 0.0 )
             {
@@ -1406,8 +1491,9 @@ void sithControl_PlayerMovementMots(SithThing *player)
     if (iVar2 == 0) {
         fVar4 = sithControl_GetAxis(INPUT_FUNC_TURN);
 #ifdef QOL_IMPROVEMENTS
-        // Scale appropriately to high framerates
-        fVar4 = fVar4 * sithTime_g_fps;
+        // Added: the mouse turns by how far it moved this frame, over this frame's physics steps
+        fVar4 = sithControl_TurnSpeed(fVar4 + sithControl_GetMouseLook(INPUT_FUNC_TURN) * thing->actorParams.maxRotVelocity
+                                              * (move_multiplier < 1.0 ? move_multiplier : 1.0) * SITHCONTROL_MOUSE_AXIS_SECS);
 #else
         fVar4 = fVar4 * sithTime_g_fps;
 #endif
@@ -1618,17 +1704,19 @@ void sithControl_PlayerMovement(SithThing *player)
             // Player yaw handling
 
             // These base values only come from raw axis fetches
-#ifdef QOL_IMPROVEMENTS
-            // Scale appropriately to high and low framerates
-            player->physicsParams.angularVelocity.y = sithControl_GetAxis(INPUT_FUNC_TURN) * sithTime_g_fps;
-#else
+#ifndef QOL_IMPROVEMENTS
             player->physicsParams.angularVelocity.y = sithControl_GetAxis(INPUT_FUNC_TURN) * sithTime_g_fps;
 #endif
             if ( move_multiplier <= 1.0 )
                 move_multiplier_ = move_multiplier;
             else
                 move_multiplier_ = 1.0;
-            
+#ifdef QOL_IMPROVEMENTS
+            // Added: the mouse turns by how far it moved this frame, over this frame's physics steps
+            player->physicsParams.angularVelocity.y = sithControl_TurnSpeed(sithControl_GetAxis(INPUT_FUNC_TURN)
+                + sithControl_GetMouseLook(INPUT_FUNC_TURN) * player->actorParams.maxRotVelocity * move_multiplier_ * SITHCONTROL_MOUSE_AXIS_SECS);
+#endif
+
             // These axis values only come from non-raw axis fetches
 #ifdef QOL_IMPROVEMENTS
             // Scale appropriately to high framerates
@@ -1736,8 +1824,9 @@ void sithControl_FreeCam(SithThing *player)
             v7->x = (Main_bMotsCompat ? -1 : 1) * sithControl_GetKeyAsAxisNormalized(INPUT_FUNC_SLIDE) * (v1->actorParams.extraSpeed + v1->actorParams.maxThrust) * 0.7;
             
 #ifdef QOL_IMPROVEMENTS
-            // Scale appropriately to high framerates
-            v1->physicsParams.angularVelocity.y = sithControl_GetAxis(INPUT_FUNC_TURN) * sithTime_g_fps;
+            // Added: the mouse turns by how far it moved this frame, over this frame's physics steps
+            v1->physicsParams.angularVelocity.y = sithControl_TurnSpeed(sithControl_GetAxis(INPUT_FUNC_TURN)
+                + sithControl_GetMouseLook(INPUT_FUNC_TURN) * v1->actorParams.maxRotVelocity * SITHCONTROL_MOUSE_AXIS_SECS);
             v1->physicsParams.angularVelocity.y +=  sithControl_GetKeyAsAxis(INPUT_FUNC_TURN) * v1->actorParams.maxRotVelocity;// * (sithTime_g_fps / 25.0) * 2.0;
 #else
             v1->physicsParams.angularVelocity.y = sithControl_GetAxis(INPUT_FUNC_TURN) * sithTime_g_fps;
