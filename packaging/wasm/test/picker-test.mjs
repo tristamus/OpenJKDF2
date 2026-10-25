@@ -738,9 +738,9 @@ test('kept folders are kept per game, and forgotten', async () => {
 
 // ---- Several ticked mods put together in one folder (setFiles), their
 // ui/jkstrings.uni with them.
-const { findClashes, setFiles, readStrings } = new Function(
+const { findClashes, setFiles, readStrings, readList, LIST_FILES } = new Function(
     cut('      // ---- Which files each mod changes', '      function wrongGameText') +
-    '\nreturn { findClashes, setFiles, readStrings };')();
+    '\nreturn { findClashes, setFiles, readStrings, readList, LIST_FILES };')();
 
 // A string table as the game's are laid out, in Latin-1.
 const uni = (lines) => Buffer.from('# made up\r\nMSGS ' + lines.length + '\r\n\r\n' +
@@ -847,6 +847,63 @@ test('two mods that differ only in jkstrings.uni still make a set, which has bot
     assert.deepEqual(loose[0].mods, [0, 1]);
     assert.equal(readStrings(loose[0].data).texts.get('PADME'), 'Padmé');
     assert.equal(readStrings(loose[0].data).texts.get('KY'), 'Kyle');
+});
+
+// Skin lists as the game's are laid out: SBX's and a skin pack's, which
+// share a skin (boc.3do) and the game's Katarn, as SBX-JK and Continuum did.
+const models = (title, rows) => Buffer.from('# ' + title + '\r\n# =====\r\n\r\nnumModels: ' + rows.length + '\r\n\r\n#\tModel name\r\n' +
+    rows.map(([m, snd, name], i) => `${i}:\t${m}\t\t${snd}\t\t#"${name}"`).join('\r\n') + '\r\n\r\n', 'latin1');
+const SKIN_MODELS = [['ky.3do', 'ky.snd', 'Katarn'], ['boc.3do', 'kyboc.snd', 'Boc'], ['robocop.3do', 'kytrooper.snd', 'RoboCop']];
+const SBX_MODELS = [['adigallia.3do', 'kyfemale.snd', 'Adi'], ['Boc.3do', 'kybocsbx.snd', 'Boc'], ['ky.3do', 'ky.snd', 'Kyle'],
+                    ['yoda.3do', 'yoda.snd', 'Yoda']];
+const setFile = (set, path) => set.filter(e => e.rel.toLowerCase() === path);
+
+test("the ticked mods' skin lists are put together, so a skin pack above SBX doesn't hide SBX's skins", async () => {
+    const { mods, clashes, set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/continuum.gob': makeGob([{ name: 'misc\\models.dat', bytes: models('Continuum', SKIN_MODELS) },
+                                           { name: 'misc\\sabers.dat', bytes: Buffer.from('numSabers: 1\r\n0:\tsabB2.BM\tsaberblue1.mat\tsaberblue0.mat\r\n') }]),
+        'resource/SBX-JK v31.gob': makeGob([{ name: 'misc\\models.dat', bytes: models('SBX', SBX_MODELS) },
+                                           { name: 'misc\\sabers.dat', bytes: Buffer.from('numSabers: 1\r\n0:\tsabB2.BM\t\tsaberblue1.mat\t\tsaberblue0.mat\r\n') }]),
+    });
+    assert.deepEqual(mods, ['continuum', 'SBX-JK v31']);
+    assert.ok(clashes['0,1'].includes('misc/models.dat'));
+    const loose = setFile(set, 'misc/models.dat');
+    assert.equal(loose.length, 1);
+    assert.equal(loose[0].mod, 0);
+    assert.deepEqual(loose[0].mods, [0, 1]);
+    const text = Buffer.from(loose[0].data).toString('latin1');
+    // The higher mod's skins in its order, then the lower one's it lacks,
+    // numbered from 0, with the count the engine allocates for. A skin is
+    // the same skin with another sound class (Boc).
+    assert.deepEqual(readList(loose[0].data, LIST_FILES[0]).map(e => e.num + ' ' + e.key),
+                     ['0 ky.3do', '1 boc.3do', '2 robocop.3do', '3 adigallia.3do', '4 yoda.3do']);
+    assert.match(text, /\r\n1:\tboc\.3do\t\tkyboc\.snd\t\t#"Boc"\r\n/);
+    assert.match(text, /\r\nnumModels: 5\r\n/);
+    // Each entry keeps its name.
+    assert.match(text, /\r\n3:\tadigallia\.3do\t\tkyfemale\.snd\t\t#"Adi"\r\n/);
+    assert.match(text, /\r\n0:\tky\.3do\t\tky\.snd\t\t#"Katarn"\r\n/);
+    // The blade lists have the same blade, spaced differently: the higher
+    // mod's alone.
+    const blades = setFile(set, 'misc/sabers.dat');
+    assert.equal(blades.length, 1);
+    assert.deepEqual(readList(blades[0].data, LIST_FILES[1]).map(e => e.key), ['sabb2.bm saberblue1.mat saberblue0.mat']);
+});
+
+test('with one ticked mod that has a skin list, it is left as it is', async () => {
+    const { set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/Maps.gob': gob('jkl\\a.jkl', 'a'),
+        'resource/SBX-JK v31.gob': makeGob([{ name: 'misc\\models.dat', bytes: models('SBX', SBX_MODELS) }]),
+    });
+    assert.deepEqual(setFile(set, 'misc/models.dat'), []);
+});
+
+test('a skin list is read as the engine reads it', () => {
+    const list = readList(Buffer.from('# c\r\n\r\nnummodels: 3\r\n# 0: not.3do x.snd\r\n2:\tb.3do\tb.snd\t#"B"\r\n0: a.3do a.snd\r\n1: only.3do\r\n', 'latin1'), LIST_FILES[0]);
+    assert.deepEqual(list.map(e => e.num + ' ' + e.key), ['0 a.3do', '2 b.3do']);
+    assert.equal(list[1].rest, 'b.3do\tb.snd\t#"B"');
+    assert.equal(readList(Buffer.from('0: a.3do a.snd\r\n'), LIST_FILES[0]), null);
 });
 
 test('a string table is read as the engine reads it', () => {

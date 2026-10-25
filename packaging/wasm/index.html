@@ -3332,8 +3332,9 @@
           var lines = [];
           for (var x = 0; x < on.length; x++) {
             for (var y = x + 1; y < on.length; y++) {
-              // Their ui/jkstrings.uni are put together (mergedStrings).
-              var paths = (clashes[on[x].index + ',' + on[y].index] || []).filter(function(p) { return p !== STRINGS_PATH; });
+              // Their ui/jkstrings.uni, skin and blade lists are put together
+              // (mergedStrings, mergedList).
+              var paths = (clashes[on[x].index + ',' + on[y].index] || []).filter(function(p) { return MERGED_PATHS.indexOf(p) < 0; });
               if (paths.length)
                 lines.push(on[x].name + ' and ' + on[y].name + ' both change ' +
                            (paths.length === 1 ? paths[0] + '. ' + on[x].name + "'s version is used"
@@ -3517,14 +3518,57 @@
         return table;
       }
 
-      // The set's ui/jkstrings.uni, as { data, mod, mods }: the highest
-      // mod with a copy, and every mod whose copy is in it. null when fewer
-      // than two of the ticked mods have one, or theirs are all the same.
-      async function mergedStrings(picked, files, ext) {
+      // misc/models.dat and misc/sabers.dat are the skins and the saber
+      // blades Multiplayer's character screen offers. The engine reads one
+      // copy of each, the first it finds, so of two mods with skins only the
+      // higher one's are offered: above SBX, Continuum's list leaves out 111
+      // of SBX's 151 skins. So when two or more ticked mods have a copy, the
+      // set gets one with all of their entries: the highest mod's, in its
+      // order, then each lower mod's that aren't in it yet. An entry is the
+      // same as another when its first `same` files are (a skin's model,
+      // whatever its sound; a blade's bitmap and materials), whatever its
+      // number. fields is how many files an entry has.
+      var LIST_FILES = [
+        { path: 'misc/models.dat', count: 'numModels', fields: 2, same: 1 },
+        { path: 'misc/sabers.dat', count: 'numSabers', fields: 3, same: 3 },
+      ];
+      var MERGED_PATHS = [STRINGS_PATH].concat(LIST_FILES.map(function(l) { return l.path; }));
+
+      // A skin or blade list as jkGuiBuildMulti_Show reads it, through
+      // stdConffile (comments and blank lines left out): the count line,
+      // then "n: file file..." lines. Each entry keeps its line's text after
+      // the number, comment and all, in Latin-1. null when the engine
+      // couldn't read it either.
+      function readList(bytes, list) {
+        var text = '';
+        for (var i = 0; i < bytes.length; i += 8192)
+          text += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        var lines = text.split('\n').map(function(l) { return l.replace(/\r$/, ''); }).filter(function(l) {
+          var t = l.replace(/#.*/, '').trim();
+          return t.length > 0;
+        });
+        if (!lines.length || !new RegExp('^\\s*' + list.count + ':\\s*\\d+', 'i').test(lines[0])) return null;
+        var entries = [];
+        for (var n = 1; n < lines.length; n++) {
+          var m = /^\s*(\d+):\s*(.*)$/.exec(lines[n]);
+          if (!m) continue;
+          var words = m[2].replace(/#.*/, '').trim().split(/\s+/);
+          if (words.length < list.fields) continue;
+          entries.push({ num: +m[1], key: words.slice(0, list.same).join(' ').toLowerCase(), rest: m[2] });
+        }
+        entries.sort(function(x, y) { return x.num - y.num; });
+        return entries;
+      }
+
+      // Each ticked mod's copy of a file, highest first, as [{ mod, bytes }]:
+      // its loose file, which the engine reads before any GOB, or else its
+      // first GOB's, in the order the set lists them. With game true, the
+      // game's own copy instead, from its GOBs in resource/, or [].
+      async function copiesOf(path, picked, files, ext, game) {
         async function fromGob(file) {
           var table = await gobTable(file);
           var g = table && table.find(function(g) {
-            return g.name.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase() === STRINGS_PATH;
+            return g.name.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase() === path;
           });
           return g ? new Uint8Array(await file.slice(g.offset, g.offset + g.size).arrayBuffer()) : null;
         }
@@ -3535,33 +3579,54 @@
         function byPath(key) {
           return function(a, b) { return key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0; };
         }
-        // Each ticked mod's copy, highest first: its loose file, which the
-        // engine reads before any GOB, or else its first GOB's, in the order
-        // the set lists them.
         var copies = [];
+        if (game) {
+          var own = files.filter(function(e) {
+            var parts = e.path.toLowerCase().split('/');
+            return e.mod === undefined && parts.length === 2 && parts[0] === 'resource' && parts[1].endsWith(ext);
+          }).sort(byPath(function(e) { return e.path.toLowerCase(); }));
+          for (var e of own) {
+            var b = await fromGob(e.file);
+            if (b) return [{ bytes: b }];
+          }
+          return copies;
+        }
         for (var o of picked) {
           var mine = files.filter(function(e) { return e.mod === o.index; });
-          var loose = mine.find(function(e) { return e.rel.toLowerCase() === STRINGS_PATH; });
+          var loose = mine.find(function(e) { return e.rel.toLowerCase() === path; });
           var bytes = loose ? loose.data : null;
           var gobs = mine.filter(isGob).sort(byPath(function(e) { return e.rel; }));
           for (var k = 0; !bytes && k < gobs.length; k++) bytes = await fromGob(gobs[k].file);
-          var table = bytes && readStrings(bytes);
-          if (table) copies.push({ mod: o.index, table: table, bytes: bytes });
+          if (bytes) copies.push({ mod: o.index, bytes: bytes });
         }
-        if (copies.length < 2 || copies.every(function(c) {
+        return copies;
+      }
+
+      // Whether the copies are all the same, byte for byte.
+      function allSame(copies) {
+        return copies.every(function(c) {
           var a = c.bytes, b = copies[0].bytes;
           return a.length === b.length && a.every(function(x, i) { return x === b[i]; });
-        })) return null;
+        });
+      }
+
+      function latin1(text) {
+        var data = new Uint8Array(text.length);
+        for (var i = 0; i < text.length; i++) data[i] = text.charCodeAt(i);
+        return data;
+      }
+
+      // The set's ui/jkstrings.uni, as { data, mod, mods }: the highest
+      // mod with a copy, and every mod whose copy is in it. null when fewer
+      // than two of the ticked mods have one, or theirs are all the same.
+      async function mergedStrings(picked, files, ext) {
+        var copies = (await copiesOf(STRINGS_PATH, picked, files, ext)).filter(function(c) {
+          return (c.table = readStrings(c.bytes));
+        });
+        if (copies.length < 2 || allSame(copies)) return null;
         // The game's own copy, from its GOBs in resource/.
-        var base = null;
-        var own = files.filter(function(e) {
-          var parts = e.path.toLowerCase().split('/');
-          return e.mod === undefined && parts.length === 2 && parts[0] === 'resource' && parts[1].endsWith(ext);
-        }).sort(byPath(function(e) { return e.path.toLowerCase(); }));
-        for (var e of own) {
-          var b = await fromGob(e.file);
-          if (b && (base = readStrings(b))) break;
-        }
+        var game = await copiesOf(STRINGS_PATH, picked, files, ext, true);
+        var base = game.length ? readStrings(game[0].bytes) : null;
         // The game's lines in its order, then each mod's new ones.
         var tables = (base ? [base] : []).concat(copies.map(function(c) { return c.table; }));
         var keys = [], seen = new Set(), lines = [];
@@ -3580,9 +3645,29 @@
         }
         var text = "# The ticked mods' copies put together by the page, for its set of them.\r\n" +
                    'MSGS ' + lines.length + '\r\n\r\n' + lines.join('\r\n') + '\r\n\r\nEND\r\n';
-        var data = new Uint8Array(text.length);
-        for (var i = 0; i < text.length; i++) data[i] = text.charCodeAt(i);
-        return { data: data, mod: copies[0].mod, mods: copies.map(function(c) { return c.mod; }) };
+        return { data: latin1(text), mod: copies[0].mod, mods: copies.map(function(c) { return c.mod; }) };
+      }
+
+      // The set's copy of a skin or blade list (LIST_FILES), as { data, mod,
+      // mods }, the way mergedStrings gives its file. null when fewer than
+      // two of the ticked mods have one, or theirs are all the same.
+      async function mergedList(list, picked, files, ext) {
+        var copies = (await copiesOf(list.path, picked, files, ext)).filter(function(c) {
+          return (c.entries = readList(c.bytes, list));
+        });
+        if (copies.length < 2 || allSame(copies)) return null;
+        var seen = new Set(), lines = [];
+        for (var c of copies) {
+          for (var e of c.entries) {
+            if (!seen.has(e.key)) {
+              seen.add(e.key);
+              lines.push(lines.length + ':\t' + e.rest);
+            }
+          }
+        }
+        var text = "# The ticked mods' copies put together by the page, for its set of them.\r\n\r\n" +
+                   list.count + ': ' + lines.length + '\r\n\r\n' + lines.join('\r\n') + '\r\n';
+        return { data: latin1(text), mod: copies[0].mod, mods: copies.map(function(c) { return c.mod; }) };
       }
 
       // The ticked mods as one folder, since the engine takes one -path, as
@@ -3591,8 +3676,9 @@
       // order they were added, and a lower mod's loose file is left out when
       // a higher mod has that file, because the engine reads loose files
       // before any GOB. A GOB that's an exact copy of one already in is left
-      // out. ui/jkstrings.uni is the mods' copies put together, as a loose
-      // file (mergedStrings), with .mods, the mods it's from. files carry
+      // out. ui/jkstrings.uni and the skin and blade lists are the mods'
+      // copies put together, as loose files (mergedStrings, mergedList),
+      // with .mods, the mods each is from. files carry
       // .mod (the mod's index), .rel and .data, and so does what comes back.
       async function setFiles(picked, files, contents, ext) {
         var out = [], taken = {}, spelling = {}, gobs = [];
@@ -3637,15 +3723,19 @@
             }
           }
         }
-        var strings = await mergedStrings(picked, files, ext);
-        if (strings) {
-          var at = out.findIndex(function(e) { return e.rel.toLowerCase() === STRINGS_PATH; });
+        var merged = [[STRINGS_PATH, await mergedStrings(picked, files, ext)]];
+        for (var list of LIST_FILES)
+          merged.push([list.path, await mergedList(list, picked, files, ext)]);
+        merged.forEach(function(m) {
+          var path = m[0], made = m[1];
+          if (!made) return;
+          var at = out.findIndex(function(e) { return e.rel.toLowerCase() === path; });
           if (at < 0) {
-            add(STRINGS_PATH, strings.data, strings.mod);
-            at = out.findIndex(function(e) { return e.rel.toLowerCase() === STRINGS_PATH; });
+            add(path, made.data, made.mod);
+            at = out.findIndex(function(e) { return e.rel.toLowerCase() === path; });
           }
-          if (at >= 0) out[at] = { rel: out[at].rel, data: strings.data, mod: strings.mod, mods: strings.mods };
-        }
+          if (at >= 0) out[at] = { rel: out[at].rel, data: made.data, mod: made.mod, mods: made.mods };
+        });
         return out;
       }
 
