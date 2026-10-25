@@ -321,6 +321,10 @@ int sithUpdate()
             sithControl_ReadControls();
             if ( g_sithMode != 2 )
             {
+#ifdef QOL_IMPROVEMENTS
+                // Added: the steps below turn the player for this long, not for the frame's time
+                sithControl_turnSecs = wholeFramesToApply * DELTA_PHYSTICK_FPS;
+#endif
                 sithControl_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
             }
             sithControl_FinishRead();
@@ -391,6 +395,9 @@ int sithUpdate()
             {
 #ifdef FIXED_TIMESTEP_PHYS
                 sithControl_ReadControls();
+#endif
+#ifdef QOL_IMPROVEMENTS
+                sithControl_turnSecs = sithTime_g_frameTimeFlex; // Added
 #endif
                 sithControl_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
 #ifdef FIXED_TIMESTEP_PHYS

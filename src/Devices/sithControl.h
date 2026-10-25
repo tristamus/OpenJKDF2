@@ -90,6 +90,10 @@ void sithControl_UnbindControlEverywhere(int flags, int controlId);
 #ifdef QOL_IMPROVEMENTS
 void sithControl_SetLastSelected(int which);
 int sithControl_GetLastSelected();
+
+// Added: how long physics turns the player for in this frame, set by
+// sithUpdate before sithControl_Update (see sithControl_TurnSpeed).
+extern flex_t sithControl_turnSecs;
 #endif // QOL_IMPROVEMENTS
 
 //static stdControlKeyInfo* (*sithControl_EnumBindings)(sithControlEnumFunc_t func, int a2, int a3, int a4, int a5) = (void*)sithControl_EnumBindings_ADDR;
