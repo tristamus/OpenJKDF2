@@ -6,6 +6,7 @@
 #include <fstream>
 #include <vector>
 #include <cstring>
+#include <cctype>
 #include <stdlib.h>
 #ifndef _WIN32
 #include <unistd.h>
@@ -371,17 +372,44 @@ static std::string jkgm_hash_to_str(uint8_t *p) {
 
 const fs::path jkgm_materials_path{ "jkgm/materials/" };
 
+// Added: metadata is read without exceptions, so a bad file skips that file
+// and a bad field takes its default, instead of the rest of the file being
+// dropped. The browser build has exceptions off (-fno-exceptions), where
+// nlohmann::json aborts the game instead of throwing.
+static bool jkgm_json_get_floats(const nlohmann::json& obj, const char* key, float* out, size_t amt)
+{
+    auto it = obj.find(key);
+    if (it == obj.end() || !it->is_array() || it->size() < amt) return false;
+    for (size_t i = 0; i < amt; i++) {
+        if (!(*it)[i].is_number()) return false;
+    }
+    for (size_t i = 0; i < amt; i++) {
+        out[i] = (*it)[i].get<float>();
+    }
+    return true;
+}
+
+static std::string jkgm_json_get_string(const nlohmann::json& obj, const char* key)
+{
+    auto it = obj.find(key);
+    if (it == obj.end() || !it->is_string()) return "";
+    return it->get<std::string>();
+}
+
 void jkgm_populate_cache()
 {
     if (jkgm_cache_once) return;
 
-    if (!fs::exists(jkgm_materials_path)) {
+    std::error_code ec;
+    if (!fs::exists(jkgm_materials_path, ec)) {
         jkgm_fastpath_disable = true;
         return;
     }
 
-    for (const auto& fs_entry : fs::directory_iterator(jkgm_materials_path)) {
-        if (!fs_entry.is_directory()) {
+    for (fs::directory_iterator dir_it(jkgm_materials_path, ec), dir_end; !ec && dir_it != dir_end; dir_it.increment(ec)) {
+        const auto& fs_entry = *dir_it;
+        std::error_code ec_entry;
+        if (!fs_entry.is_directory(ec_entry)) {
             continue;
         }
         const auto dir_iter_str = fs_entry.path().filename().string();
@@ -389,120 +417,111 @@ void jkgm_populate_cache()
         std::string base_path = "jkgm/materials/" + dir_iter_str + "/";
         std::string metadata_path = base_path + "metadata.json";
 
-        try
+        std::ifstream i(metadata_path);
+        nlohmann::json jkgm_metadata = nlohmann::json::parse(i, nullptr, false);
+        if (jkgm_metadata.is_discarded() || !jkgm_metadata.is_object()) {
+            stdPlatform_Printf("Parse error while reading metadata `%s`\n", metadata_path.c_str());
+            continue;
+        }
+
+        auto materials_it = jkgm_metadata.find("materials");
+        if (materials_it == jkgm_metadata.end() || !materials_it->is_array()) {
+            continue;
+        }
+
+        for (const auto& it : *materials_it)
         {
-            std::ifstream i(metadata_path);
-            nlohmann::json jkgm_metadata;
-            i >> jkgm_metadata;
-       
-            for (auto it : jkgm_metadata["materials"])
+            if (!it.is_object()) continue;
+
+            jkgm_cache_entry_t entry;
+            entry.emissive_tex = "";
+            entry.albedo_tex = "";
+            entry.displacement_tex = "";
+
+            if (!jkgm_json_get_floats(it, "emissive_factor", entry.emissive_factor, 3))
             {
-                jkgm_cache_entry_t entry;
-                entry.emissive_tex = "";
-                entry.albedo_tex = "";
+                entry.emissive_factor[0] = 0.0f;
+                entry.emissive_factor[1] = 0.0f;
+                entry.emissive_factor[2] = 0.0f;
+            }
+
+            entry.emissive_tex = jkgm_json_get_string(it, "emissive_map");
+            if (entry.emissive_tex != "") {
+                entry.emissive_tex = base_path + entry.emissive_tex;
+            }
+
+            if (!jkgm_json_get_floats(it, "albedo_factor", entry.albedo_factor, 4))
+            {
+                entry.albedo_factor[0] = 1.0f;
+                entry.albedo_factor[1] = 1.0f;
+                entry.albedo_factor[2] = 1.0f;
+                entry.albedo_factor[3] = 1.0f;
+            }
+
+            auto displacement_it = it.find("displacement_factor");
+            if (displacement_it != it.end() && displacement_it->is_number()) {
+                entry.displacement_factor = displacement_it->get<float>();
+
+                entry.displacement_tex = jkgm_json_get_string(it, "displacement_map");
+                if (entry.displacement_tex != "") {
+                    entry.displacement_tex = base_path + entry.displacement_tex;
+                }
+                //printf("%s %f\n", entry.displacement_tex.c_str(), entry.displacement_factor);
+            }
+            else
+            {
+                entry.displacement_factor = 0.0f;
                 entry.displacement_tex = "";
+            }
 
-                //TODO safety/bounds checks
-                if (it["emissive_factor"].type() != nlohmann::json::value_t::null) {
-                    auto json_emissive_factor = it["emissive_factor"];
-                    entry.emissive_factor[0] = json_emissive_factor[0];
-                    entry.emissive_factor[1] = json_emissive_factor[1];
-                    entry.emissive_factor[2] = json_emissive_factor[2];
-                }
-                else
-                {
-                    entry.emissive_factor[0] = 0.0f;
-                    entry.emissive_factor[1] = 0.0f;
-                    entry.emissive_factor[2] = 0.0f;
-                }
+            entry.albedo_tex = base_path + jkgm_json_get_string(it, "albedo_map");
 
-                entry.emissive_tex = it.value("emissive_map", "");
-                if (entry.emissive_tex != "") {
-                    entry.emissive_tex = base_path + entry.emissive_tex;
-                }
+            entry.albedo_data = NULL;
+            entry.emissive_data = NULL;
+            entry.displacement_data = NULL;
 
-                //TODO safety/bounds checks
-                if (it["albedo_factor"].type() != nlohmann::json::value_t::null) {
-                    auto json_albedo_factor = it["albedo_factor"];
-                    entry.albedo_factor[0] = json_albedo_factor[0];
-                    entry.albedo_factor[1] = json_albedo_factor[1];
-                    entry.albedo_factor[2] = json_albedo_factor[2];
-                    entry.albedo_factor[3] = json_albedo_factor[3];
-                }
-                else
-                {
-                    entry.albedo_factor[0] = 1.0f;
-                    entry.albedo_factor[1] = 1.0f;
-                    entry.albedo_factor[2] = 1.0f;
-                    entry.albedo_factor[3] = 1.0f;
-                }
+            entry.albedo_width = 0;
+            entry.albedo_height = 0;
+            entry.albedo_hasAlpha = 0;
 
-                if (it["displacement_factor"].type() != nlohmann::json::value_t::null) {
-                    auto json_displacement_factor = it["displacement_factor"];
-                    entry.displacement_factor = json_displacement_factor;
+            entry.emissive_width = 0;
+            entry.emissive_height = 0;
+            entry.emissive_hasAlpha = 0;
 
-                    entry.displacement_tex = it.value("displacement_map", "");
-                    if (entry.displacement_tex != "") {
-                        entry.displacement_tex = base_path + entry.displacement_tex;
-                    }
-                    //printf("%s %f\n", entry.displacement_tex.c_str(), entry.displacement_factor);
-                }
-                else
-                {
-                    entry.displacement_factor = 0.0f;
-                    entry.displacement_tex = "";
-                }
-                    
-                entry.albedo_tex = base_path + it.value("albedo_map", "");
+            entry.displacement_width = 0;
+            entry.displacement_height = 0;
+            entry.displacement_hasAlpha = 0;
 
-                entry.albedo_data = NULL;
-                entry.emissive_data = NULL;
-                entry.displacement_data = NULL;
+            auto replaces_it = it.find("replaces");
+            if (replaces_it != it.end() && replaces_it->is_array()) {
+                for (const auto& repl_it : *replaces_it) {
+                    if (!repl_it.is_object()) continue;
+                    auto cel_it = repl_it.find("cel");
+                    auto name_it = repl_it.find("name");
+                    if (cel_it == repl_it.end() || !cel_it->is_number()) continue;
+                    if (name_it == repl_it.end() || !name_it->is_string()) continue;
 
-                entry.albedo_width = 0;
-                entry.albedo_height = 0;
-                entry.albedo_hasAlpha = 0;
-
-                entry.emissive_width = 0;
-                entry.emissive_height = 0;
-                entry.emissive_hasAlpha = 0;
-
-                entry.displacement_width = 0;
-                entry.displacement_height = 0;
-                entry.displacement_hasAlpha = 0;
-
-                for (auto repl_it : it["replaces"]) {
-                    int cel_idx = repl_it["cel"];
-                    std::string name = repl_it["name"];
+                    int cel_idx = cel_it->get<int>();
+                    std::string name = name_it->get<std::string>();
 
                     jkgm_cache[name + std::to_string(cel_idx)] = entry;
                 }
+            }
 
-                for (auto hash_it : it["replaces_signatures"]) {
+#ifndef ARCH_WASM
+            // The browser build matches by name only (jkgm_populate_shortcuts)
+            auto signatures_it = it.find("replaces_signatures");
+            if (signatures_it != it.end() && signatures_it->is_array()) {
+                for (const auto& hash_it : *signatures_it) {
+                    if (!hash_it.is_string()) continue;
                     //auto bytes = hex_to_bytes(hash_it);
-                    
+
                     //print_hash(bytes.data());
                     //std::cout << hash_it << std::endl;
-                    jkgm_cache_hash[hash_it] = entry;
+                    jkgm_cache_hash[hash_it.get<std::string>()] = entry;
                 }
             }
-        }
-        catch(nlohmann::json::parse_error& e)
-        {
-            std::cout << "Parse error while reading metadata `" << metadata_path << "`:";
-            std::cout << "message: " << e.what() << '\n'
-                  << "exception id: " << e.id << '\n'
-                  << "byte position of error: " << e.byte << std::endl;
-
-            //found_replace = false;
-        }
-        catch(nlohmann::json::exception& e)
-        {
-            std::cout << "Exception while parsing metadata `" << metadata_path << "`:";
-            std::cout << "message: " << e.what() << '\n'
-                  << "exception id: " << e.id << '\n' << std::endl;
-
-            //found_replace = false;
+#endif
         }
     }
     jkgm_cache_once = true;
@@ -556,13 +575,65 @@ std::string jkgm_get_tex_hash(tVBuffer *vbuf, rdDDrawSurface *texture, rdMateria
     return hash;
 }
 
+#ifdef ARCH_WASM
+// Added: the MotS Remastered pack's muzzle flashes are placeholders, grey 8-bit
+// cels that the pack's jkgm/materials/SABER19 glows replace by name. Drawn
+// through the level's palette they come out as a rainbow disc, so the browser
+// build never draws their pixels: every cel is cleared to index 0, which
+// translucent faces discard, the way cel 0 already hides the flash between
+// shots. With the glow files there, the glow is drawn instead; without them,
+// the weapon has no flash.
+static const char* jkgm_aPlaceholderFlashMats[] = {
+    "bry_e11.mat",
+    "bry_flsh.mat",
+    "repeat_flsh.mat",
+    "bow_flsh.mat",
+    "conc_flsh.mat",
+    "radicon.mat",
+    "3rdflsh_red.mat",
+    "3rdflsh_yellow.mat",
+    "3rdflsh_green.mat",
+    "3rdflsh_blue.mat",
+};
+
+static void jkgm_hide_placeholder(tVBuffer *vbuf, rdMaterial* material)
+{
+    if (!vbuf || !material || vbuf->format.format.is16bit) return;
+    SDL_Surface* pSurface = vbuf->sdlSurface;
+    if (!pSurface || !pSurface->pixels) return;
+
+    const char* pName = strrchr(material->mat_full_fpath, '/');
+    pName = pName ? pName + 1 : material->mat_full_fpath;
+
+    for (size_t i = 0; i < sizeof(jkgm_aPlaceholderFlashMats) / sizeof(jkgm_aPlaceholderFlashMats[0]); i++) {
+        const char* pFlash = jkgm_aPlaceholderFlashMats[i];
+        size_t j = 0;
+        while (pName[j] && tolower((unsigned char)pName[j]) == pFlash[j]) j++;
+        if (pName[j] || pFlash[j]) continue;
+
+        memset(pSurface->pixels, 0, (size_t)pSurface->pitch * pSurface->h);
+        return;
+    }
+}
+#endif
+
 void jkgm_populate_shortcuts(tVBuffer *vbuf, rdDDrawSurface *texture, rdMaterial* material, int is_alpha_tex, int mipmap_level, int cel)
 {
     if (Main_bHeadless) return;
     if (texture && texture->texture_loaded) return;
 
+#ifdef ARCH_WASM
+    jkgm_hide_placeholder(vbuf, material);
+
+    // Added: the browser build has always loaded textures when they're first
+    // drawn, so it still does; only jkgm matches are loaded here, up front.
+    const bool bPrecacheUnmatched = false;
+#else
+    const bool bPrecacheUnmatched = true;
+#endif
+
     // Also preload even if we have no jkgm stuff
-    if ((!jkGuiBuildMulti_bRendering && jkPlayer_bEnableTexturePrecache) && jkgm_fastpath_disable && vbuf && texture) {
+    if (bPrecacheUnmatched && (!jkGuiBuildMulti_bRendering && jkPlayer_bEnableTexturePrecache) && jkgm_fastpath_disable && vbuf && texture) {
         // Causes some texture confusion when returning from jkGuiBuildMulti?
         //printf("PreInit %s %x %x %p %x\n", material->mat_fpath, texture->texture_id, texture->texture_loaded, vbuf, std3D_loadedTexturesAmt);
         std3D_AddToTextureCache(vbuf, texture, is_alpha_tex, 0);
@@ -574,28 +645,31 @@ void jkgm_populate_shortcuts(tVBuffer *vbuf, rdDDrawSurface *texture, rdMaterial
 
     jkgm_populate_cache();
 
-    std::string hash = jkgm_get_tex_hash(vbuf, texture, material, is_alpha_tex);
-
     std::string full_fpath_str = std::string(material->mat_full_fpath);
     std::string cache_key = full_fpath_str + std::to_string(cel);
 
-    //printf("%s %s %s\n", full_fpath_str.c_str(), cache_key.c_str(), hash.c_str());
+    //printf("%s %s\n", full_fpath_str.c_str(), cache_key.c_str());
 
     texture->cache_entry = NULL;
 
+    // Added: the checksum reads every pixel of the texture, so it's only
+    // worked out when the name has no entry. The browser build matches by
+    // name only.
     if (jkgm_cache.find(cache_key) != jkgm_cache.end()) {
         texture->skip_jkgm = 0;
     }
-    else if (jkgm_cache_hash.find(hash) != jkgm_cache_hash.end()) {
+#ifndef ARCH_WASM
+    else if (jkgm_cache_hash.find(jkgm_get_tex_hash(vbuf, texture, material, is_alpha_tex)) != jkgm_cache_hash.end()) {
         texture->skip_jkgm = 0;
     }
+#endif
     else {
         texture->skip_jkgm = 1;
     }
 
     // Also preload non-PNG textures
     if (texture->skip_jkgm) {
-        if (!jkGuiBuildMulti_bRendering && jkPlayer_bEnableTexturePrecache) {
+        if (bPrecacheUnmatched && !jkGuiBuildMulti_bRendering && jkPlayer_bEnableTexturePrecache) {
             // Causes some texture confusion when returning from jkGuiBuildMulti?
             //printf("PreInit %s %x %x %p%x \n", material->mat_fpath, texture->texture_id, texture->texture_loaded, vbuf, std3D_loadedTexturesAmt);
             std3D_AddToTextureCache(vbuf, texture, is_alpha_tex, 0);
@@ -656,9 +730,14 @@ int jkgm_std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is
         return 0;
     }
 
-    
+    // Added: same limit as std3D_AddToTextureCache
+    if (std3D_loadedTexturesAmt >= STD3D_MAX_TEXTURES) {
+        return 0;
+    }
+
     if (!jkgm_cache_once) {
-        if (!fs::exists(jkgm_materials_path)) {
+        std::error_code ec;
+        if (!fs::exists(jkgm_materials_path, ec)) {
             jkgm_fastpath_disable = true;
             return 0;
         }
@@ -743,14 +822,26 @@ int jkgm_std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is
                 //printf("Using precached %s\n", path);
             }
 
-            if (data || loadPngImage(path, &entry->albedo_width, &entry->albedo_height, &entry->albedo_hasAlpha, &data, 0))
+#ifdef ARCH_WASM
+            // Added: WebGL 2 takes no GL_BGRA/GL_BGR uploads, so the PNG is
+            // read as BGR(A) and uploaded as RGB(A): the same texture, and
+            // TEX_MODE_16BPP's swap still applies.
+            const int albedo_flip_bgr = 1;
+#else
+            const int albedo_flip_bgr = 0;
+#endif
+            if (data || loadPngImage(path, &entry->albedo_width, &entry->albedo_height, &entry->albedo_hasAlpha, &data, albedo_flip_bgr))
             {
                 //printf("Loaded %s %p\n", path, data);
                 //glTexStorage2D(GL_TEXTURE_2D, 1, entry->albedo_hasAlpha ? GL_RGBA8 : GL_RGB8, width, height);
                 //glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, entry->albedo_hasAlpha ? GL_RGBA : GL_RGB, GL_UNSIGNED_INT_8_8_8_8_REV, data);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+#ifdef ARCH_WASM
+                glTexImage2D(GL_TEXTURE_2D, 0, entry->albedo_hasAlpha ? GL_RGBA8 : GL_RGB8, entry->albedo_width, entry->albedo_height, 0,  entry->albedo_hasAlpha ?  GL_RGBA : GL_RGB,     GL_UNSIGNED_BYTE, data);
+#else
                 glTexImage2D(GL_TEXTURE_2D, 0, entry->albedo_hasAlpha ? GL_RGBA8 : GL_RGB8, entry->albedo_width, entry->albedo_height, 0,  entry->albedo_hasAlpha ?  GL_BGRA : GL_BGR,     GL_UNSIGNED_BYTE, data);
+#endif
                 //glGetTexImage(GL_TEXTURE_2D, 0, entry->albedo_hasAlpha ? GL_BGRA : GL_BGR, GL_UNSIGNED_BYTE, data);
                 //printf("%x\n", *(uint32_t*)data);
                 texture->texture_id = image_texture;
@@ -918,7 +1009,10 @@ int jkgm_std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is
 
     texture->skip_jkgm = 1;
 
+#ifndef ARCH_WASM
+    // Added: not in the browser, where it's one console line per texture
     stdPlatform_Printf("Cache miss, %s\n", cache_key.c_str());
+#endif
 
     return 0;
 }
