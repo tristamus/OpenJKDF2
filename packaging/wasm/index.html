@@ -676,7 +676,7 @@
       .gfx-notice ol { margin: 0 0 6px; padding-left: 22px; }
       .gfx-notice li { margin-bottom: 4px; }
       .gfx-notice code { font: bold 14px 'Courier New', monospace; color: var(--gold); overflow-wrap: anywhere; }
-      .gfx-notice .copy, .gfx-notice .hide {
+      .gfx-notice .copy, .gfx-notice .hide, .gfx-notice .reload {
         margin-left: 6px;
         padding: 1px 8px;
         border: 2px outset #9cc;
@@ -685,8 +685,23 @@
         font: bold 12px Verdana, Geneva, sans-serif;
         cursor: pointer;
       }
-      .gfx-notice .copy:active, .gfx-notice .hide:active { border-style: inset; }
+      .gfx-notice .copy:active, .gfx-notice .hide:active, .gfx-notice .reload:active { border-style: inset; }
       .gfx-notice .fine { margin: 0; color: var(--muted); font-size: 13px; }
+      .gfx-notice .fine:empty { display: none; }
+
+      /* SDL's error box, which the engine opens just before it stops; when it
+         couldn't get 3D graphics, with steps (showGlRefused). */
+      dialog.SDL3_messagebox {
+        max-width: 600px;
+        padding: 14px 18px;
+        background-color: var(--teal);
+        color: var(--ink);
+        border: 2px outset var(--teal-light);
+        font: 15px Verdana, Geneva, sans-serif;
+      }
+      dialog.SDL3_messagebox::backdrop { background-color: rgba(0, 0, 0, 0.6); }
+      dialog.SDL3_messagebox h1 { margin: 0 0 8px; font: bold 22px Verdana, Geneva, sans-serif; color: var(--gold); }
+      dialog.SDL3_messagebox .gfx-notice { margin: 0 0 12px; }
 
       /* Live counts in Standard Rooms, and Nar Shaddaa's room window, after
          the Zone's room list and its game room client: tables on black, a
@@ -1295,8 +1310,10 @@
               fullscreen. This browser remembers your choice.</span></span></label>
           <label class="picker-option" id="raw-mouse-choice" hidden><input type="checkbox" id="raw-mouse-option" checked>
             <span>Raw mouse input <span class="fine">Mouse look reads the mouse itself, without Windows' pointer speed and
-              Enhance pointer precision, so the view can't suddenly jolt round. Untick it if mouse look doesn't turn at all,
-              as over remote desktop or with a drawing tablet. This browser remembers your choice.</span></span></label>
+              Enhance pointer precision, so the view can't suddenly jolt round. Untick it to aim with your Windows mouse
+              settings, acceleration included (quick flicks turn further, slow movements stay fine), or if mouse look
+              doesn't turn at all, as over remote desktop or with a drawing tablet. This browser remembers your
+              choice.</span></span></label>
           <div class="actions">
             <button class="play" type="button">Start</button>
             <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
@@ -1376,12 +1393,24 @@
 
           // Ask for the faster graphics card on laptops that have two. The engine's
           // context leaves powerPreference at "default", which lets the browser pick
-          // the one that saves power.
+          // the one that saves power. If the browser won't make that context, it's
+          // asked again just as the engine asked, and if it still says no, the
+          // engine's error box gets steps that help (showGlRefused). The browser's
+          // reason, where it gives one, is kept for that box.
+          canvas.addEventListener('webglcontextcreationerror', function(e) {
+            if (e.statusMessage) Module.jkGlRefused = e.statusMessage;
+          }, false);
           var getContext = canvas.getContext;
           canvas.getContext = function(type, attrs) {
-            if (/^webgl/.test(type) && (!attrs || !attrs.powerPreference || attrs.powerPreference === 'default'))
-              attrs = Object.assign({}, attrs, { powerPreference: 'high-performance' });
-            return getContext.call(this, type, attrs);
+            if (!/^webgl/.test(type)) return getContext.call(this, type, attrs);
+            var gl = null;
+            if (!attrs || !attrs.powerPreference || attrs.powerPreference === 'default') {
+              gl = getContext.call(this, type, Object.assign({}, attrs, { powerPreference: 'high-performance' }));
+              if (!gl) console.warn('Graphics: no ' + type + ' context on the faster graphics card, asking for any');
+            }
+            if (!gl) gl = getContext.call(this, type, attrs);
+            if (!gl && typeof showGlRefused === 'function') showGlRefused();
+            return gl;
           };
 
           return canvas;
@@ -2642,6 +2671,49 @@
       // Checked once, when the page opens; a restart of the browser reloads it.
       var gfxCheck = browserProblem() ? null : graphicsCheck();
       showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
+
+      // ---- When the game can't get its 3D graphics (WebGL 2) at all, the
+      // engine opens SDL's error box ("Could not create webgl context") and
+      // stops. Often the browser turned the page down: after the graphics
+      // driver crashes or resets, Chrome, Edge and Opera refuse 3D graphics to
+      // the site until it's reloaded. Otherwise acceleration is off, or the
+      // graphics card or its driver is blocked for WebGL 2. The box gets steps
+      // for those, in that order, and the browser's own reason.
+      function showGlRefused() {
+        if (showGlRefused.done) return;
+        showGlRefused.done = true;
+        var how = GFX_HOW[browserKind()];
+        var steps = '<li>Reload this page.<button class="reload" type="button">Reload</button> After a graphics ' +
+                    "driver crash or reset, Chrome, Edge and Opera stop a site's 3D graphics until it's reloaded.</li>";
+        if (how && how.steps) {
+          steps += '<li>' + how.steps + '</li>';
+        } else {
+          steps += '<li>Close ' + (how ? how.name : 'the browser') + ' completely, every window, and open it again.</li>';
+          steps += how ? '<li>Check graphics acceleration is on: open a new tab and go to <code>' + how.address +
+                         '</code>. ' + how.toggle + ' ' + how.restart + '</li>'
+                       : "<li>Check graphics acceleration is on: open the browser's settings, search for " +
+                         '<b>acceleration</b>, turn it on and restart the browser.</li>';
+          steps += '<li>Update your graphics driver, then restart the computer.</li>';
+        }
+        var el = document.createElement('section');
+        el.className = 'gfx-notice';
+        el.innerHTML = '<p>' + (how ? how.name : 'Your browser') + " wouldn't let the game draw 3D graphics " +
+                       '(WebGL 2). Try these in order:</p><ol>' + steps + '</ol><p class="fine"></p>';
+        if (Module.jkGlRefused) el.querySelector('.fine').textContent = 'The browser said: ' + Module.jkGlRefused;
+        el.querySelector('.reload').addEventListener('click', function() {
+          leaveGuard = false;
+          location.reload();
+        });
+        console.warn('Graphics: no WebGL 2 context' + (Module.jkGlRefused ? ' (' + Module.jkGlRefused + ')' : ''));
+        // The box opens once the engine has tried every context it asks for. If
+        // a later try worked, there's no box and nothing to add.
+        var tries = 0;
+        (function place() {
+          var box = document.querySelector('dialog.SDL3_messagebox[open]');
+          if (box) box.insertBefore(el, box.querySelector('button'));
+          else if (++tries < 50) setTimeout(place, 100);
+        })();
+      }
 
       // ---- Edge's enhanced security. Where it applies (every site on Strict,
       // unfamiliar sites on Balanced; it's off by default) Edge turns off its
