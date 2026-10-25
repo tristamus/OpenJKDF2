@@ -566,7 +566,17 @@ void jkSaber_UpdateCollision(SithThing *player, int joint, int bSecondary)
     }
 
     if ( !rdModel3_GetMeshMatrix(&player->renderData, &matrix, joint, &jointMat) )
-        return;
+    {
+        // Added: a joint the model lacks (jkPlayer_JointMatrix), once the
+        // joint matrices are built
+        rdMatrix34* pJointMat;
+        if ( !rdModel3_GetMeshMatrix(&player->renderData, &matrix, 0, &jointMat) )
+            return;
+        pJointMat = jkPlayer_JointMatrix(player, joint, &tmpMat);
+        if ( !pJointMat )
+            return;
+        rdMatrix_Copy34(&jointMat, pJointMat);
+    }
 
     // Added: the blade starts where its hilt is drawn, and points the way it
     // does (jkPlayer_GripMatrix)

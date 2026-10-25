@@ -1205,6 +1205,53 @@ rdMatrix34* jkPlayer_GripMatrix(SithThing* thing, int joint, rdMatrix34* pJointM
     return pOut;
 }
 
+// Added: the matrix of one of a thing's joints, or NULL. A puppet can name a
+// node the thing's model doesn't have: SBX's player model has two nodes
+// more than the original game's, and SBX's puppets put the staff's far
+// blade on one (19, a dummy turned about on the right hand), which a skin
+// made on the original skeleton (ex. Continuum's) leaves out. Then the node
+// is taken from the model the thing's template has, and set on its parent
+// here, found by name, the way rdThing_AccumulateMatrices sets a node on
+// its parent. The joint matrices must be built.
+rdMatrix34* jkPlayer_JointMatrix(SithThing* thing, int joint, rdMatrix34* pOut)
+{
+    rdModel3* pModel = thing->renderData.model3;
+    rdModel3* pBase = NULL;
+    rdHierarchyNode* pNode;
+    rdMatrix34 local;
+    rdVector3 negPivot;
+    int parent = -1;
+
+    if (!pModel || joint < 0 || !thing->renderData.paJointMatrices)
+        return NULL;
+    if (joint < (int)pModel->numHNodes)
+        return &thing->renderData.paJointMatrices[joint];
+    if (thing->pTemplate && thing->pTemplate->renderData.type == RD_THING_MODEL3)
+        pBase = thing->pTemplate->renderData.model3;
+    if (!pBase || pBase == pModel || joint >= (int)pBase->numHNodes)
+        return NULL;
+    pNode = &pBase->aHierarchyNodes[joint];
+    if (!pNode->parent)
+        return NULL;
+    for (int i = 0; i < (int)pModel->numHNodes; i++)
+    {
+        if (!__strcmpi(pModel->aHierarchyNodes[i].name, pNode->parent->name))
+        {
+            parent = i;
+            break;
+        }
+    }
+    if (parent < 0)
+        return NULL;
+
+    rdMatrix_BuildTranslate34(&local, &pNode->pivot);
+    rdMatrix_PostMultiply34(&local, &pNode->posRotMatrix);
+    rdVector_Neg3(&negPivot, &pModel->aHierarchyNodes[parent].pivot);
+    rdMatrix_PostTranslate34(&local, &negPivot);
+    rdMatrix_Multiply34(pOut, &thing->renderData.paJointMatrices[parent], &local);
+    return pOut;
+}
+
 void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
 {
     jkPlayerInfo* playerInfo = thing->playerInfo;
@@ -1247,8 +1294,12 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
         }
     }
 
-    rdMatrix34* primaryMat = &thing->renderData.paJointMatrices[primary_mesh];
-    rdMatrix34* secondaryMat = &thing->renderData.paJointMatrices[secondary_mesh];
+    // Added: a joint the model lacks is worked out (jkPlayer_JointMatrix)
+    rdMatrix34 primaryJoint, secondaryJoint;
+    rdMatrix34* primaryMat = jkPlayer_JointMatrix(thing, primary_mesh, &primaryJoint);
+    rdMatrix34* secondaryMat = jkPlayer_JointMatrix(thing, secondary_mesh, &secondaryJoint);
+    if (!primaryMat)
+        return;
 
     // Added: with two sabers, a second hilt in the left hand, and each hand
     // holds its hilt by the middle
@@ -1257,7 +1308,8 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
     if (bSecondHilt || jkPlayer_HasReverseGrip(thing))
     {
         primaryMat = jkPlayer_GripMatrix(thing, primary_mesh, primaryMat, &primaryGrip);
-        secondaryMat = jkPlayer_GripMatrix(thing, secondary_mesh, secondaryMat, &secondaryGrip);
+        if (secondaryMat)
+            secondaryMat = jkPlayer_GripMatrix(thing, secondary_mesh, secondaryMat, &secondaryGrip);
     }
 
     if (thing->jkFlags & JKFLAG_PERSUASION)
@@ -1292,7 +1344,7 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
             {
                 jkSaber_PolylineRand(&playerInfo->polylineThing);
                 rdThing_Draw(&playerInfo->polylineThing, primaryMat);
-                if ( thing->jkFlags & JKFLAG_DUALSABERS)
+                if ( (thing->jkFlags & JKFLAG_DUALSABERS) && secondaryMat) // Added: secondaryMat
                     rdThing_Draw(&playerInfo->polylineThing, secondaryMat);
             }
         }
@@ -1314,7 +1366,7 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
         {
             jkSaber_PolylineRand(&playerInfo->polylineThing);
             rdThing_Draw(&playerInfo->polylineThing, primaryMat);
-            if (thing->jkFlags & JKFLAG_DUALSABERS)
+            if ((thing->jkFlags & JKFLAG_DUALSABERS) && secondaryMat) // Added: secondaryMat
                 rdThing_Draw(&playerInfo->polylineThing, secondaryMat);
         }
     }

@@ -104,6 +104,7 @@ int jkPlayer_HasSecondHilt(SithThing* thing); // Added
 flex_t jkPlayer_GetGripOffset(SithThing* thing, int joint); // Added
 int jkPlayer_HasReverseGrip(SithThing* thing); // Added
 rdMatrix34* jkPlayer_GripMatrix(SithThing* thing, int joint, rdMatrix34* pJointMat, rdMatrix34* pOut); // Added
+rdMatrix34* jkPlayer_JointMatrix(SithThing* thing, int joint, rdMatrix34* pOut); // Added
 void jkPlayer_SetWaggle(SithThing *player, rdVector3 *waggleVec, flex_t waggleMag);
 int jkPlayer_VerifyWcharName(char16_t *name);
 int jkPlayer_VerifyCharName(char *name);
