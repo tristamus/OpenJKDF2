@@ -3685,8 +3685,8 @@ void std3D_ScreenshotWindow(const char* pFpath)
 #endif
 
 #ifdef ARCH_WASM
-// Added: screenshots in the browser build, which has no PNG writer
-// (TARGET_CAN_JKGM is off there). Reads back the frame std3D_DrawMenu just
+// Added: screenshots in the browser build, where a PNG written to the in-memory
+// file system would never reach the player. Reads back the frame std3D_DrawMenu just
 // drew into the window, HUD included, as RGBA rows from the bottom up, for the
 // page to encode (jkGame_UpdateScreenshots). The caller frees it.
 uint8_t* std3D_ReadWindowRGBA(int* pW, int* pH)

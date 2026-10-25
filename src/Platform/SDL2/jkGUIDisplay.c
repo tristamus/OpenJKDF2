@@ -117,8 +117,10 @@ static jkGuiMenu jkGuiDisplay_menuAdvanced = { jkGuiDisplay_aElementsAdvanced, 0
 void jkGuiDisplay_Startup()
 {
     flex32_t ftmp;
-#ifndef TARGET_CAN_JKGM
-    // Added: jkgfxmod isn't built in, so its box would do nothing
+#if !defined(TARGET_CAN_JKGM) || defined(ARCH_WASM)
+    // Added: jkgfxmod isn't built in, so its box would do nothing. The browser
+    // build has it only for the MotS Remastered muzzle flashes, and keeps it on
+    // (jkPlayer_ReadConf), as the flashes are hidden placeholders without it.
     jkGuiDisplay_aElementsAdvanced[9].bIsVisible = 0;
     jkGuiDisplay_aElementsAdvanced[10].rect.y = 150;
 #endif

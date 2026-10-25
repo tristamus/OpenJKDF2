@@ -793,6 +793,11 @@ int jkPlayer_ReadConf(char16_t *name)
         jkPlayer_gamma = stdJSON_GetFloat(ext_fpath, "gamma", jkPlayer_gamma);
 
         jkPlayer_bEnableJkgm = stdJSON_GetBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
+#ifdef ARCH_WASM
+        // Added: the browser has no box to turn it back on (jkGuiDisplay_Startup),
+        // so a character brought over from a desktop install can't turn it off.
+        jkPlayer_bEnableJkgm = 1;
+#endif
         jkPlayer_bEnableTexturePrecache = stdJSON_GetBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
         jkPlayer_bKeepCorpses = stdJSON_GetBool(ext_fpath, "bKeepCorpses", jkPlayer_bKeepCorpses);
 #ifndef TARGET_RETRO_HOMEBREW
