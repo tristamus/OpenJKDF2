@@ -8,7 +8,11 @@ macro(plat_initialize)
     include(cmake_modules/plat_feat_full_sdl2.cmake)
     set(TARGET_USE_PHYSFS FALSE)
     set(OPENJKDF2_NO_ASAN TRUE)
-    set(TARGET_CAN_JKGM FALSE)
+    # jkgm (JkGfxMod-style material replacements) is on so the MotS
+    # Remastered pack's muzzle-flash glows can replace its placeholder flash
+    # textures, as they do on desktop. The page shell only hands the engine
+    # those few glow files from the player's jkgm folder, not the whole pack.
+    set(TARGET_CAN_JKGM TRUE)
     set(TARGET_USE_CURL FALSE)
     set(TARGET_BUILD_TESTS FALSE)
     set(TARGET_FIND_OPENAL FALSE)
@@ -56,6 +60,9 @@ macro(plat_link_and_package)
     target_link_libraries(${BIN_NAME} PRIVATE -lm -lSDL3 -lGL -lGLEW -lopenal -lidbfs.js)
     set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js)
     target_link_libraries(sith_engine PRIVATE nlohmann_json::nlohmann_json)
+    if(TARGET_CAN_JKGM)
+        target_link_libraries(sith_engine PRIVATE PNG::PNG ZLIB::ZLIB)
+    endif()
 
     # Game files normally come from the player's own install, picked in the
     # page shell at runtime. Baking wasm_out/ into a .data package is kept for

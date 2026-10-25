@@ -2304,8 +2304,15 @@
       // (pickedFiles), as [{ path, file }] with their paths in it: each
       // folder's files, then its folders', sorted by name ignoring case.
       // Folders the page never reads aren't opened, so MotS's HD textures
-      // (jkgm/) aren't listed one by one, and nor is anything more than 8
-      // folders deep.
+      // (jkgm/, but for the muzzle-flash glows in jkgm/materials/saber19)
+      // aren't listed one by one, and nor is anything more than 8 folders
+      // deep.
+      function isOpened(lower) {
+        if (lower === 'jkgm' || lower.startsWith('jkgm/'))
+          return (JKGM_FLASH_DIR + '/').startsWith(lower + '/');
+        return !isSkipped(lower + '/');
+      }
+
       async function listFolder(dir) {
         var out = [];
         function byName(a, b) {
@@ -2320,7 +2327,7 @@
           got.forEach(function(file, i) { out.push({ path: prefix + files[i].name, file: file }); });
           for (var d of dirs.sort(byName)) {
             var lower = (prefix + d.name).toLowerCase();
-            if (depth < 8 && lower !== 'jkgm' && !isSkipped(lower + '/')) await walk(d, prefix + d.name + '/', depth + 1);
+            if (depth < 8 && isOpened(lower)) await walk(d, prefix + d.name + '/', depth + 1);
           }
         }
         await walk(dir, '', 0);
@@ -2938,8 +2945,8 @@
 
       // ---- What gets read. Only the files the engine opens are read into
       // the tab: the rest of the folder (the MotS Remastered pack's jkgm
-      // textures, which this build can't use, backups, screenshots,
-      // launchers) is never read. detectMods finds the mods' files; these say
+      // textures, about 1.8 GB, but for its muzzle-flash glows; backups,
+      // screenshots, launchers) is never read. detectMods finds the mods' files; these say
       // which files of a mod, and which of the rest, the engine reads. Paths
       // are lowercase and spelled one way.
 
@@ -2962,6 +2969,8 @@
       //   before anywhere else, so a player's own loose cogs and the like
       //   are there.
       // - controls/: saved control setups.
+      // - for MotS, jkgm/materials/saber19: the Remastered pack's muzzle-flash
+      //   glows (keepFlashGlows).
       // player/ is read on its own (importPlayers). modPath is a folder given
       // with ?path= in the address, which is read like a mod.
       function isGameFile(lower, ext, modPath) {
@@ -2980,8 +2989,64 @@
             return parts.length === 2 && gob;
           case 'controls':
             return parts.length > 1;
+          case 'jkgm':
+            return ext === '.goo' && parts.slice(0, -1).join('/') === JKGM_FLASH_DIR &&
+                   (last === 'metadata.json' || last.endsWith('.png'));
         }
         return parts.length > 1 && MOD_RESOURCE_DIRS.indexOf(parts[0]) >= 0;
+      }
+
+      // The MotS Remastered pack's muzzle flashes are grey placeholders, which
+      // the glows in jkgm/materials/saber19 replace by name: the engine reads
+      // the folder's metadata.json and the pictures it names
+      // (src/Platform/GL/jkgm.cpp). Only the flashes' entries are kept, so the
+      // folder's sabers stay as the game draws them. Each picture is put
+      // under the spelling the metadata gives it, since the tab's files are
+      // case-sensitive. Without a metadata.json the engine can read, the
+      // folder is left out and the engine hides the flashes. Takes and
+      // returns the list of { path, data } to write, paths under gameRoot.
+      var JKGM_FLASH_DIR = 'jkgm/materials/saber19';
+      var FLASH_MATS = ['bry_e11.mat', 'bry_flsh.mat', 'repeat_flsh.mat', 'bow_flsh.mat', 'conc_flsh.mat', 'radicon.mat',
+                        '3rdflsh_red.mat', '3rdflsh_yellow.mat', '3rdflsh_green.mat', '3rdflsh_blue.mat'];
+      function keepFlashGlows(loaded, gameRoot) {
+        var dir = gameRoot + JKGM_FLASH_DIR + '/';
+        function inDir(e) { return e.path.toLowerCase().startsWith(dir); }
+        var glows = loaded.filter(inDir);
+        if (!glows.length) return loaded;
+        var out = loaded.filter(function(e) { return !inDir(e); });
+        var meta = glows.find(function(e) { return e.path.toLowerCase() === dir + 'metadata.json'; });
+        var parsed = null;
+        try {
+          if (meta) parsed = JSON.parse(new TextDecoder().decode(meta.data));
+        } catch (err) {}
+        if (!parsed || !Array.isArray(parsed.materials)) {
+          console.warn('OpenJKDF2: no muzzle-flash glows, ' + (meta ? 'its metadata.json can\'t be read' : JKGM_FLASH_DIR + ' has no metadata.json'));
+          return out;
+        }
+        var folder = meta.path.substring(0, meta.path.length - 'metadata.json'.length);
+        var byName = {};
+        for (var e of glows) byName[e.path.substring(folder.length).toLowerCase()] = e;
+        function isFlash(r) {
+          return r && typeof r.name === 'string' && FLASH_MATS.indexOf(r.name.toLowerCase().replace(/^.*[\/\\]/, '')) >= 0;
+        }
+        var kept = [], pictures = {};
+        for (var m of parsed.materials) {
+          if (!m || !Array.isArray(m.replaces) || !m.replaces.length || !m.replaces.every(isFlash)) continue;
+          kept.push(m);
+          for (var key of ['albedo_map', 'emissive_map', 'displacement_map']) {
+            var picture = typeof m[key] === 'string' && byName[m[key].toLowerCase()];
+            if (picture && !pictures[m[key]]) pictures[m[key]] = picture.data;
+          }
+        }
+        if (!kept.length) {
+          console.warn('OpenJKDF2: no muzzle-flash glows, ' + JKGM_FLASH_DIR + '/metadata.json has none');
+          return out;
+        }
+        var json = JSON.stringify(Object.assign({}, parsed, { materials: kept }));
+        out.push({ path: folder + 'metadata.json', data: new TextEncoder().encode(json) });
+        for (var name in pictures) out.push({ path: folder + name, data: pictures[name] });
+        console.log('OpenJKDF2: muzzle-flash glows: ' + kept.length + ' entries, ' + Object.keys(pictures).length + ' pictures');
+        return out;
       }
 
       // The mods among the picked files, each with the files that belong to it,
@@ -4024,6 +4089,7 @@
           files[i].data = new Uint8Array(await files[i].file.arrayBuffer());
           loaded.push({ path: gameRoot + files[i].path, data: files[i].data });
         }
+        if (isMots) loaded = keepFlashGlows(loaded, gameRoot);
         lap('reading');
         // One ticked mod runs from its own folder. Several are put together
         // in jkmods/set, sharing their files' data, unless only one of them
