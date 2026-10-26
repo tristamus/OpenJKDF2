@@ -623,6 +623,8 @@
       #picker .picker-option[hidden] { display: none; }
       #picker .picker-option input { accent-color: var(--gold); }
       #picker .picker-option .fine { display: block; }
+      #picker .picker-option:has(input:disabled) { cursor: default; }
+      #picker .picker-option input:disabled { opacity: 0.5; }
       #mod-choice fieldset { margin: 0 0 12px; padding: 0; border: 0; }
       #mod-choice legend { margin-bottom: 6px; padding: 0; font: bold 15px Verdana, Geneva, sans-serif; color: var(--gold); }
       #mod-choice fieldset label {
@@ -1308,12 +1310,12 @@
           <label class="picker-option"><input type="checkbox" id="fullscreen-option" checked>
             <span>Play in fullscreen <span class="fine">The game fills the screen when you click it. Hold Esc to leave
               fullscreen. This browser remembers your choice.</span></span></label>
-          <label class="picker-option" id="raw-mouse-choice" hidden><input type="checkbox" id="raw-mouse-option" checked>
-            <span>Raw mouse input <span class="fine">Mouse look reads the mouse itself, without Windows' pointer speed and
-              Enhance pointer precision, so the view can't suddenly jolt round. Untick it to aim with your Windows mouse
-              settings, acceleration included (quick flicks turn further, slow movements stay fine), or if mouse look
-              doesn't turn at all, as over remote desktop or with a drawing tablet. This browser remembers your
-              choice.</span></span></label>
+          <label class="picker-option" id="raw-mouse-choice"><input type="checkbox" id="raw-mouse-option" checked>
+            <span>Raw mouse input <span class="fine raw-mouse-about">Ticked, mouse look reads the mouse itself, without
+              Windows' pointer speed and Enhance pointer precision, so the view can't suddenly jolt round. Unticked, you
+              aim with your Windows mouse settings, acceleration included (quick flicks turn further, slow movements stay
+              fine). Untick it too if mouse look doesn't turn at all, as over remote desktop or with a drawing tablet.
+              This browser remembers your choice.</span></span></label>
           <div class="actions">
             <button class="play" type="button">Start</button>
             <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
@@ -1472,30 +1474,72 @@
       // ---- Mouse look. Without raw mouse input, Chromium (Chrome, Edge, Opera,
       // Brave) keeps the hidden cursor away from the page's edges by moving it
       // back to the middle, and that move can come through as mouse movement:
-      // the view jolts round 90 or 180 degrees. On Windows, raw input reads the
-      // mouse itself, never moves the cursor, and skips Windows' pointer speed
-      // and acceleration, so every lock there asks for it (the engine's and
-      // SDL's both call the canvas's requestPointerLock), and the plain lock
-      // follows if the browser turns it down. Linux has no raw input: there,
-      // and on Windows without it, the engine leaves out the jumps it can tell
-      // (Window_WasmIsMouseJump). macOS, Firefox and Safari don't move the
+      // the view jolts round 90 or 180 degrees. Raw input reads the mouse
+      // itself, never moves the cursor, and skips the system's pointer speed
+      // and acceleration. Chromium has it on Windows, macOS and ChromeOS,
+      // Firefox from 152 on Windows and macOS, Safari from 18.4; on Linux every
+      // browser turns it down (NotSupportedError). With the box ticked, every
+      // lock asks for it (the engine's and SDL's both call the canvas's
+      // requestPointerLock), and the plain lock follows if the browser turns it
+      // down. The box starts ticked only in Chromium on Windows, where the
+      // jolts are and locks have asked for raw input since the box came in;
+      // the other browsers' locks were always plain, so it starts unticked
+      // there. Linux has no raw input: there, and on Windows without it, the
+      // engine leaves out the jumps it can tell (Window_WasmIsMouseJump). macOS, Firefox and Safari don't move the
       // cursor this way. Module.jkRawMouse.warps says whether this browser
       // moves it, and .active whether the current lock is raw.
       var RAW_MOUSE_SETTING = 'jkdf2mp-raw-mouse';
-      var rawMousePlatform = navigator.userAgentData ? navigator.userAgentData.platform : '';
+      // Firefox and Safari have no userAgentData, so they say their system in navigator.platform.
+      var rawMousePlatform = navigator.userAgentData ? navigator.userAgentData.platform :
+                             /^Win/.test(navigator.platform) ? 'Windows' : /^Mac/.test(navigator.platform) ? 'macOS' : '';
+      var rawMouseFirefox = /Firefox\/(\d+)/.exec(navigator.userAgent);
+      var rawMouseSafari = !/Chrome\/|Chromium\/|OPR\//.test(navigator.userAgent) &&
+                           /Version\/(\d+)\.(\d+).*Safari\//.exec(navigator.userAgent);
+      var rawMouseDefault = rawMousePlatform === 'Windows' && !rawMouseFirefox;
       var rawMouse = Module.jkRawMouse = { warps: !!navigator.userAgentData && rawMousePlatform !== 'macOS',
-                                           want: true, supported: null, active: false };
-      var rawMouseWindows = rawMousePlatform === 'Windows';
+                                           want: rawMouseDefault, supported: null, active: false };
+      // Why this browser can't have raw input, or ''.
+      var rawMouseNo = ['Windows', 'macOS', 'Chrome OS', 'Chromium OS'].indexOf(rawMousePlatform) < 0 ? 'system' :
+                       rawMouseFirefox && +rawMouseFirefox[1] < 152 ? 'firefox' :
+                       rawMouseSafari && +rawMouseSafari[1] * 100 + +rawMouseSafari[2] < 1804 ? 'safari' : '';
+      if (rawMouseNo) rawMouse.supported = false;
       var rawMouseOption = document.getElementById('raw-mouse-option');
-      try { rawMouse.want = rawMouseOption.checked = localStorage.getItem(RAW_MOUSE_SETTING) !== 'off'; } catch (e) {}
+      var rawMouseAbout = document.querySelector('#raw-mouse-choice .raw-mouse-about');
+      try {
+        var rawMouseStored = localStorage.getItem(RAW_MOUSE_SETTING);
+        if (rawMouseStored) rawMouse.want = rawMouseStored === 'on';
+      } catch (e) {}
+      // The box says what mouse look does in this browser, and is greyed out
+      // where it can't be raw.
+      function showRawMouseChoice() {
+        var system = rawMousePlatform === 'Windows' ? 'Windows' : rawMousePlatform === 'macOS' ? 'Mac' : 'system';
+        var yours = 'your ' + (system === 'system' ? "system's" : system === 'Mac' ? "Mac's" : system) + ' mouse settings';
+        rawMouseOption.disabled = rawMouse.supported === false;
+        rawMouseOption.checked = rawMouse.want && !rawMouseOption.disabled;
+        if (rawMouseOption.disabled) {
+          rawMouseAbout.textContent =
+            (rawMouseNo === 'system' ? "Not available here: browsers on Linux can't read the mouse raw yet. " :
+             rawMouseNo === 'firefox' ? 'Needs Firefox 152 or newer: update Firefox to use it. ' :
+             rawMouseNo === 'safari' ? 'Needs Safari 18.4 or newer: update macOS to use it. ' :
+             'This browser turned raw mouse input down. ') +
+            'Mouse look uses ' + yours + ', acceleration included.';
+          return;
+        }
+        rawMouseAbout.textContent = 'Ticked, mouse look reads the mouse itself, without ' +
+          (system === 'Windows' ? "Windows' pointer speed and Enhance pointer precision" :
+           system === 'Mac' ? "macOS's tracking speed and acceleration" : "your system's pointer speed and acceleration") +
+          (rawMouse.warps ? ", so the view can't suddenly jolt round" : '') + '. Unticked, you aim with ' + yours +
+          ', acceleration included (quick flicks turn further, slow movements stay fine). Untick it too if mouse ' +
+          "look doesn't turn at all, as over remote desktop or with a drawing tablet. This browser remembers your choice.";
+      }
+      showRawMouseChoice();
       rawMouseOption.addEventListener('change', function() {
         rawMouse.want = rawMouseOption.checked;
         try { localStorage.setItem(RAW_MOUSE_SETTING, rawMouseOption.checked ? 'on' : 'off'); } catch (e) {}
       });
-      document.getElementById('raw-mouse-choice').hidden = !rawMouseWindows;
       (function() {
         var canvas = Module.canvas, lock = canvas.requestPointerLock;
-        if (!lock || !rawMouseWindows) return;
+        if (!lock || rawMouse.supported === false) return;
         canvas.requestPointerLock = function(options) {
           if (!rawMouse.want || rawMouse.supported === false) return lock.call(canvas, options);
           var request;
@@ -1510,6 +1554,7 @@
           }, function(e) {
             if (!e || e.name !== 'NotSupportedError') throw e;
             rawMouse.supported = false;
+            showRawMouseChoice();
             return lock.call(canvas, options);
           });
           locked.catch(function() {});
