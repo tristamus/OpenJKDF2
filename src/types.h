@@ -2944,7 +2944,11 @@ typedef struct SithItemInfo
     uint32_t msecLastTouchTime;
     int16_t numBins;
     int16_t field_1E;
+#ifdef QOL_IMPROVEMENTS
+    SithBackpackItem contents[16]; // Added: JK.EXE and JKM.EXE both store up to 16 items here, past the original's 12
+#else
     SithBackpackItem contents[12];
+#endif
     uint32_t field_80;
 } SithItemInfo;
 
