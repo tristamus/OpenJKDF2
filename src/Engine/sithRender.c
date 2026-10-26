@@ -3228,6 +3228,16 @@ void sithRender_RenderAlphaAdjoins()
     rdSetOcclusionMethod(0);
     rdSetSortingMethod(2);
 
+    // Added: light translucent world faces with the level's colours, as the opaque
+    // pass does. JKM.EXE leaves the mono mode the thing pass set, so translucent
+    // faces ignored MotS's coloured lighting. Ported from OpenJKDF2-MotS-Fixes by
+    // Andrei Kiralv/Darkahn and Coda Lilitari.
+    int bAlphaRGB = 0;
+#ifdef JKM_LIGHTING
+    bAlphaRGB = LIKELY(rdroid_curAcceleration) && (sithRender_renderflags & 0x80);
+    rdSetVertexColorMode(bAlphaRGB);
+#endif
+
     for (int i = 0; i < sithRender_numAlphaAdjoins; i++)
     {
         v0 = sithRender_aAlphaAdjoins[i];
@@ -3335,6 +3345,35 @@ void sithRender_RenderAlphaAdjoins()
             v9->geometryMode = RD_GEOMETRY_SOLID;
         }
 
+#ifdef JKM_LIGHTING
+        // Added: the surface's red, green and blue light, picked as in the opaque pass
+        if (bAlphaRGB)
+        {
+            if ((v0->flags & SITH_SURFACE_1000000) == 0) {
+                sithRender_faceView.paRedIntensities = v0->surfaceInfo.intensities;
+                sithRender_faceView.paGreenIntensities = sithRender_faceView.paRedIntensities;
+                sithRender_faceView.paBlueIntensities = sithRender_faceView.paRedIntensities;
+            }
+            else {
+                sithRender_faceView.paRedIntensities = v0->surfaceInfo.intensities + sithRender_faceView.numVertices;
+                sithRender_faceView.paGreenIntensities = sithRender_faceView.paRedIntensities + sithRender_faceView.numVertices;
+                sithRender_faceView.paBlueIntensities = sithRender_faceView.paGreenIntensities + sithRender_faceView.numVertices;
+            }
+            meshinfo_out.paRedIntensities = v9->paRedIntensities;
+            meshinfo_out.paGreenIntensities = v9->paGreenIntensities;
+            meshinfo_out.paBlueIntensities = v9->paBlueIntensities;
+
+            rdPrimit3_ClipFaceRGBLevel(pSurfaceFrustum,
+                v9->geometryMode,
+                v9->lightingMode,
+                v9->textureMode,
+                &sithRender_faceView,
+                &meshinfo_out,
+                &v0->surfaceInfo.face.texVertOffset);
+        }
+        else
+#endif
+        {
 #ifdef SITHRENDER_SPHERE_TEST_SURFACES
         if (clipResult != SPHERE_FULLY_INSIDE) {
 #endif
@@ -3356,6 +3395,7 @@ void sithRender_RenderAlphaAdjoins()
                 &v0->surfaceInfo.face.texVertOffset);
         }
 #endif
+        }
         
         if ( meshinfo_out.numVertices < 3u )
         {
@@ -3380,7 +3420,7 @@ void sithRender_RenderAlphaAdjoins()
                     v9->lightingMode = RD_LIGHTMODE_NOTLIT;
                 }
             }
-            else if ( v9->lightingMode == RD_LIGHTMODE_GOURAUD)
+            else if ( !bAlphaRGB && v9->lightingMode == RD_LIGHTMODE_GOURAUD) // Added: the mono light alone doesn't say an RGB face is flat
             {
                 v20 = v9->vertexIntensities;
                 v21 = 1;
@@ -3464,6 +3504,11 @@ void sithRender_RenderAlphaAdjoins()
 
     // Added: Ensure the clipping frustum doesn't get mutated
     rdCamera_g_pCurCamera->pClipFrustum = pFullCameraFrustum;
+
+#ifdef JKM_LIGHTING
+    // Added: back to mono for what follows, as the thing pass left it
+    rdSetVertexColorMode(0);
+#endif
 }
 
 int sithRender_SetExtraThingRenderFunc(sithRender_weapRendFunc_t pfFunc)

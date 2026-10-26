@@ -1023,6 +1023,9 @@ void jkPlayer_DrawPov()
 
         rdCamera_SetAmbientLight(&sithCamera_g_pCurCamera->rdCamera, ambLight);
         rdColormap_SetCurrent(sithCamera_g_pCurCamera->sector->colormap);
+#ifdef JKM_LIGHTING
+        rdSetVertexColorMode(0); // MOTS added: JKM.EXE draws the first-person model in mono (0x405c15)
+#endif
 
         rdMatrix_Copy34(&orient, &sithCamera_g_pCurCamera->orient);
         rdVector_Copy3(&trans, &playerThings[playerThingIdx].actorThing->actorParams.eyeOffset);
