@@ -2945,7 +2945,7 @@ typedef struct SithItemInfo
     int16_t numBins;
     int16_t field_1E;
 #ifdef QOL_IMPROVEMENTS
-    SithBackpackItem contents[16]; // Added: JK.EXE and JKM.EXE both store up to 16 items here, past the original's 12
+    SithBackpackItem contents[16]; // Added: JK.EXE and JKM.EXE write up to 16 items here, though their struct has room for 12
 #else
     SithBackpackItem contents[12];
 #endif
