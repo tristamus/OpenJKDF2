@@ -65,6 +65,10 @@ jobs:
       # made-up frames and browsers.
       - name: Test frame times, the slow-frame note and ?bench
         run: node packaging/wasm/test/frames-test.mjs
+      # Network measurements, the hit ledger and ?netsim, with made-up games
+      # and links.
+      - name: Test network measurements
+        run: node packaging/wasm/test/netstats-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

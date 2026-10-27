@@ -27,6 +27,9 @@
 #ifdef ARCH_WASM
 #include <emscripten.h>
 #endif
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
 
 // Added
 static int sithControl_followingPlayer = 0;
@@ -789,6 +792,12 @@ int sithControl_GetKey(int keyId, int *pState)
 
     SITH_ASSERTREL((keyId >= 0) && (keyId < INPUT_FUNC_MAX)); // Added: port from OpenJones3D
 
+#ifdef PLATFORM_WSRELAY
+    // Added: ?nettest's scripted player
+    if (stdComm_WSRelay_bTestInput)
+        return stdComm_WSRelay_TestKey(keyId, pState);
+#endif
+
     v6 = 0;
     if ( pState )
         *pState = 0;
@@ -829,6 +838,12 @@ flex_t sithControl_GetKeyAsAxisNormalized(int axisId)
     flex_t v6; // [esp+10h] [ebp-4h]
 
     SITH_ASSERTREL((axisId >= 0) && (axisId < INPUT_FUNC_MAX)); // Added: port from OpenJones3D
+
+#ifdef PLATFORM_WSRELAY
+    // Added: ?nettest's scripted player
+    if (stdComm_WSRelay_bTestInput)
+        return stdComm_WSRelay_TestAxis(axisId);
+#endif
 
     v1 = 0;
     v6 = 0.0;
@@ -898,6 +913,12 @@ flex_t sithControl_GetKeyAsAxis(int axisId)
 
     SITH_ASSERTREL((axisId >= 0) && (axisId < INPUT_FUNC_MAX)); // Added: port from OpenJones3D
 
+#ifdef PLATFORM_WSRELAY
+    // Added: ?nettest's scripted player, which turns and looks by itself
+    if (stdComm_WSRelay_bTestInput)
+        return stdComm_WSRelay_TestAxis(axisId);
+#endif
+
     v1 = 0;
     v6 = 0.0;
     if ( sithControl_aInputFuncToKeyinfo[axisId].numEntries )
@@ -954,6 +975,11 @@ static flex_t sithControl_GetMouseLook(int axisId)
     flex_t total = 0.0;
     stdControlKeyInfo* pInfo = &sithControl_aInputFuncToKeyinfo[axisId];
 
+#ifdef PLATFORM_WSRELAY
+    if (stdComm_WSRelay_bTestInput)
+        return 0.0;
+#endif
+
     for (uint32_t i = 0; i < pInfo->numEntries; i++)
     {
         stdControlKeyInfoEntry* pEntry = &pInfo->aEntries[i];
@@ -982,6 +1008,12 @@ flex_t sithControl_GetAxis(int axisId)
     flex_t v7; // [esp+4h] [ebp-4h]
 
     SITH_ASSERTREL((axisId >= 0) && (axisId < INPUT_FUNC_MAX)); // Added: port from OpenJones3D
+
+#ifdef PLATFORM_WSRELAY
+    // Added: ?nettest's scripted player, which turns and looks by itself
+    if (stdComm_WSRelay_bTestInput)
+        return stdComm_WSRelay_TestAxis(axisId);
+#endif
 
     v7 = 0.0;
     v1 = sithControl_aInputFuncToKeyinfo[axisId].aEntries;
@@ -1050,6 +1082,12 @@ int sithControl_HandlePlayer(SithThing *player, flex_t deltaSecs)
     // TODO: fix this?
 #ifdef ARCH_64BIT
     //g_debugmodeFlags &= ~0x100;
+#endif
+
+#ifdef PLATFORM_WSRELAY
+    // Added: ?nettest's scripted player picks this frame's input, before
+    // anything reads it (this is the first control callback, jkControl.c)
+    stdComm_WSRelay_TestTick(player, deltaSecs);
 #endif
 
     if ( player->moveType != SITH_MT_PHYSICS )

@@ -38,6 +38,9 @@
 #include "Dss/sithDSS.h"
 #include "General/stdMath.h"
 #include "jk.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
 
 #define NUM_THING_PARAMS (74) // JK is 72
 #define NUM_THING_TYPES (13)
@@ -469,6 +472,11 @@ flex_t sithThing_DamageThing(SithThing *pThing, SithThing *pDamageThing, flex_t 
 
     if ( damage <= 0.0 )
         return 0.0;
+#ifdef PLATFORM_WSRELAY
+    // Added: the hit ledger, for hits between players
+    if ( sithNet_isMulti && pThing->type == SITH_THING_PLAYER && pDamageThing )
+        stdComm_WSRelay_NoteHit(pThing, pDamageThing, damage, hitType, STDCOMM_WSRELAY_HIT);
+#endif
     if ( (pThing->flags & (SITH_TF_DISABLED|SITH_TF_DEAD|SITH_TF_DESTROYED)) != 0 )
         return 0.0;
     if ( (pThing->flags & SITH_TF_CAPTURED) != 0 && (pThing->flags & SITH_TF_INVULN) == 0 )

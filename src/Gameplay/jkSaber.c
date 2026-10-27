@@ -18,6 +18,9 @@
 #include "General/stdString.h"
 #include "Engine/rdMaterial.h"
 #include "Win95/stdDisplay.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
 
 #include "jk.h"
 
@@ -501,6 +504,12 @@ void  jkSaber_UpdateCollision2(SithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
 
                     jkSaber_SpawnSparks(playerInfo, &local_54, pSectorIter, SPARKTYPE_SABER);
 
+#ifdef PLATFORM_WSRELAY
+                    // Added: the hit ledger. Each game rolls its own block
+                    // chance, so this game and the victim's can disagree.
+                    if ( sithNet_isMulti && resultThing->type == SITH_THING_PLAYER )
+                        stdComm_WSRelay_NoteHit(resultThing, pPlayerThing, pCollideInfo->damage, SITH_DAMAGE_SABER, STDCOMM_WSRELAY_BLOCK);
+#endif
                     sithCog_ThingSendMessage(resultThing, 0, SITH_MESSAGE_BLOCKED);
                     pCollideInfo->damagedThings[pCollideInfo->numDamagedThings++] = searchResult->pThingCollided;
                     break;

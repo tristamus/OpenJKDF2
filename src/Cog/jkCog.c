@@ -22,6 +22,9 @@
 #include "Main/jkGame.h"
 #include "World/sithSector.h"
 #include "Win95/Windows.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
 
 #include "jk.h"
 
@@ -601,6 +604,10 @@ void jkCog_EnableSaber(sithCog *ctx)
     if ( v2 && v2->type == SITH_THING_PLAYER )
     {
         jkSaber_Enable(v2, a2, a3, a1a);
+#ifdef PLATFORM_WSRELAY
+        // Added: each swing gets a number, which the message below carries.
+        stdComm_WSRelay_NewSwing(v2);
+#endif
         if ( sithMessage_g_outputstream )
             jkDSS_SendJKEnableSaber(v3);
     }

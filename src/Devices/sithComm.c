@@ -12,6 +12,11 @@
 int sithComm_009a1160 = 0;
 int sithComm_version = 6;
 
+// Added: the message from another game being handled (its DSS id), 0 between
+// messages, so the browser build's hit ledger can tell a hit that another
+// game's message decided (stdComm_WSRelay_NoteHit).
+int sithComm_msgInProgress = 0;
+
 // MOTS altered
 int sithComm_Startup()
 {
@@ -290,7 +295,11 @@ LABEL_22:
                     if ( v2 < (unsigned int)DSS_MAX )
                     {
                         if ( sithMessage_aTypeFuncs[v2] )
+                        {
+                            sithComm_msgInProgress = v2; // Added
                             sithMessage_aTypeFuncs[v2](&sithComm_netMsgTmp);
+                            sithComm_msgInProgress = 0; // Added
+                        }
                     }
                 }
                 goto LABEL_25;

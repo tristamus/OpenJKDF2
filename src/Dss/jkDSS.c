@@ -24,6 +24,10 @@
 #include "Main/jkSmack.h"
 #include "jk.h"
 
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
+
 const char* jkDSS_aKyTeamModels[5] = {
     "ky.3do",
     "kyX0.3do",
@@ -510,6 +514,11 @@ void jkDSS_SendJKEnableSaber(SithThing *pPlayerThing)
     NETMSG_PUSHF32(pPlayerInfo->saberCollideInfo.damage);
     NETMSG_PUSHF32(pPlayerInfo->saberCollideInfo.bladeLength);
     NETMSG_PUSHF32(pPlayerInfo->saberCollideInfo.stunDelay);
+#ifdef PLATFORM_WSRELAY
+    // Added: the swing's number, after what the original sends, for the hit
+    // ledger (stdComm_WSRelay_NewSwing).
+    NETMSG_PUSHU32(stdComm_WSRelay_GetSwing(pPlayerThing));
+#endif
 
     NETMSG_END(DSS_JKENABLESABER);
 
@@ -534,6 +543,11 @@ int jkDSS_ProcessJKEnableSaber(SithMessage *msg)
     flex32_t arg3 = NETMSG_POPF32();
 
     jkSaber_Enable(pThing, arg1, arg2, arg3);
+#ifdef PLATFORM_WSRELAY
+    // Added: the swing's number, which a message from an older build doesn't
+    // have (0).
+    stdComm_WSRelay_SetSwing(pThing, NETMSG_IN_LEFT(msg) >= 4 ? NETMSG_POPU32() : 0);
+#endif
     return 1;
 }
 

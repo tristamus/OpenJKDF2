@@ -254,6 +254,36 @@
         cursor: pointer;
         pointer-events: auto;
       }
+      /* ?netstats: how each link to the other players is doing, and whether
+         hits shown here counted in the other player's game (netstats.js).
+         Only the buttons take clicks. */
+      .net-stats {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        z-index: 30;
+        max-width: min(760px, calc(100% - 16px));
+        max-height: calc(100% - 16px);
+        overflow: hidden;
+        padding: 6px 10px;
+        background-color: rgba(0, 0, 0, 0.75);
+        color: var(--ink);
+        font: 12px/1.4 'Lucida Console', Monaco, monospace;
+        pointer-events: none;
+      }
+      html.zone-open .net-stats { display: none; }
+      .net-stats pre { margin: 0 0 6px; font: inherit; white-space: pre-wrap; }
+      .net-stats .net-sim { margin-bottom: 6px; }
+      .net-stats button {
+        margin-right: 6px;
+        padding: 2px 8px;
+        border: 1px solid var(--gold);
+        background-color: transparent;
+        color: var(--gold);
+        font: bold 12px Arial, Helvetica, sans-serif;
+        cursor: pointer;
+        pointer-events: auto;
+      }
       .key-check .ok { color: var(--live); }
       .key-check .bad { color: var(--bad); }
       .key-check .also { color: var(--gold); }
@@ -1453,10 +1483,20 @@
       };
       Module.setStatus('Downloading...');
       // The address's options go to the engine, which quits on one it doesn't
-      // know, so keycheck, netlog and bench (the page's own) are left out.
+      // know, so the page's own are left out.
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length && ['keycheck', 'netlog', 'bench'].indexOf(i.split('=')[0]) < 0)
+        .filter(i => i.length && ['keycheck', 'netlog', 'bench', 'netstats', 'netsim', 'nettest'].indexOf(i.split('=')[0]) < 0)
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
+      // ?netstats (this window pings the other players) and ?netsim (its
+      // packets wait as if its connection were slower) are for netstats.js,
+      // bundled into the engine, and ?nettest (a scripted player) for the
+      // engine itself (stdComm_WSRelayTest.c).
+      (function() {
+        var params = new URLSearchParams(window.location.search);
+        if (params.has('netstats')) Module['jkNetMeasure'] = true;
+        if (params.has('netsim')) Module['jkNetSim'] = params.get('netsim');
+        if (params.has('nettest')) Module['jkNetTest'] = params.get('nettest');
+      })();
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
         Module.setStatus('Exception thrown, see JavaScript console');
@@ -5754,6 +5794,70 @@
         reset.onclick = function() {
           session = frameTally();
           sessionStart = performance.now();
+          show();
+        };
+      })();
+
+      // ---- ?netstats in the address: each link's ping, loss and position
+      // updates, and the hit ledger, live over the game (packaging/wasm/
+      // netstats.js has them), with a button that copies a report for
+      // comparing runs, and buttons that make this window's connection
+      // slower (as ?netsim=rtt:150,jitter:20,loss:2 does from the start).
+      // Add ?nettest=strafe or ?nettest=attack for a scripted player.
+      if (/[?&]netstats(=|&|$)/.test(location.search)) (function() {
+        var box = document.createElement('div');
+        box.className = 'net-stats';
+        var text = document.createElement('pre');
+        // A slower connection, and the counts start over, so they're all
+        // from one setting.
+        var slow = document.createElement('div');
+        slow.className = 'net-sim';
+        slow.append('Slow this window: ');
+        // The middle one is what hit registration is measured at: a 100 ms
+        // round trip, 20 ms jitter and 2% loss.
+        [['Off', ''], ['+100 ms, jitter, 2% loss', 'rtt:100,jitter:20,loss:2'], ['+200 ms, jitter, 2% loss', 'rtt:200,jitter:20,loss:2']].forEach(function(choice) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = choice[0];
+          b.onclick = function() {
+            if (!Module.jkNetStats) return;
+            Module.jkNetStats.setSim(choice[1]);
+            Module.jkNetStats.reset();
+            show();
+          };
+          slow.append(b);
+        });
+        var copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = 'Copy report';
+        var reset = document.createElement('button');
+        reset.type = 'button';
+        reset.textContent = 'Reset';
+        box.append(text, slow, copy, reset);
+        document.body.appendChild(box);
+
+        function lines() {
+          var stats = Module.jkNetStats;
+          return stats ? stats.text() : ['Network measurements start with the game.'];
+        }
+        function show() { text.textContent = lines().join('\n'); }
+        show();
+        setInterval(show, 1000);
+
+        copy.onclick = function() {
+          var stats = Module.jkNetStats;
+          var all = ['OpenJKDF2 network report, ' + new Date().toISOString()].concat(lines(), [
+            '', 'Page: ' + location.href.split('#')[0], 'User agent: ' + navigator.userAgent,
+            '', 'Data: ' + JSON.stringify(stats ? stats.report() : null)]).join('\n');
+          var done = function() { copy.textContent = 'Copied'; setTimeout(function() { copy.textContent = 'Copy report'; }, 1500); };
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(all).then(done, function() { selectText(text); });
+          } else {
+            selectText(text);
+          }
+        };
+        reset.onclick = function() {
+          if (Module.jkNetStats) Module.jkNetStats.reset();
           show();
         };
       })();

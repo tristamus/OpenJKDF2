@@ -1,0 +1,771 @@
+// Network measurements for the browser build, and a network simulator to test
+// with. Bundled into openjkdf2.js with --pre-js (cmake_modules/plat_wasm.cmake),
+// so it always matches the engine it ships with.
+//
+// stdComm_WSRelay.c hands it each game packet as it arrives and before it
+// goes out, and the engine tells it about hits between players
+// (stdComm_WSRelay_NoteHit). For each other player it keeps:
+//   - ping and jitter on the path game packets take: the reliable data
+//     channel (through the host, between joiners) or the lobby relay, from a
+//     small ping each second;
+//   - ping and loss on a data channel of its own that never resends ('jk-ns'),
+//     on a direct link between two games that both have this file;
+//   - how steadily their position updates arrive: how many a second, how
+//     uneven the gaps between them are, how many gaps are 100 ms or more, and
+//     the longest;
+//   - a hit ledger. Another player's game decides whether a hit on them
+//     counts; this game only shows its effects. So each game sends the
+//     attacker a receipt for each hit it decides on its own player (counted,
+//     blocked, or the player was already dead there), and the attacker
+//     matches the receipts with the hits it showed: by the attack's number
+//     where both games know it (each saber swing and each shot has one), else
+//     the next one of that kind in time. A hit with no receipt missed there.
+//     A receipt for a hit this game never showed landed there without
+//     showing here.
+// The page's ?netstats panel (index.html) shows them, and the network log gets
+// a line every 10 s in a game.
+//
+// With ?netsim in the address (Module.jkNetSim), this window's game packets
+// wait as if its connection were slower: "rtt:150,jitter:20,loss:2" adds
+// 150 ms to each round trip (half on the way in, half on the way out), up to
+// 20 ms more each way at random, and loses 2% of packets each way. A packet
+// lost on the reliable channel or the relay arrives about a round trip late,
+// as a resent one would, and holds up the ones behind it; on 'jk-ns' it's
+// gone. Set it in one window: two with it add up. Hidden tabs run timers
+// late, so keep the window showing.
+//
+// Frames start like a game packet, with idFrom and idTo (u32), then 'J' 'N'
+// and two zero bytes, which an engine reads as message 0x4E4A, past DSS_MAX,
+// with no resend id: engines without this file ignore them. Then a type
+// byte, a version byte and two zero bytes:
+//   PING     seq u32, sent f64
+//   PONG     seq u32, sent f64 (the ping's), got f64 (the other game's clock)
+//   RECEIPT  kind u8, outcome u8, flags u8, 0, damage f32, at f64, attack u32
+// Only a window with ?netstats in its address (Module.jkNetMeasure) pings,
+// so in other games this file only answers pings and sends receipts. It pings
+// the players its engine says are in the match (name), once its own player is
+// in it too (live): a host drops a player who sends it anything before
+// they've joined (sithMessage_ProcessMessages). A ping is answered at once,
+// on the path it came by; only a game with this file pings, and it takes the
+// answer out before its engine sees it. Old games never answer, so after five
+// unanswered pings they're only pinged every 15 s.
+
+(function() {
+    var MAGIC = [0x4A, 0x4E, 0x00, 0x00]; // 'J' 'N', then a resend id of 0
+    var VERSION = 1;
+    var HEADER = 16;
+    var T_PING = 1, T_PONG = 2, T_RECEIPT = 3;
+
+    var TICK_MS = 250;
+    var PING_MS = 1000;         // on the game's path
+    var PROBE_MS = 500;         // on 'jk-ns'
+    var KEEP_RTTS = 20;         // ping times kept for each path
+    var KEEP_PINGS = 40;        // pings counted for loss
+    var ANSWER_MS = 2000;       // a ping not answered by then is lost
+    var WINDOW_MS = 10000;      // position updates looked at
+    var LATE_MS = 100;          // a gap at least this long counts as late
+    var QUIET_PINGS = 5;
+    var QUIET_PING_MS = 15000;
+    var GONE_MS = 10000;        // not heard from for this long: not pinged
+    var LOG_MS = 10000;
+    var ROUTE_MS = 10000;       // how often to look up each link's route
+
+    // Kinds and outcomes, as stdComm_WSRelay_NoteHit sends them.
+    var KINDS = ['', 'saber', 'shot', 'splash', 'Force', 'other'];
+    var O_HIT = 1, O_BLOCK = 2, O_DEAD = 3;
+    var F_BY_MESSAGE = 1;       // decided by a message from the attacker (targeted Force)
+
+    var clock = {
+        now: function() { return performance.now(); },
+        later: function(fn, ms) { return setTimeout(fn, ms); },
+        every: function(fn, ms) { return setInterval(fn, ms); },
+        random: function() { return Math.random(); }
+    };
+
+    // ---- The simulator.
+
+    // "rtt:150,jitter:20,loss:2", or just a number for rtt. Null if it adds
+    // nothing.
+    function parseSim(text) {
+        if (text === undefined || text === null || text === false) return null;
+        var sim = { rtt: 0, jitter: 0, loss: 0 };
+        String(text).split(/[,;&]/).forEach(function(part) {
+            var kv = part.split(/[:=]/);
+            if (kv.length === 1) {
+                if (/^\s*\d+(\.\d+)?\s*$/.test(kv[0])) sim.rtt = Math.min(Number(kv[0]), 2000);
+                return;
+            }
+            var key = kv[0].trim().toLowerCase(), v = Number(kv[1]);
+            if (!isFinite(v) || v < 0) return;
+            if (key === 'rtt' || key === 'ping' || key === 'lag') sim.rtt = Math.min(v, 2000);
+            else if (key === 'jitter') sim.jitter = Math.min(v, 1000);
+            else if (key === 'loss') sim.loss = Math.min(v, 50);
+        });
+        return sim.rtt || sim.jitter || sim.loss ? sim : null;
+    }
+
+    var sim = parseSim(Module['jkNetSim']);
+
+    // From now on, as ?netsim=text would have from the start.
+    function setSim(text) {
+        sim = parseSim(text);
+    }
+
+    // How long one packet waits on its way in or out, or -1 if it's lost on
+    // a channel that doesn't resend.
+    function simDelay(reliable) {
+        var d = sim.rtt / 2 + clock.random() * sim.jitter;
+        if (sim.loss && clock.random() * 100 < sim.loss) {
+            if (!reliable) return -1;
+            d += Math.max(sim.rtt, 50) + 60;
+        }
+        return d;
+    }
+
+    // Packets on one reliable path, in order: each waits its own time, but
+    // never comes out before the one ahead of it.
+    function Line() {
+        this.items = [];
+        this.timer = null;
+        this.last = 0;
+    }
+    Line.prototype.push = function(at, fn) {
+        if (at < this.last) at = this.last;
+        this.last = at;
+        this.items.push({ at: at, fn: fn });
+        this.arm();
+    };
+    Line.prototype.arm = function() {
+        if (this.timer !== null || !this.items.length) return;
+        var self = this;
+        this.timer = clock.later(function() {
+            self.timer = null;
+            var t = clock.now();
+            while (self.items.length && self.items[0].at <= t + 0.5)
+                self.items.shift().fn();
+            self.arm();
+        }, Math.max(0, this.items[0].at - clock.now()));
+    };
+
+    var lines = {};
+    // Bumped when a game starts or ends, so packets still waiting from the
+    // last one are dropped.
+    var gen = 0;
+
+    function line(key) {
+        return lines[key] || (lines[key] = new Line());
+    }
+
+    // A game packet from player `from` over 'direct' (the data channel) or
+    // 'relay'. deliver(data) runs when it's due.
+    function inbound(from, data, via, deliver) {
+        if (!sim) {
+            deliver(data);
+            return;
+        }
+        var g = gen;
+        line('in ' + via + ' ' + from).push(clock.now() + simDelay(true), function() {
+            if (g === gen) deliver(data);
+        });
+    }
+
+    // A game packet for route `to` (the player whose link it goes over).
+    // send(bytes) sends it when it's due.
+    function outbound(to, bytes, send) {
+        if (!sim) return send(bytes);
+        var g = gen;
+        line('out ' + to).push(clock.now() + simDelay(true), function() {
+            if (g === gen) send(bytes);
+        });
+        return 1;
+    }
+
+    // ---- Players.
+
+    var me = { live: false, id: 0, isHost: false };
+    var players = {};
+    // The players the engine says are in the match, by id: their names.
+    var names = {};
+    var lastLog = 0, lastRoutes = 0;
+
+    function newPath() {
+        // sent: seq -> time, for pings not yet answered; pings: the last
+        // KEEP_PINGS, {seq, t, back}.
+        return { seq: 0, sent: {}, pings: [], rtts: [], quiet: 0, nextAt: 0 };
+    }
+
+    function player(id) {
+        return players[id] || (players[id] = {
+            id: id, heard: 0, via: '', route: null, positions: [],
+            game: newPath(), ns: newPath(), offsets: [],
+            shown: [], receipts: [], tally: {}, taken: {}
+        });
+    }
+
+    function tallyOf(p, kind) {
+        return p.tally[kind] || (p.tally[kind] = {
+            // Hits shown here, by what their game said.
+            counted: 0, blockedThere: 0, deadThere: 0, missedHit: 0,
+            // Blocks shown here, by what their game said.
+            blockAgreed: 0, hitThere: 0, missedBlock: 0,
+            // Receipts for hits this game never showed.
+            notShown: 0, blockNotShown: 0, deadNotShown: 0,
+            byMessage: 0,
+            // How much later their game decided than this one showed, in ms.
+            lags: []
+        });
+    }
+
+    function takenOf(p, kind) {
+        return p.taken[kind] || (p.taken[kind] = { hit: 0, block: 0, dead: 0, byMessage: 0 });
+    }
+
+    // ---- Frames.
+
+    function frame(type, to, body) {
+        var buf = new ArrayBuffer(HEADER + body);
+        var view = new DataView(buf);
+        view.setUint32(0, me.id, true);
+        view.setUint32(4, to, true);
+        new Uint8Array(buf).set(MAGIC, 8);
+        view.setUint8(12, type);
+        view.setUint8(13, VERSION);
+        return { buf: buf, view: view };
+    }
+
+    function isFrame(data) {
+        if (!(data instanceof ArrayBuffer) || data.byteLength < HEADER) return false;
+        var b = new Uint8Array(data, 8, 4);
+        return b[0] === MAGIC[0] && b[1] === MAGIC[1] && b[2] === MAGIC[2] && b[3] === MAGIC[3];
+    }
+
+    // A player's position update: DSS_THINGPOS (1) without a resend id, 52
+    // or 64 bytes (stdComm_WSRelay.c's skipRelayedPos).
+    function isPosition(data) {
+        var n = data.byteLength;
+        if (n !== 8 + 4 + 52 && n !== 8 + 4 + 64) return false;
+        var view = new DataView(data);
+        return view.getUint16(8, true) === 1 && view.getUint16(10, true) === 0;
+    }
+
+    // Over the game's path: a joiner sends everything to the host, which
+    // passes on what's for someone else.
+    function sendGame(id, buf) {
+        var net = Module.jkNet;
+        return net && net.sendPacket ? net.sendPacket(new Uint8Array(buf), me.isHost ? id : 1) : 0;
+    }
+
+    // Over 'jk-ns', which only links a host and a joiner.
+    function sendProbe(id, buf) {
+        var net = Module.jkNet;
+        if (!net || !net.nsSend) return 0;
+        if (!sim) return net.nsSend(id, buf);
+        var d = simDelay(false), g = gen;
+        if (d >= 0) clock.later(function() { if (g === gen) net.nsSend(id, buf); }, d);
+        return 1;
+    }
+
+    function ping(p, path, send) {
+        var t = clock.now();
+        var seq = ++path.seq;
+        var f = frame(T_PING, p.id, 12);
+        f.view.setUint32(16, seq, true);
+        f.view.setFloat64(20, t, true);
+        path.sent[seq] = t;
+        path.pings.push({ seq: seq, t: t, back: false });
+        while (path.pings.length > KEEP_PINGS)
+            delete path.sent[path.pings.shift().seq];
+        path.quiet++;
+        send(f.buf);
+    }
+
+    function gotPong(p, path, view) {
+        var seq = view.getUint32(16, true), sent = view.getFloat64(20, true), got = view.getFloat64(28, true);
+        if (path.sent[seq] !== sent) return;
+        delete path.sent[seq];
+        var t = clock.now(), rtt = t - sent;
+        path.rtts.push(rtt);
+        if (path.rtts.length > KEEP_RTTS) path.rtts.shift();
+        path.quiet = 0;
+        for (var i = path.pings.length - 1; i >= 0; i--) {
+            if (path.pings[i].seq === seq) {
+                path.pings[i].back = true;
+                break;
+            }
+        }
+        // Their clock less ours, the way NTP reckons it.
+        p.offsets.push({ rtt: rtt, offset: got - (sent + t) / 2 });
+        if (p.offsets.length > 16) p.offsets.shift();
+    }
+
+    // From the recent ping with the shortest round trip, which waited least.
+    function offsetOf(p) {
+        var best = null;
+        p.offsets.forEach(function(o) { if (!best || o.rtt < best.rtt) best = o; });
+        return best ? best.offset : null;
+    }
+
+    // path is 'game' or 'ns'; reply sends a frame back the same way.
+    function onFrame(p, data, path, reply) {
+        if (data.byteLength < HEADER) return;
+        var view = new DataView(data);
+        if (view.getUint8(13) !== VERSION) return;
+        var type = view.getUint8(12);
+        if (type === T_PING && data.byteLength >= HEADER + 12) {
+            var f = frame(T_PONG, p.id, 20);
+            f.view.setUint32(16, view.getUint32(16, true), true);
+            f.view.setFloat64(20, view.getFloat64(20, true), true);
+            f.view.setFloat64(28, clock.now(), true);
+            reply(f.buf);
+        } else if (type === T_PONG && data.byteLength >= HEADER + 20) {
+            gotPong(p, path === 'ns' ? p.ns : p.game, view);
+        } else if (type === T_RECEIPT && data.byteLength >= HEADER + 16) {
+            gotReceipt(p, view.getUint8(16), view.getUint8(17), view.getUint8(18), view.getFloat64(24, true),
+                       data.byteLength >= HEADER + 20 ? view.getUint32(32, true) : 0);
+        }
+    }
+
+    // A game packet that's due, before the engine gets it. Returns true for
+    // the frames this file handles itself.
+    function take(from, data, via) {
+        if (!from || !(data instanceof ArrayBuffer)) return false;
+        var p = player(from);
+        p.heard = clock.now();
+        p.via = via;
+        if (isFrame(data)) {
+            onFrame(p, data, 'game', function(buf) { sendGame(from, buf); });
+            return true;
+        }
+        if (isPosition(data)) {
+            p.positions.push(p.heard);
+            while (p.positions.length && p.positions[0] < p.heard - WINDOW_MS)
+                p.positions.shift();
+        }
+        return false;
+    }
+
+    // A message on 'jk-ns' from player `from`.
+    function onProbe(from, data) {
+        if (!isFrame(data)) return;
+        var handle = function() {
+            onFrame(player(from), data, 'ns', function(buf) { sendProbe(from, buf); });
+        };
+        if (!sim) return handle();
+        var d = simDelay(false), g = gen;
+        if (d >= 0) clock.later(function() { if (g === gen) handle(); }, d);
+    }
+
+    // ---- The hit ledger.
+
+    // How long a hit shown here and its receipt can be apart: their game sees
+    // the attack about half a round trip late, and the receipt takes the
+    // other half, with room for a slow shot's flight.
+    function windowMs(p) {
+        var rtt = median(p.game.rtts);
+        return Math.min(4000, 1000 + 2 * (rtt === null ? 300 : rtt));
+    }
+
+    // The hit or receipt for the same attack: the one with its number, or
+    // without one, the oldest of that kind since then.
+    function takeMatch(list, kind, attack, since) {
+        for (var i = 0; i < list.length; i++) {
+            var x = list[i];
+            if (x.kind === kind && x.attack === attack && (attack || x.t >= since))
+                return list.splice(i, 1)[0];
+        }
+        return null;
+    }
+
+    function settle(p, kind, shown, receipt) {
+        var c = tallyOf(p, kind);
+        if (receipt.outcome === O_DEAD) c.deadThere++;
+        else if (shown.outcome === O_BLOCK) c[receipt.outcome === O_BLOCK ? 'blockAgreed' : 'hitThere']++;
+        else c[receipt.outcome === O_BLOCK ? 'blockedThere' : 'counted']++;
+        var offset = offsetOf(p);
+        if (offset !== null) {
+            c.lags.push(receipt.at - offset - shown.t);
+            if (c.lags.length > 200) c.lags.shift();
+        }
+    }
+
+    function shownHere(p, kind, outcome, attack) {
+        var t = clock.now();
+        var shown = { kind: kind, outcome: outcome, attack: attack, t: t };
+        var receipt = takeMatch(p.receipts, kind, attack, t - windowMs(p));
+        if (receipt) settle(p, kind, shown, receipt);
+        else p.shown.push(shown);
+    }
+
+    function gotReceipt(p, kind, outcome, flags, at, attack) {
+        if (!KINDS[kind] || outcome < O_HIT || outcome > O_DEAD) return;
+        if (flags & F_BY_MESSAGE) {
+            tallyOf(p, kind).byMessage++;
+            return;
+        }
+        var t = clock.now();
+        var receipt = { kind: kind, outcome: outcome, attack: attack, at: at, t: t };
+        var shown = takeMatch(p.shown, kind, attack, t - windowMs(p));
+        if (shown) settle(p, kind, shown, receipt);
+        else p.receipts.push(receipt);
+    }
+
+    // Hits nothing came back for, and receipts for hits never shown here.
+    function expire(t) {
+        for (var id in players) {
+            var p = players[id], w = windowMs(p), c;
+            while (p.shown.length && p.shown[0].t < t - w) {
+                var s = p.shown.shift();
+                tallyOf(p, s.kind)[s.outcome === O_BLOCK ? 'missedBlock' : 'missedHit']++;
+            }
+            while (p.receipts.length && p.receipts[0].t < t - w) {
+                var r = p.receipts.shift();
+                c = tallyOf(p, r.kind);
+                if (r.outcome === O_HIT) c.notShown++;
+                else if (r.outcome === O_BLOCK) c.blockNotShown++;
+                else c.deadNotShown++;
+            }
+        }
+    }
+
+    function sendReceipt(p, kind, outcome, damage, flags, attack) {
+        var f = frame(T_RECEIPT, p.id, 20);
+        f.view.setUint8(16, kind);
+        f.view.setUint8(17, outcome);
+        f.view.setUint8(18, flags);
+        f.view.setFloat32(20, damage, true);
+        f.view.setFloat64(24, clock.now(), true);
+        f.view.setUint32(32, attack, true);
+        sendGame(p.id, f.buf);
+    }
+
+    // From the engine: a hit between this game's player and player otherId.
+    // mine: this player's hit, shown here; else a hit on this player, which
+    // this game decided. byMessage: decided by a message from the attacker's
+    // game rather than here (a targeted Force power), or passed on from
+    // another game. attack: the saber swing's or the shot's number, the same
+    // in both games, or 0.
+    function hit(otherId, mine, kind, outcome, damage, byMessage, attack) {
+        if (!me.live || !otherId || otherId === me.id || !KINDS[kind]) return;
+        var p = player(otherId);
+        attack = attack >>> 0;
+        if (mine) {
+            if (!byMessage) shownHere(p, kind, outcome, attack);
+            return;
+        }
+        var c = takenOf(p, kind);
+        if (byMessage) c.byMessage++;
+        else c[outcome === O_BLOCK ? 'block' : outcome === O_DEAD ? 'dead' : 'hit']++;
+        sendReceipt(p, kind, outcome, damage, byMessage ? F_BY_MESSAGE : 0, attack);
+    }
+
+    // ---- Each tick: pings, the route each link takes, and the log line.
+
+    function tick() {
+        var t = clock.now();
+        expire(t);
+        if (!me.live) return;
+        var net = Module.jkNet;
+        Object.keys(players).forEach(function(key) {
+            var p = players[key];
+            if (!Module['jkNetMeasure'] || p.id === me.id || t - p.heard > GONE_MS || !(p.id in names)) return;
+            var g = p.game;
+            if (t >= g.nextAt) {
+                g.nextAt = t + (g.quiet >= QUIET_PINGS ? QUIET_PING_MS : PING_MS);
+                ping(p, g, function(buf) { sendGame(p.id, buf); });
+            }
+            if (net && net.nsOpen && net.nsOpen(p.id) && t >= p.ns.nextAt) {
+                p.ns.nextAt = t + PROBE_MS;
+                ping(p, p.ns, function(buf) { sendProbe(p.id, buf); });
+            }
+        });
+        if (t - lastRoutes >= ROUTE_MS) {
+            lastRoutes = t;
+            lookUpRoutes();
+        }
+        if (t - lastLog >= LOG_MS) {
+            lastLog = t;
+            if (net && net.note && Object.keys(players).length) net.note('netstats: ' + logLine(t));
+        }
+    }
+
+    // Whether each direct link goes straight between the two computers or
+    // through a TURN server, from the browser's own stats for it.
+    function lookUpRoutes() {
+        var net = Module.jkNet;
+        if (!net || !net.peers) return;
+        Object.keys(net.peers).forEach(function(id) {
+            var peer = net.peers[id];
+            if (!peer.open || !peer.pc || !peer.pc.getStats) return;
+            peer.pc.getStats().then(function(report) {
+                var pair = null, cands = {};
+                report.forEach(function(s) {
+                    if (s.type === 'transport' && s.selectedCandidatePairId) pair = report.get(s.selectedCandidatePairId) || pair;
+                    if (s.type === 'local-candidate' || s.type === 'remote-candidate') cands[s.id] = s;
+                });
+                if (!pair) report.forEach(function(s) {
+                    if (!pair && s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pair = s;
+                });
+                if (!pair) return;
+                var local = cands[pair.localCandidateId], remote = cands[pair.remoteCandidateId];
+                player(Number(id)).route = {
+                    local: local ? local.candidateType : '?', remote: remote ? remote.candidateType : '?',
+                    rtt: typeof pair.currentRoundTripTime === 'number' ? pair.currentRoundTripTime * 1000 : null
+                };
+            }).catch(function() {});
+        });
+    }
+
+    // ---- Numbers.
+
+    function median(list) {
+        if (!list.length) return null;
+        var s = list.slice().sort(function(a, b) { return a - b; });
+        var m = s.length >> 1;
+        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    }
+
+    // How much each ping time differs from the one before, on average.
+    function jitterOf(list) {
+        if (list.length < 2) return null;
+        var d = 0;
+        for (var i = 1; i < list.length; i++) d += Math.abs(list[i] - list[i - 1]);
+        return d / (list.length - 1);
+    }
+
+    // The share of pings, among those that have had time to come back, that
+    // never did, and how many that is out of.
+    function lossOf(path, t) {
+        var due = path.pings.filter(function(x) { return x.t < t - ANSWER_MS; });
+        if (!due.length) return null;
+        var lost = due.filter(function(x) { return !x.back; }).length;
+        return { share: lost / due.length, of: due.length };
+    }
+
+    function updatesOf(times, t) {
+        var list = times.filter(function(x) { return x >= t - WINDOW_MS; });
+        if (list.length < 2) return null;
+        var sum = 0, longest = 0, late = 0, gaps = [];
+        for (var i = 1; i < list.length; i++) {
+            var g = list[i] - list[i - 1];
+            gaps.push(g);
+            sum += g;
+            if (g > longest) longest = g;
+            if (g >= LATE_MS) late++;
+        }
+        longest = Math.max(longest, t - list[list.length - 1]);
+        var mean = sum / gaps.length, dev = 0;
+        gaps.forEach(function(g) { dev += Math.abs(g - mean); });
+        var span = Math.max(1, Math.min(WINDOW_MS, t - list[0]));
+        return { rate: list.length * 1000 / span, gap: mean, uneven: dev / gaps.length, late: late, longest: longest };
+    }
+
+    function pathOf(p) {
+        var net = Module.jkNet;
+        var peer = net && net.peers ? net.peers[p.id] : null;
+        if (me.isHost || p.id === 1) {
+            if (!(peer && peer.open)) return 'lobby relay';
+            return p.route && (p.route.local === 'relay' || p.route.remote === 'relay') ? 'TURN' : 'direct';
+        }
+        return p.via === 'relay' ? 'lobby relay' : 'via host';
+    }
+
+    // ---- The report: for the panel, Copy report and the network log.
+
+    // This game's frames a second in a level over the last 5 s, from when
+    // Window.c says each one ended (Module.jkFrames), or null. Both games'
+    // frame rates matter: each draws, and sends where its player is, once a
+    // frame.
+    function frameRate(t) {
+        var f = Module.jkFrames;
+        if (!f || !f.count) return null;
+        var n = 0;
+        for (var k = 1; k <= Math.min(f.count, f.size) && f.ends[(f.count - k) % f.size] >= t - 5000; k++) n++;
+        return n ? n / 5 : null;
+    }
+
+    function report() {
+        var t = clock.now();
+        expire(t);
+        var rows = Object.keys(players).map(Number).sort(function(a, b) { return a - b; })
+            .filter(function(id) { return id !== me.id; })
+            .map(function(id) {
+                var p = players[id];
+                var hits = Object.keys(p.tally).map(Number).sort().map(function(kind) {
+                    var c = p.tally[kind];
+                    return { kind: KINDS[kind], c: c, lag: median(c.lags) };
+                });
+                var taken = Object.keys(p.taken).map(Number).sort().map(function(kind) {
+                    return { kind: KINDS[kind], c: p.taken[kind] };
+                });
+                return {
+                    id: id, name: names[id] || '', path: pathOf(p), route: p.route,
+                    heard: p.heard ? t - p.heard : null,
+                    ping: median(p.game.rtts), jitter: jitterOf(p.game.rtts),
+                    netPing: median(p.ns.rtts), loss: lossOf(p.ns, t),
+                    updates: updatesOf(p.positions, t),
+                    hits: hits, taken: taken
+                };
+            });
+        return { me: { live: me.live, id: me.id, isHost: me.isHost, fps: frameRate(t) }, sim: sim, rows: rows };
+    }
+
+    function ms(v) { return v === null || v === undefined ? '-' : Math.round(v) + ' ms'; }
+    function pct(v) { return Math.round(v * 1000) / 10 + '%'; }
+
+    function agreement(c) {
+        var agree = c.counted + c.blockAgreed;
+        var all = agree + c.blockedThere + c.deadThere + c.missedHit + c.hitThere + c.missedBlock +
+                  c.notShown + c.blockNotShown;
+        return { agree: agree, of: all };
+    }
+
+    function who(row) {
+        return 'player ' + row.id + (row.name ? ' ' + row.name : '') + (row.id === 1 ? ' (host)' : '');
+    }
+
+    function hitWords(c) {
+        var shown = c.counted + c.blockedThere + c.missedHit + c.deadThere;
+        var parts = [];
+        if (shown) {
+            var s = shown + ' hit' + (shown === 1 ? '' : 's') + ' shown: ' + c.counted + ' counted';
+            if (c.blockedThere) s += ', ' + c.blockedThere + ' blocked there';
+            if (c.missedHit) s += ', ' + c.missedHit + ' missed there';
+            if (c.deadThere) s += ', ' + c.deadThere + ' already dead there';
+            parts.push(s);
+        }
+        var blocks = c.blockAgreed + c.hitThere + c.missedBlock;
+        if (blocks) {
+            parts.push(blocks + ' block' + (blocks === 1 ? '' : 's') + ' shown: ' + c.blockAgreed + ' blocked there' +
+                       (c.hitThere ? ', ' + c.hitThere + ' counted there' : '') +
+                       (c.missedBlock ? ', ' + c.missedBlock + ' missed there' : ''));
+        }
+        if (c.notShown || c.blockNotShown)
+            parts.push((c.notShown + c.blockNotShown) + ' landed there without showing here' +
+                       (c.blockNotShown ? ' (' + c.blockNotShown + ' blocked)' : ''));
+        if (c.byMessage) parts.push(c.byMessage + ' targeted');
+        return parts.join('; ');
+    }
+
+    function text() {
+        var r = report();
+        var out = [];
+        var simWords = r.sim ? 'Simulating ' + r.sim.rtt + ' ms more round trip, ' + r.sim.jitter + ' ms jitter, ' +
+                               r.sim.loss + '% loss each way' : 'No simulated lag';
+        var fpsWords = r.me.fps !== null ? ' ' + Math.round(r.me.fps) + ' frames a second.' : '';
+        out.push(r.me.id ? 'You are player ' + r.me.id + (r.me.isHost ? ', the host' : '') +
+                           (r.me.live ? '' : ' (not in a match)') + '.' + fpsWords + ' ' + simWords + '.'
+                         : 'Not in a game yet. ' + simWords + '.');
+        if (!r.rows.length) return out;
+        out.push('');
+        r.rows.forEach(function(row) {
+            var u = row.updates;
+            out.push(who(row) + ': ' + row.path + ', ping ' + ms(row.ping) + ' (jitter ' + ms(row.jitter) + ')' +
+                     (row.loss ? ', loss ' + pct(row.loss.share) + ' of ' + row.loss.of : '') +
+                     (row.netPing !== null ? ', link ping ' + ms(row.netPing) : ''));
+            out.push('  positions: ' + (u ? u.rate.toFixed(1) + '/s, gaps ' + ms(u.gap) + ' (uneven ' + ms(u.uneven) +
+                     '), ' + u.late + ' late, longest ' + ms(u.longest) : 'none lately'));
+            row.hits.forEach(function(h) {
+                var a = agreement(h.c);
+                var words = hitWords(h.c);
+                if (!words) return;
+                out.push('  your ' + h.kind + ': ' + words +
+                         (a.of ? ' | agree ' + pct(a.agree / a.of) + ' of ' + a.of : '') +
+                         (h.lag !== null ? ' | decided ' + ms(h.lag) + ' after you' : ''));
+            });
+            var taken = row.taken.filter(function(x) { return x.c.hit || x.c.block || x.c.dead || x.c.byMessage; })
+                .map(function(x) {
+                    var c = x.c, bits = [];
+                    if (c.hit) bits.push(c.hit + ' counted');
+                    if (c.block) bits.push(c.block + ' blocked');
+                    if (c.dead) bits.push(c.dead + ' after you died');
+                    if (c.byMessage) bits.push(c.byMessage + ' targeted');
+                    return x.kind + ' ' + bits.join(', ');
+                });
+            if (taken.length) out.push('  their hits on you: ' + taken.join('; '));
+        });
+        return out;
+    }
+
+    function logLine(t) {
+        var r = report();
+        return r.rows.filter(function(row) { return row.heard !== null && row.heard < 60000; }).map(function(row) {
+            var u = row.updates;
+            var hits = row.hits.map(function(h) {
+                var a = agreement(h.c);
+                return h.kind + ' ' + h.c.counted + '/' + (h.c.counted + h.c.blockedThere + h.c.missedHit + h.c.deadThere) +
+                       ' counted, agree ' + a.agree + '/' + a.of;
+            });
+            return 'player ' + row.id + ' ' + row.path + ' ping ' + ms(row.ping) + ' jitter ' + ms(row.jitter) +
+                   (row.loss ? ' loss ' + pct(row.loss.share) + '/' + row.loss.of : '') +
+                   (u ? ' updates ' + u.rate.toFixed(1) + '/s late ' + u.late + ' longest ' + ms(u.longest) : ' no updates') +
+                   (hits.length ? ' hits ' + hits.join(', ') : '');
+        }).join('; ') || 'nobody heard from lately';
+    }
+
+    // Clears the counts, but not who's who.
+    function reset() {
+        for (var id in players) {
+            var p = players[id];
+            p.positions = [];
+            p.shown = [];
+            p.receipts = [];
+            p.tally = {};
+            p.taken = {};
+            p.game.rtts = [];
+            p.game.pings = [];
+            p.game.sent = {};
+            p.ns.rtts = [];
+            p.ns.pings = [];
+            p.ns.sent = {};
+        }
+    }
+
+    // A game starts (hosting or joining): what's still waiting from the last
+    // one is dropped, and the counts start over.
+    function start(isHost) {
+        end();
+        players = {};
+        names = {};
+        me.isHost = !!isHost;
+    }
+
+    // A game ends. Its counts stay up until the next one starts.
+    function end() {
+        gen++;
+        lines = {};
+        me.live = false;
+    }
+
+    Module.jkNetStats = {
+        // For tests (packaging/wasm/test/netstats-test.mjs).
+        lib: {
+            clock: clock, parseSim: parseSim, setSim: setSim,
+            isFrame: isFrame, isPosition: isPosition, median: median, jitterOf: jitterOf,
+            updatesOf: updatesOf, tick: tick, players: function() { return players; },
+            O_HIT: O_HIT, O_BLOCK: O_BLOCK, O_DEAD: O_DEAD, T_PING: T_PING, T_PONG: T_PONG, T_RECEIPT: T_RECEIPT
+        },
+        // stdComm_WSRelay.c's transport.
+        inbound: inbound,
+        outbound: outbound,
+        take: take,
+        onProbe: onProbe,
+        start: start,
+        end: end,
+        // The engine.
+        live: function(on, id, isHost) {
+            me.live = !!on;
+            me.id = id;
+            me.isHost = !!isHost;
+        },
+        name: function(id, name) { if (id) names[id] = name; },
+        hit: hit,
+        // The page.
+        report: report,
+        text: text,
+        reset: reset,
+        sim: function() { return sim; },
+        setSim: setSim
+    };
+
+    if (typeof setInterval !== 'undefined') clock.every(function() { tick(); }, TICK_MS);
+})();
