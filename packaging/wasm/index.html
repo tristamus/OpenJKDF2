@@ -764,7 +764,7 @@
 
       /* Live counts in Standard Rooms, and Nar Shaddaa's room window, after
          the Zone's room list and its game room client: tables on black, a
-         white list of who's on, a grey toolbar and status bar. */
+         black list of who's on, a grey toolbar and status bar. */
       :root {
         --win-grey: #d4d0c8;
         --win-dark: #808080;
@@ -995,36 +995,56 @@
       .game-list .zone-button { padding: 2px 10px; font-size: 12px; }
       .list-scroll { overflow-x: auto; }
 
+      /* Who's on, after the Zone's player list: light grey Tahoma on black,
+         section names in capitals over a grey rule, and latency bars by each
+         name. The bars are for the look: the lobby doesn't measure latency,
+         so everyone gets all four. It looks the same in both page styles. */
       .roster {
         flex: none;
         width: 210px;
         overflow-y: auto;
-        background-color: #fff;
-        color: #000;
-        font: 12px Tahoma, Verdana, sans-serif;
+        background-color: #000;
+        color: #e0e0e0;
+        font: 12px/18px Tahoma, Verdana, sans-serif;
       }
       .roster-head {
         position: sticky;
         top: 0;
-        padding: 2px 6px;
+        display: flex;
         background-color: var(--win-grey);
         border-bottom: 1px solid var(--win-dark);
-        text-align: center;
+        box-shadow: inset 0 -1px #fff;
+        color: #000;
+        line-height: 20px;
       }
-      .roster section { padding: 6px 6px 4px; }
+      .roster-head span { padding: 0 6px; }
+      .roster-head span:first-child { border-right: 1px solid var(--win-dark); box-shadow: 1px 0 #fff; }
+      .roster-head span:last-child { font-weight: bold; }
+      .roster section { padding: 6px 4px 10px; }
       .roster h2 {
         display: flex;
         justify-content: space-between;
-        margin: 0 0 2px;
-        font: bold 12px Tahoma, Verdana, sans-serif;
+        margin: 0 0 3px;
+        padding-bottom: 1px;
+        border-bottom: 1px solid #808080;
+        font: 12px/18px Tahoma, Verdana, sans-serif;
         text-transform: uppercase;
       }
       .roster h2 span { font-variant-numeric: tabular-nums; }
-      .roster ul { margin: 0; padding: 0 0 0 12px; list-style: none; }
-      .roster li { display: flex; justify-content: space-between; gap: 6px; }
-      .roster li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .roster li .where { flex: none; color: #555; }
-      .roster .none { color: #555; }
+      .roster ul { margin: 0; padding: 0; list-style: none; }
+      .roster li { display: flex; align-items: center; gap: 7px; height: 18px; }
+      .roster li .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .roster li .where { flex: none; color: #808080; }
+      .roster .none { padding-left: 26px; color: #808080; }
+      /* Four bars, each 3px with a darker right edge, 1px apart. */
+      .bars {
+        flex: none;
+        width: 19px;
+        height: 8px;
+        background:
+          repeating-linear-gradient(to right, transparent 0 3px, #3f9a2a 3px 4px, #000 4px 5px),
+          linear-gradient(#c4f0a8, #80ec58 2px);
+      }
 
       .room-note {
         margin: 0;
@@ -5345,7 +5365,10 @@
 
       function renderRoster() {
         var s = roomStatus(lobbyLive.status, lobbyLive.room);
-        roster.replaceChildren(el('div', 'roster-head', "Who's on"));
+        var head = el('div', 'roster-head');
+        head.append(el('span', null, 'Latency'), el('span', null, 'Name'));
+        roster.replaceChildren(head);
+        // Rows are [name, game] or, for players without a name, [text, null, true].
         function section(title, count, rows, none) {
           var sec = el('section');
           var h = el('h2', null, title);
@@ -5354,8 +5377,13 @@
           if (rows) {
             var ul = el('ul');
             rows.forEach(function(r) {
-              var li = el('li');
-              li.append(el('span', null, r[0]));
+              var li = el('li', r[2] ? 'none' : null);
+              if (!r[2]) {
+                var bars = el('span', 'bars');
+                bars.setAttribute('aria-hidden', 'true');
+                li.append(bars);
+              }
+              li.append(el('span', 'who', r[0]));
               if (r[1]) li.append(el('span', 'where', r[1]));
               ul.append(li);
             });
@@ -5365,7 +5393,7 @@
           roster.append(sec);
         }
         if (!s) {
-          section('In this room', '–');
+          section('Total players', '–');
           return;
         }
         var playing = [];
@@ -5376,10 +5404,10 @@
         });
         var inLobby = Math.max(0, s.online - inGames);
         var lobbyRows = s.lobby.filter(Boolean).map(function(n) { return [n]; });
-        if (lobbyRows.length < inLobby) lobbyRows.push(['+' + (inLobby - lobbyRows.length) + ' without a name']);
-        if (playing.length < inGames) playing.push(['+' + (inGames - playing.length) + ' without a name']);
-        section('In this room', String(s.online));
-        section('In the lobby', String(inLobby), lobbyRows, 'Nobody');
+        if (lobbyRows.length < inLobby) lobbyRows.push(['+' + (inLobby - lobbyRows.length) + ' without a name', null, true]);
+        if (playing.length < inGames) playing.push(['+' + (inGames - playing.length) + ' without a name', null, true]);
+        section('Total players', String(s.online));
+        section('Looking', String(inLobby), lobbyRows, 'Nobody');
         section('Playing', String(inGames), playing, 'Nobody');
       }
 
