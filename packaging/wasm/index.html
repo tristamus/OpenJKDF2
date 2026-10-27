@@ -941,10 +941,8 @@
       /* Who's on, after the Zone's player list: light grey Tahoma on black,
          section names in capitals over a grey rule, and latency bars by each
          name. The bars are for the look: the lobby doesn't measure latency,
-         so everyone gets all four. The header strip takes the window's grey,
-         or Windows XP's beige in the 2001-2006 style (html.style-2001). */
+         so everyone gets all four. It looks the same in both page styles. */
       .roster {
-        --roster-head: var(--win-grey);
         flex: none;
         width: 210px;
         overflow-y: auto;
@@ -952,12 +950,11 @@
         color: #e0e0e0;
         font: 12px/18px Tahoma, Verdana, sans-serif;
       }
-      html.style-2001 .roster { --roster-head: #ece9d8; }
       .roster-head {
         position: sticky;
         top: 0;
         display: flex;
-        background-color: var(--roster-head);
+        background-color: var(--win-grey);
         border-bottom: 1px solid var(--win-dark);
         box-shadow: inset 0 -1px #fff;
         color: #000;
