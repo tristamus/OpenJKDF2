@@ -803,14 +803,17 @@
            styles): as the Zone's game room client drew it behind the
            tables, at its own size, its top level with the first row and its
            left 23px past theirs, cut off by an ellipse round its top left
-           corner. Measured off a screenshot of the client. */
+           corner. Measured off a screenshot of the client. Darkened a little
+           (--backdrop-dim) so the tables read better over it. */
         --backdrop-x: -11px;
         --backdrop-y: 12px;
         --backdrop-cut: 445px 290px;
+        --backdrop-dim: rgba(0, 0, 0, 0.35);
         background-image:
           radial-gradient(var(--backdrop-cut) at var(--backdrop-x) var(--backdrop-y), transparent 99.5%, #000 100%),
+          linear-gradient(var(--backdrop-dim), var(--backdrop-dim)),
           var(--backdrop, none);
-        background-position: 0 0, var(--backdrop-x) var(--backdrop-y);
+        background-position: 0 0, 0 0, var(--backdrop-x) var(--backdrop-y);
         background-repeat: no-repeat;
         background-attachment: local;
       }
