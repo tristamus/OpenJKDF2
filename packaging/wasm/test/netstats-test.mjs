@@ -570,6 +570,12 @@ test('this game\'s frames a second, from when its frames ended', () => {
     join.Module.jkFrames = frames;
     near(join.ns.report().me.fps, 30, 0.5, 'frames a second');
     assert.match(join.ns.text()[0], /^You are player 2\. 30 frames a second\. No simulated lag\.$/);
+    frames.count = 0;
+    frames.ends[frames.count++] = world.now() - 1000;
+    near(join.ns.report().me.fps, 0.2, 0.01, 'one frame in 5 s');
+    assert.match(join.ns.text()[0], /^You are player 2\. 0 frames a second\./);
+    for (let i = 0; i < 4; i++) frames.ends[frames.count++] = world.now() - 900 + i * 100;
+    assert.match(join.ns.text()[0], /^You are player 2\. 1 frame a second\./);
 });
 
 test('names and the log line', () => {

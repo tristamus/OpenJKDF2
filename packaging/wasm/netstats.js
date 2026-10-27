@@ -651,7 +651,8 @@
         var out = [];
         var simWords = r.sim ? 'Simulating ' + r.sim.rtt + ' ms more round trip, ' + r.sim.jitter + ' ms jitter, ' +
                                r.sim.loss + '% loss each way' : 'No simulated lag';
-        var fpsWords = r.me.fps !== null ? ' ' + Math.round(r.me.fps) + ' frames a second.' : '';
+        var fps = r.me.fps !== null ? Math.round(r.me.fps) : null;
+        var fpsWords = fps !== null ? ' ' + fps + (fps === 1 ? ' frame' : ' frames') + ' a second.' : '';
         out.push(r.me.id ? 'You are player ' + r.me.id + (r.me.isHost ? ', the host' : '') +
                            (r.me.live ? '' : ' (not in a match)') + '.' + fpsWords + ' ' + simWords + '.'
                          : 'Not in a game yet. ' + simWords + '.');
