@@ -1086,11 +1086,11 @@
       }
 
       /* The 2001-2006 style (html.style-2001), after the Zone's blue years: a
-         blue page with pale yellow links, a sky blue tab bar ending in gold,
-         a light blue sidebar curving off at the bottom, and each section in
-         a white box with blue headings over dotted rules and striped room
-         lists. Only the look changes: the words and buttons are the 2000
-         style's. */
+         blue page with pale yellow links, a sky blue tab bar ending in light
+         blue, a light blue sidebar curving off at the bottom, and each
+         section in a white box with blue headings over dotted rules and
+         striped room lists. Only the look changes: the words and buttons are
+         the 2000 style's. */
       html.style-2001 {
         --teal: #006699;
         --teal-light: #53b5e6;
@@ -1107,8 +1107,8 @@
         --orange-light: #ff9933;
         --dots: repeating-linear-gradient(90deg, var(--navy) 0 1px, transparent 1px 3px);
         /* 2000's gold accents (titles, ticks, code, borders, focus rings, the
-           in-game notes) turn light blue, and the Join balls sky blue. The
-           tab bar keeps its gold strip. */
+           in-game notes) turn light blue, the Join balls sky blue and the
+           Host balls a deeper blue. */
         --gold: #8fd0f2;
         --join-hi: #f2fbff;
         --join: #9fd8f5;
@@ -1153,7 +1153,7 @@
       .style-2001 .play:hover { background: linear-gradient(#fdc196, #fa8f40 45%, #f26812 55%, #e05800); }
       .style-2001 .play:active { border-style: solid; box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.35); }
 
-      .style-2001 .goldnav { border: 0; background-color: #ffcc66; font: bold 14px Verdana, Geneva, sans-serif; }
+      .style-2001 .goldnav { border: 0; background-color: var(--teal-light); font: bold 14px Verdana, Geneva, sans-serif; }
       .style-2001 #zone .goldnav a {
         padding: 2px 16px;
         border-right: 2px solid var(--teal);
@@ -1306,7 +1306,7 @@
       .style-2001 #picker .promises b, .style-2001 .gfx-notice h2, .style-2001 dialog.SDL3_messagebox h1 { color: #fff; }
       .style-2001 .gfx-notice { border-left-color: var(--orange-light); }
       .style-2001 #room :focus-visible { outline-color: var(--frame); }
-      .style-2001 .room-toolbar [data-act=host] circle { fill: #fa8f40; stroke: #bd4301; }
+      .style-2001 .room-toolbar [data-act=host] circle { fill: var(--tab); stroke: var(--teal-dark); }
       .style-2001 .room-toolbar [data-act=host] path { fill: #fff; }
       .style-2001 .room-toolbar [data-act=join] circle { fill: var(--join); stroke: var(--join-lo); }
       .style-2001 .room-toolbar [data-act=join] path { stroke: var(--navy); }
@@ -1316,7 +1316,7 @@
       .style-2001 .table.empty .table-head { background-color: #1b4a66; }
       .style-2001 .table-title { color: #e6f3fb; }
       .style-2001 .round { border-color: #0b3556; color: var(--navy); }
-      .style-2001 .round.host { background: radial-gradient(circle at 35% 30%, #ffe2c4, #fa8f40 45%, #c84800); }
+      .style-2001 .round.host { background: radial-gradient(circle at 35% 30%, #d9f0fb, var(--tab) 45%, var(--teal-dark)); }
       .style-2001 .game-list td { border-bottom-color: #1b3f55; }
 
       @media (max-width: 700px) {
