@@ -969,6 +969,7 @@
         border-radius: 50%;
         border: 1px solid rgba(255, 255, 255, 0.7);
       }
+      .seat.small { width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; }
       .seat.taken { background-color: #fff; border-color: #fff; }
       .round {
         position: absolute;
@@ -5148,7 +5149,7 @@
       // typed by players, so they only ever go into the page as text.
 
       var ROOM_MAX_NAMES = 4;   // names on a table before "+N more"
-      var ROOM_MAX_SEATS = 8;   // seat dots drawn around a table's button
+      var ROOM_MAX_SEATS = 32;  // seat dots drawn around a table's button (the game's limit)
       var ROOMS = {
         'nar-shaddaa': { game: 'jk1', name: 'Nar Shaddaa', title: 'Jedi Knight: Dark Forces II - Nar Shaddaa' },
         'sith-asteroid': { game: 'mots', name: 'Sith: Asteroid', title: 'Mysteries of the Sith - Sith: Asteroid' }
@@ -5246,13 +5247,18 @@
       function isFull(g) { return g.max > 0 && g.players >= g.max; }
 
       // The dots around a table's button: one per seat, filled when taken.
+      // Past 8 seats they're smaller and spread over the whole open side of
+      // the ring, and past 16 they go all the way around it, from the top.
       function seatDots(ring, taken, seats) {
         if (seats < 1 || seats > ROOM_MAX_SEATS) return;
+        var big = seats > 8, round = seats > 16;
+        var from = round ? -90 : big ? -150 : -115, span = big ? 170 : 125;
+        var r = big ? 41 : 40;
         for (var k = 0; k < seats; k++) {
-          var a = (-115 + (seats > 1 ? k * 125 / (seats - 1) : 62)) * Math.PI / 180;
-          var dot = el('span', 'seat' + (k < taken ? ' taken' : ''));
-          dot.style.left = (50 + 40 * Math.cos(a)).toFixed(1) + 'px';
-          dot.style.top = (50 + 40 * Math.sin(a)).toFixed(1) + 'px';
+          var a = (from + (round ? k * 360 / seats : seats > 1 ? k * span / (seats - 1) : 62)) * Math.PI / 180;
+          var dot = el('span', 'seat' + (big ? ' small' : '') + (k < taken ? ' taken' : ''));
+          dot.style.left = (50 + r * Math.cos(a)).toFixed(1) + 'px';
+          dot.style.top = (50 + r * Math.sin(a)).toFixed(1) + 'px';
           dot.setAttribute('aria-hidden', 'true');
           ring.append(dot);
         }

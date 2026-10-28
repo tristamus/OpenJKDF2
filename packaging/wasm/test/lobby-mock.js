@@ -6,6 +6,14 @@
 // make players come and go. The names are made up.
 
 window.jkLobbyMock = (function() {
+    // n of these from the one at from on, for games too big to name everyone
+    // by hand.
+    var CROWD = ['MaraJade', 'Jerec', 'Sariss', 'Yun', 'Gorc', 'Boc', 'Maw', 'RahnJedi', 'Katarn99', 'NightSister',
+                 'ForceGrip', 'Rodian_Ace', 'Gran_Pilot', 'SaberStorm', 'Ewok_Assassin', 'Qu_Rahn', 'DarkJedi_7',
+                 'Tusken_Raider', 'Corran_H', 'Saber_Kyp', 'Dash_R', 'Vima_D', 'Rax_J', 'Talon_K', 'Kyle_K',
+                 'Greedo_Shot', 'BountyHntr', 'Mon_Calamari', 'GammoreanG', 'TrandoshanX', 'Sith_Lurker', 'Duros_Dan'];
+    function crowd(n, from) { return CROWD.concat(CROWD).slice(from, from + n); }
+
     // Each scenario's players not in a game, by the game they run, and
     // its games. The status the page gets is made from these.
     var SCENARIOS = {
@@ -29,6 +37,26 @@ window.jkLobbyMock = (function() {
                       names: ['Katarn99', 'NightSister', 'ForceGrip', 'Rodian_Ace', 'Gran_Pilot', 'SaberStorm'] },
                     { id: 53, name: 'newbies welcome', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
                       mod: '', locked: false, players: 1, max: 2, names: ['Ewok_Assassin'] }
+                ]
+            }
+        },
+        big: {
+            label: 'Big games',
+            status: {
+                lobby: { jk1: ['Jawa_Juice'], mots: ['KelDor_K'] },
+                games: [
+                    { id: 71, name: 'Deathmatch night', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 3, max: 16, names: crowd(3, 0) },
+                    { id: 72, name: 'Full house', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 16, max: 16, names: crowd(16, 3) },
+                    { id: 73, name: 'Team sabers', game: 'mots', map: 'jkm_mp.jkl', episode: 'JKM_MP.goo',
+                      mod: '', locked: false, players: 9, max: 24, names: crowd(9, 19) },
+                    { id: 74, name: 'CTF all night', game: 'jk1', map: 'ctf1.jkl', episode: 'JK1CTF.gob',
+                      mod: '', locked: false, players: 11, max: 32, names: crowd(11, 28) },
+                    { id: 75, name: 'Big CTF', game: 'jk1', map: 'ctf1.jkl', episode: 'JK1CTF.gob',
+                      mod: '', locked: false, players: 29, max: 32, names: crowd(29, 7) },
+                    { id: 76, name: 'Everyone on', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 32, max: 32, names: crowd(32, 13) }
                 ]
             }
         },

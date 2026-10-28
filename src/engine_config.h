@@ -180,6 +180,18 @@
 #define TICKRATE_DEFAULT TICKRATE_ORIGINAL_DEFAULT
 #endif
 
+// The host's player limit until they change it (Host > Max players). The
+// browser build starts at the 32 the Host screen allows; a level still only
+// takes as many as it has player starts (16 on JK's deathmatch maps), and the
+// lobby shows the smaller of the two, as JK.EXE's session did. Desktop builds
+// keep the original game's 4.
+#define MAXPLAYERS_ORIGINAL_DEFAULT (4)
+#ifdef ARCH_WASM
+#define MAXPLAYERS_DEFAULT (32)
+#else
+#define MAXPLAYERS_DEFAULT MAXPLAYERS_ORIGINAL_DEFAULT
+#endif
+
 // The most supersampling (Display > SSAA Multiplier) the browser build draws at. Each
 // step multiplies the pixels on both sides, so 2 is already four times the work.
 #define WASM_MAX_SSAA_MULTIPLE (2.0)
