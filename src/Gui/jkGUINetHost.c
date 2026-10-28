@@ -273,6 +273,18 @@ void jkGuiNetHost_LoadSettings()
         wuRegistry_SaveInt("tickRateDefault", TICKRATE_DEFAULT);
     }
 
+    // Added: the same for the player limit, which is saved alongside it. The
+    // saved value is the count the Host screen shows, without a dedicated
+    // host's own slot.
+    int maxPlayersDefault = wuRegistry_GetInt("maxPlayersDefault", MAXPLAYERS_ORIGINAL_DEFAULT);
+    if (maxPlayersDefault != MAXPLAYERS_DEFAULT)
+    {
+        if (jkGuiNetHost_maxPlayers == maxPlayersDefault)
+            jkGuiNetHost_maxPlayers = MAXPLAYERS_DEFAULT;
+        wuRegistry_SaveInt("maxPlayers", jkGuiNetHost_maxPlayers);
+        wuRegistry_SaveInt("maxPlayersDefault", MAXPLAYERS_DEFAULT);
+    }
+
     // MOTS added:
     //if (jkGuiNetHost_maxRank > 8) {
     //    jkGuiNetHost_maxRank = 8;
@@ -289,6 +301,11 @@ void jkGuiNetHost_LoadSettings()
 
     if (jkGuiNetHost_bIsDedicated) {
         jkGuiNetHost_maxPlayers += 1;
+        // Added: a dedicated host takes at most 31 with its own slot, as OK on
+        // the Host screen clamps it. A saved 32 would otherwise make it 33, past
+        // the 32 player slots.
+        if (jkGuiNetHost_maxPlayers > 31)
+            jkGuiNetHost_maxPlayers = 31;
     }
 
     if (jkGuiNetHost_bIsDedicated) {

@@ -808,7 +808,12 @@ static void wsrelay_WelcomePeer(int id)
     entry.numPlayers = wsrelay_RealConnectedPlayers();
     entry.maxPlayers = wsrelay_storedEntry.maxPlayers;
 
-    jkPlayer_maxPlayers = wsrelay_storedEntry.maxPlayers; // Hack?
+    // Hack? Holds joins to the session's limit. Added: only ever lower it.
+    // The level's player starts are the most it can take (sithPlayer_PlacePlayers),
+    // and slots past them can still be marked as having a start from a bigger
+    // level earlier, with no player thing behind them.
+    if (wsrelay_storedEntry.maxPlayers > 0 && jkPlayer_maxPlayers > (uint32_t)wsrelay_storedEntry.maxPlayers)
+        jkPlayer_maxPlayers = wsrelay_storedEntry.maxPlayers;
 
     wsrelay_SendEntry("welcome", id, &entry);
 }
@@ -1438,6 +1443,12 @@ int DirectPlay_SendLobbyMessage(void* pPkt, uint32_t pktLen)
 void DirectPlay_SetSessionDesc(const char* a1, DWORD maxPlayers)
 {
     _strncpy(wsrelay_storedEntry.mapJklFname, jkMain_aLevelJklFname, 0x20);
+    // Added: jkMain passes the smaller of the host's limit and the level's
+    // player starts, which is what JK.EXE's DirectPlay session showed and held
+    // joins to. The lobby used to get the host's own number, so a 16-start map
+    // hosted for 32 read "3/32" and turned the 17th player away.
+    if (maxPlayers > 0 && maxPlayers <= JKPLAYER_NUM_INFOS)
+        wsrelay_storedEntry.maxPlayers = maxPlayers;
     wsrelay_UpdateLobby();
 }
 
