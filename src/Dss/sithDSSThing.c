@@ -20,6 +20,10 @@
 #include "stdPlatform.h"
 #include "jk.h"
 
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
+
 void sithDSSThing_Pos(SithThing *pThing, int toID, int dpFlags)
 {
     rdVector3 orient; // [esp+4h] [ebp-Ch] BYREF
@@ -669,6 +673,10 @@ int sithDSSThing_ProcessFire(SithMessage *pMsg)
         flex32_t a9 = NETMSG_POPF32();
         int thingId = NETMSG_POPS32();
         //printf("sithDSSThing_ProcessFire %x %x (%f %f %f) (%f %f %f) %x %f %x %f\n", idx, templateIdx, aimError.x, aimError.y, aimError.z, fireOffset.x, fireOffset.y, fireOffset.z, anim, scale, scaleFlags, a9);
+#ifdef PLATFORM_WSRELAY
+        // Added: the shot can hit as it's made, before it gets its id below.
+        stdComm_WSRelay_fireGuid = thingId;
+#endif
         SithThing* pThing2 = sithWeapon_WeaponFireProjectile(
                       pThing,
                       pCreateThingTemplate,
@@ -680,6 +688,9 @@ int sithDSSThing_ProcessFire(SithMessage *pMsg)
                       scaleFlags,
                       a9,
                       0);
+#ifdef PLATFORM_WSRELAY
+        stdComm_WSRelay_fireGuid = 0;
+#endif
         if ( pThing2 )
         {
             pThing2->guid = thingId;
@@ -707,6 +718,10 @@ int sithDSSThing_ProcessMOTSNew2(SithMessage *msg)
         flex32_t a9 = NETMSG_POPF32();
         int thingId = NETMSG_POPS32();
         int idk = NETMSG_POPS32();
+#ifdef PLATFORM_WSRELAY
+        // Added: as in sithDSSThing_ProcessFire.
+        stdComm_WSRelay_fireGuid = thingId;
+#endif
         SithThing* pThing2 = sithWeapon_WeaponFireProjectile(
                       pThing,
                       pCreateThingTemplate,
@@ -718,6 +733,9 @@ int sithDSSThing_ProcessMOTSNew2(SithMessage *msg)
                       scaleFlags,
                       a9,
                       idk);
+#ifdef PLATFORM_WSRELAY
+        stdComm_WSRelay_fireGuid = 0;
+#endif
         if ( pThing2 )
         {
             pThing2->guid = thingId;

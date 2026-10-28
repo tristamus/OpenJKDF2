@@ -56,11 +56,21 @@
 // (packaging/wasm/mods.js). A joiner on another mod, or none, gets the
 // host's the same way, then the engine restarts into it and the player joins
 // again with that game already selected.
+//
+// packaging/wasm/netstats.js, also bundled in, sees every game packet on its
+// way in and out: it measures each link (pings, position update gaps), keeps
+// the hit ledger (stdComm_WSRelay_NoteHit), and with ?netsim makes this
+// window's packets wait as if its connection were slower. Its pings go over
+// a third data channel that never resends, which both ends only open once
+// each has said in its offer or answer ({"x": {"ns": 1}}) that it has the
+// file.
 
 #include "stdComm_WSRelay.h"
 
 #include "Win95/stdComm.h"
 #include "Dss/sithMulti.h"
+#include "Devices/sithComm.h"
+#include "World/sithThing.h"
 #include "Main/Main.h"
 #include "General/stdString.h"
 #include "stdPlatform.h"
@@ -190,6 +200,36 @@ EM_JS(void, wsrelay_js_connect, (), {
             return p;
         };
 
+        /* What this game adds to its offer or answer: that it has netstats.js,
+           so the other end may open the measurements' channel with it. */
+        net.extras = function() {
+            return Module.jkNetStats ? { ns: 1 } : undefined;
+        };
+
+        /* The measurements' channel, which never waits for or resends a lost
+           message, once both ends have said they have netstats.js. */
+        net.nsChannel = function(id, p) {
+            if (p.ns || !Module.jkNetStats) return;
+            var ns = p.ns = p.pc.createDataChannel('jk-ns', { negotiated: true, id: 2, ordered: false, maxRetransmits: 0 });
+            ns.binaryType = 'arraybuffer';
+            ns.onmessage = function(ev) { if (net.peers[id] === p) Module.jkNetStats.onProbe(id, ev.data); };
+        };
+
+        net.nsOpen = function(id) {
+            var p = net.peers[id];
+            return !!(p && p.open && p.ns && p.ns.readyState === 'open');
+        };
+
+        net.nsSend = function(id, buf) {
+            if (!net.nsOpen(id)) return 0;
+            try {
+                net.peers[id].ns.send(buf);
+                return 1;
+            } catch (e) {
+                return 0;
+            }
+        };
+
         net.closePeer = function(id) {
             var p = net.peers[id];
             if (!p) return;
@@ -197,6 +237,7 @@ EM_JS(void, wsrelay_js_connect, (), {
             p.open = false;
             try { p.dc.close(); } catch (e) {}
             try { p.mc.close(); } catch (e) {}
+            if (p.ns) try { p.ns.close(); } catch (e) {}
             try { p.pc.close(); } catch (e) {}
         };
 
@@ -208,7 +249,7 @@ EM_JS(void, wsrelay_js_connect, (), {
             var p = net.peer(id);
             p.pc.createOffer()
                 .then(function(o) { return p.pc.setLocalDescription(o); })
-                .then(function() { if (net.peers[id] === p) net.signal(id, { d: p.pc.localDescription.toJSON() }); })
+                .then(function() { if (net.peers[id] === p) net.signal(id, { d: p.pc.localDescription.toJSON(), x: net.extras() }); })
                 .catch(function(e) { console.warn('OpenJKDF2: WebRTC offer to player ' + id + ' failed, using the relay: ' + e); });
         };
 
@@ -219,13 +260,15 @@ EM_JS(void, wsrelay_js_connect, (), {
                 if (!net.isHost) return;
                 net.closePeer(from);
                 p = net.peer(from);
+                if (obj.x && obj.x.ns) net.nsChannel(from, p);
                 p.pc.setRemoteDescription(obj.d)
                     .then(function() { return p.pc.createAnswer(); })
                     .then(function(a) { return p.pc.setLocalDescription(a); })
-                    .then(function() { if (net.peers[from] === p) net.signal(from, { d: p.pc.localDescription.toJSON() }); })
+                    .then(function() { if (net.peers[from] === p) net.signal(from, { d: p.pc.localDescription.toJSON(), x: net.extras() }); })
                     .catch(function(e) { console.warn('OpenJKDF2: WebRTC answer to player ' + from + ' failed, using the relay: ' + e); });
             } else if (obj.d) {
                 p = net.peers[from];
+                if (p && obj.x && obj.x.ns) net.nsChannel(from, p);
                 if (p) p.pc.setRemoteDescription(obj.d).catch(function(e) { console.warn('OpenJKDF2: WebRTC answer from player ' + from + ' rejected: ' + e); });
             } else if (obj.c) {
                 p = net.peers[from];
@@ -235,11 +278,17 @@ EM_JS(void, wsrelay_js_connect, (), {
 
         /* Packets from a data channel. The host knows who is on the other end,
            so it stamps idFrom itself and forwards anything meant for another
-           client. */
+           client. netstats.js holds each one while ?netsim says to, and takes
+           its own frames out. */
         net.onPeerPacket = function(id, data) {
             if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
             net.stats.dcRecv++;
             net.lastFrom[id] = performance.now();
+            if (Module.jkNetStats) Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takePeerPacket(id, d); });
+            else net.takePeerPacket(id, data);
+        };
+
+        net.takePeerPacket = function(id, data) {
             if (net.isHost) {
                 var dv = new DataView(data);
                 dv.setUint32(0, id, true);
@@ -249,10 +298,16 @@ EM_JS(void, wsrelay_js_connect, (), {
                     return;
                 }
             }
+            if (Module.jkNetStats && Module.jkNetStats.take(id, data, 'direct')) return;
             net.queue.push(data);
         };
 
         net.sendPacket = function(bytes, id) {
+            if (Module.jkNetStats) return Module.jkNetStats.outbound(id, bytes, function(b) { return net.sendNow(b, id); });
+            return net.sendNow(bytes, id);
+        };
+
+        net.sendNow = function(bytes, id) {
             var p = net.peers[id];
             if (p && p.open) {
                 try {
@@ -457,7 +512,14 @@ EM_JS(void, wsrelay_js_connect, (), {
                     return;
                 } else {
                     net.stats.wsRecv++;
-                    if (ev.data.byteLength >= 8) net.lastFrom[new DataView(ev.data).getUint32(0, true)] = performance.now();
+                    var from = ev.data.byteLength >= 8 ? new DataView(ev.data).getUint32(0, true) : 0;
+                    if (ev.data.byteLength >= 8) net.lastFrom[from] = performance.now();
+                    if (Module.jkNetStats) {
+                        Module.jkNetStats.inbound(from, ev.data, 'relay', function(d) {
+                            if (net.ws === ws && !Module.jkNetStats.take(from, d, 'relay')) net.queue.push(d);
+                        });
+                        return;
+                    }
                 }
                 net.queue.push(ev.data);
             };
@@ -507,6 +569,7 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     net.lastFrom = {};
     net.relayPosAt = {};
     net.healthStats = null;
+    if (Module.jkNetStats) Module.jkNetStats.start(isHost);
     net.note((isHost ? 'hosting' : 'joined') + ' room ' + (net.seat ? net.seat.room + ' as player ' + net.seat.id : '(no seat from the relay)'));
     if (!isHost && net.rtcEnabled()) net.offer(1);
 });
@@ -515,6 +578,10 @@ EM_JS(void, wsrelay_js_rtc_end, (), {
     var net = Module.jkNet;
     if (!net) return;
     net.closeAll();
+    if (net.session && Module.jkNetStats) {
+        net.note('netstats at the end: ' + Module.jkNetStats.text().join(' / '));
+        Module.jkNetStats.end();
+    }
     if (net.session) net.note('left the game');
     net.session = false;
     net.isHost = false;
@@ -616,6 +683,29 @@ EM_JS(void, wsrelay_js_mod_describe, (const char* pTail, char* pOut, int maxLen)
     stringToUTF8(Module.jkMods ? Module.jkMods.describe(UTF8ToString(pTail)) : "", pOut, maxLen);
 });
 
+// The measurements (packaging/wasm/netstats.js): whether this game is in a
+// match now, and as which player.
+EM_JS(void, wsrelay_js_net_live, (int live, int id, int isHost), {
+    if (Module.jkNetStats) Module.jkNetStats.live(live, id, isHost);
+});
+
+// A player's name, for the network panel.
+EM_JS(void, wsrelay_js_net_name, (int id, const char16_t* pName), {
+    if (!Module.jkNetStats) return;
+    var chars = [];
+    for (var i = 0; i < 32; i++) {
+        var ch = HEAPU16[(pName >> 1) + i];
+        if (!ch) break;
+        chars.push(ch);
+    }
+    Module.jkNetStats.name(id, String.fromCharCode.apply(null, chars));
+});
+
+// A hit between this game's player and player otherId (stdComm_WSRelay_NoteHit).
+EM_JS(void, wsrelay_js_net_hit, (int otherId, int mine, int kind, int outcome, float damage, int byMessage, uint32_t attack), {
+    if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, !!byMessage, attack >>> 0);
+});
+
 // Pops one queued message into pOut. Returns its length, or -1 if the queue is
 // empty. Text is NUL-terminated (maxLen includes the terminator).
 EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText), {
@@ -651,6 +741,16 @@ static uint32_t wsrelay_id = 0xFFFFFFFF;
 
 static int wsrelay_aDisconnected[64];
 static int wsrelay_numDisconnected = 0;
+
+// What netstats.js was last told about the match (wsrelay_WatchMatch).
+static int wsrelay_bNetLive = 0;
+static uint32_t wsrelay_msecNamesSent = 0;
+
+// Saber swings (stdComm_WSRelay_NewSwing): the one each player's blade was
+// last turned on for, by player slot, and the last number this game gave.
+static uint32_t wsrelay_aSwing[JKPLAYER_NUM_INFOS];
+static uint32_t wsrelay_lastSwing = 0;
+int stdComm_WSRelay_fireGuid = 0;
 
 // A host's players the relay says left while their data channel is still up.
 // They count as gone once it goes down (or sithMulti times them out).
@@ -772,6 +872,9 @@ static void wsrelay_ResetSession()
     wsrelay_numDisconnected = 0;
     wsrelay_numLeftPending = 0;
     wsrelay_numWelcomed = 0;
+    wsrelay_bNetLive = 0;
+    wsrelay_msecNamesSent = 0;
+    memset(wsrelay_aSwing, 0, sizeof(wsrelay_aSwing));
     wsrelay_js_rtc_end();
     wsrelay_js_map_unhost();
     wsrelay_js_mod_unhost();
@@ -1288,6 +1391,142 @@ static const char* wsrelay_HostGoneReason()
     return NULL;
 }
 
+int stdComm_WSRelay_InMatch()
+{
+    if ((!wsrelay_bHosting && !wsrelay_bJoined) || !sithNet_isMulti || !sithWorld_g_pCurrentWorld || !sithPlayer_g_pLocalPlayerThing)
+        return 0;
+
+    // A joiner is in once the host has welcomed it into the level
+    // (sithMulti_ProcessWelcome clears this). Before that, the host would
+    // drop it for sending anything (sithMessage_ProcessMessages).
+    return stdComm_bIsServer || !(g_submodeFlags & 8);
+}
+
+// Tells netstats.js when this game is in a match, which is when it pings the
+// other players and keeps the hit ledger, and who they are.
+static void wsrelay_WatchMatch()
+{
+    int live = stdComm_WSRelay_InMatch();
+    if (live != wsrelay_bNetLive)
+    {
+        wsrelay_bNetLive = live;
+        wsrelay_js_net_live(live, stdComm_bIsServer ? 1 : (int)wsrelay_id, stdComm_bIsServer);
+    }
+    if (!live)
+        return;
+
+    // Players come and go, and can change their names.
+    uint32_t now = stdPlatform_GetTimeMsec();
+    if (wsrelay_msecNamesSent && now - wsrelay_msecNamesSent < 2000)
+        return;
+    wsrelay_msecNamesSent = now ? now : 1;
+    for (int i = 0; i < jkPlayer_maxPlayers; i++)
+    {
+        if ((jkPlayer_playerInfos[i].flags & 1) && jkPlayer_playerInfos[i].playerNetId)
+            wsrelay_js_net_name(jkPlayer_playerInfos[i].playerNetId, jkPlayer_playerInfos[i].player_name);
+    }
+}
+
+static int wsrelay_PlayerSlot(SithThing* pPlayer)
+{
+    if (!pPlayer || pPlayer->type != SITH_THING_PLAYER || !pPlayer->actorParams.pPlayer)
+        return -1;
+    intptr_t slot = pPlayer->actorParams.pPlayer - jkPlayer_playerInfos;
+    return (slot >= 0 && slot < JKPLAYER_NUM_INFOS) ? (int)slot : -1;
+}
+
+void stdComm_WSRelay_NewSwing(SithThing* pPlayer)
+{
+    int slot = wsrelay_PlayerSlot(pPlayer);
+    if (slot < 0)
+        return;
+    // Never 0, which stands for a swing without a number.
+    if (!++wsrelay_lastSwing)
+        wsrelay_lastSwing = 1;
+    wsrelay_aSwing[slot] = wsrelay_lastSwing;
+}
+
+void stdComm_WSRelay_SetSwing(SithThing* pPlayer, uint32_t swing)
+{
+    int slot = wsrelay_PlayerSlot(pPlayer);
+    if (slot >= 0)
+        wsrelay_aSwing[slot] = swing;
+}
+
+uint32_t stdComm_WSRelay_GetSwing(SithThing* pPlayer)
+{
+    int slot = wsrelay_PlayerSlot(pPlayer);
+    return slot >= 0 ? wsrelay_aSwing[slot] : 0;
+}
+
+// Kinds of hit, as netstats.js names them.
+#define WSRELAY_HIT_SABER (1)
+#define WSRELAY_HIT_SHOT (2)
+#define WSRELAY_HIT_SPLASH (3)
+#define WSRELAY_HIT_FORCE (4)
+#define WSRELAY_HIT_OTHER (5)
+
+void stdComm_WSRelay_NoteHit(SithThing* pVictim, SithThing* pSource, flex_t damage, int damageType, int outcome)
+{
+    // Whoever fired the shot, set off the explosion or swung the saber.
+    if (pSource)
+        stdComm_WSRelay_NoteHitBy(pVictim, sithThing_GetThingParent(pSource), pSource, damage, damageType, outcome);
+}
+
+void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThing* pSource, flex_t damage, int damageType, int outcome)
+{
+    SithThing* pLocal = sithPlayer_g_pLocalPlayerThing;
+    if (!wsrelay_bNetLive || !pLocal || !pVictim || !pSource || pVictim->type != SITH_THING_PLAYER)
+        return;
+    if (!pAttacker || pAttacker == pVictim || pAttacker->type != SITH_THING_PLAYER)
+        return;
+
+    // Only this game's own player's hits on others, which it shows, and hits
+    // on its player, which it decides.
+    int mine = (pAttacker == pLocal);
+    if (!mine && pVictim != pLocal)
+        return;
+
+    SithThing* pOther = mine ? pVictim : pAttacker;
+    int otherId = pOther->actorParams.pPlayer ? (int)pOther->actorParams.pPlayer->playerNetId : 0;
+    if (!otherId)
+        return;
+
+    // A player who's dead in this game shows nothing. The victim's game says
+    // so, for hits its player took after dying there.
+    if (pVictim->flags & (SITH_TF_DISABLED|SITH_TF_DEAD|SITH_TF_DESTROYED))
+    {
+        if (mine)
+            return;
+        outcome = STDCOMM_WSRELAY_DEAD;
+    }
+
+    int kind = WSRELAY_HIT_OTHER;
+    if (damageType & SITH_DAMAGE_SABER)
+        kind = WSRELAY_HIT_SABER;
+    else if (pSource->type == SITH_THING_EXPLOSION)
+        kind = WSRELAY_HIT_SPLASH;
+    else if (damageType & SITH_DAMAGE_FORCE)
+        kind = WSRELAY_HIT_FORCE;
+    else if (pSource->type == SITH_THING_WEAPON)
+        kind = WSRELAY_HIT_SHOT;
+
+    // Targeted Force powers (SkillTarget) reach the victim's game as a cog
+    // message, and the host can damage anyone with DSS_DAMAGE. The message
+    // decided those, not this game's simulation.
+    int byMessage = (sithComm_msgInProgress == DSS_SENDTRIGGER || sithComm_msgInProgress == DSS_DAMAGE);
+
+    // The attack, by a number both games know: the saber swing, or the shot's
+    // id. 0 for the rest, which the ledger matches by time instead.
+    uint32_t attack = 0;
+    if (kind == WSRELAY_HIT_SABER)
+        attack = stdComm_WSRelay_GetSwing(pAttacker);
+    else if (kind == WSRELAY_HIT_SHOT)
+        attack = (uint32_t)(stdComm_WSRelay_fireGuid ? stdComm_WSRelay_fireGuid : pSource->guid);
+
+    wsrelay_js_net_hit(otherId, mine, kind, outcome, (float)damage, byMessage, attack);
+}
+
 int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
 {
     int maxLen = *pLenOut;
@@ -1297,6 +1536,7 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
     Hack_ResetClients();
 
     wsrelay_WatchRelay();
+    wsrelay_WatchMatch();
     if (stdComm_bIsServer)
         wsrelay_CheckLeftPending();
 

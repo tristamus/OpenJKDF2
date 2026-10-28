@@ -126,12 +126,22 @@ test('Left Arrow and Numpad 4 turn left, Right Arrow and Numpad 6 turn right', (
     assert.ok(/sithControl_FixNumpadTurn\(\); \/\/ Added\s*return 1;/.test(sithControlC), 'profiles are repaired on load');
 });
 
-test('?keycheck, ?netlog and ?bench are the page\'s own and not passed to the engine, which quits on them', () => {
+test('?keycheck, ?netlog, ?bench and the network tests\' options are the page\'s own and not passed to the engine, which quits on them', () => {
     const at = html.indexOf("      Module['arguments'] = window.location.search");
     const code = html.substring(at, html.indexOf('\n      window.onerror', at));
-    const Module = {};
-    new Function('window', 'Module', code)({ location: { search: '?keycheck&verbose&bench&path=jkmods/x&netlog&keycheck=1' } }, Module);
-    assert.deepEqual(Module.arguments, ['-verbose', '-path', 'jkmods/x']);
+    const run = search => {
+        const Module = {};
+        new Function('window', 'Module', code)({ location: { search } }, Module);
+        return Module;
+    };
+    assert.deepEqual(run('?keycheck&verbose&bench&path=jkmods/x&netlog&keycheck=1').arguments, ['-verbose', '-path', 'jkmods/x']);
+    const net = run('?netstats&netsim=rtt:150,jitter:20&verbose&nettest=attack:bryar');
+    assert.deepEqual(net.arguments, ['-verbose']);
+    assert.equal(net.jkNetMeasure, true);
+    assert.equal(net.jkNetSim, 'rtt:150,jitter:20');
+    assert.equal(net.jkNetTest, 'attack:bryar');
+    assert.ok(!('jkNetSim' in run('?netstats')) && !('jkNetTest' in run('?netstats')));
+    assert.ok(!('jkNetMeasure' in run('?netsim=100&nettest=strafe')));
 });
 
 test('in fullscreen, Chrome and Edge give Esc, W, T and N to the game', () => {

@@ -16,6 +16,7 @@
 #include "types.h"
 
 extern int sithComm_version;
+extern int sithComm_msgInProgress; // Added
 
 int sithComm_Startup();
 void sithMessage_Shutdown();
