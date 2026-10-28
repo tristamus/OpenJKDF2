@@ -135,12 +135,13 @@ test('?keycheck, ?netlog, ?bench and the network tests\' options are the page\'s
         return Module;
     };
     assert.deepEqual(run('?keycheck&verbose&bench&path=jkmods/x&netlog&keycheck=1').arguments, ['-verbose', '-path', 'jkmods/x']);
-    const net = run('?netstats&netsim=rtt:150,jitter:20&verbose&nettest=attack:bryar');
+    const net = run('?netstats&netsim=rtt:150,jitter:20&verbose&nettest=attack:bryar&netold');
     assert.deepEqual(net.arguments, ['-verbose']);
     assert.equal(net.jkNetMeasure, true);
     assert.equal(net.jkNetSim, 'rtt:150,jitter:20');
     assert.equal(net.jkNetTest, 'attack:bryar');
-    assert.ok(!('jkNetSim' in run('?netstats')) && !('jkNetTest' in run('?netstats')));
+    assert.equal(net.jkNetOld, true);
+    assert.ok(!('jkNetSim' in run('?netstats')) && !('jkNetTest' in run('?netstats')) && !('jkNetOld' in run('?netstats')));
     assert.ok(!('jkNetMeasure' in run('?netsim=100&nettest=strafe')));
 });
 

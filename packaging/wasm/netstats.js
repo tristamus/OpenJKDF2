@@ -30,9 +30,11 @@
 // 150 ms to each round trip (half on the way in, half on the way out), up to
 // 20 ms more each way at random, and loses 2% of packets each way. A packet
 // lost on the reliable channel or the relay arrives about a round trip late,
-// as a resent one would, and holds up the ones behind it; on 'jk-ns' it's
-// gone. Set it in one window: two with it add up. Hidden tabs run timers
-// late, so keep the window showing.
+// as a resent one would, and holds up the ones behind it; on 'jk-ns' and the
+// fast lane for positions ('jk-pos') it's gone, and the others there each
+// wait their own time, so they can come in any order. Set it in one window:
+// two with it add up. Hidden tabs run timers late, so keep the window
+// showing.
 //
 // Frames start like a game packet, with idFrom and idTo (u32), then 'J' 'N'
 // and two zero bytes, which an engine reads as message 0x4E4A, past DSS_MAX,
@@ -156,13 +158,22 @@
         return lines[key] || (lines[key] = new Line());
     }
 
+    // One packet on a channel that never resends: it waits its own time, or
+    // is lost.
+    function unordered(fn) {
+        var d = simDelay(false), g = gen;
+        if (d >= 0) clock.later(function() { if (g === gen) fn(); }, d);
+    }
+
     // A game packet from player `from` over 'direct' (the data channel) or
-    // 'relay'. deliver(data) runs when it's due.
-    function inbound(from, data, via, deliver) {
+    // 'relay'. deliver(data) runs when it's due. fast: it came on the fast
+    // lane.
+    function inbound(from, data, via, deliver, fast) {
         if (!sim) {
             deliver(data);
             return;
         }
+        if (fast) return unordered(function() { deliver(data); });
         var g = gen;
         line('in ' + via + ' ' + from).push(clock.now() + simDelay(true), function() {
             if (g === gen) deliver(data);
@@ -170,9 +181,13 @@
     }
 
     // A game packet for route `to` (the player whose link it goes over).
-    // send(bytes) sends it when it's due.
-    function outbound(to, bytes, send) {
+    // send(bytes) sends it when it's due. fast: it goes on the fast lane.
+    function outbound(to, bytes, send, fast) {
         if (!sim) return send(bytes);
+        if (fast) {
+            unordered(function() { send(bytes); });
+            return 1;
+        }
         var g = gen;
         line('out ' + to).push(clock.now() + simDelay(true), function() {
             if (g === gen) send(bytes);
@@ -199,7 +214,7 @@
 
     function player(id) {
         return players[id] || (players[id] = {
-            id: id, heard: 0, via: '', route: null, positions: [],
+            id: id, heard: 0, via: '', route: null, positions: [], fast: [],
             game: newPath(), ns: newPath(), offsets: [],
             shown: [], receipts: [], tally: {}, taken: {}
         });
@@ -252,19 +267,19 @@
     }
 
     // Over the game's path: a joiner sends everything to the host, which
-    // passes on what's for someone else.
+    // passes on what's for someone else (net.route).
     function sendGame(id, buf) {
         var net = Module.jkNet;
-        return net && net.sendPacket ? net.sendPacket(new Uint8Array(buf), me.isHost ? id : 1) : 0;
+        if (!net || !net.sendPacket) return 0;
+        return net.sendPacket(new Uint8Array(buf), net.route ? net.route(id) : me.isHost ? id : 1);
     }
 
-    // Over 'jk-ns', which only links a host and a joiner.
+    // Over 'jk-ns', on a direct link.
     function sendProbe(id, buf) {
         var net = Module.jkNet;
         if (!net || !net.nsSend) return 0;
         if (!sim) return net.nsSend(id, buf);
-        var d = simDelay(false), g = gen;
-        if (d >= 0) clock.later(function() { if (g === gen) net.nsSend(id, buf); }, d);
+        unordered(function() { net.nsSend(id, buf); });
         return 1;
     }
 
@@ -328,9 +343,10 @@
         }
     }
 
-    // A game packet that's due, before the engine gets it. Returns true for
-    // the frames this file handles itself.
-    function take(from, data, via) {
+    // A game packet from player `from` that's due, before the engine gets
+    // it, with fast set if it came on the fast lane. Returns true for the
+    // frames this file handles itself.
+    function take(from, data, via, fast) {
         if (!from || !(data instanceof ArrayBuffer)) return false;
         var p = player(from);
         p.heard = clock.now();
@@ -341,8 +357,11 @@
         }
         if (isPosition(data)) {
             p.positions.push(p.heard);
-            while (p.positions.length && p.positions[0] < p.heard - WINDOW_MS)
+            p.fast.push(!!fast);
+            while (p.positions.length && p.positions[0] < p.heard - WINDOW_MS) {
                 p.positions.shift();
+                p.fast.shift();
+            }
         }
         return false;
     }
@@ -354,8 +373,7 @@
             onFrame(player(from), data, 'ns', function(buf) { sendProbe(from, buf); });
         };
         if (!sim) return handle();
-        var d = simDelay(false), g = gen;
-        if (d >= 0) clock.later(function() { if (g === gen) handle(); }, d);
+        unordered(handle);
     }
 
     // ---- The hit ledger.
@@ -544,9 +562,11 @@
         return { share: lost / due.length, of: due.length };
     }
 
-    function updatesOf(times, t) {
+    // fast, if given: for each update, whether it came on the fast lane.
+    function updatesOf(times, t, fast) {
         var list = times.filter(function(x) { return x >= t - WINDOW_MS; });
         if (list.length < 2) return null;
+        var onFast = fast ? fast.filter(function(f, i) { return f && times[i] >= t - WINDOW_MS; }).length : 0;
         var sum = 0, longest = 0, late = 0, gaps = [];
         for (var i = 1; i < list.length; i++) {
             var g = list[i] - list[i - 1];
@@ -559,16 +579,20 @@
         var mean = sum / gaps.length, dev = 0;
         gaps.forEach(function(g) { dev += Math.abs(g - mean); });
         var span = Math.max(1, Math.min(WINDOW_MS, t - list[0]));
-        return { rate: list.length * 1000 / span, gap: mean, uneven: dev / gaps.length, late: late, longest: longest };
+        return { rate: list.length * 1000 / span, gap: mean, uneven: dev / gaps.length, late: late, longest: longest,
+                 fast: onFast / list.length };
     }
 
+    // A host's link to a joiner, a joiner's to the host, and a link between
+    // two joiners go straight between the two computers or through a TURN
+    // server, or through the lobby relay when they're down. Without a link,
+    // two joiners' packets go through the host.
     function pathOf(p) {
         var net = Module.jkNet;
         var peer = net && net.peers ? net.peers[p.id] : null;
-        if (me.isHost || p.id === 1) {
-            if (!(peer && peer.open)) return 'lobby relay';
+        if (peer && peer.open)
             return p.route && (p.route.local === 'relay' || p.route.remote === 'relay') ? 'TURN' : 'direct';
-        }
+        if (me.isHost || p.id === 1) return 'lobby relay';
         return p.via === 'relay' ? 'lobby relay' : 'via host';
     }
 
@@ -605,7 +629,7 @@
                     heard: p.heard ? t - p.heard : null,
                     ping: median(p.game.rtts), jitter: jitterOf(p.game.rtts),
                     netPing: median(p.ns.rtts), loss: lossOf(p.ns, t),
-                    updates: updatesOf(p.positions, t),
+                    updates: updatesOf(p.positions, t, p.fast),
                     hits: hits, taken: taken
                 };
             });
@@ -728,8 +752,9 @@
             out.push(who(row) + ': ' + row.path + ', ping ' + ms(row.ping) + ' (jitter ' + ms(row.jitter) + ')' +
                      (row.loss ? ', loss ' + pct(row.loss.share) + ' of ' + row.loss.of : '') +
                      (row.netPing !== null ? ', link ping ' + ms(row.netPing) : ''));
-            out.push('  positions: ' + (u ? u.rate.toFixed(1) + '/s, gaps ' + ms(u.gap) + ' (uneven ' + ms(u.uneven) +
-                     '), ' + u.late + ' late, longest ' + ms(u.longest) : 'none lately'));
+            out.push('  positions: ' + (u ? u.rate.toFixed(1) + '/s' + (u.fast ? ' (' + pct(u.fast) + ' on the fast lane)' : '') +
+                     ', gaps ' + ms(u.gap) + ' (uneven ' + ms(u.uneven) + '), ' + u.late + ' late, longest ' + ms(u.longest)
+                     : 'none lately'));
             row.hits.forEach(function(h) {
                 var a = agreement(h.c);
                 var words = hitWords(h.c);
@@ -763,7 +788,7 @@
             });
             return 'player ' + row.id + ' ' + row.path + ' ping ' + ms(row.ping) + ' jitter ' + ms(row.jitter) +
                    (row.loss ? ' loss ' + pct(row.loss.share) + '/' + row.loss.of : '') +
-                   (u ? ' updates ' + u.rate.toFixed(1) + '/s late ' + u.late + ' longest ' + ms(u.longest) : ' no updates') +
+                   (u ? ' updates ' + u.rate.toFixed(1) + '/s fast ' + pct(u.fast) + ' late ' + u.late + ' longest ' + ms(u.longest) : ' no updates') +
                    (hits.length ? ' hits ' + hits.join(', ') : '');
         }).join('; ') || 'nobody heard from lately';
     }
@@ -773,6 +798,7 @@
         for (var id in players) {
             var p = players[id];
             p.positions = [];
+            p.fast = [];
             p.shown = [];
             p.receipts = [];
             p.tally = {};
