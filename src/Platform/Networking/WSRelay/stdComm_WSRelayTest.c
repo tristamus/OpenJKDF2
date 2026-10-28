@@ -127,7 +127,7 @@ int stdComm_WSRelay_bTestInput = 0;
 
 static int wsrelay_testMode = -1;       // -1 until ?nettest is read
 static int wsrelay_testSelect = INPUT_FUNC_SELECT0;
-static int wsrelay_testTries = 0;       // presses of the weapon key, this life
+static int wsrelay_testTries = 0;       // presses of the weapon key since it was in hand
 static int wsrelay_testMelee = 1;       // the saber or fists, not a gun
 static int wsrelay_testFire = INPUT_FUNC_FIRE1;
 static uint32_t wsrelay_testStrafeMs = 700;
@@ -454,6 +454,8 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
 
     // The weapon, as many times as it takes, but not forever: this player
     // may not have it. Weapon key N selects bin N, and 0 the saber's, 10.
+    // Other things switch weapons too (a picked-up backpack has), so the
+    // tries start over whenever it's in hand.
     int bin = wsrelay_testSelect - INPUT_FUNC_ACTIVATE;
     if (!wsrelay_testMelee)
     {
@@ -465,8 +467,9 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
         wsrelay_testCount = sithInventory_GetInventory(pPlayer, bin);
     }
     int backOff = wsrelay_testMsecBackOff && now - wsrelay_testMsecBackOff < WSRELAY_TEST_BACKOFF_MS;
-    if (sithInventory_GetCurrentWeapon(pPlayer) != bin && wsrelay_testTries < 5
-        && now - wsrelay_testMsecSelect >= WSRELAY_TEST_SELECT_MS)
+    if (sithInventory_GetCurrentWeapon(pPlayer) == bin)
+        wsrelay_testTries = 0;
+    else if (wsrelay_testTries < 5 && now - wsrelay_testMsecSelect >= WSRELAY_TEST_SELECT_MS)
     {
         wsrelay_testMsecSelect = now;
         wsrelay_testTries++;
