@@ -757,6 +757,11 @@ int stdComm_WSRelay_fireGuid = 0;
 static int wsrelay_aLeftPending[64];
 static int wsrelay_numLeftPending = 0;
 
+// A host's players it welcomed who don't have a player slot yet, while they
+// load the level. Their slots are spoken for (wsrelay_HasFreeSlot).
+static int wsrelay_aWelcomed[64];
+static int wsrelay_numWelcomed = 0;
+
 static jkMultiEntry wsrelay_storedEntry;      // the game we host
 static jkMultiEntry wsrelay_storedEntryEnum;  // the game we joined
 static char wsrelay_hostTail[WSRELAY_MAX_TAIL_HEX + 1];      // our mod, as we host
@@ -866,6 +871,7 @@ static void wsrelay_ResetSession()
     wsrelay_id = 0xFFFFFFFF;
     wsrelay_numDisconnected = 0;
     wsrelay_numLeftPending = 0;
+    wsrelay_numWelcomed = 0;
     wsrelay_bNetLive = 0;
     wsrelay_msecNamesSent = 0;
     memset(wsrelay_aSwing, 0, sizeof(wsrelay_aSwing));
@@ -891,6 +897,51 @@ static int wsrelay_RealConnectedPlayers()
     return amt;
 }
 
+static void wsrelay_Unwelcome(int id)
+{
+    for (int i = 0; i < wsrelay_numWelcomed; )
+    {
+        if (wsrelay_aWelcomed[i] == id)
+            wsrelay_aWelcomed[i] = wsrelay_aWelcomed[--wsrelay_numWelcomed];
+        else
+            i++;
+    }
+}
+
+// Whether a player welcomed now would get a slot. sithMulti only answers
+// "Too many players" once a joiner has loaded the level, so without this the
+// player past the last free slot loaded it all for "That game is full", and
+// two players joining for the last slot both did, for one of them.
+static int wsrelay_HasFreeSlot()
+{
+    // Players welcomed earlier who now have their slot aren't waiting for one.
+    for (int i = 0; i < wsrelay_numWelcomed; )
+    {
+        int bSeated = 0;
+        for (int j = 0; j < jkPlayer_maxPlayers; j++)
+        {
+            if ((jkPlayer_playerInfos[j].flags & 2) && jkPlayer_playerInfos[j].playerNetId == (uint32_t)wsrelay_aWelcomed[i])
+            {
+                bSeated = 1;
+                break;
+            }
+        }
+        if (bSeated)
+            wsrelay_aWelcomed[i] = wsrelay_aWelcomed[--wsrelay_numWelcomed];
+        else
+            i++;
+    }
+
+    // The slots sithMulti gives joiners.
+    int numFree = 0;
+    for (int j = 0; j < jkPlayer_maxPlayers; j++)
+    {
+        if ((jkPlayer_playerInfos[j].flags & 2) && !jkPlayer_playerInfos[j].playerNetId)
+            numFree++;
+    }
+    return numFree > wsrelay_numWelcomed;
+}
+
 static void wsrelay_UpdateLobby()
 {
     if (!wsrelay_bHosting) return;
@@ -911,7 +962,26 @@ static void wsrelay_WelcomePeer(int id)
     entry.numPlayers = wsrelay_RealConnectedPlayers();
     entry.maxPlayers = wsrelay_storedEntry.maxPlayers;
 
-    jkPlayer_maxPlayers = wsrelay_storedEntry.maxPlayers; // Hack?
+    // Hack? Holds joins to the session's limit. Added: only ever lower it.
+    // The level's player starts are the most it can take (sithPlayer_PlacePlayers),
+    // and slots past them can still be marked as having a start from a bigger
+    // level earlier, with no player thing behind them.
+    if (wsrelay_storedEntry.maxPlayers > 0 && jkPlayer_maxPlayers > (uint32_t)wsrelay_storedEntry.maxPlayers)
+        jkPlayer_maxPlayers = wsrelay_storedEntry.maxPlayers;
+
+    // Added: with no slot left, a player count at the limit, which the
+    // joiner takes as full before loading anything (stdComm_Open). Whoever
+    // had this id before is gone, waiting or not.
+    wsrelay_Unwelcome(id);
+    if (!wsrelay_HasFreeSlot())
+    {
+        stdPlatform_Printf("OpenJKDF2: No player slot left for client id %x; it's told the game is full.\n", id);
+        entry.numPlayers = entry.maxPlayers;
+    }
+    else if (wsrelay_numWelcomed < 64)
+    {
+        wsrelay_aWelcomed[wsrelay_numWelcomed++] = id;
+    }
 
     wsrelay_SendEntry("welcome", id, &entry);
 }
@@ -927,6 +997,7 @@ static void wsrelay_PeerLeft(int id)
         else
             i++;
     }
+    wsrelay_Unwelcome(id);
 
     // Only report players who finished joining, like GNSServer.
     for (int i = 0; i < jkPlayer_maxPlayers; i++)
@@ -1617,6 +1688,16 @@ int stdComm_Open(int idx, char16_t* pwPassword)
         return (err == 2) ? 0x8877014A : 0x80004005; // GUINET_GAMEFULL / GUINET_NOGAMECONNECT
     }
 
+    // Added: the host has no player slot for us (wsrelay_WelcomePeer). Told
+    // now, before the level loads, and not by sithMulti after it.
+    if (wsrelay_storedEntryEnum.maxPlayers > 0 && wsrelay_storedEntryEnum.numPlayers >= wsrelay_storedEntryEnum.maxPlayers)
+    {
+        stdPlatform_Printf("OpenJKDF2: Room %d is full.\n", wsrelay_aShownRooms[idx]);
+        wsrelay_SendText("leave");
+        wsrelay_ResetSession();
+        return 0x8877014A; // GUINET_GAMEFULL
+    }
+
     wsrelay_room = wsrelay_aShownRooms[idx];
     wsrelay_js_rtc_begin(0);
 
@@ -1674,6 +1755,12 @@ int DirectPlay_SendLobbyMessage(void* pPkt, uint32_t pktLen)
 void DirectPlay_SetSessionDesc(const char* a1, DWORD maxPlayers)
 {
     _strncpy(wsrelay_storedEntry.mapJklFname, jkMain_aLevelJklFname, 0x20);
+    // Added: jkMain passes the smaller of the host's limit and the level's
+    // player starts, which is what JK.EXE's DirectPlay session showed and held
+    // joins to. The lobby used to get the host's own number, so a 16-start map
+    // hosted for 32 read "3/32" and turned the 17th player away.
+    if (maxPlayers > 0 && maxPlayers <= JKPLAYER_NUM_INFOS)
+        wsrelay_storedEntry.maxPlayers = maxPlayers;
     wsrelay_UpdateLobby();
 }
 

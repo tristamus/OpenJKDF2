@@ -369,6 +369,17 @@ LABEL_29:
         {
             if ( v10 == 0x8877014A )
             {
+#ifdef PLATFORM_WSRELAY
+                // Added: it filled up after it was picked, and nothing has
+                // loaded. Show it as full on the Join screen, as the list
+                // would a moment later, rather than as an error.
+                if ( v7 < dplay_dword_55D618 )
+                {
+                    jkGuiMultiplayer_aEntries[v7].numPlayers = jkGuiMultiplayer_aEntries[v7].maxPlayers;
+                    jkGuiMultiplayer_sub_413E50(v7);
+                }
+                goto LABEL_28;
+#endif
                 v27 = jkStrings_GetUniStringWithFallback("GUINET_GAMEFULL");
                 v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
             }
@@ -596,6 +607,19 @@ void jkGuiMultiplayer_sub_413E50(int idx)
             jk_snwprintf(jkGuiMultiplayer_stru_556168.field_100, 0x80u, v5);
             jkGuiRend_SetVisibleAndDraw(&jkGuiMultiplayer_aElements3[9], &jkGuiMultiplayer_menu3, 0);
         }
+#ifdef PLATFORM_WSRELAY
+        // Added: like a closed game, a full one says so and has no Ok.
+        // Joining it loaded the whole level only for the host to answer
+        // "That game is full". The relay counts every seat in the room,
+        // the host's included.
+        else if ( jkGuiMultiplayer_aEntries[idx].maxPlayers > 0
+                  && jkGuiMultiplayer_aEntries[idx].numPlayers >= jkGuiMultiplayer_aEntries[idx].maxPlayers )
+        {
+            __wcscat(jkGuiMultiplayer_stru_556168.field_100, u" / ");
+            __wcscat(jkGuiMultiplayer_stru_556168.field_100, jkStrings_GetUniStringWithFallback("GUINET_GAMEFULL"));
+            jkGuiRend_SetVisibleAndDraw(&jkGuiMultiplayer_aElements3[9], &jkGuiMultiplayer_menu3, 0);
+        }
+#endif
         else
         {
             jkGuiRend_SetVisibleAndDraw(&jkGuiMultiplayer_aElements3[9], &jkGuiMultiplayer_menu3, 1);
