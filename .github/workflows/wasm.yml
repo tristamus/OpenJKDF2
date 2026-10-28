@@ -69,6 +69,11 @@ jobs:
       # and links.
       - name: Test network measurements
         run: node packaging/wasm/test/netstats-test.mjs
+      # The network code's own JavaScript (stdComm_WSRelay.c): the fast lane
+      # for positions, the switch to a link and back, links between joiners
+      # and TURN credentials, with made-up browsers, WebRTC and lobby.
+      - name: Test network paths
+        run: node packaging/wasm/test/transport-test.mjs
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

@@ -622,15 +622,16 @@ test('names and the log line', () => {
     assert.ok(host.notes.some(n => /^netstats: player 2 direct ping \d+ ms jitter \d+ ms loss/.test(n)), host.notes.join('\n'));
 });
 
-test('stdComm_WSRelay.c passes packets to netstats.js as this test does', () => {
+test('stdComm_WSRelay.c passes packets to netstats.js as this test does (transport-test.mjs runs its code)', () => {
     for (const line of [
         "Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takePeerPacket(id, d); });",
-        "if (Module.jkNetStats && Module.jkNetStats.take(id, data, 'direct')) return;",
-        "return Module.jkNetStats.outbound(id, bytes, function(b) { return net.sendNow(b, id); });",
-        "Module.jkNetStats.inbound(from, ev.data, 'relay', function(d) {",
-        "if (net.ws === ws && !Module.jkNetStats.take(from, d, 'relay')) net.queue.push(d);",
+        "Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takeFastPacket(id, d); }, true);",
+        "if (Module.jkNetStats && Module.jkNetStats.take(from, data, via, fast)) return;",
+        "return Module.jkNetStats.outbound(id, bytes, function(b) { return net.sendNow(b, id, fast ? seq : undefined); }, fast);",
+        "Module.jkNetStats.inbound(from, ev.data, 'relay', function(d) { if (net.ws === ws) net.take(from, d, 'relay'); });",
         "ns.onmessage = function(ev) { if (net.peers[id] === p) Module.jkNetStats.onProbe(id, ev.data); };",
         "{ negotiated: true, id: 2, ordered: false, maxRetransmits: 0 }",
+        "{ negotiated: true, id: 3, ordered: false, maxRetransmits: 0 }",
         "if (Module.jkNetStats) Module.jkNetStats.start(isHost);",
         "if (Module.jkNetStats) Module.jkNetStats.live(live, id, isHost);",
         "if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, !!byMessage, attack >>> 0);",

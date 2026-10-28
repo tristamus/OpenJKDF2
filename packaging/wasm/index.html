@@ -1852,17 +1852,21 @@
       // The address's options go to the engine, which quits on one it doesn't
       // know, so the page's own are left out.
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length && ['keycheck', 'netlog', 'bench', 'netstats', 'netsim', 'nettest'].indexOf(i.split('=')[0]) < 0)
+        .filter(i => i.length && ['keycheck', 'netlog', 'bench', 'netstats', 'netsim', 'nettest', 'netold'].indexOf(i.split('=')[0]) < 0)
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
       // ?netstats (this window pings the other players) and ?netsim (its
       // packets wait as if its connection were slower) are for netstats.js,
-      // bundled into the engine, and ?nettest (a scripted player) for the
-      // engine itself (stdComm_WSRelayTest.c).
+      // bundled into the engine, ?nettest (a scripted player) for the engine
+      // itself (stdComm_WSRelayTest.c), and ?netold (this window's links
+      // work as they did before the fast lane, the switch to a link and
+      // links between joiners, to compare) for its network code
+      // (stdComm_WSRelay.c).
       (function() {
         var params = new URLSearchParams(window.location.search);
         if (params.has('netstats')) Module['jkNetMeasure'] = true;
         if (params.has('netsim')) Module['jkNetSim'] = params.get('netsim');
         if (params.has('nettest')) Module['jkNetTest'] = params.get('nettest');
+        if (params.has('netold')) Module['jkNetOld'] = true;
       })();
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
