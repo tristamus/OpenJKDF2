@@ -5,7 +5,10 @@
 //
 //   ?nettest=strafe        faces the nearest other player with the saber out,
 //                          which blocks most saber hits from the front, and
-//                          strafes left and right, 600 ms each way.
+//                          strafes left and right, 700 ms each way. The
+//                          attacker fires and rests in 600 ms, so its swings
+//                          and shots fall at a different point of each
+//                          strafe, not the same one every time.
 //                          "strafe:fists" holds fists instead, which block
 //                          nothing, and "strafe:400" strafes 400 ms each way
 //                          ("strafe:fists,400" for both).
@@ -127,7 +130,7 @@ static int wsrelay_testSelect = INPUT_FUNC_SELECT0;
 static int wsrelay_testTries = 0;       // presses of the weapon key, this life
 static int wsrelay_testMelee = 1;       // the saber or fists, not a gun
 static int wsrelay_testFire = INPUT_FUNC_FIRE1;
-static uint32_t wsrelay_testStrafeMs = 600;
+static uint32_t wsrelay_testStrafeMs = 700;
 static flex_t wsrelay_testCount = 0.0; // of the weapon, last frame
 static int wsrelay_testCycle = 0;       // attack:all
 static int wsrelay_testStepSecs = WSRELAY_TEST_STEP_SECS;
