@@ -10,10 +10,15 @@
 //                          nothing, and "strafe:400" strafes 400 ms each way
 //                          ("strafe:fists,400" for both).
 //   ?nettest=attack        closes in on the nearest other player and swings
-//                          the saber at it. "attack:fists", "attack:bryar",
-//                          "attack:rifle", "attack:bowcaster",
-//                          "attack:repeater" or "attack:N" for weapon key N
-//                          use those instead.
+//                          the saber at it. A weapon after it is used
+//                          instead, and the player gets it and its ammo:
+//                          "attack:fists", "bryar", "rifle", "thermal",
+//                          "bowcaster", "repeater", "rail", "sequencer",
+//                          "concussion", or "attack:N" for weapon key N.
+//                          ",alt" uses its second fire ("attack:rail,alt").
+//                          Explosives are used from far enough away that
+//                          their blast misses the attacker, and it backs
+//                          away from a sequencer charge it drops.
 //
 // Both respawn when their player dies. So the two players stay in reach of
 // each other on any map, an attacker that's far from its target, or can't see
@@ -55,6 +60,14 @@
                                         // and a punch (+punch's range of
                                         // 0.15) reach further
 #define WSRELAY_TEST_GUN (0.8)          // with a gun, this far apart
+#define WSRELAY_TEST_RAIL (1.0)         // a rail detonator's blast reaches
+                                        // 0.5 (+raildet_exp)
+#define WSRELAY_TEST_CONCUSSION (1.3)   // a concussion bolt's 0.8 (+conc_exp)
+#define WSRELAY_TEST_THROW_MS (800)     // a thermal detonator goes further
+                                        // the longer fire is held: this lobs
+                                        // it about 0.8 (weap_thermdet.cog)
+#define WSRELAY_TEST_BACKOFF_MS (2500)  // after dropping a sequencer charge,
+                                        // run back from it this long
 #define WSRELAY_TEST_REPORT_MS (5000)   // between lines in the console
 
 EM_JS_DEPS(stdComm_WSRelayTest, "$stringToUTF8");
@@ -70,9 +83,12 @@ static int wsrelay_testMode = -1;       // -1 until ?nettest is read
 static int wsrelay_testSelect = INPUT_FUNC_SELECT0;
 static int wsrelay_testTries = 0;       // presses of the weapon key, this life
 static int wsrelay_testMelee = 1;       // the saber or fists, not a gun
+static int wsrelay_testFire = INPUT_FUNC_FIRE1;
 static uint32_t wsrelay_testStrafeMs = 600;
+static flex_t wsrelay_testCount = 0.0; // of the weapon, last frame
 
 static uint32_t wsrelay_testMsecFire = 0;
+static uint32_t wsrelay_testMsecBackOff = 0;
 static uint32_t wsrelay_testMsecSelect = 0;
 static uint32_t wsrelay_testMsecRespawn = 0;
 static uint32_t wsrelay_testMsecJump = 0;
@@ -86,18 +102,43 @@ static int wsrelay_aTestPresses[INPUT_FUNC_MAX];
 static flex_t wsrelay_aTestAxis[INPUT_FUNC_MAX];
 
 // The number key of a weapon, by its name or the key itself, or -1. The keys
-// pick weapons as in Jedi Knight: 1 fists, 2 Bryar, 3 rifle, 5 bowcaster,
-// 6 repeater, 0 the saber.
+// pick weapons as in Jedi Knight: 1 fists, 2 Bryar, 3 rifle, 4 thermal
+// detonators, 5 bowcaster, 6 repeater, 7 rail detonator, 8 sequencer
+// charges, 9 concussion rifle, 0 the saber.
 static int wsrelay_TestWeaponKey(const char* pName)
 {
     if (!strcmp(pName, "saber")) return 0;
     if (!strcmp(pName, "fists")) return 1;
     if (!strcmp(pName, "bryar")) return 2;
     if (!strcmp(pName, "rifle")) return 3;
+    if (!strcmp(pName, "thermal")) return 4;
     if (!strcmp(pName, "bowcaster")) return 5;
     if (!strcmp(pName, "repeater")) return 6;
+    if (!strcmp(pName, "rail")) return 7;
+    if (!strcmp(pName, "sequencer")) return 8;
+    if (!strcmp(pName, "concussion")) return 9;
     if (pName[0] >= '0' && pName[0] <= '9' && !pName[1]) return pName[0] - '0';
     return -1;
+}
+
+// How far from the target the attacker stays with the weapon in bin, between
+// the players' middles. 0: as close as with the saber, as for a sequencer
+// charge, which is dropped at the player's feet.
+static flex_t wsrelay_TestDistance(int bin)
+{
+    switch (bin)
+    {
+        case SITHBIN_FISTS:
+        case SITHBIN_LIGHTSABER:
+        case SITHBIN_SEQUENCER_CHARGE:
+            return 0.0;
+        case SITHBIN_RAIL_DETONATOR:
+            return WSRELAY_TEST_RAIL;
+        case SITHBIN_CONCUSSION_RIFLE:
+            return WSRELAY_TEST_CONCUSSION;
+        default:
+            return WSRELAY_TEST_GUN;
+    }
 }
 
 static void wsrelay_TestReadMode()
@@ -118,12 +159,14 @@ static void wsrelay_TestReadMode()
     else
         return;
 
-    // A weapon, and for strafe, how long each way.
+    // A weapon, which fire, and for strafe, how long each way.
     int key = 0;
     for (char* pArg = pArgs ? strtok(pArgs, ",") : NULL; pArg; pArg = strtok(NULL, ","))
     {
         if (wsrelay_TestWeaponKey(pArg) >= 0)
             key = wsrelay_TestWeaponKey(pArg);
+        else if (!strcmp(pArg, "alt"))
+            wsrelay_testFire = INPUT_FUNC_FIRE2;
         else if (wsrelay_testMode == WSRELAY_TEST_STRAFE && atoi(pArg) >= 100)
             wsrelay_testStrafeMs = atoi(pArg);
     }
@@ -243,6 +286,29 @@ static void wsrelay_TestPress(int inputFunc)
     wsrelay_aTestPresses[inputFunc] = 1;
 }
 
+// Gives the player the gun in bin and keeps its ammo up, so a test with a gun
+// runs as long as one with the saber: in a match a player starts with the
+// Bryar, no other gun, and 50 energy (kyle.cog), about 50 shots. Energy feeds
+// the Bryar and the rifle, power the bowcaster, repeater and concussion rifle,
+// rail charges the rail detonator, and thermal detonators and sequencer
+// charges are their own ammo (items.dat).
+static void wsrelay_TestArm(SithThing* pPlayer, int bin)
+{
+    // Before the last one is used, or its cog picks another weapon.
+    flex_t most = sithInventory_g_aTypes[bin].max;
+    if (sithInventory_GetInventory(pPlayer, bin) < most * 0.5)
+        sithInventory_SetInventory(pPlayer, bin, most);
+    if (!sithInventory_IsInventoryAvailable(pPlayer, bin))
+        sithInventory_SetInventoryAvailable(pPlayer, bin, 1);
+
+    static const int aAmmo[] = {SITHBIN_ENERGY, SITHBIN_POWER, SITHBIN_RAILCHARGES};
+    for (int i = 0; i < (int)(sizeof(aAmmo) / sizeof(aAmmo[0])); i++)
+    {
+        if (sithInventory_GetInventory(pPlayer, aAmmo[i]) < 100.0)
+            sithInventory_SetInventory(pPlayer, aAmmo[i], 200.0);
+    }
+}
+
 void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
 {
     // Last frame's presses have been read.
@@ -275,14 +341,27 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     }
     if (wsrelay_testWasDead)
     {
-        // A new life starts with the default weapon.
+        // A new life starts with the default weapon, and its own inventory.
         wsrelay_testWasDead = 0;
         wsrelay_testTries = 0;
+        wsrelay_testCount = 0.0;
+        wsrelay_testMsecBackOff = 0;
     }
 
     // The weapon, as many times as it takes, but not forever: this player
     // may not have it. Weapon key N selects bin N, and 0 the saber's, 10.
-    if (sithInventory_GetCurrentWeapon(pPlayer) != wsrelay_testSelect - INPUT_FUNC_ACTIVATE && wsrelay_testTries < 5
+    int bin = wsrelay_testSelect - INPUT_FUNC_ACTIVATE;
+    if (!wsrelay_testMelee)
+    {
+        // A sequencer charge lands at the player's feet: once one is
+        // dropped, run back from it.
+        if (bin == SITHBIN_SEQUENCER_CHARGE && sithInventory_GetInventory(pPlayer, bin) < wsrelay_testCount)
+            wsrelay_testMsecBackOff = now;
+        wsrelay_TestArm(pPlayer, bin);
+        wsrelay_testCount = sithInventory_GetInventory(pPlayer, bin);
+    }
+    int backOff = wsrelay_testMsecBackOff && now - wsrelay_testMsecBackOff < WSRELAY_TEST_BACKOFF_MS;
+    if (sithInventory_GetCurrentWeapon(pPlayer) != bin && wsrelay_testTries < 5
         && now - wsrelay_testMsecSelect >= WSRELAY_TEST_SELECT_MS)
     {
         wsrelay_testMsecSelect = now;
@@ -305,8 +384,9 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     // Attack: keep the target in sight and in reach. Distances are between
     // the players' middles, which can't get closer than their sizes allow.
     flex_t touch = pPlayer->collideSize + pTarget->collideSize;
-    flex_t close = wsrelay_testMelee ? touch + WSRELAY_TEST_CLOSE : WSRELAY_TEST_GUN;
-    flex_t reach = wsrelay_testMelee ? touch + WSRELAY_TEST_REACH : WSRELAY_TEST_GUN * 1.5;
+    flex_t away = wsrelay_TestDistance(bin);
+    flex_t close = away == 0.0 ? touch + WSRELAY_TEST_CLOSE : away;
+    flex_t reach = away == 0.0 ? touch + WSRELAY_TEST_REACH : away * 1.5;
     if (wsrelay_TestCanSee(pPlayer, pTarget))
         wsrelay_testMsecSeen = now;
     int unseen = now - wsrelay_testMsecSeen >= WSRELAY_TEST_UNSEEN_MS;
@@ -320,17 +400,23 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
         wsrelay_testJumps++;
     }
 
-    if (dist > close)
+    if (backOff)
+    {
+        wsrelay_aTestAxis[INPUT_FUNC_FORWARD] = -1.0;
+        wsrelay_aTestHeld[INPUT_FUNC_FAST] = 1;
+    }
+    else if (dist > close)
         wsrelay_aTestAxis[INPUT_FUNC_FORWARD] = 1.0;
-    else if (!wsrelay_testMelee && dist < close * 0.5)
+    else if (away != 0.0 && dist < close * 0.5)
         wsrelay_aTestAxis[INPUT_FUNC_FORWARD] = -1.0;
 
     // Fire held a while, then let go, so the weapon's cog hears it again.
-    uint32_t cycle = WSRELAY_TEST_FIRE_MS + WSRELAY_TEST_REST_MS;
+    uint32_t hold = bin == SITHBIN_THERMAL_DETONATOR ? WSRELAY_TEST_THROW_MS : WSRELAY_TEST_FIRE_MS;
+    uint32_t cycle = hold + WSRELAY_TEST_REST_MS;
     if (now - wsrelay_testMsecFire >= cycle)
         wsrelay_testMsecFire = now;
-    if (now - wsrelay_testMsecFire < WSRELAY_TEST_FIRE_MS && dist <= reach)
-        wsrelay_aTestHeld[INPUT_FUNC_FIRE1] = 1;
+    if (now - wsrelay_testMsecFire < hold && dist <= reach && !backOff)
+        wsrelay_aTestHeld[wsrelay_testFire] = 1;
 
     // What it's doing, now and then, for whoever is watching the console.
     if (now - wsrelay_testMsecReport >= WSRELAY_TEST_REPORT_MS)
