@@ -1468,12 +1468,16 @@ uint32_t stdComm_WSRelay_GetSwing(SithThing* pPlayer)
 
 void stdComm_WSRelay_NoteHit(SithThing* pVictim, SithThing* pSource, flex_t damage, int damageType, int outcome)
 {
+    // Whoever fired the shot, set off the explosion or swung the saber.
+    if (pSource)
+        stdComm_WSRelay_NoteHitBy(pVictim, sithThing_GetThingParent(pSource), pSource, damage, damageType, outcome);
+}
+
+void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThing* pSource, flex_t damage, int damageType, int outcome)
+{
     SithThing* pLocal = sithPlayer_g_pLocalPlayerThing;
     if (!wsrelay_bNetLive || !pLocal || !pVictim || !pSource || pVictim->type != SITH_THING_PLAYER)
         return;
-
-    // Whoever fired the shot, set off the explosion or swung the saber.
-    SithThing* pAttacker = sithThing_GetThingParent(pSource);
     if (!pAttacker || pAttacker == pVictim || pAttacker->type != SITH_THING_PLAYER)
         return;
 

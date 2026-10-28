@@ -24,6 +24,9 @@
 #include "Dss/sithDSSThing.h"
 #include "General/stdMath.h"
 #include "jk.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
 
 // MOTS added
 int sithWeapon_mots_5a3258 = -1;
@@ -722,12 +725,24 @@ int sithWeapon_ThingCollisionHandler(SithThing *pWeapon, SithThing *pThing, Sith
         pWeapon->physicsParams.flags |= SITH_PF_USEGRAVITY;
         return 1;
     }
+#ifdef PLATFORM_WSRELAY
+    // Added: who fired the bolt, for the hit ledger below. A saber that turns
+    // it away makes it the blocker's.
+    SithThing* pShooter = sithThing_GetThingParent(pWeapon);
+#endif
     if (pThing->weaponParams.flags & SITH_WF_INSTANT_IMPACT
       && bFlagsHadWfImpactSoundFxEarlier
       && !(pThing->flags & (SITH_TF_DEAD|SITH_TF_DESTROYED))
       && (pThing != sithPlayer_g_pLocalPlayerThing || sithTime_g_secGameTime >= (flex_d_t)sithWeapon_fireWait)
       && sithActor_thing_anim_blocked(pWeapon, pThing, pCollision) )
     {
+#ifdef PLATFORM_WSRELAY
+        // Added: the hit ledger. A ready saber turned the bolt away, which
+        // each game decides for itself, so this game and the victim's can
+        // disagree.
+        if ( sithNet_isMulti && pThing->type == SITH_THING_PLAYER )
+            stdComm_WSRelay_NoteHitBy(pThing, pShooter, pWeapon, pWeapon->weaponParams.damage, pWeapon->weaponParams.damageType, STDCOMM_WSRELAY_BLOCK);
+#endif
         return 1;
     }
     if ( pWeapon->weaponParams.damage == 0.0 && !(pWeapon->weaponParams.flags & (SITH_WF_ATTACHTHING | SITH_WF_THINGHITEXPLODE)))

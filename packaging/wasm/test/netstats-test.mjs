@@ -558,6 +558,38 @@ test('the counts stay up when a game ends, and Reset clears them', () => {
     assert.equal(rowOf(join, 1).ping, null);
 });
 
+test('?nettest=attack:all\'s steps keep their counts apart, each with its lag', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    join.ns.nextStep('bryar', '');
+    // Two shots shown, one counted there.
+    join.ns.hit(1, true, SHOT, HIT, 30, false, 101);
+    host.ns.hit(2, false, SHOT, HIT, 30, false, 101);
+    join.ns.hit(1, true, SHOT, HIT, 30, false, 102);
+    world.run(3000);
+    join.ns.nextStep('bryar', 'rtt:100,jitter:20,loss:2');
+    assert.deepEqual(join.ns.sim(), { rtt: 100, jitter: 20, loss: 2 });
+    assert.equal(rowOf(join, 1).hits.length, 0);
+    assert.match(join.ns.text().join('\n'), /\n  bryar  no lag: shot 50% of 2\n  now: bryar, \+100 ms$/);
+    join.ns.hit(1, true, SHOT, HIT, 30, false, 103);
+    host.ns.hit(2, false, SHOT, HIT, 30, false, 103);
+    world.run(3000);
+    join.ns.nextStep('rail alt', '');
+    world.run(3000);
+    join.ns.nextStep('', '');
+    assert.equal(join.ns.sim(), null);
+    const r = join.ns.report();
+    assert.equal(r.step, null);
+    assert.deepEqual(r.steps.map(x => [x.name, x.sim && x.sim.rtt]), [['bryar', null], ['bryar', 100], ['rail alt', null]]);
+    const c = r.steps[0].rows[0].hits[0].c;
+    assert.equal(c.counted, 1);
+    assert.equal(c.missedHit, 1);
+    assert.equal(c.lags, undefined);
+    near(r.steps[1].rows[0].ping, 140, 40, 'the second step\'s ping');
+    assert.match(join.ns.text().join('\n'),
+                 /\nSteps, how often both games agreed:\n  bryar     no lag: shot 50% of 2 · \+100 ms: shot 100% of 1\n  rail alt  no lag: no hits\n  done$/);
+});
+
 test('this game\'s frames a second, from when its frames ended', () => {
     const { world, join } = match();
     world.run(10000);
@@ -618,6 +650,17 @@ test('stdComm_WSRelay.c passes packets to netstats.js as this test does', () => 
     assert.ok(jkDSS.includes('NETMSG_PUSHU32(stdComm_WSRelay_GetSwing(pPlayerThing));'));
     assert.ok(jkDSS.includes('stdComm_WSRelay_SetSwing(pThing, NETMSG_IN_LEFT(msg) >= 4 ? NETMSG_POPU32() : 0);'));
     assert.ok(read('src/Cog/jkCog.c').includes('stdComm_WSRelay_NewSwing(v2);'));
+    // A bolt a ready saber turned away is a block, by whoever fired it: the
+    // saber makes the bolt the blocker's, so the shooter is found first.
+    const weaponC = read('src/World/sithWeapon.c');
+    const shooter = weaponC.indexOf('SithThing* pShooter = sithThing_GetThingParent(pWeapon);');
+    const blocked = weaponC.indexOf('&& sithActor_thing_anim_blocked(pWeapon, pThing, pCollision) )');
+    const noted = weaponC.indexOf('stdComm_WSRelay_NoteHitBy(pThing, pShooter, pWeapon, pWeapon->weaponParams.damage, pWeapon->weaponParams.damageType, STDCOMM_WSRELAY_BLOCK);');
+    assert.ok(shooter >= 0 && blocked > shooter && noted > blocked);
+    assert.ok(read('src/World/sithActor.c').includes('a1->pParent = thing2;'));
+    // ?nettest=attack:all's steps.
+    assert.ok(read('src/Platform/Networking/WSRelay/stdComm_WSRelayTest.c').includes(
+        "Module['jkNetStats'].nextStep(UTF8ToString(pName), UTF8ToString(pSim));"));
 });
 
 let failed = 0;

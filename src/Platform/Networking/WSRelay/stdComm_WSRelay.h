@@ -31,6 +31,10 @@ void stdComm_WSRelay_DescribeMod(int idx, char16_t* pOut, int maxChars);
 // Force power), before the victim's game applies its damage or a block.
 void stdComm_WSRelay_NoteHit(SithThing* pVictim, SithThing* pSource, flex_t damage, int damageType, int outcome);
 
+// As NoteHit, for a hit whose source no longer leads back to its attacker: a
+// bolt a ready saber turns away is the blocker's from then on.
+void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThing* pSource, flex_t damage, int damageType, int outcome);
+
 // So the ledger can tell which attack a hit in either game came from, each
 // saber swing a player starts (jkEnableSaber) gets a number, which the
 // message that turns their blade on in the other games carries

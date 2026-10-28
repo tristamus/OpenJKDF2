@@ -186,6 +186,9 @@
     var players = {};
     // The players the engine says are in the match, by id: their names.
     var names = {};
+    // ?nettest=attack:all's steps (stdComm_WSRelayTest.c): the one under way,
+    // {name, sim}, and the ones done, oldest first, with their counts.
+    var step = null, steps = [];
     var lastLog = 0, lastRoutes = 0;
 
     function newPath() {
@@ -606,7 +609,31 @@
                     hits: hits, taken: taken
                 };
             });
-        return { me: { live: me.live, id: me.id, isHost: me.isHost, fps: frameRate(t) }, sim: sim, rows: rows };
+        return { me: { live: me.live, id: me.id, isHost: me.isHost, fps: frameRate(t) }, sim: sim, rows: rows,
+                 step: step ? step.name : null, steps: steps };
+    }
+
+    // ?nettest=attack:all moves on to its next step, name ('' after the last):
+    // the counts so far are kept under the step that's ending, and start over
+    // with this window's link as slow as simText says, as ?netsim would.
+    function nextStep(name, simText) {
+        if (step) {
+            var r = report();
+            steps.push({ name: step.name, sim: step.sim, fps: r.me.fps, rows: r.rows.map(function(row) {
+                return {
+                    id: row.id, name: row.name, ping: row.ping,
+                    hits: row.hits.map(function(h) {
+                        var c = {};
+                        for (var k in h.c) if (k !== 'lags') c[k] = h.c[k];
+                        return { kind: h.kind, c: c, lag: h.lag };
+                    }),
+                    taken: row.taken
+                };
+            }) });
+        }
+        setSim(simText);
+        reset();
+        step = name ? { name: String(name), sim: sim } : null;
     }
 
     function ms(v) { return v === null || v === undefined ? '-' : Math.round(v) + ' ms'; }
@@ -646,6 +673,44 @@
         return parts.join('; ');
     }
 
+    function lagWords(s) { return s ? '+' + s.rtt + ' ms' : 'no lag'; }
+
+    // A step's hits on the other player (or each, with more than one), by kind:
+    // how often both games agreed.
+    function stepWords(s) {
+        var parts = [];
+        s.rows.forEach(function(row) {
+            row.hits.forEach(function(h) {
+                var a = agreement(h.c);
+                if (a.of) parts.push((s.rows.length > 1 ? 'player ' + row.id + ' ' : '') + h.kind + ' ' +
+                                     pct(a.agree / a.of) + ' of ' + a.of);
+            });
+        });
+        return parts.join(', ') || 'no hits';
+    }
+
+    // ?nettest=attack:all's steps: a line for each weapon, with each lag it
+    // was tried at.
+    function stepLines() {
+        if (!step && !steps.length) return [];
+        var out = ['', 'Steps, how often both games agreed:'];
+        var order = [], byName = {}, width = 0;
+        steps.forEach(function(s) {
+            if (!byName[s.name]) {
+                byName[s.name] = [];
+                order.push(s.name);
+                width = Math.max(width, s.name.length);
+            }
+            byName[s.name].push(s);
+        });
+        order.forEach(function(name) {
+            out.push('  ' + (name + new Array(width + 1).join(' ')).slice(0, width) + '  ' +
+                     byName[name].map(function(s) { return lagWords(s.sim) + ': ' + stepWords(s); }).join(' · '));
+        });
+        out.push(step ? '  now: ' + step.name + ', ' + lagWords(step.sim) : '  done');
+        return out;
+    }
+
     function text() {
         var r = report();
         var out = [];
@@ -656,7 +721,7 @@
         out.push(r.me.id ? 'You are player ' + r.me.id + (r.me.isHost ? ', the host' : '') +
                            (r.me.live ? '' : ' (not in a match)') + '.' + fpsWords + ' ' + simWords + '.'
                          : 'Not in a game yet. ' + simWords + '.');
-        if (!r.rows.length) return out;
+        if (!r.rows.length) return out.concat(stepLines());
         out.push('');
         r.rows.forEach(function(row) {
             var u = row.updates;
@@ -684,7 +749,7 @@
                 });
             if (taken.length) out.push('  their hits on you: ' + taken.join('; '));
         });
-        return out;
+        return out.concat(stepLines());
     }
 
     function logLine(t) {
@@ -765,7 +830,9 @@
         text: text,
         reset: reset,
         sim: function() { return sim; },
-        setSim: setSim
+        setSim: setSim,
+        // stdComm_WSRelayTest.c's ?nettest=attack:all.
+        nextStep: nextStep
     };
 
     if (typeof setInterval !== 'undefined') clock.every(function() { tick(); }, TICK_MS);

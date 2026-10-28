@@ -19,11 +19,19 @@
 //                          Explosives are used from far enough away that
 //                          their blast misses the attacker, and it backs
 //                          away from a sequencer charge it drops.
+//   ?nettest=attack:all    attacks with every weapon in turn, and each fire
+//                          that's different (wsrelay_aTestSteps), for 60 s
+//                          with no added lag, then 60 s as if this window's
+//                          connection were slower (the plan's test condition:
+//                          100 ms more round trip, 20 ms jitter, 2% loss).
+//                          The hit ledger keeps each step's counts apart.
+//                          "attack:all,30" takes 30 s a step.
 //
-// Both respawn when their player dies. So the two players stay in reach of
-// each other on any map, an attacker that's far from its target, or can't see
-// it, jumps next to it. The hit ledger (packaging/wasm/netstats.js) counts
-// what happens; the page's ?netstats panel shows it.
+// Both respawn when their player dies, though the target heals every frame,
+// so only a hit bigger than its health kills it. So the two players stay in
+// reach of each other on any map, an attacker that's far from its target, or
+// can't see it, jumps next to it. The hit ledger (packaging/wasm/netstats.js)
+// counts what happens; the page's ?netstats panel shows it.
 
 #include "stdComm_WSRelay.h"
 
@@ -69,6 +77,12 @@
 #define WSRELAY_TEST_BACKOFF_MS (2500)  // after dropping a sequencer charge,
                                         // run back from it this long
 #define WSRELAY_TEST_REPORT_MS (5000)   // between lines in the console
+#define WSRELAY_TEST_STEP_SECS (60)     // attack:all, each step
+#define WSRELAY_TEST_SETTLE_MS (5000)   // ...and no firing for this long
+                                        // after it, so its last hits (a
+                                        // thermal detonator's 3 s fuse,
+                                        // and their receipts) are settled
+                                        // before the next step's
 
 EM_JS_DEPS(stdComm_WSRelayTest, "$stringToUTF8");
 
@@ -76,6 +90,35 @@ EM_JS_DEPS(stdComm_WSRelayTest, "$stringToUTF8");
 EM_JS(void, wsrelay_js_nettest, (char* pOut, int maxLen), {
     stringToUTF8(Module['jkNetTest'] ? String(Module['jkNetTest']) : "", pOut, maxLen);
 });
+
+// attack:all's next step: the hit ledger keeps the counts so far under the
+// last step's name, and starts over with this window's link as slow as sim
+// says (as ?netsim does, "" for no added lag).
+EM_JS(void, wsrelay_js_nettest_step, (const char* pName, const char* pSim), {
+    if (Module['jkNetStats'] && Module['jkNetStats'].nextStep)
+        Module['jkNetStats'].nextStep(UTF8ToString(pName), UTF8ToString(pSim));
+});
+
+// attack:all's steps: each weapon, and its second fire where that's another
+// shot (the Bryar, rifle and fists fire the same way with either). The saber
+// is there to compare with. Explosives come last, and last of all the mines a
+// sequencer charge's second fire leaves, which wait 60 s for someone to touch
+// them (+seqchrg2), so no other step counts their blasts.
+static const struct
+{
+    int key;
+    int alt;
+    const char* pName;
+} wsrelay_aTestSteps[] = {
+    {0, 0, "saber"}, {1, 0, "fists"}, {2, 0, "bryar"}, {3, 0, "rifle"},
+    {5, 0, "bowcaster"}, {5, 1, "bowcaster alt"}, {6, 0, "repeater"}, {6, 1, "repeater alt"},
+    {9, 0, "concussion"}, {9, 1, "concussion alt"}, {4, 0, "thermal"}, {4, 1, "thermal alt"},
+    {7, 0, "rail"}, {7, 1, "rail alt"}, {8, 0, "sequencer"}, {8, 1, "sequencer alt"},
+};
+#define WSRELAY_TEST_NUM_STEPS ((int)(sizeof(wsrelay_aTestSteps) / sizeof(wsrelay_aTestSteps[0])))
+
+// ...each with no added lag, then the plan's test condition.
+static const char* wsrelay_aTestLags[] = {"", "rtt:100,jitter:20,loss:2"};
 
 int stdComm_WSRelay_bTestInput = 0;
 
@@ -86,6 +129,10 @@ static int wsrelay_testMelee = 1;       // the saber or fists, not a gun
 static int wsrelay_testFire = INPUT_FUNC_FIRE1;
 static uint32_t wsrelay_testStrafeMs = 600;
 static flex_t wsrelay_testCount = 0.0; // of the weapon, last frame
+static int wsrelay_testCycle = 0;       // attack:all
+static int wsrelay_testStepSecs = WSRELAY_TEST_STEP_SECS;
+static int wsrelay_testStep = -1;       // its step and lag, -1 before the first
+static uint32_t wsrelay_testMsecStep = 0;
 
 static uint32_t wsrelay_testMsecFire = 0;
 static uint32_t wsrelay_testMsecBackOff = 0;
@@ -141,6 +188,48 @@ static flex_t wsrelay_TestDistance(int bin)
     }
 }
 
+// Attack with the weapon on number key key, and its second fire if alt.
+static void wsrelay_TestUse(int key, int alt)
+{
+    wsrelay_testSelect = key ? INPUT_FUNC_SELECT1 + key - 1 : INPUT_FUNC_SELECT0;
+    wsrelay_testMelee = key <= 1;
+    wsrelay_testFire = alt ? INPUT_FUNC_FIRE2 : INPUT_FUNC_FIRE1;
+    wsrelay_testTries = 0;
+    wsrelay_testCount = 0.0;
+    wsrelay_testMsecBackOff = 0;
+}
+
+// attack:all: moves on to the next step when this one's time is up and its
+// hits are settled. Whether to hold fire now: while they settle, and after the
+// last step.
+static int wsrelay_TestCycle(uint32_t now)
+{
+    int numSteps = WSRELAY_TEST_NUM_STEPS * 2;
+    uint32_t stepMs = (uint32_t)wsrelay_testStepSecs * 1000;
+    if (wsrelay_testStep >= numSteps)
+        return 1;
+    if (wsrelay_testStep >= 0 && now - wsrelay_testMsecStep < stepMs)
+        return 0;
+    if (wsrelay_testStep >= 0 && now - wsrelay_testMsecStep < stepMs + WSRELAY_TEST_SETTLE_MS)
+        return 1;
+
+    wsrelay_testStep++;
+    wsrelay_testMsecStep = now;
+    if (wsrelay_testStep >= numSteps)
+    {
+        wsrelay_js_nettest_step("", "");
+        stdPlatform_Printf("OpenJKDF2: ?nettest: every step is done.\n");
+        return 1;
+    }
+    int i = wsrelay_testStep / 2;
+    const char* pLag = wsrelay_aTestLags[wsrelay_testStep % 2];
+    wsrelay_TestUse(wsrelay_aTestSteps[i].key, wsrelay_aTestSteps[i].alt);
+    wsrelay_js_nettest_step(wsrelay_aTestSteps[i].pName, pLag);
+    stdPlatform_Printf("OpenJKDF2: ?nettest: step %d of %d, %s, %s.\n", wsrelay_testStep + 1, numSteps,
+                       wsrelay_aTestSteps[i].pName, pLag[0] ? pLag : "no added lag");
+    return 0;
+}
+
 static void wsrelay_TestReadMode()
 {
     char text[64];
@@ -159,19 +248,24 @@ static void wsrelay_TestReadMode()
     else
         return;
 
-    // A weapon, which fire, and for strafe, how long each way.
+    // A weapon, which fire, or all of them, and how long: for strafe, each
+    // way (ms), and for attack:all, each step (s).
     int key = 0;
+    int alt = 0;
     for (char* pArg = pArgs ? strtok(pArgs, ",") : NULL; pArg; pArg = strtok(NULL, ","))
     {
         if (wsrelay_TestWeaponKey(pArg) >= 0)
             key = wsrelay_TestWeaponKey(pArg);
         else if (!strcmp(pArg, "alt"))
-            wsrelay_testFire = INPUT_FUNC_FIRE2;
+            alt = 1;
+        else if (!strcmp(pArg, "all") && wsrelay_testMode == WSRELAY_TEST_ATTACK)
+            wsrelay_testCycle = 1;
         else if (wsrelay_testMode == WSRELAY_TEST_STRAFE && atoi(pArg) >= 100)
             wsrelay_testStrafeMs = atoi(pArg);
+        else if (wsrelay_testMode == WSRELAY_TEST_ATTACK && atoi(pArg) >= 5)
+            wsrelay_testStepSecs = atoi(pArg);
     }
-    wsrelay_testSelect = key ? INPUT_FUNC_SELECT1 + key - 1 : INPUT_FUNC_SELECT0;
-    wsrelay_testMelee = key <= 1;
+    wsrelay_TestUse(key, alt);
 
     stdPlatform_Printf("OpenJKDF2: ?nettest: %s plays this window's player in a match.\n", shown);
 }
@@ -328,6 +422,9 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     // Someone's playing: no idle camera after 30 s (sithControl_Update).
     stdControl_bControlsIdle = 0;
 
+    // attack:all's steps go by the clock, alive or not.
+    int quiet = wsrelay_testCycle && wsrelay_TestCycle(now);
+
     // Dead: activate respawns, once the game takes it (sithControl_HandlePlayer).
     if (pPlayer->flags & (SITH_TF_DEAD|SITH_TF_DESTROYED))
     {
@@ -347,6 +444,10 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
         wsrelay_testCount = 0.0;
         wsrelay_testMsecBackOff = 0;
     }
+
+    // The target heals, so a test isn't held up while it respawns.
+    if (wsrelay_testMode == WSRELAY_TEST_STRAFE)
+        pPlayer->actorParams.health = pPlayer->actorParams.maxHealth;
 
     // The weapon, as many times as it takes, but not forever: this player
     // may not have it. Weapon key N selects bin N, and 0 the saber's, 10.
@@ -387,7 +488,8 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     flex_t away = wsrelay_TestDistance(bin);
     flex_t close = away == 0.0 ? touch + WSRELAY_TEST_CLOSE : away;
     flex_t reach = away == 0.0 ? touch + WSRELAY_TEST_REACH : away * 1.5;
-    if (wsrelay_TestCanSee(pPlayer, pTarget))
+    int inSight = wsrelay_TestCanSee(pPlayer, pTarget);
+    if (inSight)
         wsrelay_testMsecSeen = now;
     int unseen = now - wsrelay_testMsecSeen >= WSRELAY_TEST_UNSEEN_MS;
     if ((dist > WSRELAY_TEST_FAR || unseen) && now - wsrelay_testMsecJump >= WSRELAY_TEST_JUMP_MS)
@@ -411,11 +513,13 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
         wsrelay_aTestAxis[INPUT_FUNC_FORWARD] = -1.0;
 
     // Fire held a while, then let go, so the weapon's cog hears it again.
+    // Only with the target in sight: a rail detonator fired into a corner
+    // next to the attacker blows it up.
     uint32_t hold = bin == SITHBIN_THERMAL_DETONATOR ? WSRELAY_TEST_THROW_MS : WSRELAY_TEST_FIRE_MS;
     uint32_t cycle = hold + WSRELAY_TEST_REST_MS;
     if (now - wsrelay_testMsecFire >= cycle)
         wsrelay_testMsecFire = now;
-    if (now - wsrelay_testMsecFire < hold && dist <= reach && !backOff)
+    if (now - wsrelay_testMsecFire < hold && dist <= reach && inSight && !backOff && !quiet)
         wsrelay_aTestHeld[wsrelay_testFire] = 1;
 
     // What it's doing, now and then, for whoever is watching the console.
