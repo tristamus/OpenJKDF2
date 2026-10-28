@@ -5248,15 +5248,14 @@
 
       // The dots around a table's button: one per seat, filled when taken.
       // Past 8 seats they're smaller and spread over the whole open side of
-      // the ring, in two rows past 16.
+      // the ring, and past 16 they go all the way around it, from the top.
       function seatDots(ring, taken, seats) {
         if (seats < 1 || seats > ROOM_MAX_SEATS) return;
-        var big = seats > 8, rows = seats > 16 ? 2 : 1, perRow = Math.ceil(seats / rows);
-        var from = big ? -150 : -115, span = big ? 170 : 125;
+        var big = seats > 8, round = seats > 16;
+        var from = round ? -90 : big ? -150 : -115, span = big ? 170 : 125;
+        var r = big ? 41 : 40;
         for (var k = 0; k < seats; k++) {
-          var row = Math.floor(k / perRow), i = k % perRow;
-          var r = !big ? 40 : rows === 1 ? 41 : row ? 47 : 39;
-          var a = (from + (perRow > 1 ? i * span / (perRow - 1) : 62)) * Math.PI / 180;
+          var a = (from + (round ? k * 360 / seats : seats > 1 ? k * span / (seats - 1) : 62)) * Math.PI / 180;
           var dot = el('span', 'seat' + (big ? ' small' : '') + (k < taken ? ' taken' : ''));
           dot.style.left = (50 + r * Math.cos(a)).toFixed(1) + 'px';
           dot.style.top = (50 + r * Math.sin(a)).toFixed(1) + 'px';
