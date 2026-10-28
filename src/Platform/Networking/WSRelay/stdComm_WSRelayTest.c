@@ -514,12 +514,14 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
 
     // Fire held a while, then let go, so the weapon's cog hears it again.
     // Only with the target in sight: a rail detonator fired into a corner
-    // next to the attacker blows it up.
+    // next to the attacker blows it up. And only with this weapon in hand,
+    // so a new life's Bryar doesn't count as another weapon's.
     uint32_t hold = bin == SITHBIN_THERMAL_DETONATOR ? WSRELAY_TEST_THROW_MS : WSRELAY_TEST_FIRE_MS;
     uint32_t cycle = hold + WSRELAY_TEST_REST_MS;
     if (now - wsrelay_testMsecFire >= cycle)
         wsrelay_testMsecFire = now;
-    if (now - wsrelay_testMsecFire < hold && dist <= reach && inSight && !backOff && !quiet)
+    int inHand = sithInventory_GetCurrentWeapon(pPlayer) == bin;
+    if (now - wsrelay_testMsecFire < hold && dist <= reach && inSight && inHand && !backOff && !quiet)
         wsrelay_aTestHeld[wsrelay_testFire] = 1;
 
     // What it's doing, now and then, for whoever is watching the console.
