@@ -70,6 +70,21 @@ window.jkLobbyMock = (function() {
                 ]
             }
         },
+        // A game whose host's build speaks a newer netcode (net) than the
+        // page's (NETCODE in index.html), as one hosted after an update would
+        // look to a page opened before it.
+        versions: {
+            label: 'Another version',
+            status: {
+                lobby: { jk1: ['MaraJade'], mots: [] },
+                games: [
+                    { id: 31, name: 'No mods dueling', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 2, max: 4, names: ['Kyle_K', 'Jerec'] },
+                    { id: 32, name: 'After the update', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 1, max: 4, names: ['Rahn_J'], net: 1 }
+                ]
+            }
+        },
         empty: { label: 'Nobody on', status: { lobby: { jk1: [], mots: [] }, games: [] } },
         down: { label: 'Lobby not answering', status: null }
     };

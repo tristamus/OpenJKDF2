@@ -13,6 +13,19 @@ extern "C" {
 // mod before joining (g_should_exit is already set).
 #define STDCOMM_WSRELAY_RESTART (0x4A4B5752)
 
+// The netcode this build speaks, which it tells the lobby when it connects
+// (/relay?net=<n>): the lobby only lists games, and lets it join them, whose
+// host speaks the same. Raise it only with a change older builds can't play
+// a match with. Anything they can is agreed on through the hellos
+// (stdComm_WSRelayHits.c), so every build so far is 0. NETCODE in
+// packaging/wasm/index.html has to be the same.
+#define STDCOMM_WSRELAY_NETCODE (0)
+
+// What stdComm_Open returns when the lobby turned the join down because the
+// game's host speaks a newer netcode, or an older one.
+#define STDCOMM_WSRELAY_NEWER (0x4A4B564E)
+#define STDCOMM_WSRELAY_OLDER (0x4A4B564F)
+
 void stdComm_WSRelay_Startup();
 void stdComm_WSRelay_Shutdown();
 

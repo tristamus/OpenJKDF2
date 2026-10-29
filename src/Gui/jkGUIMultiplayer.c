@@ -388,6 +388,17 @@ LABEL_29:
                 v27 = jkStrings_GetUniStringWithFallback("GUINET_WRONGPASSWORD");
                 v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
             }
+#ifdef PLATFORM_WSRELAY
+            // Added: the lobby turned it down, because the game's host runs a
+            // build that speaks another netcode. Says whose page to reload.
+            else if ( v10 == STDCOMM_WSRELAY_NEWER || v10 == STDCOMM_WSRELAY_OLDER )
+            {
+                v27 = v10 == STDCOMM_WSRELAY_NEWER
+                      ? u"That game runs a newer version. Reload this page, then join again."
+                      : u"That game runs an older version. Its host needs to reload the page.";
+                v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
+            }
+#endif
             else
             {
                 v27 = jkStrings_GetUniStringWithFallback("GUINET_NOGAMECONNECT");

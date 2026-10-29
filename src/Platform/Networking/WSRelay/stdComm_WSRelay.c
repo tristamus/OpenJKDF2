@@ -159,10 +159,10 @@ extern int Main_bVerboseNetworking;
 // Asyncify has it unwound.
 EM_JS_DEPS(stdComm_WSRelay, "$UTF8ToString,$stringToUTF8,$lengthBytesUTF8");
 
-EM_JS(void, wsrelay_js_connect, (), {
+EM_JS(void, wsrelay_js_connect, (int netcode), {
     var net = Module.jkNet;
     if (!net) {
-        net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null,
+        net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null, netcode: netcode,
                                stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0,
                                         fastSent: 0, fastRecv: 0, fastOld: 0, fastBacklog: 0 },
                                log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
@@ -986,6 +986,9 @@ EM_JS(void, wsrelay_js_connect, (), {
             var url = Module['jkRelayUrl'];
             if (!url && typeof location !== 'undefined')
                 url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
+            /* The netcode this build speaks (STDCOMM_WSRELAY_NETCODE): the
+               lobby only lists and joins games whose host speaks the same. */
+            if (url) url += (url.indexOf('?') < 0 ? '?' : '&') + 'net=' + net.netcode;
             if (!keepQueue) net.queue = [];
             net.lobbyCan = [];
             net.state = 0;
@@ -1320,6 +1323,8 @@ static int wsrelay_bJoined = 0;       // the host welcomed us into its room
 static int wsrelay_bHostLeft = 0;      // the relay says the host left
 static int wsrelay_bSeatLost = 0;      // the relay wouldn't give our seat back
 static uint32_t wsrelay_msecRelayLost = 0; // when the relay went in a game, 0 while it's up
+// Why the relay turned our join down: 1 for no room or anything else, 2
+// full, 3 and 4 its host speaks a newer or an older netcode.
 static int wsrelay_joinError = 0;
 static int wsrelay_room = -1;
 static uint32_t wsrelay_id = 0xFFFFFFFF;
@@ -1820,9 +1825,17 @@ static void wsrelay_HandleText(char* pText)
     else if (!strcmp(pOp, "error"))
     {
         char* pCode = strtok_r(NULL, " ", &pSave);
-        stdPlatform_Printf("OpenJKDF2: Relay error: %s\n", pCode ? pCode : "?");
+        char* pDetail = strtok_r(NULL, " ", &pSave);
+        stdPlatform_Printf("OpenJKDF2: Relay error: %s%s%s\n", pCode ? pCode : "?", pDetail ? " " : "", pDetail ? pDetail : "");
         if (wsrelay_bJoining)
-            wsrelay_joinError = (pCode && !strcmp(pCode, "full")) ? 2 : 1;
+        {
+            if (pCode && !strcmp(pCode, "full"))
+                wsrelay_joinError = 2;
+            else if (pCode && !strcmp(pCode, "version"))
+                wsrelay_joinError = (pDetail && !strcmp(pDetail, "older")) ? 4 : 3;
+            else
+                wsrelay_joinError = 1;
+        }
         if (wsrelay_bHostPending)
             wsrelay_bHostPending = 0;
         // Our seat wasn't held (or not by this relay), so it can't reach
@@ -1914,7 +1927,7 @@ static int wsrelay_EnsureOpen(int timeoutMs)
     if (wsrelay_js_state() == WSRELAY_STATE_OPEN)
         return 1;
 
-    wsrelay_js_connect();
+    wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
     uint32_t until = stdPlatform_GetTimeMsec() + timeoutMs;
     while (stdPlatform_GetTimeMsec() < until)
     {
@@ -1962,7 +1975,7 @@ void stdComm_WSRelay_Startup()
     // Counted in the landing page's live counts from the start, not only once
     // the player opens the Join screen.
     wsrelay_js_presence(jkPlayer_playerShortName, &Main_bMotsCompat);
-    wsrelay_js_connect();
+    wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
 }
 
 void stdComm_WSRelay_Shutdown()
@@ -2435,6 +2448,8 @@ int stdComm_Open(int idx, char16_t* pwPassword)
         int err = wsrelay_joinError;
         wsrelay_SendText("leave");
         wsrelay_ResetSession();
+        if (err == 3 || err == 4)
+            return (err == 3) ? STDCOMM_WSRELAY_NEWER : STDCOMM_WSRELAY_OLDER;
         return (err == 2) ? 0x8877014A : 0x80004005; // GUINET_GAMEFULL / GUINET_NOGAMECONNECT
     }
 
@@ -2616,7 +2631,7 @@ int stdComm_EnumSessions(int a, void* b)
     if (wsrelay_js_state() != WSRELAY_STATE_OPEN)
     {
         // Don't block the menu on a connect; the next poll picks it up.
-        wsrelay_js_connect();
+        wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
     }
     else
     {

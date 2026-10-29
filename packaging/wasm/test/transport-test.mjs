@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 const read = path => readFileSync(new URL('../../../' + path, import.meta.url), 'utf8');
 const relayC = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.c');
 const netstatsJs = read('packaging/wasm/netstats.js');
+// The netcode this build speaks, which the engine hands wsrelay_js_connect.
+const NETCODE = Number(/#define STDCOMM_WSRELAY_NETCODE \((\d+)\)/.exec(read('src/Platform/Networking/WSRelay/stdComm_WSRelay.h'))[1]);
 
 // The EM_JS functions: name -> { params, body }. Each starts on a line of its
 // own and ends with a line that is just "});".
@@ -344,10 +346,11 @@ function makeRtc(world, game) {
 // ---- Games.
 
 // A game with this file's JavaScript and netstats.js, as openjkdf2.js has
-// them, whose player is id in room 1. old: a window with ?netold.
-function makeGame(world, { id, old = false, netsim } = {}) {
+// them, whose player is id in room 1. old: a window with ?netold. relayUrl:
+// the lobby's address, as the page gives it.
+function makeGame(world, { id, old = false, netsim, relayUrl = 'ws://lobby/relay' } = {}) {
     const game = { id, pcs: [], log: [], queue: null };
-    const Module = { jkRelayUrl: 'ws://lobby/relay' };
+    const Module = { jkRelayUrl: relayUrl };
     if (old) Module.jkNetOld = true;
     if (netsim) Module.jkNetSim = netsim;
     new Function('Module', 'setInterval', netstatsJs)(Module, () => 0);
@@ -374,7 +377,7 @@ function makeGame(world, { id, old = false, netsim } = {}) {
     }
     game.Module = Module;
     game.mem = env.HEAPU8;
-    game.js.wsrelay_js_connect();
+    game.js.wsrelay_js_connect(NETCODE);
     game.net = Module.jkNet;
     world.games.push(game);
     return game;
@@ -1110,6 +1113,24 @@ test('a joiner whose relay goes while it waits for its host\'s switch takes what
     join.net.ws.drop();
     assert.ok(p.gotSwitch && !p.held.length);
     stop();
+});
+
+test('a game tells the lobby its build\'s netcode in the address, after what the address has, also when it reconnects', async () => {
+    const world = makeWorld();
+    const game = makeGame(world, { id: 2 });
+    assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE);
+    await world.run(5);
+    game.net.ws.drop();
+    game.js.wsrelay_js_connect(NETCODE);
+    assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE);
+    const other = makeGame(world, { id: 3, relayUrl: 'ws://lobby/relay?x=1' });
+    assert.equal(other.net.ws.url, 'ws://lobby/relay?x=1&net=' + NETCODE);
+});
+
+test('the landing page offers Join for the games of the netcode its game speaks', async () => {
+    const page = /\n      var NETCODE = (\d+);\n/.exec(read('packaging/wasm/index.html'));
+    assert.ok(page, 'index.html has NETCODE');
+    assert.equal(Number(page[1]), NETCODE);
 });
 
 test('the lobby\'s list of what it can do stays out of the engine\'s queue', async () => {
