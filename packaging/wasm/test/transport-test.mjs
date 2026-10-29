@@ -145,7 +145,9 @@ function makeLobby(world) {
                 const id = Number(to);
                 const target = lobby.links ? (id === 1 ? r.host : r.peers.get(id))
                                            : r.host === ws ? r.peers.get(id) : id === 1 ? r.host : null;
-                lobby.signals.push({ from: c.id, to: id, passed: !!target && target !== ws, at: world.now() });
+                let obj = null;
+                try { obj = JSON.parse(atob(blob)); } catch (e) {}
+                lobby.signals.push({ from: c.id, to: id, passed: !!target && target !== ws, at: world.now(), obj });
                 if (target && target !== ws) lobby.send(target, `signal ${c.id} ${blob}`);
                 return;
             }
@@ -1091,6 +1093,138 @@ test('the lobby\'s list of what it can do stays out of the engine\'s queue', asy
     const [host, join] = await room(world, [2]);
     assert.deepEqual(join.net.lobbyCan, ['links']);
     assert.ok(!host.net.queue.includes('lobby links') && !join.net.queue.includes('lobby links'));
+});
+
+// ---- Transfer links (net.mapBulk).
+
+// maps.js as far as the network code sees it: the host sends each frame back
+// the way it came, and both ends note the way each came in.
+function echoMaps(host, ...joiners) {
+    host.maps = [];
+    host.Module.jkMaps = {
+        isFrame: () => false,
+        onFrame(from, data, via) {
+            host.maps.push({ from, via });
+            host.net.mapSend(from, data, via);
+        },
+    };
+    for (const j of joiners) {
+        j.maps = [];
+        j.Module.jkMaps = { isFrame: () => false, onFrame: (from, data, via) => j.maps.push({ from, via }) };
+    }
+}
+
+const bulkSignals = world => world.lobby.signals.filter(s => s.obj && s.obj.b !== undefined);
+const openPcs = game => game.pcs.filter(pc => pc.connectionState !== 'closed');
+
+test('a joiner downloading opens three transfer links to its host, and each frame comes back the way it went', async () => {
+    const world = makeWorld();
+    const [host, join] = await room(world, [2]);
+    echoMaps(host, join);
+    assert.ok(join.net.peers[1].bulkOk, 'the host said it takes them');
+    assert.deepEqual(join.net.mapLanes(1), ['direct'], 'none before a download');
+    join.net.mapBulk(1, true);
+    await world.run(500);
+    assert.deepEqual(join.net.mapLanes(1), ['direct', 'direct1', 'direct2', 'direct3']);
+    assert.equal(host.net.bulkCount(2), 3);
+    assert.equal(openPcs(join).length, 4, 'the main link and three more');
+    for (const via of ['direct', 'direct1', 'direct2', 'direct3'])
+        assert.equal(join.net.mapSend(1, new ArrayBuffer(32), via), via);
+    await world.run(200);
+    assert.deepEqual(host.maps.map(m => m.from + ' ' + m.via), ['2 direct', '2 direct1', '2 direct2', '2 direct3']);
+    assert.deepEqual(join.maps.map(m => m.from + ' ' + m.via), ['1 direct', '1 direct1', '1 direct2', '1 direct3']);
+    // Game packets never go over them.
+    send(join, 1, message(5));
+    await world.run(100);
+    assert.deepEqual(received(host).map(p => p.n), [5]);
+    assert.ok(Object.values(join.net.bulk[1]).every(l => !l.pc.channels[0]), 'a transfer link has only a map channel');
+});
+
+test('transfer links close 20 s after the last download, not while another runs', async () => {
+    const world = makeWorld();
+    const [host, join] = await room(world, [2]);
+    echoMaps(host, join);
+    join.net.mapBulk(1, true);
+    join.net.mapBulk(1, true);
+    await world.run(500);
+    join.net.mapBulk(1, false);
+    await world.run(30000);
+    assert.equal(join.net.mapLanes(1).length, 4, 'one download still runs');
+    join.net.mapBulk(1, false);
+    await world.run(19000);
+    assert.equal(join.net.mapLanes(1).length, 4, 'kept for a while, for the next one');
+    await world.run(1500);
+    assert.deepEqual(join.net.mapLanes(1), ['direct']);
+    assert.equal(join.net.bulkCount(), 0);
+    assert.equal(host.net.bulkCount(), 0, 'the host let them go when they closed');
+    assert.equal(openPcs(join).length, 1);
+    assert.equal(openPcs(host).length, 1);
+    assert.ok(join.net.peers[1].open && host.net.peers[2].open, 'the main link stays up');
+    // A download after that opens them again.
+    join.net.mapBulk(1, true);
+    await world.run(500);
+    assert.equal(join.net.mapLanes(1).length, 4);
+});
+
+test('a host from before transfer links, or a window with ?netold, gets no offer for one', async () => {
+    for (const opts of [{ hostOld: true }, {}]) {
+        const world = makeWorld();
+        const [host, join] = await room(world, [opts.hostOld ? 2 : { id: 2, old: true }], opts);
+        // A host from before them says nothing of them in its answer, as
+        // one with ?netold doesn't.
+        assert.ok(!join.net.peers[1].bulkOk);
+        join.net.mapBulk(1, true);
+        await world.run(2000);
+        assert.deepEqual(join.net.mapLanes(1), ['direct']);
+        assert.equal(bulkSignals(world).length, 0);
+        assert.equal(openPcs(host).length, 1);
+    }
+});
+
+test('transfer links wait for the main link, and go when it does', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host, join] = await room(world, [2]);
+    join.net.mapBulk(1, true);
+    await world.run(500);
+    assert.deepEqual(join.net.mapLanes(1), [], 'the relay, then');
+    assert.equal(bulkSignals(world).length, 0);
+    world.canLink = () => true;
+    await world.run(3000);
+    assert.ok(join.net.mapDirect(1), 'the main link came up');
+    join.net.mapLanes(1);
+    await world.run(500);
+    assert.equal(join.net.mapLanes(1).length, 4);
+    world.canLink = () => false;
+    join.net.peers[1].pc.drop();
+    host.net.peers[2].pc.drop();
+    await world.run(200);
+    assert.equal(join.net.bulkCount(), 0, 'closed with the main link');
+    assert.equal(host.net.bulkCount(), 0);
+});
+
+test('the host takes 12 transfer links at most at once, and a joiner it turned down tries again later', async () => {
+    const world = makeWorld();
+    const games = await room(world, [2, 3, 4, 5, 6]);
+    const host = games[0], joiners = games.slice(1);
+    echoMaps(host, ...joiners);
+    for (const j of joiners) {
+        j.net.mapBulk(1, true);
+        await world.run(200);
+    }
+    await world.run(500);
+    assert.equal(host.net.bulkCount(), 12);
+    assert.deepEqual(joiners.map(j => j.net.mapLanes(1).length), [4, 4, 4, 4, 1]);
+    // One finishes, and its links close 20 s on; the last one's offers that
+    // went unanswered are made again as its download goes on (maps.js asks
+    // for the lanes every 250 ms).
+    joiners[0].net.mapBulk(1, false);
+    const asking = world.every(() => joiners[4].net.mapLanes(1), 250);
+    await world.run(50000);
+    world.cancel(asking);
+    assert.equal(joiners[0].net.mapLanes(1).length, 1);
+    assert.equal(joiners[4].net.mapLanes(1).length, 4);
+    assert.equal(host.net.bulkCount(), 12);
 });
 
 let failed = 0;
