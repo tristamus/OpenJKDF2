@@ -15,7 +15,7 @@ const enums = read('src/types_enums.h');
 
 const SABER = 1, SHOT = 2, SPLASH = 3, FORCE = 4;
 const HIT = 1, BLOCK = 2, DEAD = 3, TURNED_DOWN = 4;
-const BY_CLAIM = 2, DECIDED = 4;
+const BY_MESSAGE = 1, BY_CLAIM = 2, DECIDED = 4, MOMENT = 8, PAST_REACH = 16;
 const NOT_THERE = 2, REPEAT = 6;
 
 // One clock for the whole test. Timers run in order as it moves on.
@@ -123,10 +123,10 @@ function position(from, to) {
 }
 
 // Two games in a match, each having heard from the other.
-function match({ oneWay = 20, hostSim, joinSim, skew = 0, dropProbe, hostMeasures = true } = {}) {
+function match({ oneWay = 20, hostSim, joinSim, skew = 0, dropProbe, hostMeasures = true, joinMeasures = true } = {}) {
     const world = makeWorld();
     const host = makeGame(world, { id: 1, isHost: true, netsim: hostSim, measure: hostMeasures });
-    const join = makeGame(world, { id: 2, skew, netsim: joinSim });
+    const join = makeGame(world, { id: 2, skew, netsim: joinSim, measure: joinMeasures });
     link(world, host, join, { oneWay, dropProbe });
     for (const g of [host, join]) {
         g.ns.start(g.isHost);
@@ -472,6 +472,27 @@ test('targeted Force powers are counted apart', () => {
     assert.match(join.ns.text().join('\n'), /your Force: 2 targeted/);
 });
 
+test('Hit what you see: targeted Force powers checked where the attacker\'s game showed the player', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    // The joiner's Force powers on the host, which its game checked at the
+    // moment each named: two played, one of them past the reach, and one
+    // was turned down. The damage a played one does isn't counted again.
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.01);
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT | PAST_REACH, 0, 0, 0.03);
+    host.ns.hit(2, false, FORCE, TURNED_DOWN, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, NOT_THERE, 0.5);
+    world.run(3000);
+    const t = takenOf(host, 2, 'Force');
+    assert.deepEqual([t.byMessage, t.turnedDown, t.claims, t.moments, t.pastReach], [2, 1, 3, 3, 1]);
+    assert.match(host.ns.text().join('\n'),
+                 /their hits on you: Force 1 turned down \(not there 1\), 2 targeted \(3 claimed, 3 at a moment, 1 of them past the reach, off by counted median/);
+    const c = hitsOf(join, 1, 'Force');
+    assert.deepEqual([c.byMessage, c.byMessageTurnedDown, c.claims, c.moments, c.pastReach], [2, 1, 3, 3, 1]);
+    assert.equal(c.turnedDown + c.notShown + c.missedHit, 0);
+    assert.match(join.ns.text().join('\n'),
+                 /your Force: 2 targeted, 1 turned down there \(not there 1\) \| 3 claimed \(3 at a moment, 1 of them past the reach\), off by counted median/);
+});
+
 test('Hit what you see: claims counted and turned down, with why and how far off', () => {
     const { world, host, join } = match();
     world.run(3000);
@@ -499,6 +520,107 @@ test('Hit what you see: claims counted and turned down, with why and how far off
     const t = takenOf(host, 2, 'shot');
     assert.deepEqual([t.hit, t.turnedDown, t.claims], [1, 1, 2]);
     assert.match(host.ns.text().join('\n'), /their hits on you: shot 1 counted, 1 turned down \(not there 1\) \(2 claimed, off by counted median 0\.05/);
+});
+
+test('Hit what you see: claims that named the moment the target was drawn at are counted apart', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 21);
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 22);
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 23);
+    world.run(20);
+    host.ns.hit(2, false, SABER, HIT, 40, BY_CLAIM | MOMENT, 21, 0, 0.01);
+    host.ns.hit(2, false, SABER, TURNED_DOWN, 40, BY_CLAIM | MOMENT, 22, NOT_THERE, 0.31);
+    host.ns.hit(2, false, SABER, HIT, 40, BY_CLAIM, 23, 0, 0.12);
+    world.run(1000);
+    const c = hitsOf(join, 1, 'saber');
+    assert.deepEqual([c.claims, c.moments, c.pastReach, c.counted, c.turnedDown], [3, 2, 0, 2, 1]);
+    assert.match(join.ns.text().join('\n'), /your saber: 3 hits shown: 2 counted, 1 turned down there \(not there 1\) \| agree 66\.7% of 3 \| 3 claimed \(2 at a moment\), off by/);
+    const t = takenOf(host, 2, 'saber');
+    assert.deepEqual([t.claims, t.moments], [3, 2]);
+    assert.match(host.ns.text().join('\n'), /their hits on you: saber 2 counted, 1 turned down \(not there 1\) \(3 claimed, 2 at a moment, off by/);
+
+    // A moment further back than the reach, checked as a claim without one.
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 24);
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 25);
+    world.run(20);
+    host.ns.hit(2, false, SABER, HIT, 40, BY_CLAIM | MOMENT | PAST_REACH, 24, 0, 0.02);
+    host.ns.hit(2, false, SABER, TURNED_DOWN, 40, BY_CLAIM | MOMENT | PAST_REACH, 25, NOT_THERE, 0.4);
+    world.run(1000);
+    assert.deepEqual([c.claims, c.moments, c.pastReach, c.counted, c.turnedDown], [5, 4, 2, 3, 2]);
+    assert.match(join.ns.text().join('\n'), /\| 5 claimed \(4 at a moment, 2 of them past the reach\), off by/);
+    assert.deepEqual([t.claims, t.moments, t.pastReach], [5, 4, 2]);
+    assert.match(host.ns.text().join('\n'), /\(5 claimed, 4 at a moment, 2 of them past the reach, off by/);
+});
+
+test('the engine asks for another game\'s clock: pinged every second for 10 s, then every 5 s, without ?netstats', () => {
+    const { world, host, join } = match({ hostMeasures: false, joinMeasures: false, skew: 5000, oneWay: 30 });
+    const pings = (game, id) => game.ns.lib.players()[id].game.pings.length;
+    world.run(3000);
+    assert.equal(pings(host, 2), 0, 'nobody measures, so nobody pings');
+    assert.ok(Number.isNaN(host.ns.clockOffset(2)), 'not asked for yet');
+    host.ns.sync(2, true);
+    world.run(10000);
+    assert.ok(pings(host, 2) >= 10 && pings(host, 2) <= 11, 'every second at first: ' + pings(host, 2));
+    // The joiner's clock reads 5 s ahead of the host's; each trip is 30 ms.
+    near(host.ns.clockOffset(2), 5000, 1, 'their clock less ours');
+    const first = pings(host, 2);
+    world.run(20000);
+    assert.ok(pings(host, 2) - first >= 4 && pings(host, 2) - first <= 5, 'then every 5 s: ' + (pings(host, 2) - first));
+    assert.equal(pings(join, 1), 0, 'the joiner didn\'t ask, so it only answers');
+    assert.ok(Number.isNaN(join.ns.clockOffset(1)));
+    host.ns.sync(2, false);
+    assert.ok(Number.isNaN(host.ns.clockOffset(2)), 'no longer asked for');
+    const last = pings(host, 2);
+    world.run(10000);
+    assert.equal(pings(host, 2), last, 'and no longer pinged');
+});
+
+test('how this game draws a player from their timed updates: behind, carried on, held still, jumps', () => {
+    const { world, host, join } = match({ oneWay: 20 });
+    world.run(10000);
+    assert.equal(rowOf(join, 1).motion, null, 'not drawn from a buffer');
+    assert.ok(!join.ns.text().some(line => /drawn from their timed updates/.test(line)));
+    // The engine's numbers each second.
+    for (let i = 0; i < 10; i++) {
+        join.ns.motion(1, { buffer: 20 + i, steps: 150, carried: 3, held: i === 9 ? 3 : 0, jumps: i === 4 ? 1 : 0,
+                            warps: i === 5 ? 1 : 0, restarts: 1 });
+        world.run(1000);
+    }
+    const m = rowOf(join, 1).motion;
+    near(m.buffer, 24.5, 1e-9, 'the buffer\'s median');
+    near(m.behind, 44.5, 0.5, 'the buffer and half the ping');
+    near(m.carried, 30 / 1500, 1e-9, 'carried on');
+    near(m.held, 3 / 1500, 1e-9, 'held still');
+    assert.deepEqual([m.jumps, m.warps, m.restarts, m.steps], [1, 1, 1, 1500]);
+    assert.ok(join.ns.text().includes('  drawn from their timed updates: 45 ms behind (buffer 25 ms), carried on 2%, held still 0.2%, 1 jump, 1 warp'),
+              join.ns.text().join('\n'));
+    assert.ok(join.notes.some(n => /^netstats: player 1 direct ping \d+ ms jitter \d+ ms .* drawn \d+ ms behind, buffer \d+ ms, carried [\d.]+%, held [\d.]+%, jumps \d+/.test(n)),
+              join.notes.join('\n'));
+    // Only the last minute's buffers count.
+    for (let i = 0; i < 60; i++) join.ns.motion(1, { buffer: 80, steps: 150, carried: 0, held: 0, jumps: 0, warps: 0, restarts: 1 });
+    near(rowOf(join, 1).motion.buffer, 80, 1e-9, 'the last minute');
+    // Not for this game's own player, or before it's in the match.
+    join.ns.motion(2, { buffer: 5, steps: 150 });
+    assert.equal(rowOf(join, 1).motion.steps, 10500);
+    join.ns.reset();
+    assert.equal(rowOf(join, 1).motion, null, 'reset');
+});
+
+test('position updates with their time are positions too', () => {
+    const { host, join } = match();
+    for (const body of [52, 64, 60, 72]) {
+        const buf = new ArrayBuffer(12 + body);
+        const view = new DataView(buf);
+        view.setUint16(8, 1, true);
+        assert.ok(join.ns.lib.isPosition(buf), body + ' bytes');
+    }
+    for (const body of [56, 68, 76]) {
+        const buf = new ArrayBuffer(12 + body);
+        new DataView(buf).setUint16(8, 1, true);
+        assert.ok(!join.ns.lib.isPosition(buf), body + ' bytes');
+    }
+    assert.ok(host);
 });
 
 test('Hit what you see: a block this game decided is final, and a claim for a hit counted already takes nothing', () => {
@@ -652,18 +774,25 @@ test('?nettest=attack:all\'s steps keep their counts apart, each with its lag', 
     world.run(3000);
     join.ns.nextStep('rail alt', '');
     world.run(3000);
+    // Three Force powers the host's game checked: two played there.
+    join.ns.nextStep('grip', '');
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.01);
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.02);
+    host.ns.hit(2, false, FORCE, TURNED_DOWN, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, NOT_THERE, 0.5);
+    world.run(3000);
     join.ns.nextStep('', '');
     assert.equal(join.ns.sim(), null);
     const r = join.ns.report();
     assert.equal(r.step, null);
-    assert.deepEqual(r.steps.map(x => [x.name, x.sim && x.sim.rtt]), [['bryar', null], ['bryar', 100], ['rail alt', null]]);
+    assert.deepEqual(r.steps.map(x => [x.name, x.sim && x.sim.rtt]),
+                     [['bryar', null], ['bryar', 100], ['rail alt', null], ['grip', null]]);
     const c = r.steps[0].rows[0].hits[0].c;
     assert.equal(c.counted, 1);
     assert.equal(c.missedHit, 1);
     assert.equal(c.lags, undefined);
     near(r.steps[1].rows[0].ping, 140, 40, 'the second step\'s ping');
     assert.match(join.ns.text().join('\n'),
-                 /\nSteps, how often both games agreed:\n  bryar     no lag: shot 50% of 2 · \+100 ms: shot 100% of 1\n  rail alt  no lag: no hits\n  done$/);
+                 /\nSteps, how often both games agreed:\n  bryar     no lag: shot 50% of 2 · \+100 ms: shot 100% of 1\n  rail alt  no lag: no hits\n  grip      no lag: Force 66\.7% of 3\n  done$/);
 });
 
 test('this game\'s frames a second, from when its frames ended', () => {
@@ -711,6 +840,7 @@ test('stdComm_WSRelay.c passes packets to netstats.js as this test does (transpo
         "if (Module.jkNetStats) Module.jkNetStats.start(isHost);",
         "if (Module.jkNetStats) Module.jkNetStats.live(live, id, isHost);",
         "if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance);",
+        "Module.jkNetStats.motion(otherId, { buffer: bufferMs, steps: steps, carried: carried, held: held, jumps: jumps, warps: warps, restarts: restarts });",
     ])
         assert.ok(relayC.includes(line), 'stdComm_WSRelay.c has: ' + line);
     // The kinds, outcomes, flags and reasons the engine sends are the ones
@@ -722,7 +852,7 @@ test('stdComm_WSRelay.c passes packets to netstats.js as this test does (transpo
         assert.match(header, new RegExp('#define STDCOMM_WSRELAY_' + name + ' \\(' + n + '\\)'));
     assert.match(source, /var KINDS = \['', 'saber', 'shot', 'splash', 'Force', 'other'\];/);
     assert.match(source, /var O_HIT = 1, O_BLOCK = 2, O_DEAD = 3, O_TURNED_DOWN = 4;/);
-    for (const [name, n] of [['BY_MESSAGE', 1], ['BY_CLAIM', 2], ['DECIDED', 4]]) {
+    for (const [name, n] of [['BY_MESSAGE', 1], ['BY_CLAIM', 2], ['DECIDED', 4], ['MOMENT', 8], ['PAST_REACH', 16]]) {
         assert.match(relayC, new RegExp('#define WSRELAY_HITFLAG_' + name + ' \\(' + n + '\\)'));
         assert.match(source, new RegExp('var F_' + name + ' = ' + n + ';'));
     }

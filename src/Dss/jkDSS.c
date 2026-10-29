@@ -518,6 +518,12 @@ void jkDSS_SendJKEnableSaber(SithThing *pPlayerThing)
     // Added: the swing's number, after what the original sends, for the hit
     // ledger (stdComm_WSRelay_NewSwing).
     NETMSG_PUSHU32(stdComm_WSRelay_GetSwing(pPlayerThing));
+
+    // Added: Hit what you see: and its time, so other games turn the blade
+    // on when they draw the player there (stdComm_WSRelay_HoldForTimeline).
+    uint32_t t32;
+    if ( stdComm_WSRelay_TimelineTime(pPlayerThing, &t32) )
+        NETMSG_PUSHU32(t32);
 #endif
 
     NETMSG_END(DSS_JKENABLESABER);
@@ -551,7 +557,7 @@ int jkDSS_ProcessJKEnableSaber(SithMessage *msg)
 
     // Added: Hit what you see: what this game knows of the swing, to check
     // the claims for what it hits.
-    stdComm_WSRelay_NoteSwing(pThing, swing);
+    stdComm_WSRelay_NoteSwing(pThing, swing, arg1, arg2);
 #endif
     return 1;
 }

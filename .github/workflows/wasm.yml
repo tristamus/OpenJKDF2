@@ -85,6 +85,15 @@ jobs:
           cc -std=c11 -O2 -Wall -Werror -o hitcheck-test packaging/wasm/test/hitcheck-test.c \
              src/Platform/Networking/WSRelay/stdComm_WSRelayHitCheck.c -lm
           ./hitcheck-test
+      # Hit what you see's buffer of another player's timed updates, on its
+      # own in C: the delay it draws them at over steady, jittery, lossy and
+      # changing links, where it puts them between and past updates, and
+      # their messages that wait for the moment they're drawn at.
+      - name: Test drawing other players from their timed updates
+        run: |
+          cc -std=c11 -O2 -Wall -Werror -o motion-test packaging/wasm/test/motion-test.c \
+             src/Platform/Networking/WSRelay/stdComm_WSRelayPlayout.c -lm
+          ./motion-test
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

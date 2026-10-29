@@ -28,13 +28,28 @@
 //     tells the others (DETONATE).
 //   - A game's own player can't turn a bolt away until the fire wait after
 //     their swing is over (sithWeapon_fireWait), so each swing tells the
-//     other games how long that is (WAIT), for the bolts they decide.
-// Everything else stays as it was: targeted Force powers, the host's damage
-// messages, falls, world traps, and a player's own attacks on itself.
+//     other games how long that is (WAIT), for the bolts they decide. A
+//     game that draws them from their timed updates has them in it while
+//     the moment it draws them at is.
+//   - A targeted Force power (Grip, Pull, Blinding, Deadly Sight) is still
+//     the attacker's game's to aim: it picks a player it shows in reach and
+//     sends their game the power's cog message (SkillTarget). Between two
+//     games that draw each other from their timed updates, the message also
+//     says the moment the player was drawn at and where it showed them
+//     (stdComm_WSRelay_ForceMoment), and their game plays it only if they
+//     were there then, as it checks a claim's last step.
+// Everything else stays as it was: the host's damage messages, falls, world
+// traps, and a player's own attacks on itself.
 //
 // Two games play by claims with each other only once each has said hello
 // (HELLO, with the rules it plays by) and heard the other's. An older build
-// never says hello, so with it hits stay as they were, both ways.
+// never says hello, so with it hits stay as they were, both ways. Hello
+// version 2 is a game that draws other players from buffers of their timed
+// updates (stdComm_WSRelayMotion.c): two such games send each other times
+// on their updates, and claims that name the moment the target was drawn
+// at, which its game checks its record at. Version 1 gets Phase 2 claims.
+// MotS says version 1 for now, so its matches keep Phase 2's claims until
+// timed updates are tested with MotS's weapons and Force powers.
 //
 // All of it is one engine message, past DSS_MAX so older engines ignore it
 // (STDCOMM_WSRELAY_HITS_MSG), sent without a resend id: the links under it
@@ -42,16 +57,20 @@
 // be past its reach anyway. First byte: type.
 //   HELLO     version u8, flags u8 (1 from the host, 2 heard yours), rules
 //             u8, reach ms u16, 0 u16
-//   CLAIM     source u8, ledger kind u8, flags u8 (1 update number known),
-//             damage f32, damage type s32, attack u32 (the swing's number or
-//             the shot's guid), target's guid s32, credited player's guid
-//             s32, target as shown vec3, attacker's position vec3, blast
-//             vec3, the target's update number u32, how long it had been
-//             applied in ms u16, 0 u16
+//   CLAIM     source u8, ledger kind u8, flags u8 (1 update number known,
+//             2 moment known, 4 carried on past the target's newest
+//             update), damage f32, damage type s32, attack u32 (the swing's
+//             number or the shot's guid), target's guid s32, credited
+//             player's guid s32, target as shown vec3, attacker's position
+//             vec3, blast vec3, the target's update number u32, how long it
+//             had been applied in ms u16, 0 u16; with a moment: the moment
+//             f64 (the target's clock), ms from its update before u16, ms to
+//             its update after u16 (0xFFFF: none)
 //   TURNED    0 u8, template s16, shot guid s32, blocker's guid s32, sector
 //             s16, 0 s16, position vec3, velocity vec3
 //   DETONATE  0 u8, fuse ms u16, charge guid s32
-//   WAIT      0 u8, fire wait ms u16
+//   WAIT      0 u8, fire wait ms u16; from version 2, when the swing
+//             started f64 (its game's motion clock)
 
 #include "stdComm_WSRelay.h"
 #include "stdComm_WSRelayHitCheck.h"
@@ -67,6 +86,7 @@
 #include "World/sithWorld.h"
 #include "Engine/sithPuppet.h"
 #include "Cog/sithCog.h"
+#include "Main/Main.h"
 #include "Primitives/rdMatrix.h"
 #include "Primitives/rdVector.h"
 #include "stdPlatform.h"
@@ -81,12 +101,14 @@
 #define HITS_DETONATE (4)
 #define HITS_WAIT (5)
 
-#define HITS_VERSION (1)
+#define HITS_VERSION (2)
 
 #define HITS_HELLO_HOST (1)
 #define HITS_HELLO_HEARD (2)
 
 #define HITS_CLAIM_SEQ (1)
+#define HITS_CLAIM_MOMENT (2)
+#define HITS_CLAIM_CARRIED (4)
 
 // How often each game says hello to each other player, and how soon after
 // its last one it answers a hello that needs an answer.
@@ -135,6 +157,7 @@ typedef struct WSRelayHitsPeer
     int netId;              // the player this is about; all of it starts
                             // over when another player gets the slot
     int bHello;             // their game said hello
+    int version;            // with this version
     int bHeardMe;           // and its last hello said it had heard this one's
     int rules;              // the rules their game said it plays by
     double helloAt;         // when this game last said hello to them
@@ -143,6 +166,9 @@ typedef struct WSRelayHitsPeer
     int bPosSeq;            // it had a number (the fast lane)
     double posAt;           // when it was applied
     double waitUntil;       // the end of their fire wait, as this game has it
+    double waitFrom;        // and on their clock, if their game said
+    double waitTo;
+    int bWaitMoment;
     WSRelayHitsSwing aSwings[HITS_SWINGS];
     int nextSwing;
     WSRelayHitsShot aShots[HITS_SHOTS];
@@ -182,6 +208,7 @@ static WSRelayHitRecord hits_record;
 static uint32_t hits_life = 1;
 static int hits_bWasAlive = 0;
 static void* hits_pWorld = NULL;
+static double hits_recordAt = -1.0;
 // Its last swing, whose fire wait the other games have been told.
 static uint32_t hits_ownSwing = 0;
 
@@ -216,6 +243,11 @@ static int hits_bApplying = 0;
 static int hits_applyKind = 0;
 static uint32_t hits_applyAttack = 0;
 static float hits_applyDistance = -1.0f;
+static int hits_applyMoment = 0;
+
+// While a targeted Force power this game checked takes effect
+// (stdComm_WSRelay_ForceTakes), which the hit ledger has already.
+static int hits_bForce = 0;
 
 static double hits_Now()
 {
@@ -325,6 +357,12 @@ static void hits_PutF32(WSRelayHitsOut* o, float v)
     o->n += 4;
 }
 
+static void hits_PutF64(WSRelayHitsOut* o, double v)
+{
+    memcpy(o->p + o->n, &v, 8);
+    o->n += 8;
+}
+
 static void hits_PutVec(WSRelayHitsOut* o, WSRelayHitVec v)
 {
     hits_PutF32(o, v.x);
@@ -393,6 +431,17 @@ static float hits_GetF32(WSRelayHitsIn* in)
     return x;
 }
 
+static double hits_GetF64(WSRelayHitsIn* in)
+{
+    double x = 0.0;
+    if (hits_Has(in, 8))
+    {
+        memcpy(&x, in->p + in->n, 8);
+        in->n += 8;
+    }
+    return x;
+}
+
 static WSRelayHitVec hits_GetVec(WSRelayHitsIn* in)
 {
     WSRelayHitVec v;
@@ -400,6 +449,17 @@ static WSRelayHitVec hits_GetVec(WSRelayHitsIn* in)
     v.y = hits_GetF32(in);
     v.z = hits_GetF32(in);
     return v;
+}
+
+// The moment another player was drawn at (stdComm_WSRelay_MotionMoment), as
+// a claim or a Force power names it: the moment f64, ms from their update
+// before it u16, ms to the one after u16 (0xFFFF: none).
+static void hits_PutMoment(WSRelayHitsOut* o, double r, double tBefore, double tAfter)
+{
+    double before = ceil(r - tBefore), after = tAfter < 0.0 ? 65535.0 : ceil(tAfter - r);
+    hits_PutF64(o, r);
+    hits_PutU16(o, before < 0.0 ? 0 : before > 65534.0 ? 65534 : (uint32_t)before);
+    hits_PutU16(o, after < 0.0 ? 0 : after > 65535.0 ? 65535 : (uint32_t)after);
 }
 
 void stdComm_WSRelay_FlushHits()
@@ -441,11 +501,13 @@ void stdComm_WSRelay_ResetHits()
     hits_life++;
     hits_bWasAlive = 0;
     hits_pWorld = NULL;
+    hits_recordAt = -1.0;
     hits_ownSwing = 0;
     memset(hits_aBlasts, 0, sizeof(hits_aBlasts));
     hits_nextBlast = 0;
     hits_numOutbox = 0;
     hits_bApplying = 0;
+    hits_bForce = 0;
 }
 
 int stdComm_WSRelay_ClampReach(int reachMs)
@@ -542,18 +604,25 @@ static uint32_t hits_LedgerAttack(int kind, uint32_t attack)
 
 // ---- Other players' attacks, as their messages tell this game.
 
-void stdComm_WSRelay_NoteSwing(SithThing* pPlayer, uint32_t swing)
+void stdComm_WSRelay_NoteSwing(SithThing* pPlayer, uint32_t swing, flex_t damage, flex_t bladeLength)
 {
     if (!swing || !pPlayer || !pPlayer->playerInfo)
         return;
     WSRelayHitsPeer* p = hits_Peer(hits_SlotOf(pPlayer));
     if (!p)
         return;
+    // Its message is noted when it comes, and again when it plays on the
+    // timeline (stdComm_WSRelay_HoldForTimeline).
+    for (int i = 0; i < HITS_SWINGS; i++)
+    {
+        if (p->aSwings[i].swing == swing)
+            return;
+    }
     WSRelayHitsSwing* s = &p->aSwings[p->nextSwing];
     s->swing = swing;
     s->at = hits_Now();
-    s->damage = pPlayer->playerInfo->saberCollideInfo.damage;
-    s->bladeLength = pPlayer->playerInfo->saberCollideInfo.bladeLength;
+    s->damage = (float)damage;
+    s->bladeLength = (float)bladeLength;
     p->nextSwing = (p->nextSwing + 1) % HITS_SWINGS;
 }
 
@@ -582,8 +651,8 @@ void stdComm_WSRelay_NoteShot(SithThing* pTemplate, const rdVector3* pFirePos, i
 
     float absScale = fabsf((float)scale);
     s->guid = guid;
-    // Its game moves a shot on by the time it was late (sithWeapon_WeaponFireProjectile).
-    s->at = hits_Now() - (secsAhead > 0.02 ? (double)secsAhead * 1000.0 : 0.0);
+    // It starts as far along its path as it was fired that much earlier.
+    s->at = hits_Now() - (secsAhead > 0.0 ? (double)secsAhead * 1000.0 : 0.0);
     s->from = hits_Vec(pFirePos);
     if (pTemplate->moveType == SITH_MT_PHYSICS)
     {
@@ -660,7 +729,8 @@ int stdComm_WSRelay_ClaimHit(SithThing* pVictim, SithThing* pSource, flex_t dama
     if (hits_bApplying || !pVictim || !pSource || pVictim->type != SITH_THING_PLAYER)
         return 0;
     // Targeted Force powers, and the host's damage messages: their messages
-    // decide, as before.
+    // decide, as before (a Force power's once stdComm_WSRelay_ForceTakes has
+    // let it play).
     if (sithComm_msgInProgress == DSS_SENDTRIGGER || sithComm_msgInProgress == DSS_DAMAGE)
         return 0;
     if (!hits_Live())
@@ -693,13 +763,19 @@ int stdComm_WSRelay_ClaimHit(SithThing* pVictim, SithThing* pSource, flex_t dama
     if (!hits_ClaimsTo(pv))
         return 0;
 
+    // The moment this game drew them at, if it drew them from their timed
+    // updates.
+    double r = 0.0, tBefore = 0.0, tAfter = -1.0;
+    int carried = 0;
+    int bMoment = pv->version >= 2 && stdComm_WSRelay_MotionMoment(pVictim, &r, &tBefore, &tAfter, &carried);
+
     uint8_t body[HITS_MAX_BODY];
     WSRelayHitsOut o = { body, 0 };
     double age = pv->bPosSeq ? now - pv->posAt : 0.0;
     hits_PutU8(&o, HITS_CLAIM);
     hits_PutU8(&o, a.source);
     hits_PutU8(&o, a.kind);
-    hits_PutU8(&o, pv->bPosSeq ? HITS_CLAIM_SEQ : 0);
+    hits_PutU8(&o, (pv->bPosSeq ? HITS_CLAIM_SEQ : 0) | (bMoment ? HITS_CLAIM_MOMENT : 0) | (bMoment && carried ? HITS_CLAIM_CARRIED : 0));
     hits_PutF32(&o, (float)damage);
     hits_Put32(&o, (uint32_t)damageType);
     hits_Put32(&o, a.attack);
@@ -711,6 +787,8 @@ int stdComm_WSRelay_ClaimHit(SithThing* pVictim, SithThing* pSource, flex_t dama
     hits_Put32(&o, pv->posSeq);
     hits_PutU16(&o, age < 0.0 ? 0 : age > 65535.0 ? 65535 : (uint32_t)age);
     hits_PutU16(&o, 0);
+    if (bMoment)
+        hits_PutMoment(&o, r, tBefore, tAfter);
     hits_Queue(pv->netId, body, o.n);
 
     // As before, the hit shows here; other players never take damage here.
@@ -734,6 +812,14 @@ static void hits_TakeClaim(int fromNetId, int slot, WSRelayHitsIn* in, double no
     uint32_t posSeq = hits_Get32(in);
     hits_GetU16(in);
     hits_GetU16(in);
+    double r = 0.0;
+    int before = 0, after = 0;
+    if (flags & HITS_CLAIM_MOMENT)
+    {
+        r = hits_GetF64(in);
+        before = (int)hits_GetU16(in);
+        after = (int)hits_GetU16(in);
+    }
     if (in->bad)
         return;
 
@@ -823,11 +909,40 @@ static void hits_TakeClaim(int fromNetId, int slot, WSRelayHitsIn* in, double no
         }
     }
 
+    // The record is on the motion clock (stdComm_WSRelayMotion.c), which
+    // runs up to a frame behind stdComm_WSRelay_Now's, as now and the times
+    // updates were sent are.
+    double clock = stdComm_WSRelay_MotionNow();
+    int moment = (flags & HITS_CLAIM_MOMENT) ? STDCOMM_WSRELAY_MOMENT_AT : STDCOMM_WSRELAY_MOMENT_NONE;
     if (v.result == WSRELAYHIT_OK)
     {
-        double tSent = (flags & HITS_CLAIM_SEQ) ? stdComm_WSRelay_SeqSentAt(fromNetId, posSeq) : -1.0;
-        double from = stdComm_WSRelayHit_WindowFrom(now, hits_reachMs, tSent);
-        v = stdComm_WSRelayHit_Check(&hits_record, hits_life, hits_IsAlive(pLocal), &claim, &at, now, from);
+        // Where this game's player was at that moment: between the updates
+        // the attacker's game drew it from, or from the one before to the
+        // moment, when it was carried on past the newest.
+        double from = 0.0, to = clock;
+        int window = WSRELAYHIT_LATE;
+        if (moment)
+            window = stdComm_WSRelayHit_MomentWindow(clock, hits_reachMs, r, before, after == 0xFFFF ? -1.0 : after, &from, &to);
+
+        // No moment: anywhere since the target's update the attacker had on
+        // screen was sent, as Phase 2 checks. A moment further back than the
+        // reach: anywhere in the reach. Never further back.
+        if (window == WSRELAYHIT_LATE)
+        {
+            double tSent = -1.0;
+            if (moment)
+                moment = STDCOMM_WSRELAY_MOMENT_PAST_REACH;
+            else if (flags & HITS_CLAIM_SEQ)
+                tSent = stdComm_WSRelay_SeqSentAt(fromNetId, posSeq);
+            from = stdComm_WSRelayHit_WindowFrom(clock, hits_reachMs, tSent < 0.0 ? -1.0 : tSent - (now - clock));
+            to = clock;
+            window = WSRELAYHIT_OK;
+        }
+
+        if (window == WSRELAYHIT_OK)
+            v = stdComm_WSRelayHit_CheckIn(&hits_record, hits_life, hits_IsAlive(pLocal), &claim, &at, now, from, to);
+        else
+            v.result = window;
     }
 
     if (v.result == WSRELAYHIT_OK)
@@ -838,22 +953,24 @@ static void hits_TakeClaim(int fromNetId, int slot, WSRelayHitsIn* in, double no
         hits_applyKind = kind;
         hits_applyAttack = ledgerAttack;
         hits_applyDistance = v.distance;
+        hits_applyMoment = moment;
         sithThing_DamageThing(pLocal, pCredit, v.damage, applyType);
         hits_bApplying = 0;
         return;
     }
 
     stdComm_WSRelay_NoteTurnedDown(fromNetId, kind, v.result == WSRELAYHIT_DEAD ? STDCOMM_WSRELAY_DEAD : STDCOMM_WSRELAY_TURNED_DOWN,
-                                   claim.damage, ledgerAttack, v.result, v.distance);
+                                   claim.damage, ledgerAttack, v.result, v.distance, moment);
 }
 
-int stdComm_WSRelay_ApplyingClaim(int* pKind, uint32_t* pAttack, float* pDistance)
+int stdComm_WSRelay_ApplyingClaim(int* pKind, uint32_t* pAttack, float* pDistance, int* pMoment)
 {
     if (!hits_bApplying)
         return 0;
     *pKind = hits_applyKind;
     *pAttack = hits_applyAttack;
     *pDistance = hits_applyDistance;
+    *pMoment = hits_applyMoment;
     return 1;
 }
 
@@ -870,6 +987,79 @@ int stdComm_WSRelay_DecidedElsewhere(SithThing* pSource, int damageType)
     if (!hits_Classify(pSource, damageType, &a) || a.maker == (int)playerThingIdx)
         return 0;
     return hits_DecidedBy(hits_Peer(a.maker)) || stdComm_WSRelayHit_Seen(&hits_claimed, hits_Now(), a.maker, a.source, a.attack);
+}
+
+// ---- Targeted Force powers.
+
+int stdComm_WSRelay_ForceMoment(SithThing* pVictim, uint8_t* pOut)
+{
+    if (!pVictim || pVictim == sithPlayer_g_pLocalPlayerThing || !hits_IsShownAlive(pVictim))
+        return 0;
+    WSRelayHitsPeer* pv = hits_Peer(hits_SlotOf(pVictim));
+    double r = 0.0, tBefore = 0.0, tAfter = -1.0;
+    int carried = 0;
+    if (!hits_ClaimsTo(pv) || pv->version < 2 || !stdComm_WSRelay_MotionMoment(pVictim, &r, &tBefore, &tAfter, &carried))
+        return 0;
+
+    WSRelayHitsOut o = { pOut, 0 };
+    hits_PutMoment(&o, r, tBefore, tAfter);
+    hits_PutVec(&o, hits_Vec(&pVictim->position));
+    return o.n;
+}
+
+int stdComm_WSRelay_ForceTakes(SithThing* pVictim, SithThing* pSource, const uint8_t* pData)
+{
+    hits_bForce = 0;
+
+    // Not on this game's player, or from a game it doesn't play Hit what you
+    // see with: as before. Its player dead: its class cog does nothing, as
+    // before.
+    SithThing* pLocal = sithPlayer_g_pLocalPlayerThing;
+    WSRelayHitsPeer* p = hits_Peer(hits_SlotOf(pSource));
+    if (!pLocal || pVictim != pLocal || !p || !hits_Live() || !p->bHello || p->rules != STDCOMM_WSRELAY_HITS_HWYS
+        || !hits_IsAlive(pLocal))
+        return 1;
+
+    WSRelayHitsIn in = { pData, 0, STDCOMM_WSRELAY_FORCE_BYTES, 0 };
+    double r = hits_GetF64(&in);
+    int before = (int)hits_GetU16(&in);
+    int after = (int)hits_GetU16(&in);
+    WSRelayHitVec target = hits_GetVec(&in);
+
+    // Was the player where that game showed them, at the moment it drew them
+    // at, or, for one further back than the reach, anywhere in the reach: as
+    // a claim (hits_TakeClaim), on the motion clock.
+    double clock = stdComm_WSRelay_MotionNow();
+    double from = 0.0, to = clock;
+    int moment = STDCOMM_WSRELAY_MOMENT_AT;
+    WSRelayHitVerdict v;
+    memset(&v, 0, sizeof(v));
+    v.distance = -1.0f;
+    v.result = stdComm_WSRelayHit_MomentWindow(clock, hits_reachMs, r, before, after == 0xFFFF ? -1.0 : after, &from, &to);
+    if (v.result == WSRELAYHIT_LATE)
+    {
+        moment = STDCOMM_WSRELAY_MOMENT_PAST_REACH;
+        from = stdComm_WSRelayHit_WindowFrom(clock, hits_reachMs, -1.0);
+        to = clock;
+        v.result = WSRELAYHIT_OK;
+    }
+    if (v.result == WSRELAYHIT_OK)
+        v = stdComm_WSRelayHit_CheckThere(&hits_record, hits_life, target, from, to);
+
+    stdComm_WSRelay_NoteTargeted(p->netId, v.result == WSRELAYHIT_OK ? STDCOMM_WSRELAY_HIT : STDCOMM_WSRELAY_TURNED_DOWN,
+                                 v.result, v.distance, moment);
+    hits_bForce = v.result == WSRELAYHIT_OK;
+    return hits_bForce;
+}
+
+void stdComm_WSRelay_ForceDone()
+{
+    hits_bForce = 0;
+}
+
+int stdComm_WSRelay_ApplyingForce()
+{
+    return hits_bForce;
 }
 
 // ---- Bolts turned away, and charges.
@@ -893,17 +1083,29 @@ int stdComm_WSRelay_InFireWait(SithThing* pPlayer)
     if (!pPlayer || pPlayer == sithPlayer_g_pLocalPlayerThing || !hits_Live())
         return 0;
     WSRelayHitsPeer* p = hits_Peer(hits_SlotOf(pPlayer));
-    return p && p->waitUntil > hits_Now();
+    if (!p)
+        return 0;
+    // Drawn from their timed updates: whether they were in it at the moment
+    // they're drawn at.
+    double r, tBefore, tAfter;
+    int carried;
+    if (p->bWaitMoment && stdComm_WSRelay_MotionMoment(pPlayer, &r, &tBefore, &tAfter, &carried))
+        return r >= p->waitFrom && r < p->waitTo;
+    return p->waitUntil > hits_Now();
 }
 
 static void hits_TakeWait(int slot, WSRelayHitsIn* in)
 {
     hits_GetU8(in);
     int waitMs = (int)hits_GetU16(in);
+    double from = in->len - in->n >= 8 ? hits_GetF64(in) : NAN;
     WSRelayHitsPeer* p = hits_Peer(slot);
     if (in->bad || !p)
         return;
     p->waitUntil = hits_Now() + waitMs;
+    p->bWaitMoment = isfinite(from);
+    p->waitFrom = p->bWaitMoment ? from : 0.0;
+    p->waitTo = p->bWaitMoment ? from + waitMs : 0.0;
 }
 
 // This game's copy of a shot, if it's still flying here.
@@ -1093,14 +1295,61 @@ int stdComm_WSRelay_ShotStart(SithThing* pShooter, int guid, const rdVector3* pS
     return 1;
 }
 
+// ---- The record, and motion.
+
+void stdComm_WSRelay_RecordOwn(double t)
+{
+    SithThing* pLocal = sithPlayer_g_pLocalPlayerThing;
+    if (!pLocal || !stdComm_WSRelay_InMatch())
+        return;
+
+    // A new level: nothing from the last one applies.
+    if (hits_pWorld != sithWorld_g_pCurrentWorld)
+    {
+        hits_pWorld = sithWorld_g_pCurrentWorld;
+        stdComm_WSRelayHit_ClearRecord(&hits_record);
+        stdComm_WSRelayHit_ClearSeen(&hits_seen);
+        stdComm_WSRelayHit_ClearSeen(&hits_claimed);
+        memset(hits_aBlasts, 0, sizeof(hits_aBlasts));
+        hits_life++;
+        hits_bWasAlive = 0;
+        hits_recordAt = -1.0;
+    }
+
+    // To the ms, as this game's timed updates name it.
+    t = floor(t + 0.5);
+    if (t <= hits_recordAt)
+        return;
+    hits_recordAt = t;
+
+    // Each death starts a new life.
+    int bAlive = hits_IsAlive(pLocal);
+    if (hits_bWasAlive && !bAlive)
+        hits_life++;
+    hits_bWasAlive = bAlive;
+    stdComm_WSRelayHit_Record(&hits_record, t, hits_Vec(&pLocal->position), hits_life, bAlive);
+}
+
+int stdComm_WSRelay_MotionWith(int slot)
+{
+    WSRelayHitsPeer* p = hits_Peer(slot);
+    return p && p->version >= 2 && hits_ClaimsTo(p);
+}
+
 // ---- Each frame, and each message.
+
+// The hello version this game says: 1 in MotS (see the top).
+static int hits_Version(void)
+{
+    return Main_bMotsCompat ? 1 : HITS_VERSION;
+}
 
 static void hits_SendHello(WSRelayHitsPeer* p, double now)
 {
     uint8_t body[8];
     WSRelayHitsOut o = { body, 0 };
     hits_PutU8(&o, HITS_HELLO);
-    hits_PutU8(&o, HITS_VERSION);
+    hits_PutU8(&o, hits_Version());
     hits_PutU8(&o, (stdComm_bIsServer ? HITS_HELLO_HOST : 0) | (p->bHello ? HITS_HELLO_HEARD : 0));
     hits_PutU8(&o, hits_rules);
     hits_PutU16(&o, hits_reachMs);
@@ -1122,6 +1371,8 @@ static void hits_TakeHello(int fromNetId, int slot, WSRelayHitsIn* in)
 
     int bFirst = !p->bHello;
     p->bHello = 1;
+    // The lower of the two: both games have to read what the other sends.
+    p->version = version < hits_Version() ? version : hits_Version();
     p->bHeardMe = !!(flags & HITS_HELLO_HEARD);
     p->rules = (rules == STDCOMM_WSRELAY_HITS_HWYS) ? STDCOMM_WSRELAY_HITS_HWYS : STDCOMM_WSRELAY_HITS_CLASSIC;
 
@@ -1174,26 +1425,8 @@ void stdComm_WSRelay_HitsFrame()
         return;
     }
     double now = hits_Now();
-
-    // A new level: nothing from the last one applies.
-    if (hits_pWorld != sithWorld_g_pCurrentWorld)
-    {
-        hits_pWorld = sithWorld_g_pCurrentWorld;
-        stdComm_WSRelayHit_ClearRecord(&hits_record);
-        stdComm_WSRelayHit_ClearSeen(&hits_seen);
-        stdComm_WSRelayHit_ClearSeen(&hits_claimed);
-        memset(hits_aBlasts, 0, sizeof(hits_aBlasts));
-        hits_life++;
-        hits_bWasAlive = 0;
-    }
-
-    // Each death starts a new life.
     SithThing* pLocal = sithPlayer_g_pLocalPlayerThing;
-    int bAlive = hits_IsAlive(pLocal);
-    if (hits_bWasAlive && !bAlive)
-        hits_life++;
-    hits_bWasAlive = bAlive;
-    stdComm_WSRelayHit_Record(&hits_record, now, hits_Vec(&pLocal->position), hits_life, bAlive);
+    stdComm_WSRelay_RecordOwn(stdComm_WSRelay_MotionNow());
 
     // A swing this frame: its fire wait, which its cog has set by now.
     uint32_t swing = stdComm_WSRelay_GetSwing(pLocal);
@@ -1203,11 +1436,12 @@ void stdComm_WSRelay_HitsFrame()
         if (hits_Live())
         {
             double waitMs = ((double)sithWeapon_fireWait - (double)sithTime_g_secGameTime) * 1000.0;
-            uint8_t body[4];
+            uint8_t body[12];
             WSRelayHitsOut o = { body, 0 };
             hits_PutU8(&o, HITS_WAIT);
             hits_PutU8(&o, 0);
             hits_PutU16(&o, waitMs <= 0.0 ? 0 : waitMs > 65535.0 ? 65535 : (uint32_t)waitMs);
+            hits_PutF64(&o, stdComm_WSRelay_OwnSwingAt());
             hits_Queue(-1, body, o.n);
         }
     }

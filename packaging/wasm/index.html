@@ -5599,11 +5599,16 @@
       //     byGame: { jk1: { online: 3, lobby: ['DarkJedi_7'] }, mots: { online: 5, lobby: ['Dash_R'] } },
       //     games: [{ id: 3, name: 'No mods dueling', game: 'jk1', map: '01narshadda.jkl',
       //               episode: 'JK1MP.gob', mod: '', locked: false, players: 2, max: 4,
-      //               names: ['Kyle_K', 'MaraJade'] }] }
-      // id is the lobby's room number, names start with the host's, and online
-      // counts everyone with the game running, in a game or not. Names are
-      // typed by players, so they only ever go into the page as text.
+      //               names: ['Kyle_K', 'MaraJade'], net: 0 }] }
+      // id is the lobby's room number, names start with the host's, online
+      // counts everyone with the game running, in a game or not, and net is
+      // the netcode the game's host speaks. Names are typed by players, so
+      // they only ever go into the page as text.
 
+      // The netcode this page's game speaks (STDCOMM_WSRELAY_NETCODE in
+      // stdComm_WSRelay.h, which this has to match). The lobby only lets it
+      // join games whose host speaks the same, so the others have no Join.
+      var NETCODE = 0;
       var ROOM_MAX_NAMES = 4;   // names on a table before "+N more"
       var ROOM_MAX_SEATS = 32;  // seat dots drawn around a table's button (the game's limit)
       var ROOMS = {
@@ -5644,7 +5649,8 @@
         }).map(function(g) {
           return { id: num(g.id), name: str(g.name, 32), game: g.game === 'mots' ? 'mots' : 'jk1',
                    map: str(g.map, 64), episode: str(g.episode, 64), mod: str(g.mod, 64),
-                   locked: !!g.locked, players: num(g.players), max: num(g.max), names: names(g.names) };
+                   locked: !!g.locked, players: num(g.players), max: num(g.max), names: names(g.names),
+                   net: num(g.net) };
         });
         var lobby = names(s.lobby);
         var by = s.byGame && typeof s.byGame === 'object' ? s.byGame : {};
@@ -5702,6 +5708,11 @@
 
       function isFull(g) { return g.max > 0 && g.players >= g.max; }
 
+      // 'newer' or 'older' for a game whose host speaks another netcode than
+      // this page's game, which can't join it; null for one it can.
+      function otherVersion(g) { return g.net === NETCODE ? null : g.net > NETCODE ? 'newer' : 'older'; }
+      var VERSION_STATE = { newer: 'Newer version: reload this page', older: 'Older version' };
+
       // The dots around a table's button: one per seat, filled when taken.
       // Past 8 seats they're smaller and spread over the whole open side of
       // the ring, and past 16 they go all the way around it, from the top.
@@ -5724,6 +5735,7 @@
         var li = el('li', 'table');
         var no = gameNumber(i);
         var full = isFull(g);
+        var other = otherVersion(g);
         var head = el('div', 'table-head');
         var line = el('div', 'table-line');
         line.append(el('b', 'table-no', no));
@@ -5758,9 +5770,10 @@
         seatDots(ring, g.players, g.max);
         var button = el('button', 'round');
         button.type = 'button';
-        if (full) {
+        if (full || other) {
           button.disabled = true;
-          button.setAttribute('aria-label', no + ' is full');
+          button.setAttribute('aria-label', no + (other ? ' runs ' + (other === 'older' ? 'an older' : 'a newer') +
+                                                          ' version' : ' is full'));
         } else {
           button.append(el('span', null, 'Join'));
           button.setAttribute('aria-label', 'Join ' + no);
@@ -5773,8 +5786,9 @@
         li.append(body);
 
         var open = g.max - g.players;
-        li.append(el('p', 'table-state' + (full ? ' full' : ''),
-                     full ? 'Game Is Full' : (g.max ? plural(open, 'seat open', 'seats open') : '')));
+        li.append(el('p', 'table-state' + (full || other ? ' full' : ''),
+                     other ? VERSION_STATE[other] : full ? 'Game Is Full' :
+                     (g.max ? plural(open, 'seat open', 'seats open') : '')));
         return li;
       }
 
@@ -5845,7 +5859,9 @@
           if (g.locked) name.insertAdjacentHTML('beforeend', ' ' + LOCK_SVG);
           var names = g.names.filter(Boolean);
           var action = el('td');
-          if (isFull(g)) {
+          if (otherVersion(g)) {
+            action.textContent = VERSION_STATE[otherVersion(g)];
+          } else if (isFull(g)) {
             action.textContent = 'Full';
           } else {
             var b = el('button', 'zone-button', 'Join');
@@ -5995,7 +6011,7 @@
         var s = roomStatus(lobbyLive.status, lobbyLive.room);
         var best = null, bestIndex = -1;
         (s ? s.games : []).forEach(function(g, i) {
-          if (!isFull(g) && !g.locked && (!best || g.players > best.players)) { best = g; bestIndex = i; }
+          if (!isFull(g) && !g.locked && !otherVersion(g) && (!best || g.players > best.players)) { best = g; bestIndex = i; }
         });
         return best ? { id: best.id, label: gameNumber(bestIndex) } : null;
       }

@@ -127,6 +127,7 @@
 #include "jk.h"
 
 #include <emscripten.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -162,10 +163,10 @@ extern int Main_bVerboseNetworking;
 // Asyncify has it unwound.
 EM_JS_DEPS(stdComm_WSRelay, "$UTF8ToString,$stringToUTF8,$lengthBytesUTF8");
 
-EM_JS(void, wsrelay_js_connect, (), {
+EM_JS(void, wsrelay_js_connect, (int netcode), {
     var net = Module.jkNet;
     if (!net) {
-        net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null,
+        net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null, netcode: netcode,
                                stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0,
                                         fastSent: 0, fastRecv: 0, fastOld: 0, fastBacklog: 0 },
                                log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
@@ -807,10 +808,11 @@ EM_JS(void, wsrelay_js_connect, (), {
            next one is never more than a tick away and replaces it. Only
            those: DSS_THINGPOS (1) sent without resends (msgId 0), 52 or 64
            bytes long, which only a player's is (sithDSSThing_Pos adds the
-           head pitch for players). Direct links get them all. */
+           head pitch for players), or 60 or 72 with its time
+           (stdComm_WSRelayMotion.c). Direct links get them all. */
         net.skipRelayedPos = function(bytes) {
-            var n = bytes.byteLength;
-            if (n !== 8 + 4 + 52 && n !== 8 + 4 + 64) return false;
+            var n = bytes.byteLength, body = n - 8 - 4;
+            if (body !== 52 && body !== 64 && body !== 60 && body !== 72) return false;
             var dv = new DataView(bytes.buffer, bytes.byteOffset, n);
             if (dv.getUint16(8, true) !== 1 || dv.getUint16(10, true) !== 0) return false;
             var key = dv.getUint32(4, true) + ' ' + dv.getInt32(12, true);
@@ -1161,6 +1163,9 @@ EM_JS(void, wsrelay_js_connect, (), {
             var url = Module['jkRelayUrl'];
             if (!url && typeof location !== 'undefined')
                 url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
+            /* The netcode this build speaks (STDCOMM_WSRELAY_NETCODE): the
+               lobby only lists and joins games whose host speaks the same. */
+            if (url) url += (url.indexOf('?') < 0 ? '?' : '&') + 'net=' + net.netcode;
             if (!keepQueue) net.queue = [];
             net.lobbyCan = [];
             net.state = 0;
@@ -1428,6 +1433,23 @@ EM_JS(void, wsrelay_js_net_hit, (int otherId, int mine, int kind, int outcome, f
     if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance);
 });
 
+// How player otherId was drawn from their buffer over the last second
+// (stdComm_WSRelay_NoteMotion).
+EM_JS(void, wsrelay_js_net_motion, (int otherId, double bufferMs, int steps, int carried, int held, int jumps, int warps, int restarts), {
+    if (Module.jkNetStats && Module.jkNetStats.motion)
+        Module.jkNetStats.motion(otherId, { buffer: bufferMs, steps: steps, carried: carried, held: held, jumps: jumps, warps: warps, restarts: restarts });
+});
+
+// Whether this game needs player otherId's clock (stdComm_WSRelay_SyncClock),
+// and their clock less this one's, NaN if unknown.
+EM_JS(void, wsrelay_js_net_sync, (int otherId, int on), {
+    if (Module.jkNetStats && Module.jkNetStats.sync) Module.jkNetStats.sync(otherId, !!on);
+});
+
+EM_JS(double, wsrelay_js_net_clock, (int otherId), {
+    return Module.jkNetStats && Module.jkNetStats.clockOffset ? Module.jkNetStats.clockOffset(otherId) : NaN;
+});
+
 // When this game sent player `to` its position update numbered seq
 // (net.nextSeq), or -1 if it no longer knows.
 EM_JS(double, wsrelay_js_seq_sent_at, (int to, uint32_t seq), {
@@ -1478,6 +1500,8 @@ static int wsrelay_bJoined = 0;       // the host welcomed us into its room
 static int wsrelay_bHostLeft = 0;      // the relay says the host left
 static int wsrelay_bSeatLost = 0;      // the relay wouldn't give our seat back
 static uint32_t wsrelay_msecRelayLost = 0; // when the relay went in a game, 0 while it's up
+// Why the relay turned our join down: 1 for no room or anything else, 2
+// full, 3 and 4 its host speaks a newer or an older netcode.
 static int wsrelay_joinError = 0;
 static int wsrelay_room = -1;
 static uint32_t wsrelay_id = 0xFFFFFFFF;
@@ -1493,6 +1517,8 @@ static uint32_t wsrelay_msecNamesSent = 0;
 // last turned on for, by player slot, and the last number this game gave.
 static uint32_t wsrelay_aSwing[JKPLAYER_NUM_INFOS];
 static uint32_t wsrelay_lastSwing = 0;
+// When this game's own player last swung, on the motion clock.
+static double wsrelay_ownSwingAt = 0.0;
 int stdComm_WSRelay_fireGuid = 0;
 
 // A host's players the relay says left while their data channel is still up.
@@ -1642,6 +1668,7 @@ static void wsrelay_ResetSession()
     wsrelay_msecNamesSent = 0;
     memset(wsrelay_aSwing, 0, sizeof(wsrelay_aSwing));
     stdComm_WSRelay_ResetHits();
+    stdComm_WSRelay_ResetMotion();
     wsrelay_js_rtc_end();
     wsrelay_js_map_unhost();
     wsrelay_js_mod_unhost();
@@ -1975,9 +2002,17 @@ static void wsrelay_HandleText(char* pText)
     else if (!strcmp(pOp, "error"))
     {
         char* pCode = strtok_r(NULL, " ", &pSave);
-        stdPlatform_Printf("OpenJKDF2: Relay error: %s\n", pCode ? pCode : "?");
+        char* pDetail = strtok_r(NULL, " ", &pSave);
+        stdPlatform_Printf("OpenJKDF2: Relay error: %s%s%s\n", pCode ? pCode : "?", pDetail ? " " : "", pDetail ? pDetail : "");
         if (wsrelay_bJoining)
-            wsrelay_joinError = (pCode && !strcmp(pCode, "full")) ? 2 : 1;
+        {
+            if (pCode && !strcmp(pCode, "full"))
+                wsrelay_joinError = 2;
+            else if (pCode && !strcmp(pCode, "version"))
+                wsrelay_joinError = (pDetail && !strcmp(pDetail, "older")) ? 4 : 3;
+            else
+                wsrelay_joinError = 1;
+        }
         if (wsrelay_bHostPending)
             wsrelay_bHostPending = 0;
         // Our seat wasn't held (or not by this relay), so it can't reach
@@ -2069,7 +2104,7 @@ static int wsrelay_EnsureOpen(int timeoutMs)
     if (wsrelay_js_state() == WSRELAY_STATE_OPEN)
         return 1;
 
-    wsrelay_js_connect();
+    wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
     uint32_t until = stdPlatform_GetTimeMsec() + timeoutMs;
     while (stdPlatform_GetTimeMsec() < until)
     {
@@ -2117,7 +2152,7 @@ void stdComm_WSRelay_Startup()
     // Counted in the landing page's live counts from the start, not only once
     // the player opens the Join screen.
     wsrelay_js_presence(jkPlayer_playerShortName, &Main_bMotsCompat);
-    wsrelay_js_connect();
+    wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
 }
 
 void stdComm_WSRelay_Shutdown()
@@ -2184,6 +2219,17 @@ double stdComm_WSRelay_Now()
     return wsrelay_js_now();
 }
 
+void stdComm_WSRelay_SyncClock(int netId, int bOn)
+{
+    if (netId)
+        wsrelay_js_net_sync(netId, bOn);
+}
+
+double stdComm_WSRelay_ClockOffset(int netId)
+{
+    return netId ? wsrelay_js_net_clock(netId) : NAN;
+}
+
 int stdComm_WSRelay_InMatch()
 {
     if ((!wsrelay_bHosting && !wsrelay_bJoined) || !sithNet_isMulti || !sithWorld_g_pCurrentWorld || !sithPlayer_g_pLocalPlayerThing)
@@ -2237,6 +2283,13 @@ void stdComm_WSRelay_NewSwing(SithThing* pPlayer)
     if (!++wsrelay_lastSwing)
         wsrelay_lastSwing = 1;
     wsrelay_aSwing[slot] = wsrelay_lastSwing;
+    if (pPlayer == sithPlayer_g_pLocalPlayerThing)
+        wsrelay_ownSwingAt = stdComm_WSRelay_MotionNow();
+}
+
+double stdComm_WSRelay_OwnSwingAt()
+{
+    return wsrelay_ownSwingAt;
 }
 
 void stdComm_WSRelay_SetSwing(SithThing* pPlayer, uint32_t swing)
@@ -2259,6 +2312,17 @@ uint32_t stdComm_WSRelay_GetSwing(SithThing* pPlayer)
 #define WSRELAY_HITFLAG_BY_MESSAGE (1)
 #define WSRELAY_HITFLAG_BY_CLAIM (2)
 #define WSRELAY_HITFLAG_DECIDED (4)
+// A claim that named the moment the target was drawn at, and one whose
+// moment was further back than the reach (STDCOMM_WSRELAY_MOMENT_*).
+#define WSRELAY_HITFLAG_MOMENT (8)
+#define WSRELAY_HITFLAG_PAST_REACH (16)
+
+static int wsrelay_MomentFlags(int moment)
+{
+    if (moment == STDCOMM_WSRELAY_MOMENT_PAST_REACH)
+        return WSRELAY_HITFLAG_MOMENT | WSRELAY_HITFLAG_PAST_REACH;
+    return moment == STDCOMM_WSRELAY_MOMENT_AT ? WSRELAY_HITFLAG_MOMENT : 0;
+}
 
 int stdComm_WSRelay_HitKind(SithThing* pSource, int damageType)
 {
@@ -2299,11 +2363,17 @@ void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThi
     if (!otherId)
         return;
 
+    // A targeted Force power this game checked is in the ledger already
+    // (stdComm_WSRelay_ForceTakes), not the damage it does.
+    if (!mine && stdComm_WSRelay_ApplyingForce())
+        return;
+
     int flags = 0;
     int claimKind = 0;
     uint32_t claimAttack = 0;
     float distance = -1.0f;
-    int bApplying = stdComm_WSRelay_ApplyingClaim(&claimKind, &claimAttack, &distance);
+    int claimMoment = STDCOMM_WSRELAY_MOMENT_NONE;
+    int bApplying = stdComm_WSRelay_ApplyingClaim(&claimKind, &claimAttack, &distance, &claimMoment);
     if (!mine && !bApplying && stdComm_WSRelay_DecidedElsewhere(pSource, damageType))
     {
         // Hit what you see: the attacker's game decides this one, and its
@@ -2348,17 +2418,33 @@ void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThi
     {
         kind = claimKind;
         attack = claimAttack;
-        flags = WSRELAY_HITFLAG_BY_CLAIM;
+        flags = WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(claimMoment);
     }
 
     wsrelay_js_net_hit(otherId, mine, kind, outcome, (float)damage, flags, attack, 0, distance);
 }
 
-void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance)
+void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance, int moment)
 {
     if (!wsrelay_bNetLive || !otherId)
         return;
-    wsrelay_js_net_hit(otherId, 0, kind, outcome, (float)damage, WSRELAY_HITFLAG_BY_CLAIM, attack, reason, distance);
+    wsrelay_js_net_hit(otherId, 0, kind, outcome, (float)damage, WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), attack, reason, distance);
+}
+
+void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float distance, int moment)
+{
+    if (!wsrelay_bNetLive || !otherId)
+        return;
+    wsrelay_js_net_hit(otherId, 0, STDCOMM_WSRELAY_KIND_FORCE, outcome, 0.0f,
+                       WSRELAY_HITFLAG_BY_MESSAGE | WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), 0, reason, distance);
+}
+
+void stdComm_WSRelay_NoteMotion(int otherId, double bufferMs, uint32_t steps, uint32_t carried, uint32_t held,
+                                uint32_t jumps, uint32_t warps, uint32_t restarts)
+{
+    if (!wsrelay_bNetLive || !otherId)
+        return;
+    wsrelay_js_net_motion(otherId, bufferMs, (int)steps, (int)carried, (int)held, (int)jumps, (int)warps, (int)restarts);
 }
 
 int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
@@ -2439,12 +2525,13 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
 // This player's own position update, which sithMulti_CheckPlayers sends to
 // each player about 50 times a second: DSS_THINGPOS for its own thing without
 // a resend id, 52 or 64 bytes (sithDSSThing_Pos adds the head pitch for
-// players). Positions of other things, and those a cog sends with a resend
-// id (a teleport), stay on the reliable channel.
+// players), or 60 or 72 with its time (stdComm_WSRelayMotion.c). Positions of
+// other things, and those a cog sends with a resend id (a teleport), stay on
+// the reliable channel.
 static int wsrelay_IsOwnPosition(const void* pData, uint32_t size)
 {
     const uint8_t* p = (const uint8_t*)pData;
-    if (size != 4 + 52 && size != 4 + 64)
+    if (size != 4 + 52 && size != 4 + 64 && size != 4 + 60 && size != 4 + 72)
         return 0;
     if (*(const uint16_t*)&p[0] != DSS_THINGPOS || *(const uint16_t*)&p[2] != 0)
         return 0;
@@ -2538,6 +2625,8 @@ int stdComm_Open(int idx, char16_t* pwPassword)
         int err = wsrelay_joinError;
         wsrelay_SendText("leave");
         wsrelay_ResetSession();
+        if (err == 3 || err == 4)
+            return (err == 3) ? STDCOMM_WSRELAY_NEWER : STDCOMM_WSRELAY_OLDER;
         return (err == 2) ? 0x8877014A : 0x80004005; // GUINET_GAMEFULL / GUINET_NOGAMECONNECT
     }
 
@@ -2719,7 +2808,7 @@ int stdComm_EnumSessions(int a, void* b)
     if (wsrelay_js_state() != WSRELAY_STATE_OPEN)
     {
         // Don't block the menu on a connect; the next poll picks it up.
-        wsrelay_js_connect();
+        wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
     }
     else
     {

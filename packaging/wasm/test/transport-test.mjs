@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 const read = path => readFileSync(new URL('../../../' + path, import.meta.url), 'utf8');
 const relayC = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.c');
 const netstatsJs = read('packaging/wasm/netstats.js');
+// The netcode this build speaks, which the engine hands wsrelay_js_connect.
+const NETCODE = Number(/#define STDCOMM_WSRELAY_NETCODE \((\d+)\)/.exec(read('src/Platform/Networking/WSRelay/stdComm_WSRelay.h'))[1]);
 
 // The EM_JS functions: name -> { params, body }. Each starts on a line of its
 // own and ends with a line that is just "});".
@@ -346,10 +348,11 @@ function makeRtc(world, game) {
 // ---- Games.
 
 // A game with this file's JavaScript and netstats.js, as openjkdf2.js has
-// them, whose player is id in room 1. old: a window with ?netold.
-function makeGame(world, { id, old = false, netsim } = {}) {
+// them, whose player is id in room 1. old: a window with ?netold. relayUrl:
+// the lobby's address, as the page gives it.
+function makeGame(world, { id, old = false, netsim, relayUrl = 'ws://lobby/relay' } = {}) {
     const game = { id, pcs: [], log: [], queue: null };
-    const Module = { jkRelayUrl: 'ws://lobby/relay' };
+    const Module = { jkRelayUrl: relayUrl };
     if (old) Module.jkNetOld = true;
     if (netsim) Module.jkNetSim = netsim;
     new Function('Module', 'setInterval', netstatsJs)(Module, () => 0);
@@ -376,7 +379,7 @@ function makeGame(world, { id, old = false, netsim } = {}) {
     }
     game.Module = Module;
     game.mem = env.HEAPU8;
-    game.js.wsrelay_js_connect();
+    game.js.wsrelay_js_connect(NETCODE);
     game.net = Module.jkNet;
     world.games.push(game);
     return game;
@@ -591,6 +594,32 @@ test('a fast lane update reaches the engine with its number, and its sender know
     for (let i = 0; i < 256; i++) send(two, 3, position(10 + i), true);
     assert.equal(two.js.wsrelay_js_seq_sent_at(3, c.seq), -1);
     assert.ok(two.js.wsrelay_js_seq_sent_at(3, c.seq + 1) > 0);
+});
+
+test('through the relay, a player\'s updates go to each player at most every 200 ms, with their time or without', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host, join] = await room(world, [2]);
+    // One thing per size: 52 and 64 bytes as before, 60 and 72 with the
+    // time Hit what you see adds (stdComm_WSRelayMotion.c).
+    const sizes = [52, 64, 60, 72];
+    for (let i = 0; i < 50; i++) {
+        sizes.forEach((size, guid) => {
+            const body = new Uint8Array(4 + size);
+            const view = new DataView(body.buffer);
+            view.setUint16(0, 1, true);
+            view.setUint32(4, guid, true);
+            send(join, 1, body, true);
+        });
+        await world.run(20);
+    }
+    await world.run(500);
+    const got = received(host).filter(m => m.msg === 1);
+    sizes.forEach((size, guid) => {
+        const n = got.filter(m => m.n === guid && m.bytes.byteLength === 8 + 4 + size).length;
+        assert.ok(n >= 5 && n <= 6, size + ' bytes: ' + n + ' of 50 in 1 s');
+    });
+    assert.equal(join.net.stats.wsSent + join.net.stats.wsSkipped, 200);
 });
 
 test('behind a backlog, an update is dropped rather than sent late', async () => {
@@ -1086,6 +1115,24 @@ test('a joiner whose relay goes while it waits for its host\'s switch takes what
     join.net.ws.drop();
     assert.ok(p.gotSwitch && !p.held.length);
     stop();
+});
+
+test('a game tells the lobby its build\'s netcode in the address, after what the address has, also when it reconnects', async () => {
+    const world = makeWorld();
+    const game = makeGame(world, { id: 2 });
+    assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE);
+    await world.run(5);
+    game.net.ws.drop();
+    game.js.wsrelay_js_connect(NETCODE);
+    assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE);
+    const other = makeGame(world, { id: 3, relayUrl: 'ws://lobby/relay?x=1' });
+    assert.equal(other.net.ws.url, 'ws://lobby/relay?x=1&net=' + NETCODE);
+});
+
+test('the landing page offers Join for the games of the netcode its game speaks', async () => {
+    const page = /\n      var NETCODE = (\d+);\n/.exec(read('packaging/wasm/index.html'));
+    assert.ok(page, 'index.html has NETCODE');
+    assert.equal(Number(page[1]), NETCODE);
 });
 
 test('the lobby\'s list of what it can do stays out of the engine\'s queue', async () => {

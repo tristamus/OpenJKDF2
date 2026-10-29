@@ -292,6 +292,13 @@ LABEL_14:
                 else
                 {
 LABEL_22:
+#ifdef PLATFORM_WSRELAY
+                    // Added: Hit what you see: another player's swing,
+                    // animation and sound messages wait until this game
+                    // draws them at the moment they were sent.
+                    if ( stdComm_WSRelay_HoldForTimeline(&sithComm_netMsgTmp) )
+                        goto LABEL_25;
+#endif
                     if ( v2 < (unsigned int)DSS_MAX )
                     {
                         if ( sithMessage_aTypeFuncs[v2] )

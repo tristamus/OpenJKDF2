@@ -273,6 +273,16 @@ void sithThing_Update(flex_t secDeltaTime, int msecDeltaTime)
             }
             if ( sithThing_pfUnknownFunc && pThingIter->jkFlags )
                 sithThing_pfUnknownFunc(pThingIter);
+#ifdef PLATFORM_WSRELAY
+            // Added: Hit what you see: another player drawn from their timed
+            // updates moves only as those say (stdComm_WSRelayMotion.c), so
+            // nothing here steers or blocks them.
+            if ( pThingIter->type == SITH_THING_PLAYER && sithNet_isMulti && stdComm_WSRelay_MotionDrawn(pThingIter) )
+            {
+                sithPuppet_UpdatePuppet(pThingIter, secDeltaTime);
+                continue;
+            }
+#endif
             if ( pThingIter->moveType == SITH_MT_PHYSICS )
             {
                 // CPU optimization testing
