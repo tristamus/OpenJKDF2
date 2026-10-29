@@ -370,6 +370,11 @@ test('a mod saved from an earlier game is used again without asking the host', a
     assert.equal(await waitMod(first), STATE_RESTART);
     const path = first.jkMods.restart();
     await settle(100); // saving happens after the restart is ready
+    // As a Blob, which Chromium keeps at any size, where it refuses a record
+    // holding over 127 MiB itself.
+    const saved = [...idb.dbs.get('jkdf2mp-mods').stores.get('data').data.values()];
+    assert.equal(saved.length, 1);
+    assert.ok(saved[0] instanceof Blob);
 
     // Next visit: a new tab in the same browser.
     const again = await makeTab({ files: { ...retailInstall }, idb });
@@ -385,6 +390,30 @@ test('a mod saved from an earlier game is used again without asking the host', a
     assert.equal(picked.jkMods.current().fp, host.jkMods.current().fp);
     assert.equal(picked.jkMods.current().name, 'SBX');
     assert.deepEqual(filesUnder(picked, '/jk1/' + path)['cog/sabers.cog'], Buffer.from(sabers));
+});
+
+test('a mod saved as bytes, before mods were saved as Blobs, is still used', async () => {
+    const idb = makeIDB();
+    const host = await sbxHost();
+    const first = await makeTab({ files: { ...retailInstall }, idb });
+    connect(host, first);
+    host.jkMods.host();
+    await settle();
+    first.jkMods.fetch(tailOf(host));
+    assert.equal(await waitMod(first), STATE_RESTART);
+    const path = first.jkMods.restart();
+    await settle(100);
+    const data = idb.dbs.get('jkdf2mp-mods').stores.get('data').data;
+    for (const [k, v] of data)
+        data.set(k, new Uint8Array(await v.arrayBuffer()));
+
+    const again = await makeTab({ files: { ...retailInstall }, idb });
+    const link = connect(host, again);
+    again.jkMods.fetch(tailOf(host));
+    assert.equal(await waitMod(again), STATE_RESTART);
+    assert.equal(again.jkMods.restart(), path);
+    assert.equal(link.log.length, 0);
+    assert.deepEqual(filesUnder(again, '/jk1/' + path)['cog/sabers.cog'], Buffer.from(sabers));
 });
 
 test('a joiner missing the original files the mod needs is told so, and nothing is set up', async () => {

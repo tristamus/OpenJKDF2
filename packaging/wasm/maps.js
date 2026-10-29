@@ -613,7 +613,10 @@
 
     // ---- Downloads kept in IndexedDB, one database per kind: "meta" holds
     // small records to list and evict by, "data" the files themselves, under
-    // the same key.
+    // the same key. A file goes in as a Blob: Chromium refuses a record
+    // whose own bytes are over 127 MiB (133169152), so a mod like SBX-JK
+    // Continuum (305 MiB) wasn't kept, but it keeps a Blob's bytes beside the
+    // record. Files saved before as bytes still read.
 
     function makeStore(dbName, maxBytes) {
         var dbPromise = null;
@@ -656,6 +659,11 @@
             return game + '/' + name.toLowerCase() + '/' + sha;
         }
 
+        // A file's bytes as saved: an ArrayBuffer from a Blob, or the bytes.
+        function bytesOf(data) {
+            return typeof Blob !== 'undefined' && data instanceof Blob ? data.arrayBuffer() : data;
+        }
+
         async function list(game) {
             var db = await open();
             if (!db)
@@ -677,7 +685,7 @@
                 tx.objectStore('meta').put(meta);
             }
             await done(tx);
-            return meta && data ? { meta: meta, data: data } : null;
+            return meta && data ? { meta: meta, data: await bytesOf(data) } : null;
         }
 
         function get(game, name, sha) {
@@ -698,7 +706,8 @@
             var db = await open();
             if (!db)
                 return null;
-            return request(db.transaction('data').objectStore('data').get(k));
+            var data = await request(db.transaction('data').objectStore('data').get(k));
+            return data ? bytesOf(data) : data;
         }
 
         async function put(game, name, ext, sha, bytes) {
@@ -707,7 +716,7 @@
                 return;
             var k = key(game, name, sha);
             var tx = db.transaction(['meta', 'data'], 'readwrite');
-            tx.objectStore('data').put(bytes, k);
+            tx.objectStore('data').put(new Blob([bytes]), k);
             tx.objectStore('meta').put({ key: k, game: game, name: name, ext: ext, sha256: sha,
                                          size: bytes.length, used: Date.now() });
             await done(tx);
