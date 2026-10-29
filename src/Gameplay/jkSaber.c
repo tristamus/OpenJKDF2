@@ -16,8 +16,10 @@
 #include "Engine/sithCollision.h"
 #include "Main/jkSmack.h"
 #include "General/stdString.h"
+#include "General/util.h"
 #include "Engine/rdMaterial.h"
 #include "Win95/stdDisplay.h"
+#include "stdPlatform.h"
 #ifdef PLATFORM_WSRELAY
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
 #endif
@@ -224,9 +226,47 @@ static void jkSaber_CalcGlowColor(jkPlayerInfo* saberinfo, const char* material_
     rdVector_Set3(pOut, 1.0, 1.0, 1.0);
 }
 
+// Added: whether a saber material is in this game's files, in the folders
+// sithMaterial_Load looks in (mat, then 3do\mat).
+static int jkSaber_MaterialExists(const char* pName)
+{
+    char fpath[128];
+
+    if (!pName || !pName[0])
+        return 0;
+    stdString_snprintf(fpath, sizeof(fpath), "mat%c%s", '\\', pName);
+    if (util_FileExists(fpath))
+        return 1;
+    stdString_snprintf(fpath, sizeof(fpath), "3do%cmat%c%s", '\\', '\\', pName);
+    return util_FileExists(fpath);
+}
+
+// Added: a saber whose materials this game doesn't have gets the standard
+// green blade, instead of the gray and yellow "missing texture" (dflt.mat).
+// A multiplayer character keeps the saber it was made with, so one made with
+// a mod (SBX-JK Continuum names its sabers' materials after hashes, in
+// 3do\mat) shows that blade in every game without the mod. Mods that hide the
+// blade (SBX) blank the standard green one, so it stays hidden there.
+static void jkSaber_FallBackIfMissing(char **ppSide, char **ppTip)
+{
+    static char aDefaultSide[] = "sabergreen1.mat";
+    static char aDefaultTip[] = "sabergreen0.mat";
+
+    if ( jkSaber_MaterialExists(*ppSide) && jkSaber_MaterialExists(*ppTip) )
+        return;
+    if ( !jkSaber_MaterialExists(aDefaultSide) || !jkSaber_MaterialExists(aDefaultTip) )
+        return;
+    stdPlatform_Printf("OpenJKDF2: saber materials %s and %s aren't in this game's files, using %s and %s\n",
+                       *ppSide ? *ppSide : "(none)", *ppTip ? *ppTip : "(none)", aDefaultSide, aDefaultTip);
+    *ppSide = aDefaultSide;
+    *ppTip = aDefaultTip;
+}
+
 void jkSaber_InitializeSaberInfo(SithThing *thing, char *material_side_fname, char *material_tip_fname, flex_t base_rad, flex_t tip_rad, flex_t len, SithThing *wall_sparks, SithThing *blood_sparks, SithThing *saber_sparks)
 {
     if (!thing) return; // Added: Fix nullptr deref in Mots cutscenes
+
+    jkSaber_FallBackIfMissing(&material_side_fname, &material_tip_fname); // Added
 
     flex_t length = 0.0;
     jkPlayerInfo* saberinfo = thing->playerInfo;
