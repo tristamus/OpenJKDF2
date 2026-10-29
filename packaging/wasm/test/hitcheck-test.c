@@ -333,6 +333,134 @@ static void test_strafe(void)
     CHECK(v.result == WSRELAYHIT_NOT_THERE, "400 ms late, 300 ms reach: %d %f", v.result, v.distance);
 }
 
+// The window a claim that names the moment r it drew the target at is
+// checked in, from the times the claim gives as the hit ledger
+// (stdComm_WSRelayHits.c) sends them: ms from the update before r, and to
+// the one after (none when tAfter < 0), checked 150 ms later with 300 ms of
+// reach.
+static void momentWindow(double r, double tBefore, double tAfter, double* pFrom, double* pTo)
+{
+    double after = tAfter < 0.0 ? -1.0 : ceil(tAfter - r);
+    int result = stdComm_WSRelayHit_MomentWindow(r + 150.0, 300.0, r, ceil(r - tBefore), after, pFrom, pTo);
+    CHECK(result == WSRELAYHIT_OK, "window at %f: %d", r, result);
+}
+
+// The attacker's game draws the strafing target from its timed updates,
+// sent every third 150 Hz step, and names the moment it drew them at. The
+// target's game checks only between the two updates that moment fell
+// between, on its record of every step: each hit at the moment passes, and
+// a place the target was 200 ms from it doesn't, though the window by the
+// reach would take it.
+static void test_moment(void)
+{
+    stdComm_WSRelayHit_ClearRecord(&record);
+    for (int step = 0; step <= 1500; step++)
+    {
+        double t = floor(step * 1000.0 / 150.0 + 0.5);
+        stdComm_WSRelayHit_Record(&record, t, vec(strafeX(t), 0, 0), 1, 1);
+    }
+
+    int passed = 0, total = 0;
+    double worst = 0.0;
+    for (double r = 8500.0; r < 9700.0; r += 7.0)
+    {
+        double tBefore = 20.0 * floor(r / 20.0), tAfter = tBefore + 20.0;
+        float x = strafeX(tBefore) + (strafeX(tAfter) - strafeX(tBefore)) * (float)((r - tBefore) / 20.0);
+        WSRelayHitClaim c = saberClaim(vec(x, 0, 0), vec(x, 0.2f, 0), 50.0f);
+        WSRelayHitAttack a = swing(vec(x, 0.2f, 0));
+        double from, to;
+        momentWindow(r, tBefore, tAfter, &from, &to);
+        WSRelayHitVerdict v = stdComm_WSRelayHit_CheckIn(&record, 1, 1, &c, &a, r + 150.0, from, to);
+        total++;
+        if (v.result == WSRELAYHIT_OK)
+            passed++;
+        if (v.distance > worst)
+            worst = v.distance;
+    }
+    CHECK(passed == total && worst < 0.01, "at the moment: %d of %d passed, %f JKU off at most", passed, total, worst);
+
+    // Shown where they were 200 ms before the moment, 0.3 JKU back along
+    // their path, and 0.28 from where they were 1 ms before the update
+    // before it. The window by the reach, from 300 ms before the claim,
+    // takes it.
+    double r = 9450.0, now = r + 150.0, from, to;
+    WSRelayHitClaim c = saberClaim(vec(strafeX(r - 200.0), 0, 0), vec(strafeX(r - 200.0), 0.2f, 0), 50.0f);
+    WSRelayHitAttack a = swing(vec(strafeX(r - 200.0), 0.2f, 0));
+    momentWindow(r, 9440.0, 9460.0, &from, &to);
+    WSRelayHitVerdict v = stdComm_WSRelayHit_CheckIn(&record, 1, 1, &c, &a, now, from, to);
+    CHECK(v.result == WSRELAYHIT_NOT_THERE && near(v.distance, 0.2835, 0.001), "200 ms from the moment: %d %f", v.result, v.distance);
+    v = stdComm_WSRelayHit_Check(&record, 1, 1, &c, &a, now, stdComm_WSRelayHit_WindowFrom(now, 300.0, -1.0));
+    CHECK(v.result == WSRELAYHIT_OK, "the same by the reach: %d %f", v.result, v.distance);
+
+    // Carried on 60 ms past the newest update along its velocity.
+    r = 9460.0;
+    float x = strafeX(9400.0) - 1.5f * 0.06f;
+    c = saberClaim(vec(x, 0, 0), vec(x, 0.2f, 0), 50.0f);
+    a = swing(vec(x, 0.2f, 0));
+    momentWindow(r, 9400.0, -1.0, &from, &to);
+    CHECK(near(from, 9399.0, 1e-9) && near(to, 9461.0, 1e-9), "carried: window %f to %f", from, to);
+    v = stdComm_WSRelayHit_CheckIn(&record, 1, 1, &c, &a, r + 150.0, from, to);
+    CHECK(v.result == WSRELAYHIT_OK && v.distance < 0.01f, "carried 60 ms: %d %f", v.result, v.distance);
+
+    // Died and came back since, or the record no longer goes back that far.
+    v = stdComm_WSRelayHit_CheckIn(&record, 2, 1, &c, &a, r + 150.0, from, to);
+    CHECK(v.result == WSRELAYHIT_LATE, "new life: %d", v.result);
+    momentWindow(5000.0, 4980.0, 5000.0, &from, &to);
+    v = stdComm_WSRelayHit_CheckIn(&record, 1, 1, &c, &a, 5150.0, from, to);
+    CHECK(v.result == WSRELAYHIT_LATE, "older than the record: %d", v.result);
+}
+
+// How old a moment can be: no further back than the reach, and never ahead
+// of this game's clock. One further back is checked as a claim without a
+// moment (stdComm_WSRelayHits.c), anywhere in the reach: a player who stood
+// still since is hit there, one who ran on isn't.
+static void test_moment_reach(void)
+{
+    double from = 0.0, to = 0.0;
+    int result = stdComm_WSRelayHit_MomentWindow(5000.0, 300.0, 4800.0, 12.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_OK && near(from, 4787.0, 1e-9) && near(to, 4809.0, 1e-9), "200 ms old: %d %f %f", result, from, to);
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 300.0, 4800.0, 12.0, -1.0, &from, &to);
+    CHECK(result == WSRELAYHIT_OK && near(to, 4801.0, 1e-9), "carried on: to the moment: %d %f", result, to);
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 300.0, 4700.0, 12.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_OK, "300 ms old: %d", result);
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 300.0, 4699.0, 12.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_LATE, "301 ms old: %d", result);
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 500.0, 4600.0, 12.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_OK, "400 ms old, 500 ms reach: %d", result);
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 150.0, 4800.0, 12.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_LATE, "200 ms old, 150 ms reach: %d", result);
+
+    // Ahead of this game's clock, or nonsense.
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 300.0, 5040.0, 12.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_OK, "40 ms ahead: %d", result);
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 300.0, 5060.0, 12.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_BAD, "60 ms ahead: %d", result);
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 300.0, NAN, 12.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_BAD, "NaN: %d", result);
+    result = stdComm_WSRelayHit_MomentWindow(5000.0, 300.0, 4800.0, -1.0, 8.0, &from, &to);
+    CHECK(result == WSRELAYHIT_BAD, "update before after the moment: %d", result);
+
+    // 450 ms old at the moment, then checked in the reach: 0.225 JKU from
+    // the nearest place the strafing player was in it.
+    double r = 8500.0, now = 8950.0;
+    result = stdComm_WSRelayHit_MomentWindow(now, 300.0, r, 7.0, 13.0, &from, &to);
+    CHECK(result == WSRELAYHIT_LATE, "450 ms old: %d", result);
+    stdComm_WSRelayHit_ClearRecord(&record);
+    for (double t = 8000.0; t <= now; t += 1000.0 / 150.0)
+        stdComm_WSRelayHit_Record(&record, floor(t + 0.5), vec(10.0f, 0, 0), 1, 1);
+    WSRelayHitClaim c = saberClaim(vec(10.0f, 0, 0), vec(10.0f, 0.2f, 0), 50.0f);
+    WSRelayHitAttack a = swing(vec(10.0f, 0.2f, 0));
+    WSRelayHitVerdict v = stdComm_WSRelayHit_Check(&record, 1, 1, &c, &a, now, stdComm_WSRelayHit_WindowFrom(now, 300.0, -1.0));
+    CHECK(v.result == WSRELAYHIT_OK && v.distance < 0.001f, "stood still since: %d %f", v.result, v.distance);
+    stdComm_WSRelayHit_ClearRecord(&record);
+    for (double t = 8000.0; t <= now; t += 1000.0 / 150.0)
+        stdComm_WSRelayHit_Record(&record, floor(t + 0.5), vec(strafeX(floor(t + 0.5)), 0, 0), 1, 1);
+    c = saberClaim(vec(strafeX(r), 0, 0), vec(strafeX(r), 0.2f, 0), 50.0f);
+    a = swing(vec(strafeX(r), 0.2f, 0));
+    v = stdComm_WSRelayHit_Check(&record, 1, 1, &c, &a, now, stdComm_WSRelayHit_WindowFrom(now, 300.0, -1.0));
+    CHECK(v.result == WSRELAYHIT_NOT_THERE && near(v.distance, 0.225, 0.002), "ran on since: %d %f", v.result, v.distance);
+}
+
 static void test_seen(void)
 {
     WSRelayHitSeen seen;
@@ -357,6 +485,8 @@ int main(void)
     test_check_saber();
     test_check_shots();
     test_strafe();
+    test_moment();
+    test_moment_reach();
     test_seen();
     printf("%d of %d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;

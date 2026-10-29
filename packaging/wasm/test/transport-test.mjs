@@ -591,6 +591,32 @@ test('a fast lane update reaches the engine with its number, and its sender know
     assert.ok(two.js.wsrelay_js_seq_sent_at(3, c.seq + 1) > 0);
 });
 
+test('through the relay, a player\'s updates go to each player at most every 200 ms, with their time or without', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host, join] = await room(world, [2]);
+    // One thing per size: 52 and 64 bytes as before, 60 and 72 with the
+    // time Hit what you see adds (stdComm_WSRelayMotion.c).
+    const sizes = [52, 64, 60, 72];
+    for (let i = 0; i < 50; i++) {
+        sizes.forEach((size, guid) => {
+            const body = new Uint8Array(4 + size);
+            const view = new DataView(body.buffer);
+            view.setUint16(0, 1, true);
+            view.setUint32(4, guid, true);
+            send(join, 1, body, true);
+        });
+        await world.run(20);
+    }
+    await world.run(500);
+    const got = received(host).filter(m => m.msg === 1);
+    sizes.forEach((size, guid) => {
+        const n = got.filter(m => m.n === guid && m.bytes.byteLength === 8 + 4 + size).length;
+        assert.ok(n >= 5 && n <= 6, size + ' bytes: ' + n + ' of 50 in 1 s');
+    });
+    assert.equal(join.net.stats.wsSent + join.net.stats.wsSkipped, 200);
+});
+
 test('behind a backlog, an update is dropped rather than sent late', async () => {
     const world = makeWorld();
     const [host, join] = await room(world, [2]);

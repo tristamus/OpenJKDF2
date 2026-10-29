@@ -116,12 +116,35 @@ typedef struct WSRelayHitVerdict
 // WSRELAYHIT_UPDATE_SLACK_MS, and never more than reachMs back.
 double stdComm_WSRelayHit_WindowFrom(double now, double reachMs, double tSent);
 
-// Checks a claim against the record. The player is in their life `life`,
-// alive or not (aliveNow). Whether the attack already counted is the caller's
-// to say (stdComm_WSRelayHit_Seen).
+// Checks a claim against the record, between windowFrom and now. The player
+// is in their life `life`, alive or not (aliveNow). Whether the attack
+// already counted is the caller's to say (stdComm_WSRelayHit_Seen).
 WSRelayHitVerdict stdComm_WSRelayHit_Check(const WSRelayHitRecord* pRecord, uint32_t life, int aliveNow,
                                            const WSRelayHitClaim* pClaim, const WSRelayHitAttack* pAttack,
                                            double now, double windowFrom);
+
+// As Check, between windowFrom and windowTo: a claim that names the moment
+// the attacker's game drew the player at, checked between the player's
+// updates it drew them from.
+WSRelayHitVerdict stdComm_WSRelayHit_CheckIn(const WSRelayHitRecord* pRecord, uint32_t life, int aliveNow,
+                                             const WSRelayHitClaim* pClaim, const WSRelayHitAttack* pAttack,
+                                             double now, double windowFrom, double windowTo);
+
+// A claim that names a moment: the attacker's game drew the player at r (on
+// the player's game's clock, as now is), between the player's updates
+// beforeMs before it and afterMs after it (< 0: none, it carried them on
+// past the newest). The window to check (CheckIn) is from the update before
+// to the one after, or to r, with WSRELAYHIT_MOMENT_SLACK_MS either side for
+// rounding.
+//
+// WSRELAYHIT_OK; WSRELAYHIT_LATE when r is further back than the reach,
+// which the caller checks as a claim without a moment, never further back
+// than the reach (WindowFrom); or WSRELAYHIT_BAD (r ahead of now by more
+// than WSRELAYHIT_MOMENT_AHEAD_MS, or nonsense).
+#define WSRELAYHIT_MOMENT_SLACK_MS (1.0)
+#define WSRELAYHIT_MOMENT_AHEAD_MS (50.0)
+int stdComm_WSRelayHit_MomentWindow(double now, double reachMs, double r, double beforeMs, double afterMs,
+                                    double* pFrom, double* pTo);
 
 // Attacks that already counted on this player, by attacker, kind and number,
 // for 5 s.

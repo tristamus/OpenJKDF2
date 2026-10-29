@@ -344,6 +344,13 @@ int sithUpdate()
 
             //printf("%f %u %f %f\n",framesToApply, wholeFramesToApply, rolloverCombine, sithTime_physicsRolloverFrames);
 
+#ifdef PLATFORM_WSRELAY
+            // Added: Hit what you see: the time each step stands for
+            // (stdComm_WSRelayMotion.c).
+            if ( sithNet_isMulti )
+                stdComm_WSRelay_MotionFrame(wholeFramesToApply);
+#endif
+
             for (int i = 0; i < wholeFramesToApply; i++)
             {
                 sithSoundMixer_Update(sithTime_g_frameTimeFlex);
@@ -361,6 +368,12 @@ int sithUpdate()
                 //{
                 //    sithControl_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
                 //}
+#ifdef PLATFORM_WSRELAY
+                // Added: Hit what you see: other players drawn from their
+                // timed updates, where they were at this step's moment.
+                if ( sithNet_isMulti )
+                    stdComm_WSRelay_MotionStep();
+#endif
                 sithThing_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
                 sithThing_MotsTick(0x1F, 0, 0);
 

@@ -152,6 +152,13 @@ WSRelayHitVerdict stdComm_WSRelayHit_Check(const WSRelayHitRecord* pRecord, uint
                                            const WSRelayHitClaim* pClaim, const WSRelayHitAttack* pAttack,
                                            double now, double windowFrom)
 {
+    return stdComm_WSRelayHit_CheckIn(pRecord, life, aliveNow, pClaim, pAttack, now, windowFrom, now);
+}
+
+WSRelayHitVerdict stdComm_WSRelayHit_CheckIn(const WSRelayHitRecord* pRecord, uint32_t life, int aliveNow,
+                                             const WSRelayHitClaim* pClaim, const WSRelayHitAttack* pAttack,
+                                             double now, double windowFrom, double windowTo)
+{
     WSRelayHitVerdict v;
     v.result = WSRELAYHIT_OK;
     v.damage = pClaim->damage;
@@ -209,7 +216,7 @@ WSRelayHitVerdict stdComm_WSRelayHit_Check(const WSRelayHitRecord* pRecord, uint
     }
 
     // Was the player there, as the attacker's game showed them?
-    v.distance = stdComm_WSRelayHit_Closest(pRecord, windowFrom, now, life, pClaim->target, &v.at);
+    v.distance = stdComm_WSRelayHit_Closest(pRecord, windowFrom, windowTo, life, pClaim->target, &v.at);
     if (v.distance < 0.0f)
     {
         v.result = WSRELAYHIT_LATE;
@@ -224,6 +231,18 @@ WSRelayHitVerdict stdComm_WSRelayHit_Check(const WSRelayHitRecord* pRecord, uint
     if (pAttack->maxDamage > 0.0f && v.damage > pAttack->maxDamage)
         v.damage = pAttack->maxDamage;
     return v;
+}
+
+int stdComm_WSRelayHit_MomentWindow(double now, double reachMs, double r, double beforeMs, double afterMs,
+                                    double* pFrom, double* pTo)
+{
+    if (!isfinite(r) || !isfinite(beforeMs) || !isfinite(afterMs) || beforeMs < 0.0 || r > now + WSRELAYHIT_MOMENT_AHEAD_MS)
+        return WSRELAYHIT_BAD;
+    if (now - r > reachMs)
+        return WSRELAYHIT_LATE;
+    *pFrom = r - beforeMs - WSRELAYHIT_MOMENT_SLACK_MS;
+    *pTo = (afterMs < 0.0 ? r : r + afterMs) + WSRELAYHIT_MOMENT_SLACK_MS;
+    return WSRELAYHIT_OK;
 }
 
 void stdComm_WSRelayHit_ClearSeen(WSRelayHitSeen* pSeen)
