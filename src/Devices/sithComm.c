@@ -301,6 +301,16 @@ LABEL_22:
                             sithComm_msgInProgress = 0; // Added
                         }
                     }
+#ifdef PLATFORM_WSRELAY
+                    // Added: Hit what you see's own messages, which older
+                    // games ignore.
+                    else if ( v2 == STDCOMM_WSRELAY_HITS_MSG )
+                    {
+                        sithComm_msgInProgress = v2;
+                        stdComm_WSRelay_ProcessHits(&sithComm_netMsgTmp);
+                        sithComm_msgInProgress = 0;
+                    }
+#endif
                 }
                 goto LABEL_25;
             }

@@ -13,15 +13,19 @@
 //   - how steadily their position updates arrive: how many a second, how
 //     uneven the gaps between them are, how many gaps are 100 ms or more, and
 //     the longest;
-//   - a hit ledger. Another player's game decides whether a hit on them
-//     counts; this game only shows its effects. So each game sends the
-//     attacker a receipt for each hit it decides on its own player (counted,
-//     blocked, or the player was already dead there), and the attacker
-//     matches the receipts with the hits it showed: by the attack's number
-//     where both games know it (each saber swing and each shot has one), else
-//     the next one of that kind in time. A hit with no receipt missed there.
-//     A receipt for a hit this game never showed landed there without
-//     showing here.
+//   - a hit ledger. Under the Classic rules another player's game decides
+//     whether a hit on them counts; this game only shows its effects. So
+//     each game sends the attacker a receipt for each hit it decides on its
+//     own player (counted, blocked, or the player was already dead there),
+//     and the attacker matches the receipts with the hits it showed: by the
+//     attack's number where both games know it (each saber swing and each
+//     shot has one), else the next one of that kind in time. A hit with no
+//     receipt missed there. A receipt for a hit this game never showed
+//     landed there without showing here. Under Hit what you see, the
+//     attacker's game claims the hits it showed (stdComm_WSRelayHits.c), and
+//     the receipt says whether the victim's game counted the claim or turned
+//     it down, why, and how far its player was from where the claim showed
+//     them. Blocks the attacker's game decides are final, with no receipt.
 // The page's ?netstats panel (index.html) shows them, and the network log gets
 // a line every 10 s in a game.
 //
@@ -42,7 +46,9 @@
 // byte, a version byte and two zero bytes:
 //   PING     seq u32, sent f64
 //   PONG     seq u32, sent f64 (the ping's), got f64 (the other game's clock)
-//   RECEIPT  kind u8, outcome u8, flags u8, 0, damage f32, at f64, attack u32
+//   RECEIPT  kind u8, outcome u8, flags u8, why u8 (a turned down claim's
+//            reason), damage f32, at f64, attack u32, distance f32 (from where
+//            a claim showed the player, -1 if not checked)
 // Only a window with ?netstats in its address (Module.jkNetMeasure) pings,
 // so in other games this file only answers pings and sends receipts. It pings
 // the players its engine says are in the match (name), once its own player is
@@ -74,8 +80,15 @@
 
     // Kinds and outcomes, as stdComm_WSRelay_NoteHit sends them.
     var KINDS = ['', 'saber', 'shot', 'splash', 'Force', 'other'];
-    var O_HIT = 1, O_BLOCK = 2, O_DEAD = 3;
+    var O_HIT = 1, O_BLOCK = 2, O_DEAD = 3, O_TURNED_DOWN = 4;
     var F_BY_MESSAGE = 1;       // decided by a message from the attacker (targeted Force)
+    var F_BY_CLAIM = 2;         // a claim from the attacker's game, counted or turned down
+    var F_DECIDED = 4;          // this game's block, which is final
+    // Why a claim was turned down (stdComm_WSRelayHitCheck.h's WSRELAYHIT_*).
+    var WHY = ['', 'dead', 'not there', 'too late', 'unknown attack', 'out of reach', 'already counted', 'bad numbers',
+               'not playing by claims'];
+    var WHY_REPEAT = 6;
+    var KEEP_DISTANCES = 200;
 
     var clock = {
         now: function() { return performance.now(); },
@@ -223,19 +236,42 @@
     function tallyOf(p, kind) {
         return p.tally[kind] || (p.tally[kind] = {
             // Hits shown here, by what their game said.
-            counted: 0, blockedThere: 0, deadThere: 0, missedHit: 0,
-            // Blocks shown here, by what their game said.
-            blockAgreed: 0, hitThere: 0, missedBlock: 0,
+            counted: 0, blockedThere: 0, deadThere: 0, missedHit: 0, turnedDown: 0,
+            // Blocks shown here, by what their game said, and the ones this
+            // game decided.
+            blockAgreed: 0, hitThere: 0, missedBlock: 0, blockDecided: 0,
             // Receipts for hits this game never showed.
             notShown: 0, blockNotShown: 0, deadNotShown: 0,
             byMessage: 0,
+            // Claims their game had counted already.
+            repeats: 0,
+            // Claims, why each turned down one was, and how far their player
+            // was from where each showed them.
+            claims: 0, why: {}, distances: [], turnedDownDistances: [],
             // How much later their game decided than this one showed, in ms.
             lags: []
         });
     }
 
     function takenOf(p, kind) {
-        return p.taken[kind] || (p.taken[kind] = { hit: 0, block: 0, dead: 0, byMessage: 0 });
+        return p.taken[kind] || (p.taken[kind] = {
+            hit: 0, block: 0, dead: 0, byMessage: 0, turnedDown: 0,
+            claims: 0, why: {}, distances: [], turnedDownDistances: []
+        });
+    }
+
+    // A claim's numbers, in tally or taken c.
+    function noteClaim(c, outcome, why, distance) {
+        c.claims++;
+        if (outcome === O_TURNED_DOWN) {
+            var words = WHY[why] || 'other';
+            c.why[words] = (c.why[words] || 0) + 1;
+        }
+        if (distance >= 0) {
+            var list = outcome === O_TURNED_DOWN ? c.turnedDownDistances : c.distances;
+            list.push(distance);
+            if (list.length > KEEP_DISTANCES) list.shift();
+        }
     }
 
     // ---- Frames.
@@ -339,7 +375,8 @@
             gotPong(p, path === 'ns' ? p.ns : p.game, view);
         } else if (type === T_RECEIPT && data.byteLength >= HEADER + 16) {
             gotReceipt(p, view.getUint8(16), view.getUint8(17), view.getUint8(18), view.getFloat64(24, true),
-                       data.byteLength >= HEADER + 20 ? view.getUint32(32, true) : 0);
+                       data.byteLength >= HEADER + 20 ? view.getUint32(32, true) : 0, view.getUint8(19),
+                       data.byteLength >= HEADER + 24 ? view.getFloat32(36, true) : -1);
         }
     }
 
@@ -400,8 +437,10 @@
     function settle(p, kind, shown, receipt) {
         var c = tallyOf(p, kind);
         if (receipt.outcome === O_DEAD) c.deadThere++;
+        else if (receipt.outcome === O_TURNED_DOWN) c.turnedDown++;
         else if (shown.outcome === O_BLOCK) c[receipt.outcome === O_BLOCK ? 'blockAgreed' : 'hitThere']++;
         else c[receipt.outcome === O_BLOCK ? 'blockedThere' : 'counted']++;
+        if (receipt.flags & F_BY_CLAIM) noteClaim(c, receipt.outcome, receipt.why, receipt.distance);
         var offset = offsetOf(p);
         if (offset !== null) {
             c.lags.push(receipt.at - offset - shown.t);
@@ -417,14 +456,21 @@
         else p.shown.push(shown);
     }
 
-    function gotReceipt(p, kind, outcome, flags, at, attack) {
-        if (!KINDS[kind] || outcome < O_HIT || outcome > O_DEAD) return;
+    function gotReceipt(p, kind, outcome, flags, at, attack, why, distance) {
+        if (!KINDS[kind] || outcome < O_HIT || outcome > O_TURNED_DOWN) return;
         if (flags & F_BY_MESSAGE) {
             tallyOf(p, kind).byMessage++;
             return;
         }
+        // Their game had counted that attack already, by its own rules, and
+        // that receipt took the hit shown here.
+        if (outcome === O_TURNED_DOWN && why === WHY_REPEAT) {
+            tallyOf(p, kind).repeats++;
+            return;
+        }
         var t = clock.now();
-        var receipt = { kind: kind, outcome: outcome, attack: attack, at: at, t: t };
+        var receipt = { kind: kind, outcome: outcome, attack: attack, at: at, t: t, flags: flags,
+                        why: why || 0, distance: distance === undefined ? -1 : distance };
         var shown = takeMatch(p.shown, kind, attack, t - windowMs(p));
         if (shown) settle(p, kind, shown, receipt);
         else p.receipts.push(receipt);
@@ -443,40 +489,54 @@
                 c = tallyOf(p, r.kind);
                 if (r.outcome === O_HIT) c.notShown++;
                 else if (r.outcome === O_BLOCK) c.blockNotShown++;
+                else if (r.outcome === O_TURNED_DOWN) c.turnedDown++;
                 else c.deadNotShown++;
+                if (r.flags & F_BY_CLAIM) noteClaim(c, r.outcome, r.why, r.distance);
             }
         }
     }
 
-    function sendReceipt(p, kind, outcome, damage, flags, attack) {
-        var f = frame(T_RECEIPT, p.id, 20);
+    function sendReceipt(p, kind, outcome, damage, flags, attack, why, distance) {
+        var f = frame(T_RECEIPT, p.id, 24);
         f.view.setUint8(16, kind);
         f.view.setUint8(17, outcome);
         f.view.setUint8(18, flags);
+        f.view.setUint8(19, why);
         f.view.setFloat32(20, damage, true);
         f.view.setFloat64(24, clock.now(), true);
         f.view.setUint32(32, attack, true);
+        f.view.setFloat32(36, distance, true);
         sendGame(p.id, f.buf);
     }
 
     // From the engine: a hit between this game's player and player otherId.
     // mine: this player's hit, shown here; else a hit on this player, which
-    // this game decided. byMessage: decided by a message from the attacker's
-    // game rather than here (a targeted Force power), or passed on from
-    // another game. attack: the saber swing's or the shot's number, the same
-    // in both games, or 0.
-    function hit(otherId, mine, kind, outcome, damage, byMessage, attack) {
+    // this game decided. flags: F_BY_MESSAGE, decided by a message from the
+    // attacker's game rather than here (a targeted Force power), or passed on
+    // from another game; F_BY_CLAIM, the attacker's game claimed it, and
+    // this game counted it or turned it down (O_TURNED_DOWN, or O_DEAD) for
+    // reason why, with its player distance JKU from where the claim showed
+    // them (-1 if not checked); F_DECIDED, this game's block on the other
+    // player, which is final. attack: the saber swing's or the shot's number,
+    // the same in both games, or 0.
+    function hit(otherId, mine, kind, outcome, damage, flags, attack, why, distance) {
         if (!me.live || !otherId || otherId === me.id || !KINDS[kind]) return;
         var p = player(otherId);
+        flags = flags | 0;
         attack = attack >>> 0;
+        why = why | 0;
+        if (distance === undefined || distance === null || !(distance >= 0)) distance = -1;
         if (mine) {
-            if (!byMessage) shownHere(p, kind, outcome, attack);
+            if (flags & F_DECIDED) tallyOf(p, kind).blockDecided++;
+            else if (!(flags & F_BY_MESSAGE)) shownHere(p, kind, outcome, attack);
             return;
         }
         var c = takenOf(p, kind);
-        if (byMessage) c.byMessage++;
+        if (flags & F_BY_MESSAGE) c.byMessage++;
+        else if (outcome === O_TURNED_DOWN) c.turnedDown++;
         else c[outcome === O_BLOCK ? 'block' : outcome === O_DEAD ? 'dead' : 'hit']++;
-        sendReceipt(p, kind, outcome, damage, byMessage ? F_BY_MESSAGE : 0, attack);
+        if (flags & F_BY_CLAIM) noteClaim(c, outcome, why, distance);
+        sendReceipt(p, kind, outcome, damage, flags & (F_BY_MESSAGE|F_BY_CLAIM), attack, why, distance);
     }
 
     // ---- Each tick: pings, the route each link takes, and the log line.
@@ -543,6 +603,14 @@
         var s = list.slice().sort(function(a, b) { return a - b; });
         var m = s.length >> 1;
         return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    }
+
+    // The middle, nine in ten and the most of a list, or null.
+    function spread(list) {
+        if (!list || !list.length) return null;
+        var s = list.slice().sort(function(a, b) { return a - b; });
+        return { median: median(s), p90: s[Math.min(s.length - 1, Math.ceil(s.length * 0.9) - 1)], most: s[s.length - 1],
+                 of: s.length };
     }
 
     // How much each ping time differs from the one before, on average.
@@ -619,10 +687,13 @@
                 var p = players[id];
                 var hits = Object.keys(p.tally).map(Number).sort().map(function(kind) {
                     var c = p.tally[kind];
-                    return { kind: KINDS[kind], c: c, lag: median(c.lags) };
+                    return { kind: KINDS[kind], c: c, lag: median(c.lags), distance: spread(c.distances),
+                             turnedDownDistance: spread(c.turnedDownDistances) };
                 });
                 var taken = Object.keys(p.taken).map(Number).sort().map(function(kind) {
-                    return { kind: KINDS[kind], c: p.taken[kind] };
+                    var c = p.taken[kind];
+                    return { kind: KINDS[kind], c: c, distance: spread(c.distances),
+                             turnedDownDistance: spread(c.turnedDownDistances) };
                 });
                 return {
                     id: id, name: names[id] || '', path: pathOf(p), route: p.route,
@@ -648,8 +719,8 @@
                     id: row.id, name: row.name, ping: row.ping,
                     hits: row.hits.map(function(h) {
                         var c = {};
-                        for (var k in h.c) if (k !== 'lags') c[k] = h.c[k];
-                        return { kind: h.kind, c: c, lag: h.lag };
+                        for (var k in h.c) if (k !== 'lags' && k !== 'distances' && k !== 'turnedDownDistances') c[k] = h.c[k];
+                        return { kind: h.kind, c: c, lag: h.lag, distance: h.distance, turnedDownDistance: h.turnedDownDistance };
                     }),
                     taken: row.taken
                 };
@@ -664,10 +735,20 @@
     function pct(v) { return Math.round(v * 1000) / 10 + '%'; }
 
     function agreement(c) {
-        var agree = c.counted + c.blockAgreed;
-        var all = agree + c.blockedThere + c.deadThere + c.missedHit + c.hitThere + c.missedBlock +
+        var agree = c.counted + c.blockAgreed + c.blockDecided;
+        var all = agree + c.blockedThere + c.deadThere + c.missedHit + c.turnedDown + c.hitThere + c.missedBlock +
                   c.notShown + c.blockNotShown;
         return { agree: agree, of: all };
+    }
+
+    function whyWords(why) {
+        return Object.keys(why).sort().map(function(k) { return k + ' ' + why[k]; }).join(', ');
+    }
+
+    function jku(v) { return (Math.round(v * 100) / 100).toFixed(2); }
+
+    function spreadWords(s) {
+        return s ? 'median ' + jku(s.median) + ', 90% ' + jku(s.p90) + ', most ' + jku(s.most) : '';
     }
 
     function who(row) {
@@ -675,26 +756,39 @@
     }
 
     function hitWords(c) {
-        var shown = c.counted + c.blockedThere + c.missedHit + c.deadThere;
+        var shown = c.counted + c.blockedThere + c.missedHit + c.deadThere + c.turnedDown;
         var parts = [];
         if (shown) {
             var s = shown + ' hit' + (shown === 1 ? '' : 's') + ' shown: ' + c.counted + ' counted';
             if (c.blockedThere) s += ', ' + c.blockedThere + ' blocked there';
+            if (c.turnedDown) s += ', ' + c.turnedDown + ' turned down there (' + whyWords(c.why) + ')';
             if (c.missedHit) s += ', ' + c.missedHit + ' missed there';
             if (c.deadThere) s += ', ' + c.deadThere + ' already dead there';
             parts.push(s);
         }
-        var blocks = c.blockAgreed + c.hitThere + c.missedBlock;
+        var blocks = c.blockAgreed + c.hitThere + c.missedBlock + c.blockDecided;
         if (blocks) {
-            parts.push(blocks + ' block' + (blocks === 1 ? '' : 's') + ' shown: ' + c.blockAgreed + ' blocked there' +
-                       (c.hitThere ? ', ' + c.hitThere + ' counted there' : '') +
-                       (c.missedBlock ? ', ' + c.missedBlock + ' missed there' : ''));
+            var b = [];
+            if (c.blockDecided) b.push(c.blockDecided + ' decided here');
+            if (c.blockAgreed || c.hitThere || c.missedBlock) b.push(c.blockAgreed + ' blocked there');
+            if (c.hitThere) b.push(c.hitThere + ' counted there');
+            if (c.missedBlock) b.push(c.missedBlock + ' missed there');
+            parts.push(blocks + ' block' + (blocks === 1 ? '' : 's') + ' shown: ' + b.join(', '));
         }
         if (c.notShown || c.blockNotShown)
             parts.push((c.notShown + c.blockNotShown) + ' landed there without showing here' +
                        (c.blockNotShown ? ' (' + c.blockNotShown + ' blocked)' : ''));
+        if (c.repeats) parts.push(c.repeats + ' claimed after counting there');
         if (c.byMessage) parts.push(c.byMessage + ' targeted');
         return parts.join('; ');
+    }
+
+    // How far the player was from where the claims showed them.
+    function distanceWords(h) {
+        var parts = [];
+        if (h.distance) parts.push('counted ' + spreadWords(h.distance));
+        if (h.turnedDownDistance) parts.push('turned down ' + spreadWords(h.turnedDownDistance));
+        return parts.length ? 'off by ' + parts.join('; ') : '';
     }
 
     function lagWords(s) { return s ? '+' + s.rtt + ' ms' : 'no lag'; }
@@ -759,18 +853,22 @@
                 var a = agreement(h.c);
                 var words = hitWords(h.c);
                 if (!words) return;
+                var off = distanceWords(h);
                 out.push('  your ' + h.kind + ': ' + words +
                          (a.of ? ' | agree ' + pct(a.agree / a.of) + ' of ' + a.of : '') +
+                         (h.c.claims ? ' | ' + h.c.claims + ' claimed' + (off ? ', ' + off : '') : '') +
                          (h.lag !== null ? ' | decided ' + ms(h.lag) + ' after you' : ''));
             });
-            var taken = row.taken.filter(function(x) { return x.c.hit || x.c.block || x.c.dead || x.c.byMessage; })
+            var taken = row.taken.filter(function(x) { return x.c.hit || x.c.block || x.c.dead || x.c.byMessage || x.c.turnedDown; })
                 .map(function(x) {
                     var c = x.c, bits = [];
                     if (c.hit) bits.push(c.hit + ' counted');
+                    if (c.turnedDown) bits.push(c.turnedDown + ' turned down (' + whyWords(c.why) + ')');
                     if (c.block) bits.push(c.block + ' blocked');
                     if (c.dead) bits.push(c.dead + ' after you died');
                     if (c.byMessage) bits.push(c.byMessage + ' targeted');
-                    return x.kind + ' ' + bits.join(', ');
+                    var off = distanceWords(x);
+                    return x.kind + ' ' + bits.join(', ') + (c.claims ? ' (' + c.claims + ' claimed' + (off ? ', ' + off : '') + ')' : '');
                 });
             if (taken.length) out.push('  their hits on you: ' + taken.join('; '));
         });
@@ -783,8 +881,10 @@
             var u = row.updates;
             var hits = row.hits.map(function(h) {
                 var a = agreement(h.c);
-                return h.kind + ' ' + h.c.counted + '/' + (h.c.counted + h.c.blockedThere + h.c.missedHit + h.c.deadThere) +
-                       ' counted, agree ' + a.agree + '/' + a.of;
+                return h.kind + ' ' + h.c.counted + '/' + (h.c.counted + h.c.blockedThere + h.c.missedHit + h.c.deadThere + h.c.turnedDown) +
+                       ' counted, agree ' + a.agree + '/' + a.of +
+                       (h.c.turnedDown ? ', turned down ' + whyWords(h.c.why) : '') +
+                       (h.distance ? ', off by ' + spreadWords(h.distance) : '');
             });
             return 'player ' + row.id + ' ' + row.path + ' ping ' + ms(row.ping) + ' jitter ' + ms(row.jitter) +
                    (row.loss ? ' loss ' + pct(row.loss.share) + '/' + row.loss.of : '') +
@@ -833,8 +933,10 @@
         lib: {
             clock: clock, parseSim: parseSim, setSim: setSim,
             isFrame: isFrame, isPosition: isPosition, median: median, jitterOf: jitterOf,
-            updatesOf: updatesOf, tick: tick, players: function() { return players; },
-            O_HIT: O_HIT, O_BLOCK: O_BLOCK, O_DEAD: O_DEAD, T_PING: T_PING, T_PONG: T_PONG, T_RECEIPT: T_RECEIPT
+            updatesOf: updatesOf, spread: spread, tick: tick, players: function() { return players; },
+            O_HIT: O_HIT, O_BLOCK: O_BLOCK, O_DEAD: O_DEAD, O_TURNED_DOWN: O_TURNED_DOWN,
+            F_BY_MESSAGE: F_BY_MESSAGE, F_BY_CLAIM: F_BY_CLAIM, F_DECIDED: F_DECIDED,
+            T_PING: T_PING, T_PONG: T_PONG, T_RECEIPT: T_RECEIPT
         },
         // stdComm_WSRelay.c's transport.
         inbound: inbound,

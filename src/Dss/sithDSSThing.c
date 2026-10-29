@@ -118,6 +118,11 @@ int sithDSSThing_ProcessPos(SithMessage *pMsg)
         rdVector_Zero3(&lookTmp);
         lookTmp.x = NETMSG_POPF32();
         sithActor_SetHeadPYR(pThing, &lookTmp);
+#ifdef PLATFORM_WSRELAY
+        // Added: Hit what you see: which of this player's updates this game
+        // shows now, which a claim for a hit on them names.
+        stdComm_WSRelay_NotePos(pThing, pMsg->netMsg.idx);
+#endif
     }
 
     return 1;
@@ -640,15 +645,53 @@ void sithDSSThing_Fire(SithThing *pWeapon, SithThing *pProjectile, rdVector3 *pF
     NETMSG_PUSHS32(thingId);
 
     if (idk == 0 || !Main_bMotsCompat) {
+#ifdef PLATFORM_WSRELAY
+        // Added: where the shooter was, at the end, where older games don't
+        // look (sithDSSThing_ProcessFire).
+        NETMSG_PUSHVEC3(pWeapon->position);
+#endif
         NETMSG_END(DSS_FIREPROJECTILE);
     }
     else if (Main_bMotsCompat) {
         NETMSG_PUSHS32(idk);
+#ifdef PLATFORM_WSRELAY
+        NETMSG_PUSHVEC3(pWeapon->position); // Added: as above
+#endif
         NETMSG_END(DSS_MOTS_NEW_2);
     }
 
     sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, sendtoId, mpFlags, 0);
+
+#ifdef PLATFORM_WSRELAY
+    // Added: Hit what you see: claims for what the shot hit as it was made go
+    // after it.
+    stdComm_WSRelay_FlushHits();
+#endif
 }
+
+#ifdef PLATFORM_WSRELAY
+// Added: another game's shot, made here by sithDSSThing_ProcessFire or
+// sithDSSThing_ProcessMOTSNew2 from its fire message. Hit what you see: it
+// starts where its shooter was (the message says, past what older games
+// send), it goes by that game's id from the start, and this game keeps what
+// it needs to check the claims for what it hits.
+static SithThing* sithDSSThing_FireOthersShot(const rdVector3 *pShooterPos, SithThing *pShooter, SithThing *pTemplate,
+                                              rdVector3 *pFireDir, rdVector3 *pFirePos, sithSound *pSound, int anim,
+                                              flex32_t scale, int16_t scaleFlags, flex32_t a9, int thingId, int idk)
+{
+    sithWeapon_pFireStartSector = NULL;
+    if ( pShooterPos )
+        stdComm_WSRelay_ShotStart(pShooter, thingId, pShooterPos, &sithWeapon_fireStartPos, &sithWeapon_pFireStartSector);
+
+    stdComm_WSRelay_fireGuid = thingId;
+    SithThing* pShot = sithWeapon_WeaponFireProjectile(pShooter, pTemplate, pFireDir, pFirePos, pSound, anim, scale, scaleFlags, a9, idk);
+    stdComm_WSRelay_fireGuid = 0;
+    sithWeapon_pFireStartSector = NULL;
+
+    stdComm_WSRelay_NoteShot(pTemplate, pFirePos, thingId, scale, scaleFlags, a9);
+    return pShot;
+}
+#endif
 
 // MOTS altered (Added argument to sithWeapon_WeaponFireProjectile)
 int sithDSSThing_ProcessFire(SithMessage *pMsg)
@@ -674,9 +717,15 @@ int sithDSSThing_ProcessFire(SithMessage *pMsg)
         int thingId = NETMSG_POPS32();
         //printf("sithDSSThing_ProcessFire %x %x (%f %f %f) (%f %f %f) %x %f %x %f\n", idx, templateIdx, aimError.x, aimError.y, aimError.z, fireOffset.x, fireOffset.y, fireOffset.z, anim, scale, scaleFlags, a9);
 #ifdef PLATFORM_WSRELAY
-        // Added: the shot can hit as it's made, before it gets its id below.
-        stdComm_WSRelay_fireGuid = thingId;
-#endif
+        // Added: where the shooter was, which older games don't send, for
+        // Hit what you see (sithDSSThing_FireOthersShot).
+        rdVector3 shooterPos;
+        int bShooterPos = NETMSG_IN_LEFT(pMsg) >= (intptr_t)sizeof(rdVector3);
+        if ( bShooterPos )
+            shooterPos = NETMSG_POPVEC3();
+        SithThing* pThing2 = sithDSSThing_FireOthersShot(bShooterPos ? &shooterPos : NULL, pThing, pCreateThingTemplate,
+                                                         &fireOffset, &aimError, pSound, anim, scale, scaleFlags, a9, thingId, 0);
+#else
         SithThing* pThing2 = sithWeapon_WeaponFireProjectile(
                       pThing,
                       pCreateThingTemplate,
@@ -688,8 +737,6 @@ int sithDSSThing_ProcessFire(SithMessage *pMsg)
                       scaleFlags,
                       a9,
                       0);
-#ifdef PLATFORM_WSRELAY
-        stdComm_WSRelay_fireGuid = 0;
 #endif
         if ( pThing2 )
         {
@@ -720,8 +767,13 @@ int sithDSSThing_ProcessMOTSNew2(SithMessage *msg)
         int idk = NETMSG_POPS32();
 #ifdef PLATFORM_WSRELAY
         // Added: as in sithDSSThing_ProcessFire.
-        stdComm_WSRelay_fireGuid = thingId;
-#endif
+        rdVector3 shooterPos;
+        int bShooterPos = NETMSG_IN_LEFT(msg) >= (intptr_t)sizeof(rdVector3);
+        if ( bShooterPos )
+            shooterPos = NETMSG_POPVEC3();
+        SithThing* pThing2 = sithDSSThing_FireOthersShot(bShooterPos ? &shooterPos : NULL, pThing, pCreateThingTemplate,
+                                                         &fireOffset, &aimError, pSound, anim, scale, scaleFlags, a9, thingId, idk);
+#else
         SithThing* pThing2 = sithWeapon_WeaponFireProjectile(
                       pThing,
                       pCreateThingTemplate,
@@ -733,8 +785,6 @@ int sithDSSThing_ProcessMOTSNew2(SithMessage *msg)
                       scaleFlags,
                       a9,
                       idk);
-#ifdef PLATFORM_WSRELAY
-        stdComm_WSRelay_fireGuid = 0;
 #endif
         if ( pThing2 )
         {

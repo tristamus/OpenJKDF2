@@ -13,8 +13,10 @@ const source = read('packaging/wasm/netstats.js');
 const relayC = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.c');
 const enums = read('src/types_enums.h');
 
-const SABER = 1, SHOT = 2, FORCE = 4;
-const HIT = 1, BLOCK = 2, DEAD = 3;
+const SABER = 1, SHOT = 2, SPLASH = 3, FORCE = 4;
+const HIT = 1, BLOCK = 2, DEAD = 3, TURNED_DOWN = 4;
+const BY_CLAIM = 2, DECIDED = 4;
+const NOT_THERE = 2, REPEAT = 6;
 
 // One clock for the whole test. Timers run in order as it moves on.
 function makeWorld() {
@@ -333,7 +335,8 @@ test('a hit shown here and counted in the victim\'s game agrees', () => {
     const c = hitsOf(join, 1, 'saber');
     assert.equal(c.counted, 1);
     assert.equal(c.missedHit + c.blockedThere + c.notShown, 0);
-    assert.deepEqual(takenOf(host, 2, 'saber'), { hit: 1, block: 0, dead: 0, byMessage: 0 });
+    const t = takenOf(host, 2, 'saber');
+    assert.deepEqual([t.hit, t.block, t.dead, t.byMessage, t.turnedDown, t.claims], [1, 0, 0, 0, 0, 0]);
     assert.match(join.ns.text().join('\n'), /your saber: 1 hit shown: 1 counted \| agree 100% of 1/);
     assert.match(host.ns.text().join('\n'), /their hits on you: saber 1 counted/);
 });
@@ -467,6 +470,79 @@ test('targeted Force powers are counted apart', () => {
     assert.equal(hitsOf(join, 1, 'Force').notShown, 0);
     assert.equal(takenOf(host, 2, 'Force').byMessage, 2);
     assert.match(join.ns.text().join('\n'), /your Force: 2 targeted/);
+});
+
+test('Hit what you see: claims counted and turned down, with why and how far off', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    // The joiner's shots hit the host on its screen, and it claimed each.
+    join.ns.hit(1, true, SHOT, HIT, 30, 0, 0x20007);
+    join.ns.hit(1, true, SHOT, HIT, 30, 0, 0x20008);
+    join.ns.hit(1, true, SPLASH, HIT, 20, 0, 0);
+    world.run(20);
+    // The host's game counted one, turned one down, and counted the blast.
+    host.ns.hit(2, false, SHOT, HIT, 30, BY_CLAIM, 0x20007, 0, 0.05);
+    host.ns.hit(2, false, SHOT, TURNED_DOWN, 30, BY_CLAIM, 0x20008, NOT_THERE, 0.62);
+    host.ns.hit(2, false, SPLASH, HIT, 20, BY_CLAIM, 0, 0, 0.11);
+    world.run(1000);
+    const c = hitsOf(join, 1, 'shot');
+    assert.equal(c.counted, 1);
+    assert.equal(c.turnedDown, 1);
+    assert.equal(c.claims, 2);
+    assert.deepEqual(c.why, { 'not there': 1 });
+    near(c.distances[0], 0.05, 1e-6, 'counted distance');
+    near(c.turnedDownDistances[0], 0.62, 1e-6, 'turned down distance');
+    assert.equal(c.missedHit + c.notShown, 0);
+    assert.equal(hitsOf(join, 1, 'splash').counted, 1);
+    const text = join.ns.text().join('\n');
+    assert.match(text, /your shot: 2 hits shown: 1 counted, 1 turned down there \(not there 1\) \| agree 50% of 2 \| 2 claimed, off by counted median 0\.05, 90% 0\.05, most 0\.05; turned down median 0\.62, 90% 0\.62, most 0\.62/);
+    const t = takenOf(host, 2, 'shot');
+    assert.deepEqual([t.hit, t.turnedDown, t.claims], [1, 1, 2]);
+    assert.match(host.ns.text().join('\n'), /their hits on you: shot 1 counted, 1 turned down \(not there 1\) \(2 claimed, off by counted median 0\.05/);
+});
+
+test('Hit what you see: a block this game decided is final, and a claim for a hit counted already takes nothing', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    join.ns.hit(1, true, SABER, BLOCK, 40, DECIDED, 11);
+    // A hit the host's game decided itself, as the Classic rules have it, then
+    // the joiner's claim for the same swing.
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 12);
+    host.ns.hit(2, false, SABER, HIT, 40, 0, 12);
+    host.ns.hit(2, false, SABER, TURNED_DOWN, 40, BY_CLAIM, 12, REPEAT, -1);
+    world.run(4000);
+    const c = hitsOf(join, 1, 'saber');
+    assert.equal(c.blockDecided, 1);
+    assert.equal(c.counted, 1);
+    assert.equal(c.repeats, 1);
+    assert.equal(c.turnedDown + c.missedHit + c.missedBlock + c.notShown, 0);
+    const text = join.ns.text().join('\n');
+    assert.match(text, /your saber: 1 hit shown: 1 counted; 1 block shown: 1 decided here; 1 claimed after counting there \| agree 100% of 2/);
+    // The victim's game counted the swing once.
+    const t = takenOf(host, 2, 'saber');
+    assert.deepEqual([t.hit, t.turnedDown], [1, 1]);
+    assert.deepEqual(t.why, { 'already counted': 1 });
+});
+
+test('an older game\'s receipt without a reason or distance still counts', () => {
+    const { world, join } = match();
+    world.run(3000);
+    join.ns.hit(1, true, SHOT, HIT, 10, 0, 0x30001);
+    const buf = new ArrayBuffer(36);
+    const view = new DataView(buf);
+    view.setUint32(0, 1, true);
+    view.setUint32(4, 2, true);
+    new Uint8Array(buf).set([0x4A, 0x4E, 0, 0], 8);
+    view.setUint8(12, join.ns.lib.T_RECEIPT);
+    view.setUint8(13, 1);
+    view.setUint8(16, SHOT);
+    view.setUint8(17, HIT);
+    view.setFloat64(24, 0, true);
+    view.setUint32(32, 0x30001, true);
+    assert.ok(join.ns.take(1, buf, 'direct'));
+    const c = hitsOf(join, 1, 'shot');
+    assert.equal(c.counted, 1);
+    assert.equal(c.claims, 0);
 });
 
 test('how much later the victim\'s game decided, though the clocks differ', () => {
@@ -626,7 +702,7 @@ test('stdComm_WSRelay.c passes packets to netstats.js as this test does (transpo
     for (const line of [
         "Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takePeerPacket(id, d); });",
         "Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takeFastPacket(id, d); }, true);",
-        "if (Module.jkNetStats && Module.jkNetStats.take(from, data, via, fast)) return;",
+        "if (Module.jkNetStats && Module.jkNetStats.take(from, data, via, seq !== undefined)) return;",
         "return Module.jkNetStats.outbound(id, bytes, function(b) { return net.sendNow(b, id, fast ? seq : undefined); }, fast);",
         "Module.jkNetStats.inbound(from, ev.data, 'relay', function(d) { if (net.ws === ws) net.take(from, d, 'relay'); });",
         "ns.onmessage = function(ev) { if (net.peers[id] === p) Module.jkNetStats.onProbe(id, ev.data); };",
@@ -634,22 +710,38 @@ test('stdComm_WSRelay.c passes packets to netstats.js as this test does (transpo
         "{ negotiated: true, id: 3, ordered: false, maxRetransmits: 0 }",
         "if (Module.jkNetStats) Module.jkNetStats.start(isHost);",
         "if (Module.jkNetStats) Module.jkNetStats.live(live, id, isHost);",
-        "if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, !!byMessage, attack >>> 0);",
+        "if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance);",
     ])
         assert.ok(relayC.includes(line), 'stdComm_WSRelay.c has: ' + line);
-    // The kinds and outcomes the engine sends are the ones netstats.js reads.
-    for (const [name, n] of [['SABER', 1], ['SHOT', 2], ['SPLASH', 3], ['FORCE', 4], ['OTHER', 5]])
-        assert.match(relayC, new RegExp('#define WSRELAY_HIT_' + name + ' \\(' + n + '\\)'));
+    // The kinds, outcomes, flags and reasons the engine sends are the ones
+    // netstats.js reads.
     const header = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.h');
-    for (const [name, n] of [['HIT', 1], ['BLOCK', 2], ['DEAD', 3]])
+    for (const [name, n] of [['SABER', 1], ['SHOT', 2], ['SPLASH', 3], ['FORCE', 4], ['OTHER', 5]])
+        assert.match(header, new RegExp('#define STDCOMM_WSRELAY_KIND_' + name + ' \\(' + n + '\\)'));
+    for (const [name, n] of [['HIT', 1], ['BLOCK', 2], ['DEAD', 3], ['TURNED_DOWN', 4]])
         assert.match(header, new RegExp('#define STDCOMM_WSRELAY_' + name + ' \\(' + n + '\\)'));
     assert.match(source, /var KINDS = \['', 'saber', 'shot', 'splash', 'Force', 'other'\];/);
-    assert.match(source, /var O_HIT = 1, O_BLOCK = 2, O_DEAD = 3;/);
+    assert.match(source, /var O_HIT = 1, O_BLOCK = 2, O_DEAD = 3, O_TURNED_DOWN = 4;/);
+    for (const [name, n] of [['BY_MESSAGE', 1], ['BY_CLAIM', 2], ['DECIDED', 4]]) {
+        assert.match(relayC, new RegExp('#define WSRELAY_HITFLAG_' + name + ' \\(' + n + '\\)'));
+        assert.match(source, new RegExp('var F_' + name + ' = ' + n + ';'));
+    }
+    const check = read('src/Platform/Networking/WSRelay/stdComm_WSRelayHitCheck.h');
+    const why = JSON.parse(/var WHY = (\[[^\]]*\]);/.exec(source)[1].replace(/'/g, '"'));
+    for (const [name, words] of [['DEAD', 'dead'], ['NOT_THERE', 'not there'], ['LATE', 'too late'], ['UNKNOWN', 'unknown attack'],
+                                 ['OUT_OF_REACH', 'out of reach'], ['REPEAT', 'already counted'], ['BAD', 'bad numbers']]) {
+        const n = Number(new RegExp('#define WSRELAYHIT_' + name + ' \\((\\d+)\\)').exec(check)[1]);
+        assert.equal(why[n], words, name);
+    }
+    assert.equal(why[Number(/#define STDCOMM_WSRELAY_HITS_NOT_PLAYING \((\d+)\)/.exec(header)[1])], 'not playing by claims');
+    assert.match(source, /var WHY_REPEAT = 6;/);
+    assert.match(check, /#define WSRELAYHIT_REPEAT \(6\)/);
     // Each swing's number goes out with the message that turns the blade on,
     // after the original's fields, and comes back in from it.
     const jkDSS = read('src/Dss/jkDSS.c');
     assert.ok(jkDSS.includes('NETMSG_PUSHU32(stdComm_WSRelay_GetSwing(pPlayerThing));'));
-    assert.ok(jkDSS.includes('stdComm_WSRelay_SetSwing(pThing, NETMSG_IN_LEFT(msg) >= 4 ? NETMSG_POPU32() : 0);'));
+    assert.ok(jkDSS.includes('uint32_t swing = NETMSG_IN_LEFT(msg) >= 4 ? NETMSG_POPU32() : 0;'));
+    assert.ok(jkDSS.includes('stdComm_WSRelay_SetSwing(pThing, swing);'));
     assert.ok(read('src/Cog/jkCog.c').includes('stdComm_WSRelay_NewSwing(v2);'));
     // A bolt a ready saber turned away is a block, by whoever fired it: the
     // saber makes the bolt the blocker's, so the shooter is found first.

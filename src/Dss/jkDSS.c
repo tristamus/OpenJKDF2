@@ -546,7 +546,12 @@ int jkDSS_ProcessJKEnableSaber(SithMessage *msg)
 #ifdef PLATFORM_WSRELAY
     // Added: the swing's number, which a message from an older build doesn't
     // have (0).
-    stdComm_WSRelay_SetSwing(pThing, NETMSG_IN_LEFT(msg) >= 4 ? NETMSG_POPU32() : 0);
+    uint32_t swing = NETMSG_IN_LEFT(msg) >= 4 ? NETMSG_POPU32() : 0;
+    stdComm_WSRelay_SetSwing(pThing, swing);
+
+    // Added: Hit what you see: what this game knows of the swing, to check
+    // the claims for what it hits.
+    stdComm_WSRelay_NoteSwing(pThing, swing);
 #endif
     return 1;
 }

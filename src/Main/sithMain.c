@@ -415,6 +415,12 @@ int sithUpdate()
         
         sithConsole_Flush();
         sithMulti_Update(sithTime_g_frameTime);
+#ifdef PLATFORM_WSRELAY
+        // Added: Hit what you see: where this game's player ended the frame,
+        // and the claims for what its attacks hit in it.
+        if ( sithNet_isMulti )
+            stdComm_WSRelay_HitsFrame();
+#endif
         sithGamesave_Process();
 
         sithMain_tickEndMs = stdPlatform_GetTimeMsec();

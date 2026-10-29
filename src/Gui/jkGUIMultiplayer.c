@@ -549,6 +549,55 @@ void jkGuiMultiplayer_sub_4140B0(jkGuiMenu *pMenu)
     }
 }
 
+#ifdef PLATFORM_WSRELAY
+static void jkGuiMultiplayer_Append(char16_t* pOut, int maxChars, const char16_t* pText)
+{
+    int n = _wcslen(pOut);
+    while (*pText && n < maxChars - 1)
+        pOut[n++] = *pText++;
+    pOut[n] = 0;
+}
+
+// Added: the otherwise unused third line says what the listed game's mod
+// means for joining it, and which hit rules its host plays by. The rules go
+// short when both don't fit, and first, with the mod's words cut short, when
+// even that doesn't.
+static void jkGuiMultiplayer_DescribeGame(int idx)
+{
+    jkGuiElement* pElement = &jkGuiMultiplayer_aElements3[8];
+    char16_t* pLine = (char16_t*)jkGuiMultiplayer_stru_556168.field_200;
+    const int maxChars = sizeof(jkGuiMultiplayer_stru_556168.field_200) / sizeof(char16_t);
+    stdFont* pFont = jkGui_stdFonts[pElement->textType];
+    char16_t mod[128];
+    char16_t hits[64];
+
+    stdComm_WSRelay_DescribeMod(idx, mod, 128);
+    for (int bShort = 0; bShort < 2; bShort++)
+    {
+        stdComm_WSRelay_DescribeHits(idx, bShort, hits, 64);
+        pLine[0] = 0;
+        jkGuiMultiplayer_Append(pLine, maxChars, mod);
+        if (mod[0] && hits[0])
+            jkGuiMultiplayer_Append(pLine, maxChars, u"; ");
+        jkGuiMultiplayer_Append(pLine, maxChars, hits);
+        if (!pFont || stdFont_sub_4355F0(pFont, pLine) <= pElement->rect.width)
+            return;
+    }
+
+    for (int keep = (int)_wcslen(mod) - 1; keep > 0; keep--)
+    {
+        mod[keep] = 0;
+        pLine[0] = 0;
+        jkGuiMultiplayer_Append(pLine, maxChars, hits);
+        jkGuiMultiplayer_Append(pLine, maxChars, u"; ");
+        jkGuiMultiplayer_Append(pLine, maxChars, mod);
+        jkGuiMultiplayer_Append(pLine, maxChars, u"...");
+        if (stdFont_sub_4355F0(pFont, pLine) <= pElement->rect.width)
+            return;
+    }
+}
+#endif
+
 void jkGuiMultiplayer_sub_413E50(int idx)
 {
     char16_t *v1; // eax
@@ -625,9 +674,7 @@ void jkGuiMultiplayer_sub_413E50(int idx)
             jkGuiRend_SetVisibleAndDraw(&jkGuiMultiplayer_aElements3[9], &jkGuiMultiplayer_menu3, 1);
         }
 #ifdef PLATFORM_WSRELAY
-        // Added: the game's mod, on the otherwise unused third line.
-        stdComm_WSRelay_DescribeMod(idx, (char16_t*)jkGuiMultiplayer_stru_556168.field_200,
-                                    sizeof(jkGuiMultiplayer_stru_556168.field_200) / sizeof(char16_t));
+        jkGuiMultiplayer_DescribeGame(idx);
 #endif
     }
     else

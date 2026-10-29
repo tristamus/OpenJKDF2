@@ -165,7 +165,7 @@ EM_JS(void, wsrelay_js_connect, (), {
                                stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0,
                                         fastSent: 0, fastRecv: 0, fastOld: 0, fastBacklog: 0 },
                                log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
-                               seqTo: {}, seqFrom: {}, links: {}, lobbyCan: [], pending: {},
+                               seqTo: {}, seqSent: {}, seqFrom: {}, links: {}, lobbyCan: [], pending: {},
                                turn: null, turnEnds: 0, iceUntil: 0, iceAsked: false, iceAskedAt: 0, iceWaiters: [],
                                session: false, sessionNo: 0, hostTries: 0, hostRetry: null };
 
@@ -452,18 +452,22 @@ EM_JS(void, wsrelay_js_connect, (), {
                 // From another joiner, over a link of our own.
                 dv.setUint32(0, id, true);
             }
-            net.take(dv.getUint32(0, true), data, 'direct', seq !== undefined);
+            net.take(dv.getUint32(0, true), data, 'direct', seq);
         };
 
         /* A game packet from player `from` that's due: for this file, for
-           netstats.js, or for the engine. */
-        net.take = function(from, data, via, fast) {
+           netstats.js, or for the engine. seq: it came on the fast lane with
+           this number, which the engine gets with it (wsrelay_js_recv): a
+           claim under Hit what you see names the update its attacker had on
+           screen (stdComm_WSRelayHits.c). */
+        net.take = function(from, data, via, seq) {
             if (net.isLinkFrame(data)) {
                 net.onLinkFrame(from, data);
                 return;
             }
             if (from > 1 && !net.isHost) net.heardFrom(from);
-            if (Module.jkNetStats && Module.jkNetStats.take(from, data, via, fast)) return;
+            if (Module.jkNetStats && Module.jkNetStats.take(from, data, via, seq !== undefined)) return;
+            if (seq !== undefined) data.jkSeq = seq;
             net.queue.push(data);
         };
 
@@ -508,11 +512,21 @@ EM_JS(void, wsrelay_js_connect, (), {
 
         /* The next number for this player's position updates to player `to`,
            from a random start, so a receiver can tell a sender that started
-           over. */
+           over. When each of the last 256 went, so a claim that names one can
+           be checked from then (net.seqSentAt). */
         net.nextSeq = function(to) {
             var s = net.seqTo[to];
             if (s === undefined) s = Math.floor(Math.random() * 4294967296);
-            return net.seqTo[to] = (s + 1) >>> 0;
+            s = net.seqTo[to] = (s + 1) >>> 0;
+            var sent = net.seqSent[to] || (net.seqSent[to] = { seqs: new Uint32Array(256), at: new Float64Array(256) });
+            sent.seqs[s & 255] = s;
+            sent.at[s & 255] = performance.now();
+            return s;
+        };
+
+        net.seqSentAt = function(to, seq) {
+            var sent = net.seqSent[to];
+            return sent && sent.seqs[seq & 255] === seq && sent.at[seq & 255] ? sent.at[seq & 255] : -1;
         };
 
         /* The link a packet for player `to` goes over: a host's go straight
@@ -1085,6 +1099,7 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     net.lastFrom = {};
     net.relayPosAt = {};
     net.seqTo = {};
+    net.seqSent = {};
     net.seqFrom = {};
     net.links = {};
     net.pending = {};
@@ -1229,21 +1244,42 @@ EM_JS(void, wsrelay_js_net_name, (int id, const char16_t* pName), {
     Module.jkNetStats.name(id, String.fromCharCode.apply(null, chars));
 });
 
-// A hit between this game's player and player otherId (stdComm_WSRelay_NoteHit).
-EM_JS(void, wsrelay_js_net_hit, (int otherId, int mine, int kind, int outcome, float damage, int byMessage, uint32_t attack), {
-    if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, !!byMessage, attack >>> 0);
+// A hit between this game's player and player otherId (stdComm_WSRelay_NoteHit),
+// with WSRELAY_HITFLAG_*, and for a claim this game turned down, why
+// (reason) and how close its player came (distance, -1 if not checked).
+EM_JS(void, wsrelay_js_net_hit, (int otherId, int mine, int kind, int outcome, float damage, int flags, uint32_t attack, int reason, float distance), {
+    if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance);
+});
+
+// When this game sent player `to` its position update numbered seq
+// (net.nextSeq), or -1 if it no longer knows.
+EM_JS(double, wsrelay_js_seq_sent_at, (int to, uint32_t seq), {
+    var net = Module.jkNet;
+    return net ? net.seqSentAt(to, seq >>> 0) : -1;
+});
+
+// The clock net.nextSeq notes those times by.
+EM_JS(double, wsrelay_js_now, (), {
+    return performance.now();
 });
 
 // Pops one queued message into pOut. Returns its length, or -1 if the queue is
-// empty. Text is NUL-terminated (maxLen includes the terminator).
-EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText), {
+// empty. Text is NUL-terminated (maxLen includes the terminator). pSeq gets
+// whether a game packet came on the fast lane, and its number (net.take).
+EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText, int* pSeq), {
     var net = Module.jkNet;
     if (!net || !net.queue.length) return -1;
     var data = net.queue.shift();
+    HEAP32[pSeq >> 2] = 0;
+    HEAP32[(pSeq >> 2) + 1] = 0;
     if (typeof data === 'string') {
         stringToUTF8(data, pOut, maxLen);
         HEAP32[pIsText >> 2] = 1;
         return Math.min(lengthBytesUTF8(data), maxLen - 1);
+    }
+    if (data.jkSeq !== undefined) {
+        HEAP32[pSeq >> 2] = 1;
+        HEAP32[(pSeq >> 2) + 1] = data.jkSeq | 0;
     }
     var bytes = new Uint8Array(data);
     var len = Math.min(bytes.length, maxLen);
@@ -1253,6 +1289,8 @@ EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText), {
 });
 
 static uint8_t wsrelay_recvBuf[WSRELAY_MAX_RECV];
+// Whether the packet in wsrelay_recvBuf came on the fast lane, and its number.
+static int32_t wsrelay_aRecvSeq[2];
 static uint8_t wsrelay_sendBuf[WSRELAY_MAX_PACKET];
 static char wsrelay_textBuf[1024];
 
@@ -1309,6 +1347,23 @@ static char wsrelay_aListTails[WSRELAY_MAX_LISTED][WSRELAY_MAX_TAIL_HEX + 1];
 static int wsrelay_numShown = 0;
 static int wsrelay_aShownRooms[WSRELAY_MAX_LISTED];
 static char wsrelay_aShownTails[WSRELAY_MAX_LISTED][WSRELAY_MAX_TAIL_HEX + 1];
+
+// The hit rules each listed game's host plays by, as its entry says
+// (wsrelay_EntryHits): rules | reach ms << 8, or -1 if it doesn't say.
+static int wsrelay_aListHits[WSRELAY_MAX_LISTED];
+static int wsrelay_aShownHits[WSRELAY_MAX_LISTED];
+
+// The hit rules an entry says its host plays by, or -1 for an older host's,
+// which plays by Classic.
+static int wsrelay_EntryHits(const jkMultiEntry* pEntry, int* pReachMs)
+{
+    if (pEntry->guidInstance.c != STDCOMM_WSRELAY_HITS_ENTRY_MAGIC)
+        return -1;
+    int rules = (pEntry->guidInstance.d & 0xFF) == STDCOMM_WSRELAY_HITS_HWYS ? STDCOMM_WSRELAY_HITS_HWYS : STDCOMM_WSRELAY_HITS_CLASSIC;
+    if (pReachMs)
+        *pReachMs = stdComm_WSRelay_ClampReach((int)(pEntry->guidInstance.d >> 8));
+    return rules;
+}
 
 static void wsrelay_ToHex(const void* pData, int len, char* pOut)
 {
@@ -1373,11 +1428,17 @@ static int wsrelay_SendText(const char* pText)
     return wsrelay_js_send_text(pText);
 }
 
-// Only a host sends entries, each followed by its mod tail.
+// Only a host sends entries, each followed by its mod tail. Each says what
+// hit rules the host plays by (STDCOMM_WSRELAY_HITS_ENTRY_MAGIC).
 static void wsrelay_SendEntry(const char* pOp, int id, const jkMultiEntry* pEntry)
 {
     char hex[sizeof(jkMultiEntry)*2 + 1];
-    wsrelay_ToHex(pEntry, sizeof(jkMultiEntry), hex);
+    jkMultiEntry entry = *pEntry;
+    int reachMs = 0;
+    int rules = stdComm_WSRelay_GetHitRules(&reachMs);
+    entry.guidInstance.c = STDCOMM_WSRELAY_HITS_ENTRY_MAGIC;
+    entry.guidInstance.d = (uint32_t)rules | ((uint32_t)reachMs << 8);
+    wsrelay_ToHex(&entry, sizeof(jkMultiEntry), hex);
     if (id >= 0)
         snprintf(wsrelay_textBuf, sizeof(wsrelay_textBuf), "%s %d %s%s", pOp, id, hex, wsrelay_hostTail);
     else
@@ -1403,6 +1464,7 @@ static void wsrelay_ResetSession()
     wsrelay_bNetLive = 0;
     wsrelay_msecNamesSent = 0;
     memset(wsrelay_aSwing, 0, sizeof(wsrelay_aSwing));
+    stdComm_WSRelay_ResetHits();
     wsrelay_js_rtc_end();
     wsrelay_js_map_unhost();
     wsrelay_js_mod_unhost();
@@ -1596,6 +1658,10 @@ static void wsrelay_HandleList(char* pArgs)
         wsrelay_aListRooms[n] = room;
         pEntry->numPlayers = atoi(pPlayers);
 
+        int reachMs = 0;
+        int rules = wsrelay_EntryHits(pEntry, &reachMs);
+        wsrelay_aListHits[n] = rules < 0 ? -1 : (rules | (reachMs << 8));
+
         // The join screen keeps its selection by guidInstance, so each room
         // needs its own.
         memset(&pEntry->guidInstance, 0, sizeof(pEntry->guidInstance));
@@ -1708,6 +1774,11 @@ static void wsrelay_HandleText(char* pText)
             wsrelay_storedEntryEnum.field_E0 = 10;
             strcpy(wsrelay_storedTailEnum, tail);
 
+            // The host's hit rules (its hello says so again in the match).
+            int reachMs = STDCOMM_WSRELAY_REACH_DEFAULT;
+            int rules = wsrelay_EntryHits(&entry, &reachMs);
+            stdComm_WSRelay_SetHitRules(rules < 0 ? STDCOMM_WSRELAY_HITS_CLASSIC : rules, reachMs);
+
             // Hack?
             sithMulti_multiModeFlags = wsrelay_storedEntryEnum.multiModeFlags;
             sithNet_MultiModeFlags = wsrelay_storedEntryEnum.multiModeFlags;
@@ -1744,8 +1815,9 @@ static void wsrelay_HandleText(char* pText)
 static void wsrelay_PumpControl()
 {
     int isText = 0;
+    int32_t aSeq[2];
     int len;
-    while ((len = wsrelay_js_recv(wsrelay_recvBuf, sizeof(wsrelay_recvBuf), &isText)) >= 0)
+    while ((len = wsrelay_js_recv(wsrelay_recvBuf, sizeof(wsrelay_recvBuf), &isText, aSeq)) >= 0)
     {
         if (isText)
             wsrelay_HandleText((char*)wsrelay_recvBuf);
@@ -1919,6 +1991,22 @@ static const char* wsrelay_HostGoneReason()
     return NULL;
 }
 
+int stdComm_WSRelay_RecvSeq(uint32_t* pSeq)
+{
+    *pSeq = (uint32_t)wsrelay_aRecvSeq[1];
+    return wsrelay_aRecvSeq[0];
+}
+
+double stdComm_WSRelay_SeqSentAt(int toId, uint32_t seq)
+{
+    return wsrelay_js_seq_sent_at(toId, seq);
+}
+
+double stdComm_WSRelay_Now()
+{
+    return wsrelay_js_now();
+}
+
 int stdComm_WSRelay_InMatch()
 {
     if ((!wsrelay_bHosting && !wsrelay_bJoined) || !sithNet_isMulti || !sithWorld_g_pCurrentWorld || !sithPlayer_g_pLocalPlayerThing)
@@ -1987,12 +2075,26 @@ uint32_t stdComm_WSRelay_GetSwing(SithThing* pPlayer)
     return slot >= 0 ? wsrelay_aSwing[slot] : 0;
 }
 
-// Kinds of hit, as netstats.js names them.
-#define WSRELAY_HIT_SABER (1)
-#define WSRELAY_HIT_SHOT (2)
-#define WSRELAY_HIT_SPLASH (3)
-#define WSRELAY_HIT_FORCE (4)
-#define WSRELAY_HIT_OTHER (5)
+// What the hit ledger hears about a hit (wsrelay_js_net_hit): it was decided
+// by a message from the attacker's game (targeted Force), it was a claim
+// (stdComm_WSRelayHits.c), and this game's block against a player it claims
+// hits on, which is final.
+#define WSRELAY_HITFLAG_BY_MESSAGE (1)
+#define WSRELAY_HITFLAG_BY_CLAIM (2)
+#define WSRELAY_HITFLAG_DECIDED (4)
+
+int stdComm_WSRelay_HitKind(SithThing* pSource, int damageType)
+{
+    if (damageType & SITH_DAMAGE_SABER)
+        return STDCOMM_WSRELAY_KIND_SABER;
+    if (pSource->type == SITH_THING_EXPLOSION)
+        return STDCOMM_WSRELAY_KIND_SPLASH;
+    if (damageType & SITH_DAMAGE_FORCE)
+        return STDCOMM_WSRELAY_KIND_FORCE;
+    if (pSource->type == SITH_THING_WEAPON)
+        return STDCOMM_WSRELAY_KIND_SHOT;
+    return STDCOMM_WSRELAY_KIND_OTHER;
+}
 
 void stdComm_WSRelay_NoteHit(SithThing* pVictim, SithThing* pSource, flex_t damage, int damageType, int outcome)
 {
@@ -2020,6 +2122,24 @@ void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThi
     if (!otherId)
         return;
 
+    int flags = 0;
+    int claimKind = 0;
+    uint32_t claimAttack = 0;
+    float distance = -1.0f;
+    int bApplying = stdComm_WSRelay_ApplyingClaim(&claimKind, &claimAttack, &distance);
+    if (!mine && !bApplying && stdComm_WSRelay_DecidedElsewhere(pSource, damageType))
+    {
+        // Hit what you see: the attacker's game decides this one, and its
+        // claim gets the receipt. What happens here only shows.
+        return;
+    }
+    if (mine && outcome == STDCOMM_WSRELAY_BLOCK && stdComm_WSRelay_ClaimsTo(pVictim))
+    {
+        // And this game's blocks against a player it claims hits on are
+        // final: no receipt comes for them.
+        flags |= WSRELAY_HITFLAG_DECIDED;
+    }
+
     // A player who's dead in this game shows nothing. The victim's game says
     // so, for hits its player took after dying there.
     if (pVictim->flags & (SITH_TF_DISABLED|SITH_TF_DEAD|SITH_TF_DESTROYED))
@@ -2029,30 +2149,39 @@ void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThi
         outcome = STDCOMM_WSRELAY_DEAD;
     }
 
-    int kind = WSRELAY_HIT_OTHER;
-    if (damageType & SITH_DAMAGE_SABER)
-        kind = WSRELAY_HIT_SABER;
-    else if (pSource->type == SITH_THING_EXPLOSION)
-        kind = WSRELAY_HIT_SPLASH;
-    else if (damageType & SITH_DAMAGE_FORCE)
-        kind = WSRELAY_HIT_FORCE;
-    else if (pSource->type == SITH_THING_WEAPON)
-        kind = WSRELAY_HIT_SHOT;
+    int kind = stdComm_WSRelay_HitKind(pSource, damageType);
 
     // Targeted Force powers (SkillTarget) reach the victim's game as a cog
     // message, and the host can damage anyone with DSS_DAMAGE. The message
     // decided those, not this game's simulation.
-    int byMessage = (sithComm_msgInProgress == DSS_SENDTRIGGER || sithComm_msgInProgress == DSS_DAMAGE);
+    if (sithComm_msgInProgress == DSS_SENDTRIGGER || sithComm_msgInProgress == DSS_DAMAGE)
+        flags |= WSRELAY_HITFLAG_BY_MESSAGE;
 
     // The attack, by a number both games know: the saber swing, or the shot's
     // id. 0 for the rest, which the ledger matches by time instead.
     uint32_t attack = 0;
-    if (kind == WSRELAY_HIT_SABER)
+    if (kind == STDCOMM_WSRELAY_KIND_SABER)
         attack = stdComm_WSRelay_GetSwing(pAttacker);
-    else if (kind == WSRELAY_HIT_SHOT)
+    else if (kind == STDCOMM_WSRELAY_KIND_SHOT)
         attack = (uint32_t)(stdComm_WSRelay_fireGuid ? stdComm_WSRelay_fireGuid : pSource->guid);
 
-    wsrelay_js_net_hit(otherId, mine, kind, outcome, (float)damage, byMessage, attack);
+    // A claim's damage, which hit this game's player by the attacker's
+    // account: the claim says what it was.
+    if (bApplying)
+    {
+        kind = claimKind;
+        attack = claimAttack;
+        flags = WSRELAY_HITFLAG_BY_CLAIM;
+    }
+
+    wsrelay_js_net_hit(otherId, mine, kind, outcome, (float)damage, flags, attack, 0, distance);
+}
+
+void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance)
+{
+    if (!wsrelay_bNetLive || !otherId)
+        return;
+    wsrelay_js_net_hit(otherId, 0, kind, outcome, (float)damage, WSRELAY_HITFLAG_BY_CLAIM, attack, reason, distance);
 }
 
 int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
@@ -2090,7 +2219,7 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
         }
 
         int isText = 0;
-        int len = wsrelay_js_recv(wsrelay_recvBuf, sizeof(wsrelay_recvBuf), &isText);
+        int len = wsrelay_js_recv(wsrelay_recvBuf, sizeof(wsrelay_recvBuf), &isText, wsrelay_aRecvSeq);
         if (len < 0)
             break;
 
@@ -2347,6 +2476,11 @@ int DirectPlay_OpenHost(jkMultiEntry* pEntry)
 
     wsrelay_ResetSession();
 
+    // The host's choice of hit rules, which its entry lists and every game in
+    // its match plays by.
+    stdComm_WSRelay_SetHitRules(stdComm_WSRelay_bClassicHits ? STDCOMM_WSRELAY_HITS_CLASSIC : STDCOMM_WSRELAY_HITS_HWYS,
+                                stdComm_WSRelay_hitReachMs);
+
     // Without a relay the game still runs, just with nobody able to join,
     // which is what hosting did before this backend existed.
     if (!wsrelay_EnsureOpen(WSRELAY_CONNECT_MS))
@@ -2429,6 +2563,7 @@ int stdComm_EnumSessions(int a, void* b)
         jkGuiMultiplayer_aEntries[i] = wsrelay_aListEntries[i];
         wsrelay_aShownRooms[i] = wsrelay_aListRooms[i];
         strcpy(wsrelay_aShownTails[i], wsrelay_aListTails[i]);
+        wsrelay_aShownHits[i] = wsrelay_aListHits[i];
 
         // Back from restarting into this game's mod: select it again. The join
         // screen keeps whichever entry has this guid selected.
@@ -2461,6 +2596,26 @@ void DirectPlay_Destroy()
 int DirectPlay_IdkSessionDesc(jkMultiEntry* pEntry)
 {
     return 1;
+}
+
+void stdComm_WSRelay_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars)
+{
+    char text[64];
+    text[0] = 0;
+    if (idx >= 0 && idx < wsrelay_numShown)
+    {
+        // An older host's entry doesn't say: it plays by Classic.
+        int hits = wsrelay_aShownHits[idx];
+        if (hits >= 0 && (hits & 0xFF) == STDCOMM_WSRELAY_HITS_HWYS)
+            snprintf(text, sizeof(text), bShort ? "Hit what you see" : "Hit rules: Hit what you see (%d ms)", hits >> 8);
+        else
+            snprintf(text, sizeof(text), bShort ? "Classic hits" : "Hit rules: Classic");
+    }
+
+    int i = 0;
+    for (; text[i] && i < maxChars - 1; i++)
+        pOut[i] = (char16_t)(uint8_t)text[i];
+    pOut[i] = 0;
 }
 
 void stdComm_WSRelay_DescribeMod(int idx, char16_t* pOut, int maxChars)
