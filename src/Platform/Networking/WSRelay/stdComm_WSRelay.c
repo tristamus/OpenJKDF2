@@ -93,7 +93,9 @@
 // window's packets wait as if its connection were slower. Its pings go over
 // a third data channel that never resends, which both ends only open once
 // each has said in its offer or answer ({"x": {"ns": 1}}) that it has the
-// file.
+// file. When this game leaves a match, or its tab closes in one, the JS posts
+// netstats.js's summary of the match to the lobby's address (/summary): counts
+// only, with no names (net.sendSummary).
 //
 // A player's own position updates take a fast lane where both ends have one:
 // a fourth data channel ('jk-pos') that never waits for or resends a lost
@@ -124,6 +126,7 @@
 #include "Main/Main.h"
 #include "General/stdString.h"
 #include "stdPlatform.h"
+#include "version.h"
 #include "jk.h"
 
 #include <emscripten.h>
@@ -215,14 +218,53 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         };
         setInterval(function() { if (net.session) net.note(net.health()); }, 10000);
 
-        /* A tab closed in a game gives up its seat at once (a socket that
-           just closes keeps it for a while) and closes its data channels, so
-           the others don't wait on it. */
+        /* A tab closed in a game sends its match summary, gives up its seat
+           at once (a socket that just closes keeps it for a while) and closes
+           its data channels, so the others don't wait on it. */
         if (typeof window !== 'undefined') window.addEventListener('pagehide', function() {
             if (!net.session) return;
+            net.sendSummary();
             if (net.state === 1) try { net.ws.send('leave'); } catch (e) {}
             net.closeAll();
         });
+
+        /* Where the match summary goes: /summary on the lobby's address. */
+        net.summaryUrl = function() {
+            var url = Module['jkSummaryUrl'] || Module['jkRelayUrl'];
+            if (!url && typeof location !== 'undefined')
+                url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
+            try {
+                var u = new URL(url);
+                if (!Module['jkSummaryUrl']) {
+                    u.protocol = u.protocol === 'wss:' ? 'https:' : u.protocol === 'ws:' ? 'http:' : u.protocol;
+                    u.pathname = u.pathname.substring(0, u.pathname.lastIndexOf('/') + 1) + 'summary';
+                }
+                u.search = "";
+                u.hash = "";
+                return u.href;
+            } catch (e) {
+                return null;
+            }
+        };
+
+        /* netstats.js's summary of the match this game is leaving (once a
+           match, and none for one too short to say anything), with
+           sendBeacon, which still goes out as the tab closes. The lobby keeps
+           it for reading back later; nothing here waits for an answer. */
+        net.sendSummary = function() {
+            var stats = Module.jkNetStats;
+            var s = stats && stats.summary ? stats.summary() : null;
+            if (!s) return false;
+            var url = net.summaryUrl(), body = JSON.stringify(s), sent = false;
+            if (url && typeof navigator !== 'undefined' && navigator.sendBeacon) {
+                try { sent = navigator.sendBeacon(url, body); } catch (e) {}
+            }
+            if (!sent && url && typeof fetch !== 'undefined') {
+                try { fetch(url, { method: 'POST', body: body, keepalive: true }).catch(function() {}); sent = true; } catch (e) {}
+            }
+            net.note('match summary ' + (sent ? 'sent' : 'not sent') + ' (' + body.length + ' bytes)');
+            return sent;
+        };
 
         net.rtcEnabled = function() {
             return Module['jkUseWebRTC'] !== false && typeof RTCPeerConnection !== 'undefined';
@@ -1297,6 +1339,8 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
 EM_JS(void, wsrelay_js_rtc_end, (), {
     var net = Module.jkNet;
     if (!net) return;
+    // While its links are still up, which the summary names.
+    if (net.session) net.sendSummary();
     net.closeAll();
     if (net.session && Module.jkNetStats) {
         net.note('netstats at the end: ' + Module.jkNetStats.text().join(' / '));
@@ -1426,11 +1470,25 @@ EM_JS(void, wsrelay_js_net_name, (int id, const char16_t* pName), {
     Module.jkNetStats.name(id, String.fromCharCode.apply(null, chars));
 });
 
+// The match's rules and reach, whether this game runs MotS, and its build,
+// for the match summary.
+EM_JS(void, wsrelay_js_net_facts, (int rules, int reachMs, int mots, const char* pBuild), {
+    if (Module.jkNetStats && Module.jkNetStats.facts) Module.jkNetStats.facts(rules, reachMs, !!mots, UTF8ToString(pBuild));
+});
+
+// The hello version this game and player id agreed on, 0 for none
+// (stdComm_WSRelay_HelloWith), for the match summary.
+EM_JS(void, wsrelay_js_net_hello, (int id, int version), {
+    if (Module.jkNetStats && Module.jkNetStats.hello) Module.jkNetStats.hello(id, version);
+});
+
 // A hit between this game's player and player otherId (stdComm_WSRelay_NoteHit),
 // with WSRELAY_HITFLAG_*, and for a claim this game turned down, why
-// (reason) and how close its player came (distance, -1 if not checked).
-EM_JS(void, wsrelay_js_net_hit, (int otherId, int mine, int kind, int outcome, float damage, int flags, uint32_t attack, int reason, float distance), {
-    if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance);
+// (reason) and how close its player came (distance, -1 if not checked). For
+// a claim that named a moment, how far back that was when this game checked
+// it (ageMs, -1 otherwise).
+EM_JS(void, wsrelay_js_net_hit, (int otherId, int mine, int kind, int outcome, float damage, int flags, uint32_t attack, int reason, float distance, float ageMs), {
+    if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance, ageMs);
 });
 
 // How player otherId was drawn from their buffer over the last second
@@ -2242,7 +2300,8 @@ int stdComm_WSRelay_InMatch()
 }
 
 // Tells netstats.js when this game is in a match, which is when it pings the
-// other players and keeps the hit ledger, and who they are.
+// other players and keeps the hit ledger, and who they are. And for its match
+// summary, the rules, and which hello version this game agreed with each.
 static void wsrelay_WatchMatch()
 {
     int live = stdComm_WSRelay_InMatch();
@@ -2259,10 +2318,18 @@ static void wsrelay_WatchMatch()
     if (wsrelay_msecNamesSent && now - wsrelay_msecNamesSent < 2000)
         return;
     wsrelay_msecNamesSent = now ? now : 1;
+    int reachMs = 0;
+    int rules = stdComm_WSRelay_GetHitRules(&reachMs);
+    // First: it starts a roll call, and the players named after it are the
+    // ones still in the match.
+    wsrelay_js_net_facts(rules, reachMs, Main_bMotsCompat, openjkdf2_aReleaseCommitShort);
     for (int i = 0; i < jkPlayer_maxPlayers; i++)
     {
         if ((jkPlayer_playerInfos[i].flags & 1) && jkPlayer_playerInfos[i].playerNetId)
+        {
             wsrelay_js_net_name(jkPlayer_playerInfos[i].playerNetId, jkPlayer_playerInfos[i].player_name);
+            wsrelay_js_net_hello(jkPlayer_playerInfos[i].playerNetId, stdComm_WSRelay_HelloWith(i));
+        }
     }
 }
 
@@ -2373,7 +2440,8 @@ void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThi
     uint32_t claimAttack = 0;
     float distance = -1.0f;
     int claimMoment = STDCOMM_WSRELAY_MOMENT_NONE;
-    int bApplying = stdComm_WSRelay_ApplyingClaim(&claimKind, &claimAttack, &distance, &claimMoment);
+    float claimAgeMs = -1.0f;
+    int bApplying = stdComm_WSRelay_ApplyingClaim(&claimKind, &claimAttack, &distance, &claimMoment, &claimAgeMs);
     if (!mine && !bApplying && stdComm_WSRelay_DecidedElsewhere(pSource, damageType))
     {
         // Hit what you see: the attacker's game decides this one, and its
@@ -2421,22 +2489,22 @@ void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThi
         flags = WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(claimMoment);
     }
 
-    wsrelay_js_net_hit(otherId, mine, kind, outcome, (float)damage, flags, attack, 0, distance);
+    wsrelay_js_net_hit(otherId, mine, kind, outcome, (float)damage, flags, attack, 0, distance, bApplying ? claimAgeMs : -1.0f);
 }
 
-void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance, int moment)
+void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance, int moment, float ageMs)
 {
     if (!wsrelay_bNetLive || !otherId)
         return;
-    wsrelay_js_net_hit(otherId, 0, kind, outcome, (float)damage, WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), attack, reason, distance);
+    wsrelay_js_net_hit(otherId, 0, kind, outcome, (float)damage, WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), attack, reason, distance, ageMs);
 }
 
-void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float distance, int moment)
+void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float distance, int moment, float ageMs)
 {
     if (!wsrelay_bNetLive || !otherId)
         return;
     wsrelay_js_net_hit(otherId, 0, STDCOMM_WSRELAY_KIND_FORCE, outcome, 0.0f,
-                       WSRELAY_HITFLAG_BY_MESSAGE | WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), 0, reason, distance);
+                       WSRELAY_HITFLAG_BY_MESSAGE | WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), 0, reason, distance, ageMs);
 }
 
 void stdComm_WSRelay_NoteMotion(int otherId, double bufferMs, uint32_t steps, uint32_t carried, uint32_t held,

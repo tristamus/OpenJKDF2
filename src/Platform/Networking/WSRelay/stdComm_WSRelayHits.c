@@ -244,6 +244,7 @@ static int hits_applyKind = 0;
 static uint32_t hits_applyAttack = 0;
 static float hits_applyDistance = -1.0f;
 static int hits_applyMoment = 0;
+static float hits_applyAgeMs = -1.0f;
 
 // While a targeted Force power this game checked takes effect
 // (stdComm_WSRelay_ForceTakes), which the hit ledger has already.
@@ -914,6 +915,8 @@ static void hits_TakeClaim(int fromNetId, int slot, WSRelayHitsIn* in, double no
     // updates were sent are.
     double clock = stdComm_WSRelay_MotionNow();
     int moment = (flags & HITS_CLAIM_MOMENT) ? STDCOMM_WSRELAY_MOMENT_AT : STDCOMM_WSRELAY_MOMENT_NONE;
+    // How far back that moment is, which the reach limits (-1: none named).
+    float ageMs = moment ? (float)(clock - r) : -1.0f;
     if (v.result == WSRELAYHIT_OK)
     {
         // Where this game's player was at that moment: between the updates
@@ -954,16 +957,17 @@ static void hits_TakeClaim(int fromNetId, int slot, WSRelayHitsIn* in, double no
         hits_applyAttack = ledgerAttack;
         hits_applyDistance = v.distance;
         hits_applyMoment = moment;
+        hits_applyAgeMs = ageMs;
         sithThing_DamageThing(pLocal, pCredit, v.damage, applyType);
         hits_bApplying = 0;
         return;
     }
 
     stdComm_WSRelay_NoteTurnedDown(fromNetId, kind, v.result == WSRELAYHIT_DEAD ? STDCOMM_WSRELAY_DEAD : STDCOMM_WSRELAY_TURNED_DOWN,
-                                   claim.damage, ledgerAttack, v.result, v.distance, moment);
+                                   claim.damage, ledgerAttack, v.result, v.distance, moment, ageMs);
 }
 
-int stdComm_WSRelay_ApplyingClaim(int* pKind, uint32_t* pAttack, float* pDistance, int* pMoment)
+int stdComm_WSRelay_ApplyingClaim(int* pKind, uint32_t* pAttack, float* pDistance, int* pMoment, float* pAgeMs)
 {
     if (!hits_bApplying)
         return 0;
@@ -971,6 +975,7 @@ int stdComm_WSRelay_ApplyingClaim(int* pKind, uint32_t* pAttack, float* pDistanc
     *pAttack = hits_applyAttack;
     *pDistance = hits_applyDistance;
     *pMoment = hits_applyMoment;
+    *pAgeMs = hits_applyAgeMs;
     return 1;
 }
 
@@ -1047,7 +1052,7 @@ int stdComm_WSRelay_ForceTakes(SithThing* pVictim, SithThing* pSource, const uin
         v = stdComm_WSRelayHit_CheckThere(&hits_record, hits_life, target, from, to);
 
     stdComm_WSRelay_NoteTargeted(p->netId, v.result == WSRELAYHIT_OK ? STDCOMM_WSRELAY_HIT : STDCOMM_WSRELAY_TURNED_DOWN,
-                                 v.result, v.distance, moment);
+                                 v.result, v.distance, moment, (float)(clock - r));
     hits_bForce = v.result == WSRELAYHIT_OK;
     return hits_bForce;
 }
@@ -1334,6 +1339,12 @@ int stdComm_WSRelay_MotionWith(int slot)
 {
     WSRelayHitsPeer* p = hits_Peer(slot);
     return p && p->version >= 2 && hits_ClaimsTo(p);
+}
+
+int stdComm_WSRelay_HelloWith(int slot)
+{
+    WSRelayHitsPeer* p = hits_Peer(slot);
+    return p && p->bHello ? p->version : 0;
 }
 
 // ---- Each frame, and each message.

@@ -351,7 +351,7 @@ function makeRtc(world, game) {
 // them, whose player is id in room 1. old: a window with ?netold. relayUrl:
 // the lobby's address, as the page gives it.
 function makeGame(world, { id, old = false, netsim, relayUrl = 'ws://lobby/relay' } = {}) {
-    const game = { id, pcs: [], log: [], queue: null };
+    const game = { id, pcs: [], log: [], queue: null, beacons: [] };
     const Module = { jkRelayUrl: relayUrl };
     if (old) Module.jkNetOld = true;
     if (netsim) Module.jkNetSim = netsim;
@@ -371,6 +371,8 @@ function makeGame(world, { id, old = false, netsim, relayUrl = 'ws://lobby/relay
         WebSocket: makeWebSocket(world), RTCPeerConnection: makeRtc(world, game),
         console: { log: t => game.log.push(t), warn: t => game.log.push(t), error: t => game.log.push(t) },
         window: undefined, location: undefined,
+        // The match summary goes with sendBeacon.
+        navigator: { sendBeacon: (url, body) => game.beacons.push({ url, body: JSON.parse(body) }) > 0 }, fetch: undefined,
     };
     game.js = {};
     for (const [name, fn] of Object.entries(EM_JS)) {
@@ -1127,6 +1129,52 @@ test('a game tells the lobby its build\'s netcode in the address, after what the
     assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE);
     const other = makeGame(world, { id: 3, relayUrl: 'ws://lobby/relay?x=1' });
     assert.equal(other.net.ws.url, 'ws://lobby/relay?x=1&net=' + NETCODE);
+});
+
+test('a game leaving a match posts its summary to /summary on the lobby\'s address, while its links are up, once', async () => {
+    const world = makeWorld();
+    const [host, join] = await room(world, [2]);
+    for (const g of [host, join]) {
+        g.js.wsrelay_js_net_live(1, g.id, g.isHost ? 1 : 0);
+        g.Module.jkNetStats.name(1, 'Jerec');
+        g.Module.jkNetStats.name(2, 'Kyle');
+    }
+    // 40 s of a match: positions both ways, and netstats.js's ticks.
+    for (let i = 0; i < 160; i++) {
+        send(join, 1, position(i), true);
+        send(host, 2, position(i), true);
+        await world.run(250);
+        for (const g of [host, join]) g.Module.jkNetStats.lib.tick();
+    }
+    assert.equal(join.beacons.length, 0);
+    join.js.wsrelay_js_rtc_end();
+    assert.equal(join.beacons.length, 1);
+    assert.equal(join.beacons[0].url, 'http://lobby/summary');
+    const s = join.beacons[0].body;
+    assert.deepEqual([s.v, s.host, s.players, s.others.length, s.others[0].link], [1, false, 2, 1, 'direct']);
+    assert.ok(s.secs >= 39 && s.secs <= 41, 'in the match ' + s.secs + ' s');
+    assert.ok(!/Jerec|Kyle/.test(JSON.stringify(s)));
+    assert.ok(join.net.log.some(line => /match summary sent \(\d+ bytes\)$/.test(line)), join.net.log.join('\n'));
+    join.js.wsrelay_js_rtc_end();
+    assert.equal(join.beacons.length, 1, 'once');
+    // The host's goes when it leaves too.
+    host.js.wsrelay_js_rtc_end();
+    assert.deepEqual(host.beacons.map(b => [b.url, b.body.host]), [['http://lobby/summary', true]]);
+});
+
+test('the summary goes to /summary on the lobby\'s address, or where the page says', async () => {
+    const world = makeWorld();
+    for (const [relayUrl, want] of [['ws://lobby/relay', 'http://lobby/summary'],
+                                    ['wss://jediknight.zone/relay', 'https://jediknight.zone/summary'],
+                                    ['ws://127.0.0.1:8787/relay?x=1#y', 'http://127.0.0.1:8787/summary'],
+                                    ['wss://example.org/lobby/relay', 'https://example.org/lobby/summary']])
+        assert.equal(makeGame(world, { id: 3, relayUrl }).net.summaryUrl(), want, relayUrl);
+    const game = makeGame(world, { id: 4 });
+    game.Module.jkSummaryUrl = 'http://127.0.0.1:9000/x/summary?y=1';
+    assert.equal(game.net.summaryUrl(), 'http://127.0.0.1:9000/x/summary');
+    // Nothing to send: no match.
+    assert.equal(game.net.sendSummary(), false);
+    assert.equal(game.beacons.length, 0);
 });
 
 test('the landing page offers Join for the games of the netcode its game speaks', async () => {
