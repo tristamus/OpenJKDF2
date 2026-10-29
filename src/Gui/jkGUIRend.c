@@ -11,6 +11,9 @@
 #include "Platform/stdControl.h"
 #include "Win95/Window.h"
 #include "Win95/stdGdi.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_Idle
+#endif
 #include "Win95/stdSound.h"
 #include "General/stdString.h"
 #include "Primitives/rdRect.h"
@@ -403,6 +406,12 @@ int32_t jkGuiRend_DisplayAndReturnClicked(jkGuiMenu *menu)
             if ( menu->idkFunc && !menu->lastClicked )
                 menu->idkFunc(menu);
         }
+#ifdef PLATFORM_WSRELAY
+        // Added: the game doesn't receive while a menu is up (the 30 s stats
+        // screen), and an Imperial Network Protocol server drops players it
+        // doesn't hear from for 20 s.
+        stdComm_Imperial_Idle();
+#endif
     }
     jkGuiRend_sub_50FDB0();
     --jkGuiRend_menuNestDepth;
