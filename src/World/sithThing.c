@@ -475,7 +475,15 @@ flex_t sithThing_DamageThing(SithThing *pThing, SithThing *pDamageThing, flex_t 
 #ifdef PLATFORM_WSRELAY
     // Added: the hit ledger, for hits between players
     if ( sithNet_isMulti && pThing->type == SITH_THING_PLAYER && pDamageThing )
+    {
         stdComm_WSRelay_NoteHit(pThing, pDamageThing, damage, hitType, STDCOMM_WSRELAY_HIT);
+
+        // Added: Hit what you see. This game claims its own player's hits on
+        // others, and a hit on its player that the attacker's game claims
+        // only shows here.
+        if ( stdComm_WSRelay_ClaimHit(pThing, pDamageThing, damage, hitType) )
+            return 0.0;
+    }
 #endif
     if ( (pThing->flags & (SITH_TF_DISABLED|SITH_TF_DEAD|SITH_TF_DESTROYED)) != 0 )
         return 0.0;

@@ -546,6 +546,51 @@ test('the host passes a joiner\'s updates on over its fast lane, or without the 
     assert.equal(four.net.seqFrom['2 4'].seq, two.net.seqTo[4]);
 });
 
+// What the engine reads for the next game packet (wsrelay_js_recv), past
+// the lobby's text: its length, whether it came on the fast lane, and its
+// number.
+function recv(game) {
+    const view = new DataView(game.mem.buffer);
+    for (;;) {
+        const len = game.js.wsrelay_js_recv(2048, 4096, 8000, 8008);
+        if (len >= 0 && view.getInt32(8000, true)) continue;
+        return { len, fast: view.getInt32(8008, true), seq: view.getUint32(8012, true),
+                 n: len >= 16 ? view.getUint32(2048 + 12, true) : null };
+    }
+}
+
+test('a fast lane update reaches the engine with its number, and its sender knows when it sent that one', async () => {
+    const world = makeWorld();
+    world.lobby.links = false;
+    const [host, two, three] = await room(world, [2, 3]);
+    send(two, 1, position(1), true);
+    const sentAt = world.now();
+    send(two, 1, message(2));
+    await world.run(100);
+    const a = recv(host), b = recv(host);
+    assert.deepEqual([a.n, a.fast, a.seq], [1, 1, two.net.seqTo[1]]);
+    assert.deepEqual([b.n, b.fast], [2, 0], 'a reliable message has no number');
+    assert.equal(recv(host).len, -1);
+    // A claim names the update; the sender looks up when it went.
+    assert.equal(two.js.wsrelay_js_seq_sent_at(1, a.seq), sentAt);
+    assert.equal(two.js.wsrelay_js_seq_sent_at(1, a.seq + 1), -1);
+    assert.equal(two.js.wsrelay_js_seq_sent_at(3, a.seq), -1, 'numbers are each receiver\'s own');
+    assert.equal(two.js.wsrelay_js_now(), world.now());
+    // Through the host to another joiner, with the number the sender gave it
+    // for that joiner.
+    await world.run(1000);
+    send(two, 3, position(3), true);
+    const sentAt3 = world.now();
+    await world.run(200);
+    const c = recv(three);
+    assert.deepEqual([c.n, c.fast, c.seq], [3, 1, two.net.seqTo[3]]);
+    assert.equal(two.js.wsrelay_js_seq_sent_at(3, c.seq), sentAt3);
+    // It remembers the last 256 it sent each player.
+    for (let i = 0; i < 256; i++) send(two, 3, position(10 + i), true);
+    assert.equal(two.js.wsrelay_js_seq_sent_at(3, c.seq), -1);
+    assert.ok(two.js.wsrelay_js_seq_sent_at(3, c.seq + 1) > 0);
+});
+
 test('behind a backlog, an update is dropped rather than sent late', async () => {
     const world = makeWorld();
     const [host, join] = await room(world, [2]);

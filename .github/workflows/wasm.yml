@@ -74,6 +74,13 @@ jobs:
       # and TURN credentials, with made-up browsers, WebRTC and lobby.
       - name: Test network paths
         run: node packaging/wasm/test/transport-test.mjs
+      # Hit what you see's check on a hit claim, on its own in C, with
+      # made-up records of where a player was and made-up claims.
+      - name: Test the hit claim check
+        run: |
+          cc -std=c11 -O2 -Wall -Werror -o hitcheck-test packaging/wasm/test/hitcheck-test.c \
+             src/Platform/Networking/WSRelay/stdComm_WSRelayHitCheck.c -lm
+          ./hitcheck-test
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

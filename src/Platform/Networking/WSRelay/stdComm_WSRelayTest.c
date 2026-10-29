@@ -11,7 +11,9 @@
 //                          strafe, not the same one every time.
 //                          "strafe:fists" holds fists instead, which block
 //                          nothing, and "strafe:400" strafes 400 ms each way
-//                          ("strafe:fists,400" for both).
+//                          ("strafe:fists,400" for both). With "run" (here
+//                          or after attack's weapon), the player runs, as
+//                          most do with Always run on: "strafe:fists,run".
 //   ?nettest=attack        closes in on the nearest other player and swings
 //                          the saber at it. A weapon after it is used
 //                          instead, and the player gets it and its ammo:
@@ -131,6 +133,7 @@ static int wsrelay_testTries = 0;       // presses of the weapon key since it wa
 static int wsrelay_testMelee = 1;       // the saber or fists, not a gun
 static int wsrelay_testFire = INPUT_FUNC_FIRE1;
 static uint32_t wsrelay_testStrafeMs = 700;
+static int wsrelay_testRun = 0;         // the run key held throughout
 static flex_t wsrelay_testCount = 0.0; // of the weapon, last frame
 static int wsrelay_testCycle = 0;       // attack:all
 static int wsrelay_testStepSecs = WSRELAY_TEST_STEP_SECS;
@@ -261,6 +264,8 @@ static void wsrelay_TestReadMode()
             key = wsrelay_TestWeaponKey(pArg);
         else if (!strcmp(pArg, "alt"))
             alt = 1;
+        else if (!strcmp(pArg, "run"))
+            wsrelay_testRun = 1;
         else if (!strcmp(pArg, "all") && wsrelay_testMode == WSRELAY_TEST_ATTACK)
             wsrelay_testCycle = 1;
         else if (wsrelay_testMode == WSRELAY_TEST_STRAFE && atoi(pArg) >= 100)
@@ -424,6 +429,7 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
 
     // Someone's playing: no idle camera after 30 s (sithControl_Update).
     stdControl_bControlsIdle = 0;
+    wsrelay_aTestHeld[INPUT_FUNC_FAST] = wsrelay_testRun;
 
     // attack:all's steps go by the clock, alive or not.
     int quiet = wsrelay_testCycle && wsrelay_TestCycle(now);

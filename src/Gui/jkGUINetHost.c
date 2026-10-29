@@ -63,6 +63,22 @@ enum jkGuiNetHostElement_t
 enum jkGuiNetHostAdvancedElement_t
 {
     NETHOST_TICKRATE_TEXTBOX = 3,
+#ifdef QOL_IMPROVEMENTS
+    NETHOST_DEDICATED_CHECKBOX = 4,
+    NETHOST_COOP_CHECKBOX = 5,
+    NETHOST_ADVANCED_ADDED = 6,
+#else
+    NETHOST_ADVANCED_ADDED = 4,
+#endif
+#ifdef PLATFORM_WSRELAY
+    // Added: the hit rules (stdComm_WSRelayHits.c).
+    NETHOST_CLASSICHITS_CHECKBOX = NETHOST_ADVANCED_ADDED,
+    NETHOST_HITREACH_TEXTBOX = NETHOST_ADVANCED_ADDED + 2,
+    NETHOST_ADVANCED_OK_BUTTON = NETHOST_ADVANCED_ADDED + 3,
+#else
+    NETHOST_ADVANCED_OK_BUTTON = NETHOST_ADVANCED_ADDED,
+#endif
+    NETHOST_ADVANCED_CANCEL_BUTTON = NETHOST_ADVANCED_OK_BUTTON + 1,
 };
 
 static int32_t jkGuiNetHost_aIdk[2] = {0xd, 0xe};
@@ -157,7 +173,7 @@ static jkGuiMenu jkGuiNetHost_menuMots =
 static jkGuiElement* jkGuiNetHost_pElements = jkGuiNetHost_aElements;
 static jkGuiMenu* jkGuiNetHost_pMenu = &jkGuiNetHost_menu;
 
-static jkGuiElement jkGuiNetHost_aSettingsElements[9] =
+static jkGuiElement jkGuiNetHost_aSettingsElements[] =
 {
     { ELEMENT_TEXT, 0, 0, NULL, 3, { 0, 410, 640, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT, 0, 6, "GUI_MULTIPLAYER", 3, { 20, 20, 600, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -166,6 +182,11 @@ static jkGuiElement jkGuiNetHost_aSettingsElements[9] =
 #ifdef QOL_IMPROVEMENTS
     { ELEMENT_CHECKBOX, 0, 0, "GUIEXT_DEDICATED_SERVER", 0, { 70, 270, 200, 40 }, 1, 0, "GUIEXT_DEDICATED_SERVER_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX, 0, 0, "GUIEXT_COOP", 0, { 70, 300, 200, 40 }, 1, 0, "GUIEXT_COOP_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
+#ifdef PLATFORM_WSRELAY
+    { ELEMENT_CHECKBOX, 0, 0, "GUIEXT_CLASSIC_HITS", 0, { 70, 330, 300, 40 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT, 0, 0, "GUIEXT_HIT_REACH", 2, { 70, 360, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBOX, 0, 0, NULL, 0, { 280, 370, 50, 20 }, 1, 0, "GUIEXT_HIT_REACH_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_TEXTBUTTON, GUI_OK, 2, "GUI_OK", 3, { 420, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, GUI_CANCEL, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -204,6 +225,26 @@ int wstr_to_int_clamped(char16_t *pWstr, int minVal, int maxVal)
 
     return val;
 }
+
+#ifdef PLATFORM_WSRELAY
+// Added: the hit rules this game hosts by, on the Advanced screen: Hit what
+// you see unless Classic is checked, and how far back a hit can reach.
+static char16_t jkGuiNetHost_hitReachText[32];
+
+static void jkGuiNetHost_ShowHitRules()
+{
+    jkGuiNetHost_aSettingsElements[NETHOST_CLASSICHITS_CHECKBOX].selectedTextEntry = !!stdComm_WSRelay_bClassicHits;
+    jk_snwprintf(jkGuiNetHost_hitReachText, 0x20u, u"%d", stdComm_WSRelay_ClampReach(stdComm_WSRelay_hitReachMs));
+    jkGuiNetHost_aSettingsElements[NETHOST_HITREACH_TEXTBOX].wstr = jkGuiNetHost_hitReachText;
+    jkGuiNetHost_aSettingsElements[NETHOST_HITREACH_TEXTBOX].selectedTextEntry = 8;
+}
+
+static void jkGuiNetHost_TakeHitRules()
+{
+    stdComm_WSRelay_bClassicHits = !!jkGuiNetHost_aSettingsElements[NETHOST_CLASSICHITS_CHECKBOX].selectedTextEntry;
+    stdComm_WSRelay_hitReachMs = wstr_to_int_clamped(jkGuiNetHost_hitReachText, STDCOMM_WSRELAY_REACH_MIN, STDCOMM_WSRELAY_REACH_MAX);
+}
+#endif
 
 // Added: Make sure stuff actually gets into the registry
 void jkGuiNetHost_SaveSettings()
@@ -247,6 +288,10 @@ void jkGuiNetHost_SaveSettings()
     wuRegistry_SaveBool("bUseTimeLimit", jkGuiNetHost_gameFlags & MULTIMODEFLAG_TIMELIMIT);
     wuRegistry_SaveBool("bIsSingleLevel", jkGuiNetHost_gameFlags & MULTIMODEFLAG_SINGLE_LEVEL);
     wuRegistry_SaveBool("bIsTeams", jkGuiNetHost_gameFlags & MULTIMODEFLAG_TEAMS);
+#endif
+#ifdef PLATFORM_WSRELAY
+    wuRegistry_SaveBool("bClassicHits", stdComm_WSRelay_bClassicHits);
+    wuRegistry_SaveInt("hitReachMs", stdComm_WSRelay_hitReachMs);
 #endif
 }
 
@@ -352,6 +397,10 @@ void jkGuiNetHost_LoadSettings()
         jkGuiNetHost_gameFlags &= ~MULTIMODEFLAG_TEAMS;
     }
 
+#endif
+#ifdef PLATFORM_WSRELAY
+    stdComm_WSRelay_bClassicHits = !!wuRegistry_GetBool("bClassicHits", stdComm_WSRelay_bClassicHits);
+    stdComm_WSRelay_hitReachMs = stdComm_WSRelay_ClampReach(wuRegistry_GetInt("hitReachMs", stdComm_WSRelay_hitReachMs));
 #endif
 }
 
@@ -593,21 +642,29 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
             jkGuiNetHost_aSettingsElements[NETHOST_TICKRATE_TEXTBOX].wstr = a1;
             jkGuiNetHost_aSettingsElements[NETHOST_TICKRATE_TEXTBOX].selectedTextEntry = 32;
 #ifdef QOL_IMPROVEMENTS
-            jkGuiNetHost_aSettingsElements[4].selectedTextEntry = jkGuiNetHost_bIsDedicated;
-            jkGuiNetHost_aSettingsElements[5].selectedTextEntry = jkGuiNetHost_bIsCoop;
+            jkGuiNetHost_aSettingsElements[NETHOST_DEDICATED_CHECKBOX].selectedTextEntry = jkGuiNetHost_bIsDedicated;
+            jkGuiNetHost_aSettingsElements[NETHOST_COOP_CHECKBOX].selectedTextEntry = jkGuiNetHost_bIsCoop;
 #endif
-            jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[4]);
-            jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[5]);
+#ifdef PLATFORM_WSRELAY
+            jkGuiNetHost_ShowHitRules();
+#endif
+            // Fixed: Return and Escape are Ok and Cancel. They were the
+            // checkboxes Added under them, so Return checked Dedicated Server.
+            jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[NETHOST_ADVANCED_OK_BUTTON]);
+            jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[NETHOST_ADVANCED_CANCEL_BUTTON]);
             if ( jkGuiRend_DisplayAndReturnClicked(&jkGuiNetHost_menuSettings) == GUI_OK )
             {
                 pMultiEntry->sessionFlags = 0;
                 pMultiEntry->tickRateMs = wstr_to_int_clamped(a1, TICKRATE_MIN, TICKRATE_MAX);
                 jkGuiNetHost_tickRate = pMultiEntry->tickRateMs;
                 jkGuiNetHost_sessionFlags = pMultiEntry->sessionFlags;
+#ifdef PLATFORM_WSRELAY
+                jkGuiNetHost_TakeHitRules();
+#endif
             }
 #ifdef QOL_IMPROVEMENTS
-            jkGuiNetHost_bIsDedicated = !!jkGuiNetHost_aSettingsElements[4].selectedTextEntry;
-            jkGuiNetHost_bIsCoop = !!jkGuiNetHost_aSettingsElements[5].selectedTextEntry;
+            jkGuiNetHost_bIsDedicated = !!jkGuiNetHost_aSettingsElements[NETHOST_DEDICATED_CHECKBOX].selectedTextEntry;
+            jkGuiNetHost_bIsCoop = !!jkGuiNetHost_aSettingsElements[NETHOST_COOP_CHECKBOX].selectedTextEntry;
 
             jkEpisodeTypeFlags_t loadMask = (JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF);
             if (Main_bMotsCompat)
@@ -638,8 +695,12 @@ int jkGuiNetHost_sub_4118C0(jkMultiEntry3 *pEntry)
     jk_snwprintf(a1a, 0x20u, u"%d", jkGuiNetHost_tickRate);
     jkGuiNetHost_aSettingsElements[NETHOST_TICKRATE_TEXTBOX].wstr = a1a;
     jkGuiNetHost_aSettingsElements[NETHOST_TICKRATE_TEXTBOX].selectedTextEntry = 32;
-    jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[4]);
-    jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[5]);
+#ifdef PLATFORM_WSRELAY
+    jkGuiNetHost_ShowHitRules();
+#endif
+    // Fixed: Ok and Cancel, as above.
+    jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[NETHOST_ADVANCED_OK_BUTTON]);
+    jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[NETHOST_ADVANCED_CANCEL_BUTTON]);
     v1 = jkGuiRend_DisplayAndReturnClicked(&jkGuiNetHost_menuSettings);
     if ( v1 == GUI_OK )
     {
@@ -648,6 +709,9 @@ int jkGuiNetHost_sub_4118C0(jkMultiEntry3 *pEntry)
         pEntry->tickRateMs = tickRate;
         jkGuiNetHost_tickRate = tickRate;
         jkGuiNetHost_sessionFlags = pEntry->sessionFlags;
+#ifdef PLATFORM_WSRELAY
+        jkGuiNetHost_TakeHitRules();
+#endif
     }
     return v1;
 }
