@@ -1,6 +1,6 @@
 # jkdf2mp: Jedi Knight multiplayer in your browser
 
-**Play: https://jkdf2mp.jkdf2mp-lobby.workers.dev/** (desktop Chrome or Firefox, plus your own copy of the game)
+**Play: https://jediknight.zone/** (desktop Chrome or Firefox, plus your own copy of the game)
 
 This fork of [OpenJKDF2](https://github.com/shinyquagsire23/OpenJKDF2) lets you play **Star Wars Jedi Knight: Dark Forces II** and **Mysteries of the Sith** multiplayer in a web browser. Open the page, pick the folder where the game is installed, then host a match or join one from the game's own Multiplayer menu. There's nothing to install and no port forwarding to set up.
 
