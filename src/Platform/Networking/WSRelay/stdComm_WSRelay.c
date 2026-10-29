@@ -108,8 +108,12 @@
 // to a joiner that has no fast lane. Everything else stays on the reliable
 // channel, for the reason above.
 //
-// ?netold leaves out the fast lane, the switch, links between clients and
-// TURN, so its links work as they did before them, to compare.
+// A joiner downloading a map or mod from the host opens a few more links to
+// it while the download runs, each its own RTCPeerConnection, since a data
+// channel carries only so much at a time (net.mapBulk).
+//
+// ?netold leaves out the fast lane, the switch, links between clients, TURN
+// and transfer links, so its links work as they did before them, to compare.
 
 #include "stdComm_WSRelay.h"
 
@@ -166,6 +170,7 @@ EM_JS(void, wsrelay_js_connect, (), {
                                         fastSent: 0, fastRecv: 0, fastOld: 0, fastBacklog: 0 },
                                log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
                                seqTo: {}, seqSent: {}, seqFrom: {}, links: {}, lobbyCan: [], pending: {},
+                               bulk: {}, bulkUse: {},
                                turn: null, turnEnds: 0, iceUntil: 0, iceAsked: false, iceAskedAt: 0, iceWaiters: [],
                                session: false, sessionNo: 0, hostTries: 0, hostRetry: null };
 
@@ -195,7 +200,8 @@ EM_JS(void, wsrelay_js_connect, (), {
                 var p = net.peers[id], heard = net.lastFrom[id];
                 line += '; player ' + id + ' ' + (p ? (p.open ? 'direct' : p.joiner ? 'through the host' : 'relay') + ' (' + p.pc.connectionState +
                     ', channel ' + p.dc.readyState + ', ' + p.dc.bufferedAmount + ' bytes waiting' +
-                    (p.pos ? ', fast lane ' + p.pos.readyState : '') + ')' : 'relay') +
+                    (p.pos ? ', fast lane ' + p.pos.readyState : '') +
+                    (net.bulkCount(id) ? ', ' + net.bulkCount(id) + ' transfer links' : '') + ')' : 'relay') +
                     ', heard ' + (heard ? ((now - heard) / 1000).toFixed(1) + ' s ago' : 'never');
             });
             line += '; sent ' + (s.dcSent - was.dcSent) + ' direct, ' + (s.fastSent - was.fastSent) + ' fast (' +
@@ -292,12 +298,13 @@ EM_JS(void, wsrelay_js_connect, (), {
 
         /* What this game adds to its offer or answer: that it has netstats.js,
            so the other end may open the measurements' channel with it, that
-           it has the fast lane, and that it switches to a link and back (see
-           the top of the file). */
+           it has the fast lane, that it switches to a link and back (see
+           the top of the file), and that it takes transfer links
+           (net.mapBulk). */
         net.extras = function() {
             var x = {};
             if (Module.jkNetStats) x.ns = 1;
-            if (!Module['jkNetOld']) x.pos = x.sw = 1;
+            if (!Module['jkNetOld']) x.pos = x.sw = x.bulk = 1;
             return x;
         };
 
@@ -331,6 +338,7 @@ EM_JS(void, wsrelay_js_connect, (), {
             if (x && x.ns) net.nsChannel(id, p);
             if (x && x.pos) net.posChannel(id, p);
             if (x && x.sw && !Module['jkNetOld']) p.sw = true;
+            if (x && x.bulk && !Module['jkNetOld']) p.bulkOk = true;
         };
 
         net.nsOpen = function(id) {
@@ -363,10 +371,12 @@ EM_JS(void, wsrelay_js_connect, (), {
             if (p.ns) try { p.ns.close(); } catch (e) {}
             if (p.pos) try { p.pos.close(); } catch (e) {}
             try { p.pc.close(); } catch (e) {}
+            net.closeBulk(id);
         };
 
         net.closeAll = function() {
             for (var id in net.peers) net.closePeer(id);
+            for (var id in net.bulk) net.closeBulk(id);
         };
 
         net.offer = function(id) {
@@ -382,6 +392,10 @@ EM_JS(void, wsrelay_js_connect, (), {
 
         net.onSignal = function(from, obj) {
             if (!net.rtcEnabled()) return;
+            if (obj.b !== undefined) {
+                net.onBulkSignal(from, obj);
+                return;
+            }
             var p;
             if (obj.d && obj.d.type === 'offer') {
                 // A host answers its joiners, a joiner another joiner with a
@@ -811,6 +825,17 @@ EM_JS(void, wsrelay_js_connect, (), {
            went, or null. */
         net.mapSend = function(id, bytes, via) {
             var p = net.peers[id];
+            var n = net.bulkNumber(via);
+            if (n) {
+                var l = (net.bulk[id] || {})[n];
+                if (!l || !net.bulkOpen(l)) return null;
+                try {
+                    l.mc.send(bytes);
+                    return via;
+                } catch (e) {
+                    return null;
+                }
+            }
             if (via !== 'relay' && net.mapDirect(id)) {
                 try {
                     p.mc.send(bytes);
@@ -825,6 +850,158 @@ EM_JS(void, wsrelay_js_connect, (), {
         net.mapDirect = function(id) {
             var p = net.peers[id];
             return !!(p && p.open && p.mc.readyState === 'open');
+        };
+
+        /* Transfer links: more links to the host while a map or mod download
+           runs. A data channel carries only so much at a time however fast
+           the connection (in Chrome about 2 MB/s at a 50 ms round trip,
+           packaging/wasm/test/transfer-bench.mjs), and each RTCPeerConnection
+           has its own, so maps.js asks for these while it downloads
+           (net.mapBulk) and spreads the download over them and the map
+           channel (net.mapLanes), each lane named 'direct' and its number.
+           Each is a connection of its own with only a map channel, whose
+           signals carry its number ({"b": n}). A joiner offers them only to
+           a host that said it takes them ({"x": {"bulk": 1}}): one from
+           before them would take the offer for the main link. They close
+           20 s after the last download, or with the main link. */
+        var BULK_LINKS = 3, BULK_IDLE_MS = 20000, BULK_UP_MS = 15000, BULK_RETRY_MS = 30000, BULK_HOST_MAX = 12;
+
+        net.bulkNumber = function(via) {
+            var m = /^direct([1-9])$/.exec(via || '');
+            return m && +m[1] <= BULK_LINKS ? +m[1] : 0;
+        };
+
+        net.bulkOpen = function(l) {
+            var cs = l.pc.connectionState;
+            return l.mc.readyState === 'open' && cs !== 'disconnected' && cs !== 'failed' && cs !== 'closed';
+        };
+
+        net.bulkCount = function(id) {
+            var n = 0;
+            if (id === undefined) {
+                for (var k in net.bulk) n += net.bulkCount(k);
+                return n;
+            }
+            for (var k in net.bulk[id] || {}) n++;
+            return n;
+        };
+
+        /* A new transfer link with player id, number n, in place of any
+           before it. */
+        net.bulkLink = function(id, n) {
+            var pc;
+            try {
+                pc = new RTCPeerConnection({ iceServers: net.iceServers() });
+            } catch (e) {
+                pc = new RTCPeerConnection({ iceServers: net.ice || Module['jkIceServers'] || [] });
+            }
+            var mc = pc.createDataChannel('jk-map', { negotiated: true, id: 1 });
+            mc.binaryType = 'arraybuffer';
+            net.closeBulkLink(id, n);
+            var links = net.bulk[id] = net.bulk[id] || {};
+            var l = links[n] = { pc: pc, mc: mc, at: performance.now() };
+            var mine = function() { return !!net.bulk[id] && net.bulk[id][n] === l; };
+            var via = 'direct' + n;
+            mc.onmessage = function(ev) { if (mine() && Module.jkMaps) Module.jkMaps.onFrame(id, ev.data, via); };
+            mc.onopen = function() { if (mine()) net.note('transfer link ' + n + ' to player ' + id + ' is up'); };
+            pc.onicecandidate = function(ev) { if (ev.candidate && mine()) net.signal(id, { b: n, c: ev.candidate.toJSON() }); };
+            var update = function() {
+                var cs = pc.connectionState;
+                if (cs === 'failed' || cs === 'closed' || mc.readyState === 'closed') net.closeBulkLink(id, n, l);
+            };
+            pc.onconnectionstatechange = update;
+            mc.onclose = update;
+            return l;
+        };
+
+        /* Closes link n with player id, if it's still l when l is given. */
+        net.closeBulkLink = function(id, n, l) {
+            var links = net.bulk[id];
+            if (!links || !links[n] || (l && links[n] !== l)) return;
+            l = links[n];
+            delete links[n];
+            try { l.mc.close(); } catch (e) {}
+            try { l.pc.close(); } catch (e) {}
+        };
+
+        net.closeBulk = function(id) {
+            for (var n in net.bulk[id] || {}) net.closeBulkLink(id, n);
+            delete net.bulk[id];
+        };
+
+        /* maps.js downloading from player id (on) or done (off). While any
+           download runs the joiner keeps up to BULK_LINKS links to it. */
+        net.mapBulk = function(id, on) {
+            var w = net.bulkUse[id] = net.bulkUse[id] || { n: 0, idle: null, tried: {} };
+            clearTimeout(w.idle);
+            w.idle = null;
+            if (on) {
+                w.n++;
+                net.bulkOffer(id);
+                return;
+            }
+            if (w.n > 0) w.n--;
+            if (!w.n) w.idle = setTimeout(function() {
+                w.idle = null;
+                if (!w.n) net.closeBulk(id);
+            }, BULK_IDLE_MS);
+        };
+
+        /* Offers the links a download could use and doesn't have: once the
+           main link is up, again for one that isn't up after BULK_UP_MS, and
+           at most every BULK_RETRY_MS for each. */
+        net.bulkOffer = function(id) {
+            var w = net.bulkUse[id], p = net.peers[id];
+            if (!w || !w.n || !p || !p.bulkOk || net.isHost || !net.mapDirect(id) || Module['jkNetOld'] || net.state !== 1) return;
+            var now = performance.now();
+            var links = net.bulk[id] || {};
+            for (var n = 1; n <= BULK_LINKS; n++) {
+                var l = links[n];
+                if (l && (net.bulkOpen(l) || now - l.at < BULK_UP_MS)) continue;
+                if (w.tried[n] !== undefined && now - w.tried[n] < BULK_RETRY_MS) continue;
+                w.tried[n] = now;
+                (function(n) {
+                    var l = net.bulkLink(id, n);
+                    l.pc.createOffer()
+                        .then(function(o) { return l.pc.setLocalDescription(o); })
+                        .then(function() { if ((net.bulk[id] || {})[n] === l) net.signal(id, { b: n, d: l.pc.localDescription.toJSON() }); })
+                        .catch(function(e) { net.closeBulkLink(id, n, l); });
+                })(n);
+            }
+        };
+
+        /* The ways to player id a download can use now: the map channel and
+           the transfer links that are up, or none for the relay. */
+        net.mapLanes = function(id) {
+            net.bulkOffer(id);
+            var lanes = net.mapDirect(id) ? ['direct'] : [];
+            var links = net.bulk[id] || {};
+            for (var n = 1; n <= BULK_LINKS; n++) {
+                if (links[n] && net.bulkOpen(links[n])) lanes.push('direct' + n);
+            }
+            return lanes;
+        };
+
+        /* A transfer link's offer, answer or ICE candidate. The host answers
+           its joiners' offers, BULK_HOST_MAX links at most at once. */
+        net.onBulkSignal = function(from, obj) {
+            var n = obj.b;
+            if (typeof n !== 'number' || n !== (n | 0) || n < 1 || n > BULK_LINKS || Module['jkNetOld']) return;
+            var l = (net.bulk[from] || {})[n];
+            if (obj.d && obj.d.type === 'offer') {
+                if (!net.isHost || from < 2 || !net.peers[from]) return;
+                if (!l && net.bulkCount() >= BULK_HOST_MAX) return;
+                l = net.bulkLink(from, n);
+                l.pc.setRemoteDescription(obj.d)
+                    .then(function() { return l.pc.createAnswer(); })
+                    .then(function(a) { return l.pc.setLocalDescription(a); })
+                    .then(function() { if ((net.bulk[from] || {})[n] === l) net.signal(from, { b: n, d: l.pc.localDescription.toJSON() }); })
+                    .catch(function(e) { net.closeBulkLink(from, n, l); });
+            } else if (obj.d && l) {
+                l.pc.setRemoteDescription(obj.d).catch(function(e) { net.closeBulkLink(from, n, l); });
+            } else if (obj.c && l) {
+                l.pc.addIceCandidate(obj.c).catch(function() {});
+            }
         };
 
         /* TURN. A lobby that says "turn" hands out short-lived credentials

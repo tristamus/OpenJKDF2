@@ -62,15 +62,16 @@
     var TAIL_MOD = 1, TAIL_PACK = 2;
     var MAX_NAME = 63;
     var PACK_FP_BYTES = 16;
-    // What can be sent. Set by this page, not by the browser or the lobby, and
-    // higher than a map's, since a few mods ticked together soon pass 100 MB.
+    // What can be sent. Set by this page, not by the browser or the lobby: a
+    // joiner holds the mod once as files and, for a moment, once more while
+    // checking it, so 1 GB of mods needs about 2 GB of the tab's memory.
     // Bigger mods are still fingerprinted, so a joiner with the same folder can
     // use theirs.
-    var MAX_MOD_BYTES = 250 * 1024 * 1024;
-    var MAX_MOD_FILES = 10000;
-    var MAX_PACK_BYTES = 1024 * 1024 * 1024;
+    var MAX_MOD_BYTES = 1024 * 1024 * 1024;
+    var MAX_MOD_FILES = 50000;
+    var MAX_PACK_BYTES = 2047 * 1024 * 1024;
     var MAX_PACK_FILES = 50000;
-    var MAX_STORED_MOD_BYTES = 500 * 1024 * 1024;
+    var MAX_STORED_MOD_BYTES = 2048 * 1024 * 1024;
     var MAX_PATH = 127; // a GOB entry name is char[128]
     var MAX_DEPTH = 8;
     var GOB_ENTRY = 136;
@@ -158,8 +159,10 @@
     }
 
     // Packs the files into a GOB: "GOB ", version 20, the table's offset, the
-    // files back to back, then the table (Win95/stdGob.h).
-    function packFiles(files, readFile) {
+    // files back to back, then the table (Win95/stdGob.h). In pieces: the
+    // header, each file as readFile gives it, and the table, so nothing is
+    // copied until the whole is needed in one piece (bytes()).
+    function packPieces(files, readFile) {
         if (files.length > MAX_PACK_FILES)
             throw fail('too-many-files');
         var dataBytes = 0;
@@ -168,33 +171,63 @@
         if (dataBytes > MAX_PACK_BYTES)
             throw fail('too-big');
         var tableOffs = 12 + dataBytes;
-        var total = tableOffs + 4 + files.length * GOB_ENTRY;
-        var out = new Uint8Array(total);
-        var v = new DataView(out.buffer);
-        out.set([0x47, 0x4F, 0x42, 0x20], 0);
-        v.setUint32(4, 20, true);
-        v.setUint32(8, tableOffs, true);
-        v.setUint32(tableOffs, files.length, true);
+        var head = new Uint8Array(12);
+        var hv = new DataView(head.buffer);
+        head.set([0x47, 0x4F, 0x42, 0x20], 0);
+        hv.setUint32(4, 20, true);
+        hv.setUint32(8, tableOffs, true);
+        var table = new Uint8Array(4 + files.length * GOB_ENTRY);
+        var tv = new DataView(table.buffer);
+        tv.setUint32(0, files.length, true);
+        var parts = [head];
         var at = 12;
         var entries = [];
         files.forEach(function(f, i) {
             var bytes = readFile(f);
             if (bytes.length !== f.size)
                 throw fail('changed');
-            out.set(bytes, at);
-            var e = tableOffs + 4 + i * GOB_ENTRY;
-            v.setUint32(e, at, true);
-            v.setUint32(e + 4, f.size, true);
+            parts.push(bytes);
+            var e = 4 + i * GOB_ENTRY;
+            tv.setUint32(e, at, true);
+            tv.setUint32(e + 4, f.size, true);
             for (var j = 0; j < f.rel.length; j++)
-                out[e + 8 + j] = f.rel.charCodeAt(j);
+                table[e + 8 + j] = f.rel.charCodeAt(j);
             entries.push({ offset: at, size: f.size, name: f.rel });
             at += f.size;
         });
-        return { bytes: out, entries: entries };
+        parts.push(table);
+        return { data: lib.pieces(parts), entries: entries, parts: parts };
+    }
+
+    function packFiles(files, readFile) {
+        var p = packPieces(files, readFile);
+        return { bytes: p.data.bytes(), entries: p.entries };
+    }
+
+    // The mod's files as the file system holds them, not copied.
+    function readMod(f) {
+        return core.fileBytes(f.path);
     }
 
     function pack(dir) {
-        return packFiles(listFiles(dir), function(f) { return FS().readFile(f.path); });
+        return packFiles(listFiles(dir), readMod);
+    }
+
+    // What a fingerprint was worked out from: each file's name, and the bytes
+    // the file system holds for it. While they're the same arrays, the
+    // fingerprint still holds and needn't be worked out again to host.
+    function sameParts(a, b) {
+        if (!a || !b || a.length !== b.length)
+            return false;
+        for (var i = 0; i < a.length; i++) {
+            if (a[i].buffer !== b[i].buffer || a[i].byteOffset !== b[i].byteOffset || a[i].length !== b[i].length)
+                return false;
+        }
+        return true;
+    }
+
+    function fileParts(p) {
+        return p.parts.slice(1, -1);
     }
 
     // What may be sent as references: each file, and each file inside a GOB
@@ -205,7 +238,7 @@
             ranges.push(e);
             if (!/\.go[bo]$/i.test(e.name))
                 continue;
-            var inner = p.bytes.subarray(e.offset, e.offset + e.size);
+            var inner = p.data ? p.data.read(e.offset, e.size) : p.bytes.subarray(e.offset, e.offset + e.size);
             var dir = lib.parseGob(function(o, n) { return inner.subarray(o, o + n); }, inner.length);
             if (!dir)
                 continue;
@@ -240,10 +273,11 @@
         var fs = FS();
         try {
             fs.mkdirTree(dir);
+            // Each file is a view of the pack, which the file system keeps.
             for (var e of gob.entries) {
                 var path = dir + '/' + e.name;
                 fs.mkdirTree(path.substring(0, path.lastIndexOf('/')));
-                fs.writeFile(path, bytes.slice(e.offset, e.offset + e.size));
+                fs.writeFile(path, bytes.subarray(e.offset, e.offset + e.size), { canOwn: true });
             }
         } catch (err) {
             throw fail('install');
@@ -320,6 +354,7 @@
     var current = null;   // { fp, name, path } of the running mod, or null
     var target = null;    // where the next restart goes, the same shape
     var fingerprints = {}; // path -> Promise<fp>
+    var sigs = {};        // path -> the file parts its fingerprint was worked out from
     var unpacked = {};    // netmods folder name -> fp, this session
 
     // Mod folders the page found and loaded: [{ name, path }], path relative
@@ -328,14 +363,32 @@
         return Array.isArray(Module.jkModFolders) ? Module.jkModFolders : [];
     }
 
+    // The fingerprint of the mod folder at path, under the game folder root.
+    async function fingerprintAt(root, path) {
+        var p = packPieces(listFiles(root + '/' + path), readMod);
+        var fp = await lib.sha256(p.data.bytes());
+        sigs[path] = fileParts(p);
+        return fp;
+    }
+
     function fingerprint(path) {
         if (!fingerprints[path]) {
-            fingerprints[path] = (async function() {
-                return lib.sha256(pack(core.gameRoot() + '/' + path).bytes);
-            })();
+            fingerprints[path] = fingerprintAt(core.gameRoot(), path);
             fingerprints[path].catch(function() { delete fingerprints[path]; });
         }
         return fingerprints[path];
+    }
+
+    // A mod unpacked as fp at path: its files are the pack's, so the
+    // fingerprint holds without working it out again.
+    function unpackedAs(root, path, fp) {
+        unpacked[path] = fp;
+        fingerprints[path] = Promise.resolve(fp);
+        try {
+            sigs[path] = fileParts(packPieces(listFiles(root + '/' + path), readMod));
+        } catch (e) {
+            delete sigs[path];
+        }
     }
 
     function netPath(fp) {
@@ -363,7 +416,7 @@
             return null;
         var path = netPath(fp);
         unpack(bytes, root + '/' + path);
-        unpacked[path] = fp;
+        unpackedAs(root, path, fp);
         return { fp: fp, name: cleanName(name || saved.meta.name), path: path };
     }
 
@@ -424,14 +477,9 @@
             var info = { status: 'error', name: c.name, ext: ext };
             var p;
             try {
-                p = pack(root + '/' + c.path);
+                p = packPieces(listFiles(root + '/' + c.path), readMod);
             } catch (e) {
                 info.status = e.reason || 'error';
-                return { info: info };
-            }
-            var sha = await lib.sha256(p.bytes);
-            if (sha !== c.fp) {
-                info.status = 'changed';
                 return { info: info };
             }
             if (p.entries.length > MAX_MOD_FILES) {
@@ -442,16 +490,23 @@
                 info.status = 'too-big';
                 return { info: info };
             }
-            var plan = await lib.planShareRanges(p.bytes, shareRanges(p), core.retailSources(root, ext));
+            // The files the fingerprint was worked out from, untouched since,
+            // still give it; anything else is packed whole to check.
+            var sha = sameParts(sigs[c.path], fileParts(p)) ? c.fp : await lib.sha256(p.data.bytes());
+            if (sha !== c.fp) {
+                info.status = 'changed';
+                return { info: info };
+            }
+            var plan = await lib.planShareRanges(p.data, shareRanges(p), core.retailSources(root, ext));
             if (!plan.ok) {
                 info.status = plan.reason;
                 return { info: info };
             }
             console.log('OpenJKDF2: ready to send mod ' + c.name + ' to joiners (' + p.entries.length + ' files, ' +
                         plan.refs + ' parts left out as original game files, ' + plan.stream.length + ' of ' +
-                        p.bytes.length + ' bytes to send)');
+                        p.data.length + ' bytes to send)');
             return {
-                info: { status: 'ok', name: c.name, ext: ext, size: p.bytes.length, sha256: sha,
+                info: { status: 'ok', name: c.name, ext: ext, size: p.data.length, sha256: sha,
                         streamSize: plan.stream.length, refsBytes: plan.refsBytes },
                 stream: plan.stream
             };
@@ -467,7 +522,9 @@
     var MESSAGES = {
         'none': "The host's mod couldn't be read on their side.",
         'error': "The host couldn't get its mod ready to send.",
-        'too-big': 'This mod is over 250 MB, too big to send. To join, put your own copy of it in your game folder.',
+        'too-big': 'This mod is over 1 GB, too big to send. To join, put your own copy of it in your game folder.',
+        'memory': "This tab ran out of memory for the host's mod. Close other tabs and try again, or put your " +
+                  'own copy of it in your game folder.',
         'too-many-files': 'This mod has too many files to send.',
         'retail-only': "The host's mod is made only of original game files, so it isn't sent.",
         'corrupt': "The mod didn't arrive intact, so it wasn't installed.",
@@ -661,17 +718,12 @@
         clearTimeout(j.checking);
         core.ui.show(j.label, 'Connecting to the host...', cancel, KIND_MOD);
         await core.waitForDirect(j);
-        var stream = await core.download(j, info, core.directUp() ? core.CHUNK_DIRECT : core.CHUNK_RELAY);
-
-        var result = await lib.rebuild(info, stream, core.retailSources(root, ext));
-        if (!result.ok)
-            throw fail(result.reason);
-        core.check(j);
+        var bytes = await core.receive(j, info, core.retailSources(root, ext));
         var path = netPath(want.fp);
-        var count = unpack(result.bytes, root + '/' + path);
-        unpacked[path] = want.fp;
+        var count = unpack(bytes, root + '/' + path);
+        unpackedAs(root, path, want.fp);
         console.log('OpenJKDF2: installed mod ' + want.name + ' from the host (' + count + ' files)');
-        store.put(gameName(), want.name, ext, want.fp, result.bytes).catch(function(e) {
+        store.put(gameName(), want.name, ext, want.fp, bytes).catch(function(e) {
             console.warn('OpenJKDF2: could not save mod ' + want.name + ' for next time: ' + e);
         });
         return { fp: want.fp, name: want.name, path: path, downloaded: true };
@@ -840,7 +892,7 @@
                 if (!current)
                     console.warn('OpenJKDF2: the saved mod ' + path + " couldn't be loaded from this browser's storage");
             } else if (isDir(root + '/' + path)) {
-                var fp = await lib.sha256(pack(root + '/' + path).bytes);
+                var fp = await fingerprintAt(root, path);
                 fingerprints[path] = Promise.resolve(fp);
                 current = { fp: fp, name: cleanName(nameOfPath(path)), path: path };
             } else {

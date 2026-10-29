@@ -47,6 +47,10 @@ jobs:
       # The page's mod list and zipped mods, with made-up files.
       - name: Test the mod list
         run: node packaging/wasm/test/picker-test.mjs
+      # unzip.js, the zip methods the browser can't unpack: zips made by
+      # PKZIP, 7-Zip, xz, zstd and others (packaging/wasm/test/fixtures).
+      - name: Test unzipping
+        run: node packaging/wasm/test/unzip-test.mjs
       # Screenshots: storing them, their names and the zip, with made-up pictures.
       - name: Test screenshots
         run: node packaging/wasm/test/screenshots-test.mjs
@@ -86,7 +90,8 @@ jobs:
       - name: Collect web build
         run: |
           mkdir -p web
-          cp packaging/wasm/index.html packaging/wasm/move-out.html build_emcc/openjkdf2.js build_emcc/openjkdf2.wasm web/
+          cp packaging/wasm/index.html packaging/wasm/move-out.html packaging/wasm/unzip.js build_emcc/openjkdf2.js \
+             build_emcc/openjkdf2.wasm web/
       - uses: actions/upload-artifact@v4
         with:
           name: openjkdf2-wasm

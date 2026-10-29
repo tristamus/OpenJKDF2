@@ -22,13 +22,18 @@ function loadMaps(Module) {
 
 // ---- Two tabs and the link between them.
 
-function makeGame({ hostFiles, joinFiles, direct = true, drop = () => false }) {
+// lanes: the ways each tab says it has to the other (net.mapLanes), such as
+// the map channel and the extra links for transfers; direct alone when not
+// given. rewrite(frame) can change a frame on its way.
+function makeGame({ hostFiles, joinFiles, direct = true, drop = () => false, lanes = null, rewrite = null }) {
     const log = [];
-    const link = { direct, drop, log };
+    const link = { direct, drop, log, lanes };
     const host = { FS: makeFS(hostFiles) };
     const join = { FS: makeFS(joinFiles) };
     const deliver = (to, from, bytes, via) => {
-        const copy = bytes.slice(0);
+        let copy = bytes.slice(0);
+        if (rewrite)
+            copy = rewrite({ to: to === host ? 'host' : 'join', via, bytes: copy }) || copy;
         log.push({ to: to === host ? 'host' : 'join', via, bytes: new Uint8Array(copy) });
         if (via === 'relay')
             assert.ok(copy.byteLength <= 64 * 1024, 'relay frame over the lobby cap: ' + copy.byteLength);
@@ -36,22 +41,26 @@ function makeGame({ hostFiles, joinFiles, direct = true, drop = () => false }) {
             return;
         setImmediate(() => to.jkMaps.onFrame(from, copy, via));
     };
-    host.jkNet = {
-        mapDirect: id => id === 2 && link.direct,
+    const way = via => {
+        if (via === 'relay' || !link.direct)
+            return 'relay';
+        return link.lanes && link.lanes.includes(via) ? via : 'direct';
+    };
+    const net = (other, otherId) => ({
+        mapDirect: id => id === otherId && link.direct,
         mapSend(id, bytes, via) {
-            const used = via !== 'relay' && link.direct ? 'direct' : 'relay';
-            deliver(join, 1, bytes, used);
+            const used = way(via);
+            deliver(other(), otherId === 1 ? 2 : 1, bytes, used);
             return used;
         },
-    };
-    join.jkNet = {
-        mapDirect: id => id === 1 && link.direct,
-        mapSend(id, bytes, via) {
-            const used = via !== 'relay' && link.direct ? 'direct' : 'relay';
-            deliver(host, 2, bytes, used);
-            return used;
-        },
-    };
+    });
+    host.jkNet = net(() => join, 2);
+    join.jkNet = net(() => host, 1);
+    if (lanes) {
+        join.jkNet.mapLanes = () => (link.direct ? link.lanes : []);
+        join.jkNet.bulk = [];
+        join.jkNet.mapBulk = (id, on) => join.jkNet.bulk.push(on);
+    }
     loadMaps(host);
     loadMaps(join);
     return { host, join, link, log };
@@ -131,22 +140,23 @@ test('retail copies are left out of what is sent, and rebuilt from the joiner\'s
     const plan = await lib.planShare(customMap, sources(lib, [retailRes, retailEp]));
     assert.ok(plan.ok);
     assert.equal(plan.refs, 2);
-    assert.ok(!contains(plan.stream, retailA) && !contains(plan.stream, retailB), 'retail bytes in the stream');
-    assert.ok(contains(plan.stream, custom1) && contains(plan.stream, custom2) && contains(plan.stream, modifiedC));
-    assert.equal(plan.stream.length, plan.refsBytes + customMap.length - retailA.length - retailB.length);
+    const stream = plan.stream.bytes();
+    assert.ok(!contains(stream, retailA) && !contains(stream, retailB), 'retail bytes in the stream');
+    assert.ok(contains(stream, custom1) && contains(stream, custom2) && contains(stream, modifiedC));
+    assert.equal(stream.length, plan.refsBytes + customMap.length - retailA.length - retailB.length);
 
-    const info = { size: customMap.length, sha256: sha(customMap), streamSize: plan.stream.length, refsBytes: plan.refsBytes };
-    const out = await lib.rebuild(info, plan.stream, sources(lib, [retailRes]));
+    const info = { size: customMap.length, sha256: sha(customMap), streamSize: stream.length, refsBytes: plan.refsBytes };
+    const out = await lib.rebuild(info, stream, sources(lib, [retailRes]));
     assert.ok(out.ok, out.reason);
     assert.deepEqual(Buffer.from(out.bytes), Buffer.from(customMap));
 
-    const missing = await lib.rebuild(info, plan.stream, sources(lib, [retailEp]));
+    const missing = await lib.rebuild(info, stream, sources(lib, [retailEp]));
     assert.equal(missing.reason, 'missing-retail');
 
-    const tampered = plan.stream.slice();
+    const tampered = stream.slice();
     tampered[tampered.length - 1] ^= 1;
     assert.equal((await lib.rebuild(info, tampered, sources(lib, [retailRes]))).reason, 'mismatch');
-    assert.equal((await lib.rebuild(info, plan.stream.subarray(1), sources(lib, [retailRes]))).reason, 'corrupt');
+    assert.equal((await lib.rebuild(info, stream.subarray(1), sources(lib, [retailRes]))).reason, 'corrupt');
 });
 
 test('a GOB made only of retail files is not sent', async () => {
@@ -167,9 +177,10 @@ test('entries that share bytes with a retail copy still rebuild exactly', async 
     const plan = await lib.planShare(gob, sources(lib, [retailRes]));
     assert.ok(plan.ok);
     assert.equal(plan.refs, 1);
-    assert.ok(!contains(plan.stream, retailA));
-    const info = { size: gob.length, sha256: sha(gob), streamSize: plan.stream.length, refsBytes: plan.refsBytes };
-    const out = await lib.rebuild(info, plan.stream, sources(lib, [retailRes]));
+    const stream = plan.stream.bytes();
+    assert.ok(!contains(stream, retailA));
+    const info = { size: gob.length, sha256: sha(gob), streamSize: stream.length, refsBytes: plan.refsBytes };
+    const out = await lib.rebuild(info, stream, sources(lib, [retailRes]));
     assert.ok(out.ok, out.reason);
     assert.deepEqual(Buffer.from(out.bytes), Buffer.from(gob));
 });
@@ -194,8 +205,11 @@ test('a joiner without the map gets it straight from the host', async () => {
         assert.ok(!contains(f.bytes, retailA) && !contains(f.bytes, retailB), 'retail bytes sent');
         assert.equal(f.via, 'direct');
     }
-    const chunks = framesTo(g.log, 'join', 4);
-    assert.equal(chunks.length, Math.ceil((customMap.length - 8000 + 4 + 80) / 16384));
+    // Random bytes don't get smaller, so the one block goes as it is.
+    const stream = customMap.length - 8000 + 4 + 80;
+    assert.equal(framesTo(g.log, 'join', 4).length, 0);
+    assert.equal(framesTo(g.log, 'join', 6).length, Math.ceil(stream / 65536));
+    assert.equal(framesTo(g.log, 'host', 5).length, 1);
 });
 
 test('through the relay, frames stay under its cap', async () => {
@@ -216,13 +230,126 @@ test('through the relay, frames stay under its cap', async () => {
     assert.ok(Date.now() - started < 2500, 'waited for a direct link: ' + (Date.now() - started) + ' ms');
     assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_big.gob')), Buffer.from(big));
     assert.ok(g.log.every(f => f.via === 'relay'));
-    const chunks = framesTo(g.log, 'join', 4);
-    assert.equal(chunks.length, Math.ceil((big.length - retailA.length + 44) / (48 * 1024)));
-    const requests = framesTo(g.log, 'host', 3).length + framesTo(g.log, 'host', 1).length;
-    console.log(`    ${big.length} byte map over the relay: ${chunks.length} chunk frames, ${requests} requests`);
-    // Half a window (10 chunks) per request, plus the first full window and
-    // the info request.
-    assert.ok(requests <= Math.ceil(chunks.length / 10) + 1, requests + ' requests');
+    const stream = big.length - retailA.length + 44;
+    const blocks = Math.ceil(stream / 1048576);
+    let parts = 0;
+    for (let b = 0; b < blocks; b++)
+        parts += Math.ceil(Math.min(1048576, stream - b * 1048576) / (48 * 1024));
+    assert.equal(framesTo(g.log, 'join', 6).length, parts);
+    const requests = framesTo(g.log, 'host', 5).length + framesTo(g.log, 'host', 1).length;
+    console.log(`    ${big.length} byte map over the relay: ${parts} block parts, ${requests} requests`);
+    // One request a block, and the info request.
+    assert.equal(requests, blocks + 1);
+});
+
+test('a map that squeezes goes squeezed, and comes out the same', async () => {
+    const text = Buffer.from('thing 1 template=walkplayer 0.0 0.0 0.0 pos=(1.0/2.0/3.0)\n'.repeat(60000));
+    const map = makeGob([{ name: 'episode.jk', bytes: randomBytes(1000) }, { name: 'jkl\\ctf_text.jkl', bytes: text },
+                         { name: 'mat\\a.mat', bytes: retailA }]);
+    const g = makeGame({
+        hostFiles: { ...retailInstall, '/jk1/episode/ctf_text.gob': map },
+        joinFiles: { ...retailInstall },
+    });
+    g.host.jkMaps.host('ctf_text', 'gob');
+    await hostReady(g.host);
+    g.join.jkMaps.fetch('ctf_text', 'gob');
+    assert.equal(await waitState(g.join), 1);
+    assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_text.gob')), Buffer.from(map));
+    const sent = framesTo(g.log, 'join', 6).reduce((n, f) => n + f.bytes.length - 40, 0);
+    console.log(`    ${map.length} byte map sent as ${sent} bytes`);
+    assert.ok(sent < map.length / 10, sent + ' bytes sent');
+    assert.ok(framesTo(g.log, 'join', 6).every(f => f.bytes[36] === 1 || f.bytes[36] === 0));
+});
+
+test('a host from before blocks gets asked for chunks, and an older joiner gets chunks', async () => {
+    // Takes z out of the host's info, as a host or joiner from before blocks
+    // would have it.
+    const g = makeGame({
+        hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
+        joinFiles: { ...retailInstall },
+        rewrite: f => {
+            if (f.to !== 'join' || new Uint8Array(f.bytes)[12] !== 2)
+                return null;
+            const info = JSON.parse(new TextDecoder().decode(new Uint8Array(f.bytes, 16)));
+            assert.equal(info.z, 1048576);
+            delete info.z;
+            const json = new TextEncoder().encode(JSON.stringify(info));
+            const out = new Uint8Array(16 + json.length);
+            out.set(new Uint8Array(f.bytes, 0, 16));
+            out.set(json, 16);
+            return out.buffer;
+        },
+    });
+    g.host.jkMaps.host('ctf_test', 'gob');
+    await hostReady(g.host);
+    g.join.jkMaps.fetch('ctf_test', 'gob');
+    assert.equal(await waitState(g.join), 1);
+    assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
+    assert.equal(framesTo(g.log, 'host', 5).length, 0);
+    assert.equal(framesTo(g.log, 'join', 4).length, Math.ceil((customMap.length - 8000 + 4 + 80) / 16384));
+});
+
+test('blocks go over every lane to the host, and a lane that closes hands its blocks on', async () => {
+    const big = makeGob([{ name: 'episode.jk', bytes: randomBytes(1000) }, { name: 'big.jkl', bytes: randomBytes(6500000) }]);
+    let closed = false;
+    const g = makeGame({
+        hostFiles: { ...retailInstall, '/jk1/episode/ctf_lanes.gob': big },
+        joinFiles: { ...retailInstall },
+        lanes: ['direct', 'direct1', 'direct2', 'direct3'],
+        drop: f => closed && f.via === 'direct2',
+    });
+    g.host.jkMaps.host('ctf_lanes', 'gob');
+    await hostReady(g.host);
+    g.join.jkMaps.fetch('ctf_lanes', 'gob');
+    // direct2 closes once a few blocks are in.
+    const watch = setInterval(() => {
+        if (framesTo(g.log, 'join', 6).length > 20 && !closed) {
+            closed = true;
+            g.link.lanes = ['direct', 'direct1', 'direct3'];
+        }
+    }, 1);
+    assert.equal(await waitState(g.join), 1);
+    clearInterval(watch);
+    assert.ok(closed);
+    assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_lanes.gob')), Buffer.from(big));
+    const asked = new Set(g.log.filter(f => f.to === 'host' && f.bytes[12] === 5).map(f => f.via));
+    assert.deepEqual([...asked].sort(), ['direct', 'direct1', 'direct2', 'direct3']);
+    // Each part comes back the way its block was asked for.
+    for (const f of framesTo(g.log, 'join', 6))
+        assert.ok(['direct', 'direct1', 'direct2', 'direct3'].includes(f.via));
+    // The extra links were asked for, then let go.
+    assert.deepEqual(g.join.jkNet.bulk, [true, false]);
+});
+
+test('blocks put back together in any order make the same GOB', async () => {
+    const { lib } = loadMaps({ FS: makeFS({}) });
+    const many = [];
+    for (let i = 0; i < 3000; i++)
+        many.push({ name: 'mat\\r' + i + '.mat', bytes: i % 3 ? randomBytes(700) : retailA });
+    many.push({ name: 'big', bytes: randomBytes(2500000) });
+    const gob = makeGob(many);
+    const plan = await lib.planShare(gob, sources(lib, [retailRes]));
+    assert.ok(plan.ok);
+    const stream = plan.stream.bytes();
+    // A reference table of 1000 references: over 1 block's worth with these
+    // small blocks, so the first ones wait for it.
+    const info = { size: gob.length, sha256: sha(gob), streamSize: stream.length, refsBytes: plan.refsBytes };
+    for (const size of [7, 4096, 65536, 1048576]) {
+        const offsets = [];
+        for (let at = 0; at < stream.length; at += size)
+            offsets.push(at);
+        offsets.sort(() => Math.random() - 0.5);
+        const rb = lib.rebuilder(info, sources(lib, [retailRes]));
+        for (const at of offsets)
+            rb.put(at, stream.slice(at, at + size));
+        const out = await rb.finish();
+        assert.ok(out.ok, out.reason);
+        assert.deepEqual(Buffer.from(out.bytes), Buffer.from(gob));
+    }
+    // One piece short.
+    const rb = lib.rebuilder(info, sources(lib, [retailRes]));
+    rb.put(0, stream.slice(0, stream.length - 10));
+    assert.equal((await rb.finish()).reason, 'corrupt');
 });
 
 test('a joiner with the same version downloads nothing', async () => {
@@ -313,7 +440,7 @@ test('the engine can stop a download (host left, or Cancel)', async () => {
     const g = makeGame({
         hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
         joinFiles: { ...retailInstall },
-        drop: f => f.to === 'join' && f.bytes[12] === 4,
+        drop: f => f.to === 'join' && f.bytes[12] === 6,
     });
     g.host.jkMaps.host('ctf_test', 'gob');
     await hostReady(g.host);
@@ -325,13 +452,13 @@ test('the engine can stop a download (host left, or Cancel)', async () => {
     assert.ok(!g.join.FS.files.has('/jk1/episode/ctf_test.gob'));
 });
 
-test('chunks lost when the link changes are asked for again', async () => {
+test('blocks lost when the link changes are asked for again', async () => {
     let dropped = 0;
     const g = makeGame({
         hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
         joinFiles: { ...retailInstall },
         drop: f => {
-            if (f.to !== 'join' || f.bytes[12] !== 4 || f.via !== 'direct' || dropped >= 3)
+            if (f.to !== 'join' || f.bytes[12] !== 6 || f.via !== 'direct' || dropped >= 3)
                 return false;
             dropped++;
             return true;
