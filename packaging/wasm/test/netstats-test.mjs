@@ -15,7 +15,7 @@ const enums = read('src/types_enums.h');
 
 const SABER = 1, SHOT = 2, SPLASH = 3, FORCE = 4;
 const HIT = 1, BLOCK = 2, DEAD = 3, TURNED_DOWN = 4;
-const BY_CLAIM = 2, DECIDED = 4, MOMENT = 8, PAST_REACH = 16;
+const BY_MESSAGE = 1, BY_CLAIM = 2, DECIDED = 4, MOMENT = 8, PAST_REACH = 16;
 const NOT_THERE = 2, REPEAT = 6;
 
 // One clock for the whole test. Timers run in order as it moves on.
@@ -472,6 +472,27 @@ test('targeted Force powers are counted apart', () => {
     assert.match(join.ns.text().join('\n'), /your Force: 2 targeted/);
 });
 
+test('Hit what you see: targeted Force powers checked where the attacker\'s game showed the player', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    // The joiner's Force powers on the host, which its game checked at the
+    // moment each named: two played, one of them past the reach, and one
+    // was turned down. The damage a played one does isn't counted again.
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.01);
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT | PAST_REACH, 0, 0, 0.03);
+    host.ns.hit(2, false, FORCE, TURNED_DOWN, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, NOT_THERE, 0.5);
+    world.run(3000);
+    const t = takenOf(host, 2, 'Force');
+    assert.deepEqual([t.byMessage, t.turnedDown, t.claims, t.moments, t.pastReach], [2, 1, 3, 3, 1]);
+    assert.match(host.ns.text().join('\n'),
+                 /their hits on you: Force 1 turned down \(not there 1\), 2 targeted \(3 claimed, 3 at a moment, 1 of them past the reach, off by counted median/);
+    const c = hitsOf(join, 1, 'Force');
+    assert.deepEqual([c.byMessage, c.byMessageTurnedDown, c.claims, c.moments, c.pastReach], [2, 1, 3, 3, 1]);
+    assert.equal(c.turnedDown + c.notShown + c.missedHit, 0);
+    assert.match(join.ns.text().join('\n'),
+                 /your Force: 2 targeted, 1 turned down there \(not there 1\) \| 3 claimed \(3 at a moment, 1 of them past the reach\), off by counted median/);
+});
+
 test('Hit what you see: claims counted and turned down, with why and how far off', () => {
     const { world, host, join } = match();
     world.run(3000);
@@ -753,18 +774,25 @@ test('?nettest=attack:all\'s steps keep their counts apart, each with its lag', 
     world.run(3000);
     join.ns.nextStep('rail alt', '');
     world.run(3000);
+    // Three Force powers the host's game checked: two played there.
+    join.ns.nextStep('grip', '');
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.01);
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.02);
+    host.ns.hit(2, false, FORCE, TURNED_DOWN, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, NOT_THERE, 0.5);
+    world.run(3000);
     join.ns.nextStep('', '');
     assert.equal(join.ns.sim(), null);
     const r = join.ns.report();
     assert.equal(r.step, null);
-    assert.deepEqual(r.steps.map(x => [x.name, x.sim && x.sim.rtt]), [['bryar', null], ['bryar', 100], ['rail alt', null]]);
+    assert.deepEqual(r.steps.map(x => [x.name, x.sim && x.sim.rtt]),
+                     [['bryar', null], ['bryar', 100], ['rail alt', null], ['grip', null]]);
     const c = r.steps[0].rows[0].hits[0].c;
     assert.equal(c.counted, 1);
     assert.equal(c.missedHit, 1);
     assert.equal(c.lags, undefined);
     near(r.steps[1].rows[0].ping, 140, 40, 'the second step\'s ping');
     assert.match(join.ns.text().join('\n'),
-                 /\nSteps, how often both games agreed:\n  bryar     no lag: shot 50% of 2 · \+100 ms: shot 100% of 1\n  rail alt  no lag: no hits\n  done$/);
+                 /\nSteps, how often both games agreed:\n  bryar     no lag: shot 50% of 2 · \+100 ms: shot 100% of 1\n  rail alt  no lag: no hits\n  grip      no lag: Force 66\.7% of 3\n  done$/);
 });
 
 test('this game\'s frames a second, from when its frames ended', () => {

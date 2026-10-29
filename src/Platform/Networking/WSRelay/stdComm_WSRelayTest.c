@@ -24,8 +24,13 @@
 //                          Explosives are used from far enough away that
 //                          their blast misses the attacker, and it backs
 //                          away from a sequencer charge it drops.
-//   ?nettest=attack:all    attacks with every weapon in turn, and each fire
-//                          that's different (wsrelay_aTestSteps), for 60 s
+//                          A targeted Force power instead ("attack:grip",
+//                          "pull", "blinding" or "deadlysight") is used from
+//                          0.6 away, at rank 4, and the player gets it and
+//                          the mana for it.
+//   ?nettest=attack:all    attacks with every weapon in turn, each fire
+//                          that's different, and each targeted Force power
+//                          (wsrelay_aTestSteps), for 60 s
 //                          with no added lag, then 60 s as if this window's
 //                          connection were slower (the plan's test condition:
 //                          100 ms more round trip, 20 ms jitter, 2% loss).
@@ -76,6 +81,12 @@
 #define WSRELAY_TEST_RAIL (1.0)         // a rail detonator's blast reaches
                                         // 0.5 (+raildet_exp)
 #define WSRELAY_TEST_CONCUSSION (1.3)   // a concussion bolt's 0.8 (+conc_exp)
+#define WSRELAY_TEST_FORCE (0.6)        // with a Force power: Grip reaches
+                                        // 1 (force_grip.cog)
+#define WSRELAY_TEST_FORCE_MS (600)     // a power held this long, so its cog
+                                        // picks a target (every 0.33 s)...
+#define WSRELAY_TEST_FORCE_REST_MS (400) // ...then let go, which uses it
+#define WSRELAY_TEST_FORCE_RANK (4.0)
 #define WSRELAY_TEST_THROW_MS (800)     // a thermal detonator goes further
                                         // the longer fire is held: this lobs
                                         // it about 0.8 (weap_thermdet.cog)
@@ -105,20 +116,24 @@ EM_JS(void, wsrelay_js_nettest_step, (const char* pName, const char* pSim), {
 });
 
 // attack:all's steps: each weapon, and its second fire where that's another
-// shot (the Bryar, rifle and fists fire the same way with either). The saber
-// is there to compare with. Explosives come last, and last of all the mines a
-// sequencer charge's second fire leaves, which wait 60 s for someone to touch
-// them (+seqchrg2), so no other step counts their blasts.
+// shot (the Bryar, rifle and fists fire the same way with either), then each
+// targeted Force power (with the saber in hand). The saber is there to
+// compare with. Explosives come last, and last of all the mines a sequencer
+// charge's second fire leaves, which wait 60 s for someone to touch them
+// (+seqchrg2), so no other step counts their blasts.
 static const struct
 {
     int key;
     int alt;
+    int power;
     const char* pName;
 } wsrelay_aTestSteps[] = {
-    {0, 0, "saber"}, {1, 0, "fists"}, {2, 0, "bryar"}, {3, 0, "rifle"},
-    {5, 0, "bowcaster"}, {5, 1, "bowcaster alt"}, {6, 0, "repeater"}, {6, 1, "repeater alt"},
-    {9, 0, "concussion"}, {9, 1, "concussion alt"}, {4, 0, "thermal"}, {4, 1, "thermal alt"},
-    {7, 0, "rail"}, {7, 1, "rail alt"}, {8, 0, "sequencer"}, {8, 1, "sequencer alt"},
+    {0, 0, 0, "saber"}, {1, 0, 0, "fists"}, {2, 0, 0, "bryar"}, {3, 0, 0, "rifle"},
+    {5, 0, 0, "bowcaster"}, {5, 1, 0, "bowcaster alt"}, {6, 0, 0, "repeater"}, {6, 1, 0, "repeater alt"},
+    {0, 0, SITHBIN_F_GRIP, "grip"}, {0, 0, SITHBIN_F_PULL, "pull"}, {0, 0, SITHBIN_F_BLINDING, "blinding"},
+    {0, 0, SITHBIN_F_DEADLYSIGHT, "deadly sight"},
+    {9, 0, 0, "concussion"}, {9, 1, 0, "concussion alt"}, {4, 0, 0, "thermal"}, {4, 1, 0, "thermal alt"},
+    {7, 0, 0, "rail"}, {7, 1, 0, "rail alt"}, {8, 0, 0, "sequencer"}, {8, 1, 0, "sequencer alt"},
 };
 #define WSRELAY_TEST_NUM_STEPS ((int)(sizeof(wsrelay_aTestSteps) / sizeof(wsrelay_aTestSteps[0])))
 
@@ -132,6 +147,7 @@ static int wsrelay_testSelect = INPUT_FUNC_SELECT0;
 static int wsrelay_testTries = 0;       // presses of the weapon key since it was in hand
 static int wsrelay_testMelee = 1;       // the saber or fists, not a gun
 static int wsrelay_testFire = INPUT_FUNC_FIRE1;
+static int wsrelay_testPower = 0;       // a Force power's bin, used instead
 static uint32_t wsrelay_testStrafeMs = 700;
 static int wsrelay_testRun = 0;         // the run key held throughout
 static flex_t wsrelay_testCount = 0.0; // of the weapon, last frame
@@ -174,6 +190,16 @@ static int wsrelay_TestWeaponKey(const char* pName)
     return -1;
 }
 
+// The bin of a targeted Force power, by its name, or 0.
+static int wsrelay_TestPowerBin(const char* pName)
+{
+    if (!strcmp(pName, "grip")) return SITHBIN_F_GRIP;
+    if (!strcmp(pName, "pull")) return SITHBIN_F_PULL;
+    if (!strcmp(pName, "blinding")) return SITHBIN_F_BLINDING;
+    if (!strcmp(pName, "deadlysight")) return SITHBIN_F_DEADLYSIGHT;
+    return 0;
+}
+
 // How far from the target the attacker stays with the weapon in bin, between
 // the players' middles. 0: as close as with the saber, as for a sequencer
 // charge, which is dropped at the player's feet.
@@ -194,12 +220,14 @@ static flex_t wsrelay_TestDistance(int bin)
     }
 }
 
-// Attack with the weapon on number key key, and its second fire if alt.
-static void wsrelay_TestUse(int key, int alt)
+// Attack with the weapon on number key key, and its second fire if alt, or
+// with the Force power in bin power, that weapon in hand.
+static void wsrelay_TestUse(int key, int alt, int power)
 {
     wsrelay_testSelect = key ? INPUT_FUNC_SELECT1 + key - 1 : INPUT_FUNC_SELECT0;
     wsrelay_testMelee = key <= 1;
     wsrelay_testFire = alt ? INPUT_FUNC_FIRE2 : INPUT_FUNC_FIRE1;
+    wsrelay_testPower = power;
     wsrelay_testTries = 0;
     wsrelay_testCount = 0.0;
     wsrelay_testMsecBackOff = 0;
@@ -229,7 +257,7 @@ static int wsrelay_TestCycle(uint32_t now)
     }
     int i = wsrelay_testStep / 2;
     const char* pLag = wsrelay_aTestLags[wsrelay_testStep % 2];
-    wsrelay_TestUse(wsrelay_aTestSteps[i].key, wsrelay_aTestSteps[i].alt);
+    wsrelay_TestUse(wsrelay_aTestSteps[i].key, wsrelay_aTestSteps[i].alt, wsrelay_aTestSteps[i].power);
     wsrelay_js_nettest_step(wsrelay_aTestSteps[i].pName, pLag);
     stdPlatform_Printf("OpenJKDF2: ?nettest: step %d of %d, %s, %s.\n", wsrelay_testStep + 1, numSteps,
                        wsrelay_aTestSteps[i].pName, pLag[0] ? pLag : "no added lag");
@@ -254,14 +282,17 @@ static void wsrelay_TestReadMode()
     else
         return;
 
-    // A weapon, which fire, or all of them, and how long: for strafe, each
-    // way (ms), and for attack:all, each step (s).
+    // A weapon, which fire, a Force power, or all of them, and how long: for
+    // strafe, each way (ms), and for attack:all, each step (s).
     int key = 0;
     int alt = 0;
+    int power = 0;
     for (char* pArg = pArgs ? strtok(pArgs, ",") : NULL; pArg; pArg = strtok(NULL, ","))
     {
         if (wsrelay_TestWeaponKey(pArg) >= 0)
             key = wsrelay_TestWeaponKey(pArg);
+        else if (wsrelay_TestPowerBin(pArg) && wsrelay_testMode == WSRELAY_TEST_ATTACK)
+            power = wsrelay_TestPowerBin(pArg);
         else if (!strcmp(pArg, "alt"))
             alt = 1;
         else if (!strcmp(pArg, "run"))
@@ -273,7 +304,7 @@ static void wsrelay_TestReadMode()
         else if (wsrelay_testMode == WSRELAY_TEST_ATTACK && atoi(pArg) >= 5)
             wsrelay_testStepSecs = atoi(pArg);
     }
-    wsrelay_TestUse(key, alt);
+    wsrelay_TestUse(key, alt, power);
 
     stdPlatform_Printf("OpenJKDF2: ?nettest: %s plays this window's player in a match.\n", shown);
 }
@@ -411,6 +442,23 @@ static void wsrelay_TestArm(SithThing* pPlayer, int bin)
     }
 }
 
+// Gives the player the targeted Force power in bin at rank 4, picked, and
+// keeps their mana up: Deadly Sight takes 300 of it (force_deadlysight.cog),
+// and the most they can have is 50 a Jedi rank (force_well.cog).
+static void wsrelay_TestForce(SithThing* pPlayer, int bin)
+{
+    if (sithInventory_GetInventory(pPlayer, bin) < WSRELAY_TEST_FORCE_RANK)
+        sithInventory_SetInventory(pPlayer, bin, WSRELAY_TEST_FORCE_RANK);
+    if (!sithInventory_IsInventoryAvailable(pPlayer, bin))
+        sithInventory_SetInventoryAvailable(pPlayer, bin, 1);
+    if (sithInventory_GetInventory(pPlayer, SITHBIN_JEDI_RANK) < 8.0)
+        sithInventory_SetInventory(pPlayer, SITHBIN_JEDI_RANK, 8.0);
+    if (sithInventory_GetInventory(pPlayer, SITHBIN_FORCEMANA) < 350.0)
+        sithInventory_SetInventory(pPlayer, SITHBIN_FORCEMANA, 400.0);
+    if (pPlayer->actorParams.pPlayer && pPlayer->actorParams.pPlayer->curPower != bin)
+        sithInventory_SetCurPower(pPlayer, bin);
+}
+
 void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
 {
     // Last frame's presses have been read.
@@ -472,6 +520,8 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
         wsrelay_TestArm(pPlayer, bin);
         wsrelay_testCount = sithInventory_GetInventory(pPlayer, bin);
     }
+    if (wsrelay_testPower)
+        wsrelay_TestForce(pPlayer, wsrelay_testPower);
     int backOff = wsrelay_testMsecBackOff && now - wsrelay_testMsecBackOff < WSRELAY_TEST_BACKOFF_MS;
     if (sithInventory_GetCurrentWeapon(pPlayer) == bin)
         wsrelay_testTries = 0;
@@ -497,7 +547,7 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     // Attack: keep the target in sight and in reach. Distances are between
     // the players' middles, which can't get closer than their sizes allow.
     flex_t touch = pPlayer->collideSize + pTarget->collideSize;
-    flex_t away = wsrelay_TestDistance(bin);
+    flex_t away = wsrelay_testPower ? WSRELAY_TEST_FORCE : wsrelay_TestDistance(bin);
     flex_t close = away == 0.0 ? touch + WSRELAY_TEST_CLOSE : away;
     flex_t reach = away == 0.0 ? touch + WSRELAY_TEST_REACH : away * 1.5;
     int inSight = wsrelay_TestCanSee(pPlayer, pTarget);
@@ -527,22 +577,28 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     // Fire held a while, then let go, so the weapon's cog hears it again.
     // Only with the target in sight: a rail detonator fired into a corner
     // next to the attacker blows it up. And only with this weapon in hand,
-    // so a new life's Bryar doesn't count as another weapon's.
+    // so a new life's Bryar doesn't count as another weapon's. A Force power
+    // the same, with any weapon in hand: it's used when let go.
     uint32_t hold = bin == SITHBIN_THERMAL_DETONATOR ? WSRELAY_TEST_THROW_MS : WSRELAY_TEST_FIRE_MS;
-    uint32_t cycle = hold + WSRELAY_TEST_REST_MS;
-    if (now - wsrelay_testMsecFire >= cycle)
+    uint32_t rest = WSRELAY_TEST_REST_MS;
+    if (wsrelay_testPower)
+    {
+        hold = WSRELAY_TEST_FORCE_MS;
+        rest = WSRELAY_TEST_FORCE_REST_MS;
+    }
+    if (now - wsrelay_testMsecFire >= hold + rest)
         wsrelay_testMsecFire = now;
-    int inHand = sithInventory_GetCurrentWeapon(pPlayer) == bin;
+    int inHand = wsrelay_testPower || sithInventory_GetCurrentWeapon(pPlayer) == bin;
     if (now - wsrelay_testMsecFire < hold && dist <= reach && inSight && inHand && !backOff && !quiet)
-        wsrelay_aTestHeld[wsrelay_testFire] = 1;
+        wsrelay_aTestHeld[wsrelay_testPower ? INPUT_FUNC_USESKILL : wsrelay_testFire] = 1;
 
     // What it's doing, now and then, for whoever is watching the console.
     if (now - wsrelay_testMsecReport >= WSRELAY_TEST_REPORT_MS)
     {
         wsrelay_testMsecReport = now;
-        stdPlatform_Printf("OpenJKDF2: ?nettest: target %.2f away (reach %.2f), %s, weapon %d, %d jumps so far\n",
+        stdPlatform_Printf("OpenJKDF2: ?nettest: target %.2f away (reach %.2f), %s, weapon %d, power %d, %d jumps so far\n",
                            (double)dist, (double)reach, unseen ? "out of sight" : "in sight",
-                           sithInventory_GetCurrentWeapon(pPlayer), wsrelay_testJumps);
+                           sithInventory_GetCurrentWeapon(pPlayer), wsrelay_testPower, wsrelay_testJumps);
     }
 }
 

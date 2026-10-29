@@ -461,6 +461,66 @@ static void test_moment_reach(void)
     CHECK(v.result == WSRELAYHIT_NOT_THERE && near(v.distance, 0.225, 0.002), "ran on since: %d %f", v.result, v.distance);
 }
 
+// A targeted Force power (stdComm_WSRelayHits.c) only has the place the
+// attacker's game showed the player at a moment to check, as a claim's last
+// check (CheckThere). A Grip holds its victim still, so one aimed at them
+// before that can be past the reach and still find them there.
+static void test_there(void)
+{
+    stdComm_WSRelayHit_ClearRecord(&record);
+    for (int step = 0; step <= 1500; step++)
+    {
+        double t = floor(step * 1000.0 / 150.0 + 0.5);
+        stdComm_WSRelayHit_Record(&record, t, vec(strafeX(t), 0, 0), 1, 1);
+    }
+
+    int passed = 0, total = 0;
+    double worst = 0.0;
+    for (double r = 8500.0; r < 9700.0; r += 7.0)
+    {
+        double tBefore = 20.0 * floor(r / 20.0), tAfter = tBefore + 20.0;
+        float x = strafeX(tBefore) + (strafeX(tAfter) - strafeX(tBefore)) * (float)((r - tBefore) / 20.0);
+        double from, to;
+        momentWindow(r, tBefore, tAfter, &from, &to);
+        WSRelayHitVerdict v = stdComm_WSRelayHit_CheckThere(&record, 1, vec(x, 0, 0), from, to);
+        total++;
+        if (v.result == WSRELAYHIT_OK && v.damage == 0.0f)
+            passed++;
+        if (v.distance > worst)
+            worst = v.distance;
+    }
+    CHECK(passed == total && worst < 0.01, "at the moment: %d of %d there, %f JKU off at most", passed, total, worst);
+
+    // Shown 200 ms from the moment: as far off as test_moment's claim.
+    double from, to;
+    momentWindow(9450.0, 9440.0, 9460.0, &from, &to);
+    WSRelayHitVerdict v = stdComm_WSRelayHit_CheckThere(&record, 1, vec(strafeX(9250.0), 0, 0), from, to);
+    CHECK(v.result == WSRELAYHIT_NOT_THERE && near(v.distance, 0.2835, 0.001), "200 ms from the moment: %d %f", v.result, v.distance);
+
+    // Died and came back since, or nonsense.
+    v = stdComm_WSRelayHit_CheckThere(&record, 2, vec(strafeX(9450.0), 0, 0), from, to);
+    CHECK(v.result == WSRELAYHIT_LATE && v.distance < 0.0f, "new life: %d %f", v.result, v.distance);
+    v = stdComm_WSRelayHit_CheckThere(&record, 1, vec(NAN, 0, 0), from, to);
+    CHECK(v.result == WSRELAYHIT_BAD, "NaN place: %d", v.result);
+    v = stdComm_WSRelayHit_CheckThere(&record, 1, vec(strafeX(9450.0), 0, 0), from, INFINITY);
+    CHECK(v.result == WSRELAYHIT_BAD, "endless window: %d", v.result);
+
+    // Held still from 8450 on: a moment 450 ms old, further back than the
+    // reach, is checked anywhere in the reach, and they're still there.
+    double now = 8950.0;
+    float held = strafeX(8450.0);
+    stdComm_WSRelayHit_ClearRecord(&record);
+    for (double t = 8000.0; t <= now; t += 1000.0 / 150.0)
+    {
+        double at = floor(t + 0.5);
+        stdComm_WSRelayHit_Record(&record, at, vec(at < 8450.0 ? strafeX(at) : held, 0, 0), 1, 1);
+    }
+    int result = stdComm_WSRelayHit_MomentWindow(now, 300.0, 8500.0, 7.0, 13.0, &from, &to);
+    CHECK(result == WSRELAYHIT_LATE, "450 ms old: %d", result);
+    v = stdComm_WSRelayHit_CheckThere(&record, 1, vec(held, 0, 0), stdComm_WSRelayHit_WindowFrom(now, 300.0, -1.0), now);
+    CHECK(v.result == WSRELAYHIT_OK && v.distance < 0.001f, "held still since: %d %f", v.result, v.distance);
+}
+
 static void test_seen(void)
 {
     WSRelayHitSeen seen;
@@ -487,6 +547,7 @@ int main(void)
     test_strafe();
     test_moment();
     test_moment_reach();
+    test_there();
     test_seen();
     printf("%d of %d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;

@@ -266,7 +266,10 @@
             blockAgreed: 0, hitThere: 0, missedBlock: 0, blockDecided: 0,
             // Receipts for hits this game never showed.
             notShown: 0, blockNotShown: 0, deadNotShown: 0,
-            byMessage: 0,
+            // Targeted Force powers: played there, and turned down there,
+            // which their game checks once the power says the moment this
+            // game drew their player at.
+            byMessage: 0, byMessageTurnedDown: 0,
             // Claims their game had counted already.
             repeats: 0,
             // Claims, how many named a moment, and how many of those were
@@ -508,7 +511,10 @@
     function gotReceipt(p, kind, outcome, flags, at, attack, why, distance) {
         if (!KINDS[kind] || outcome < O_HIT || outcome > O_TURNED_DOWN) return;
         if (flags & F_BY_MESSAGE) {
-            tallyOf(p, kind).byMessage++;
+            var c = tallyOf(p, kind);
+            if (outcome === O_TURNED_DOWN) c.byMessageTurnedDown++;
+            else c.byMessage++;
+            if (flags & F_BY_CLAIM) noteClaim(c, outcome, why, distance === undefined ? -1 : distance, flags);
             return;
         }
         // Their game had counted that attack already, by its own rules, and
@@ -562,13 +568,15 @@
     // mine: this player's hit, shown here; else a hit on this player, which
     // this game decided. flags: F_BY_MESSAGE, decided by a message from the
     // attacker's game rather than here (a targeted Force power), or passed on
-    // from another game; F_BY_CLAIM, the attacker's game claimed it, and
-    // this game counted it or turned it down (O_TURNED_DOWN, or O_DEAD) for
-    // reason why, with its player distance JKU from where the claim showed
-    // them (-1 if not checked); F_MOMENT, with F_BY_CLAIM: the claim named
-    // the moment the attacker's game drew this player at, and F_PAST_REACH,
-    // one further back than the reach, which was checked as a claim without
-    // one; F_DECIDED, this game's block on the other player, which is final.
+    // from another game, and with F_BY_CLAIM, one this game checked, which
+    // played (O_HIT) or was turned down; F_BY_CLAIM, the attacker's game
+    // claimed it, and this game counted it or turned it down (O_TURNED_DOWN,
+    // or O_DEAD) for reason why, with its player distance JKU from where the
+    // claim showed them (-1 if not checked); F_MOMENT, with F_BY_CLAIM: the
+    // claim named the moment the attacker's game drew this player at, and
+    // F_PAST_REACH, one further back than the reach, which was checked as a
+    // claim without one; F_DECIDED, this game's block on the other player,
+    // which is final.
     // attack: the saber swing's or the shot's number, the same in both
     // games, or 0.
     function hit(otherId, mine, kind, outcome, damage, flags, attack, why, distance) {
@@ -584,8 +592,8 @@
             return;
         }
         var c = takenOf(p, kind);
-        if (flags & F_BY_MESSAGE) c.byMessage++;
-        else if (outcome === O_TURNED_DOWN) c.turnedDown++;
+        if (outcome === O_TURNED_DOWN) c.turnedDown++;
+        else if (flags & F_BY_MESSAGE) c.byMessage++;
         else c[outcome === O_BLOCK ? 'block' : outcome === O_DEAD ? 'dead' : 'hit']++;
         if (flags & F_BY_CLAIM) noteClaim(c, outcome, why, distance, flags);
         sendReceipt(p, kind, outcome, damage, flags & (F_BY_MESSAGE|F_BY_CLAIM|F_MOMENT|F_PAST_REACH), attack, why, distance);
@@ -860,7 +868,9 @@
             parts.push((c.notShown + c.blockNotShown) + ' landed there without showing here' +
                        (c.blockNotShown ? ' (' + c.blockNotShown + ' blocked)' : ''));
         if (c.repeats) parts.push(c.repeats + ' claimed after counting there');
-        if (c.byMessage) parts.push(c.byMessage + ' targeted');
+        if (c.byMessage || c.byMessageTurnedDown)
+            parts.push(c.byMessage + ' targeted' + (c.byMessageTurnedDown ? ', ' + c.byMessageTurnedDown +
+                                                     ' turned down there (' + whyWords(c.why) + ')' : ''));
         return parts.join('; ');
     }
 
@@ -881,12 +891,15 @@
     function lagWords(s) { return s ? '+' + s.rtt + ' ms' : 'no lag'; }
 
     // A step's hits on the other player (or each, with more than one), by kind:
-    // how often both games agreed.
+    // how often both games agreed. A targeted Force power agrees when it
+    // played there.
     function stepWords(s) {
         var parts = [];
         s.rows.forEach(function(row) {
             row.hits.forEach(function(h) {
                 var a = agreement(h.c);
+                a.agree += h.c.byMessage;
+                a.of += h.c.byMessage + h.c.byMessageTurnedDown;
                 if (a.of) parts.push((s.rows.length > 1 ? 'player ' + row.id + ' ' : '') + h.kind + ' ' +
                                      pct(a.agree / a.of) + ' of ' + a.of);
             });

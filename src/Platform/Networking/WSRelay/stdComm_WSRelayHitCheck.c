@@ -216,20 +216,37 @@ WSRelayHitVerdict stdComm_WSRelayHit_CheckIn(const WSRelayHitRecord* pRecord, ui
     }
 
     // Was the player there, as the attacker's game showed them?
-    v.distance = stdComm_WSRelayHit_Closest(pRecord, windowFrom, windowTo, life, pClaim->target, &v.at);
-    if (v.distance < 0.0f)
-    {
-        v.result = WSRELAYHIT_LATE;
+    WSRelayHitVerdict there = stdComm_WSRelayHit_CheckThere(pRecord, life, pClaim->target, windowFrom, windowTo);
+    v.result = there.result;
+    v.distance = there.distance;
+    v.at = there.at;
+    if (v.result != WSRELAYHIT_OK)
         return v;
-    }
-    if (v.distance > WSRELAYHIT_TOLERANCE)
-    {
-        v.result = WSRELAYHIT_NOT_THERE;
-        return v;
-    }
 
     if (pAttack->maxDamage > 0.0f && v.damage > pAttack->maxDamage)
         v.damage = pAttack->maxDamage;
+    return v;
+}
+
+WSRelayHitVerdict stdComm_WSRelayHit_CheckThere(const WSRelayHitRecord* pRecord, uint32_t life, WSRelayHitVec target,
+                                                double windowFrom, double windowTo)
+{
+    WSRelayHitVerdict v;
+    v.result = WSRELAYHIT_OK;
+    v.damage = 0.0f;
+    v.distance = -1.0f;
+    v.at = 0.0;
+
+    if (!wsrelayhit_IsFinite(target) || !isfinite(windowFrom) || !isfinite(windowTo))
+    {
+        v.result = WSRELAYHIT_BAD;
+        return v;
+    }
+    v.distance = stdComm_WSRelayHit_Closest(pRecord, windowFrom, windowTo, life, target, &v.at);
+    if (v.distance < 0.0f)
+        v.result = WSRELAYHIT_LATE;
+    else if (v.distance > WSRELAYHIT_TOLERANCE)
+        v.result = WSRELAYHIT_NOT_THERE;
     return v;
 }
 

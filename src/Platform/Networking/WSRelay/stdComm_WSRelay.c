@@ -2173,6 +2173,11 @@ void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThi
     if (!otherId)
         return;
 
+    // A targeted Force power this game checked is in the ledger already
+    // (stdComm_WSRelay_ForceTakes), not the damage it does.
+    if (!mine && stdComm_WSRelay_ApplyingForce())
+        return;
+
     int flags = 0;
     int claimKind = 0;
     uint32_t claimAttack = 0;
@@ -2234,6 +2239,14 @@ void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t d
     if (!wsrelay_bNetLive || !otherId)
         return;
     wsrelay_js_net_hit(otherId, 0, kind, outcome, (float)damage, WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), attack, reason, distance);
+}
+
+void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float distance, int moment)
+{
+    if (!wsrelay_bNetLive || !otherId)
+        return;
+    wsrelay_js_net_hit(otherId, 0, STDCOMM_WSRELAY_KIND_FORCE, outcome, 0.0f,
+                       WSRELAY_HITFLAG_BY_MESSAGE | WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), 0, reason, distance);
 }
 
 void stdComm_WSRelay_NoteMotion(int otherId, double bufferMs, uint32_t steps, uint32_t carried, uint32_t held,

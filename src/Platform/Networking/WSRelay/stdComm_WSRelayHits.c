@@ -31,8 +31,15 @@
 //     other games how long that is (WAIT), for the bolts they decide. A
 //     game that draws them from their timed updates has them in it while
 //     the moment it draws them at is.
-// Everything else stays as it was: targeted Force powers, the host's damage
-// messages, falls, world traps, and a player's own attacks on itself.
+//   - A targeted Force power (Grip, Pull, Blinding, Deadly Sight) is still
+//     the attacker's game's to aim: it picks a player it shows in reach and
+//     sends their game the power's cog message (SkillTarget). Between two
+//     games that draw each other from their timed updates, the message also
+//     says the moment the player was drawn at and where it showed them
+//     (stdComm_WSRelay_ForceMoment), and their game plays it only if they
+//     were there then, as it checks a claim's last step.
+// Everything else stays as it was: the host's damage messages, falls, world
+// traps, and a player's own attacks on itself.
 //
 // Two games play by claims with each other only once each has said hello
 // (HELLO, with the rules it plays by) and heard the other's. An older build
@@ -234,6 +241,10 @@ static int hits_applyKind = 0;
 static uint32_t hits_applyAttack = 0;
 static float hits_applyDistance = -1.0f;
 static int hits_applyMoment = 0;
+
+// While a targeted Force power this game checked takes effect
+// (stdComm_WSRelay_ForceTakes), which the hit ledger has already.
+static int hits_bForce = 0;
 
 static double hits_Now()
 {
@@ -437,6 +448,17 @@ static WSRelayHitVec hits_GetVec(WSRelayHitsIn* in)
     return v;
 }
 
+// The moment another player was drawn at (stdComm_WSRelay_MotionMoment), as
+// a claim or a Force power names it: the moment f64, ms from their update
+// before it u16, ms to the one after u16 (0xFFFF: none).
+static void hits_PutMoment(WSRelayHitsOut* o, double r, double tBefore, double tAfter)
+{
+    double before = ceil(r - tBefore), after = tAfter < 0.0 ? 65535.0 : ceil(tAfter - r);
+    hits_PutF64(o, r);
+    hits_PutU16(o, before < 0.0 ? 0 : before > 65534.0 ? 65534 : (uint32_t)before);
+    hits_PutU16(o, after < 0.0 ? 0 : after > 65535.0 ? 65535 : (uint32_t)after);
+}
+
 void stdComm_WSRelay_FlushHits()
 {
     for (int i = 0; i < hits_numOutbox; i++)
@@ -482,6 +504,7 @@ void stdComm_WSRelay_ResetHits()
     hits_nextBlast = 0;
     hits_numOutbox = 0;
     hits_bApplying = 0;
+    hits_bForce = 0;
 }
 
 int stdComm_WSRelay_ClampReach(int reachMs)
@@ -703,7 +726,8 @@ int stdComm_WSRelay_ClaimHit(SithThing* pVictim, SithThing* pSource, flex_t dama
     if (hits_bApplying || !pVictim || !pSource || pVictim->type != SITH_THING_PLAYER)
         return 0;
     // Targeted Force powers, and the host's damage messages: their messages
-    // decide, as before.
+    // decide, as before (a Force power's once stdComm_WSRelay_ForceTakes has
+    // let it play).
     if (sithComm_msgInProgress == DSS_SENDTRIGGER || sithComm_msgInProgress == DSS_DAMAGE)
         return 0;
     if (!hits_Live())
@@ -761,12 +785,7 @@ int stdComm_WSRelay_ClaimHit(SithThing* pVictim, SithThing* pSource, flex_t dama
     hits_PutU16(&o, age < 0.0 ? 0 : age > 65535.0 ? 65535 : (uint32_t)age);
     hits_PutU16(&o, 0);
     if (bMoment)
-    {
-        double before = ceil(r - tBefore), after = tAfter < 0.0 ? 65535.0 : ceil(tAfter - r);
-        hits_PutF64(&o, r);
-        hits_PutU16(&o, before < 0.0 ? 0 : before > 65534.0 ? 65534 : (uint32_t)before);
-        hits_PutU16(&o, after < 0.0 ? 0 : after > 65535.0 ? 65535 : (uint32_t)after);
-    }
+        hits_PutMoment(&o, r, tBefore, tAfter);
     hits_Queue(pv->netId, body, o.n);
 
     // As before, the hit shows here; other players never take damage here.
@@ -965,6 +984,79 @@ int stdComm_WSRelay_DecidedElsewhere(SithThing* pSource, int damageType)
     if (!hits_Classify(pSource, damageType, &a) || a.maker == (int)playerThingIdx)
         return 0;
     return hits_DecidedBy(hits_Peer(a.maker)) || stdComm_WSRelayHit_Seen(&hits_claimed, hits_Now(), a.maker, a.source, a.attack);
+}
+
+// ---- Targeted Force powers.
+
+int stdComm_WSRelay_ForceMoment(SithThing* pVictim, uint8_t* pOut)
+{
+    if (!pVictim || pVictim == sithPlayer_g_pLocalPlayerThing || !hits_IsShownAlive(pVictim))
+        return 0;
+    WSRelayHitsPeer* pv = hits_Peer(hits_SlotOf(pVictim));
+    double r = 0.0, tBefore = 0.0, tAfter = -1.0;
+    int carried = 0;
+    if (!hits_ClaimsTo(pv) || pv->version < 2 || !stdComm_WSRelay_MotionMoment(pVictim, &r, &tBefore, &tAfter, &carried))
+        return 0;
+
+    WSRelayHitsOut o = { pOut, 0 };
+    hits_PutMoment(&o, r, tBefore, tAfter);
+    hits_PutVec(&o, hits_Vec(&pVictim->position));
+    return o.n;
+}
+
+int stdComm_WSRelay_ForceTakes(SithThing* pVictim, SithThing* pSource, const uint8_t* pData)
+{
+    hits_bForce = 0;
+
+    // Not on this game's player, or from a game it doesn't play Hit what you
+    // see with: as before. Its player dead: its class cog does nothing, as
+    // before.
+    SithThing* pLocal = sithPlayer_g_pLocalPlayerThing;
+    WSRelayHitsPeer* p = hits_Peer(hits_SlotOf(pSource));
+    if (!pLocal || pVictim != pLocal || !p || !hits_Live() || !p->bHello || p->rules != STDCOMM_WSRELAY_HITS_HWYS
+        || !hits_IsAlive(pLocal))
+        return 1;
+
+    WSRelayHitsIn in = { pData, 0, STDCOMM_WSRELAY_FORCE_BYTES, 0 };
+    double r = hits_GetF64(&in);
+    int before = (int)hits_GetU16(&in);
+    int after = (int)hits_GetU16(&in);
+    WSRelayHitVec target = hits_GetVec(&in);
+
+    // Was the player where that game showed them, at the moment it drew them
+    // at, or, for one further back than the reach, anywhere in the reach: as
+    // a claim (hits_TakeClaim), on the motion clock.
+    double clock = stdComm_WSRelay_MotionNow();
+    double from = 0.0, to = clock;
+    int moment = STDCOMM_WSRELAY_MOMENT_AT;
+    WSRelayHitVerdict v;
+    memset(&v, 0, sizeof(v));
+    v.distance = -1.0f;
+    v.result = stdComm_WSRelayHit_MomentWindow(clock, hits_reachMs, r, before, after == 0xFFFF ? -1.0 : after, &from, &to);
+    if (v.result == WSRELAYHIT_LATE)
+    {
+        moment = STDCOMM_WSRELAY_MOMENT_PAST_REACH;
+        from = stdComm_WSRelayHit_WindowFrom(clock, hits_reachMs, -1.0);
+        to = clock;
+        v.result = WSRELAYHIT_OK;
+    }
+    if (v.result == WSRELAYHIT_OK)
+        v = stdComm_WSRelayHit_CheckThere(&hits_record, hits_life, target, from, to);
+
+    stdComm_WSRelay_NoteTargeted(p->netId, v.result == WSRELAYHIT_OK ? STDCOMM_WSRELAY_HIT : STDCOMM_WSRELAY_TURNED_DOWN,
+                                 v.result, v.distance, moment);
+    hits_bForce = v.result == WSRELAYHIT_OK;
+    return hits_bForce;
+}
+
+void stdComm_WSRelay_ForceDone()
+{
+    hits_bForce = 0;
+}
+
+int stdComm_WSRelay_ApplyingForce()
+{
+    return hits_bForce;
 }
 
 // ---- Bolts turned away, and charges.

@@ -130,6 +130,14 @@ WSRelayHitVerdict stdComm_WSRelayHit_CheckIn(const WSRelayHitRecord* pRecord, ui
                                              const WSRelayHitClaim* pClaim, const WSRelayHitAttack* pAttack,
                                              double now, double windowFrom, double windowTo);
 
+// Only whether the player was where another game showed them (target),
+// between windowFrom and windowTo in life `life`: the last of the claim's
+// checks, and all there is to check of a targeted Force power, which that
+// game aimed at the player where it showed them. WSRELAYHIT_OK,
+// WSRELAYHIT_NOT_THERE, WSRELAYHIT_LATE or WSRELAYHIT_BAD; no damage.
+WSRelayHitVerdict stdComm_WSRelayHit_CheckThere(const WSRelayHitRecord* pRecord, uint32_t life, WSRelayHitVec target,
+                                                double windowFrom, double windowTo);
+
 // A claim that names a moment: the attacker's game drew the player at r (on
 // the player's game's clock, as now is), between the player's updates
 // beforeMs before it and afterMs after it (< 0: none, it carried them on

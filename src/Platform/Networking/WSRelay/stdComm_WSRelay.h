@@ -83,6 +83,13 @@ double stdComm_WSRelay_Now();
 // was checked (STDCOMM_WSRELAY_MOMENT_*).
 void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance, int moment);
 
+// The hit ledger: a targeted Force power on this game's player from player
+// otherId, sent with the moment its game drew this one's player at
+// (stdComm_WSRelay_ForceTakes), which played (STDCOMM_WSRELAY_HIT) or was
+// turned down (STDCOMM_WSRELAY_TURNED_DOWN) for reason. distance and moment
+// as for NoteTurnedDown.
+void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float distance, int moment);
+
 // ---- Hit what you see (stdComm_WSRelayHits.c).
 
 // The rules a match plays by: the host's choice, on its host screen.
@@ -148,6 +155,21 @@ int stdComm_WSRelay_ClaimsTo(SithThing* pPlayer);
 // Whether a hit or block on this game's player by pSource is the attacker's
 // game's to decide.
 int stdComm_WSRelay_DecidedElsewhere(SithThing* pSource, int damageType);
+
+// Targeted Force powers: the cog message a power aimed at another player
+// sends their game (SkillTarget, sithDSSCog_SendMessage). ForceMoment: the
+// STDCOMM_WSRELAY_FORCE_BYTES that go after it, into pOut, while this game
+// draws pVictim from their timed updates in a match played by Hit what you
+// see: the moment it drew them at and where (0: none). ForceTakes: whether
+// one on this game's player pVictim from pSource, with those bytes, plays
+// (1) or is turned down (0), by where its player was then; the hit ledger
+// has either. ApplyingForce: while one that was checked plays, until
+// ForceDone, so the ledger doesn't count the damage it does again.
+#define STDCOMM_WSRELAY_FORCE_BYTES (24)
+int stdComm_WSRelay_ForceMoment(SithThing* pVictim, uint8_t* pOut);
+int stdComm_WSRelay_ForceTakes(SithThing* pVictim, SithThing* pSource, const uint8_t* pData);
+void stdComm_WSRelay_ForceDone();
+int stdComm_WSRelay_ApplyingForce();
 
 // What other players' games tell this one about their attacks: a swing
 // (DSS_JKENABLESABER: its number, damage and blade length; noted once, so
