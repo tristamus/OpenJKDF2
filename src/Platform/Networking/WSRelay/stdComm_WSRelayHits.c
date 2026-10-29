@@ -1,10 +1,11 @@
-// Hit what you see: the hit rules a host plays by unless it picks Classic
-// (jkGuiNetHost). The game that made an attack decides what it hit, by what
-// its player saw, and the target's game checks each hit before it counts
-// (stdComm_WSRelayHitCheck.h). Classic keeps the original rules, where each
-// game decides the hits on its own player by where it has the attacker and
-// the attack: about a round trip of the network ago, so a swing or a shot
-// that hit on the attacker's screen often missed there.
+// Hit what you see: hit rules a host can pick on its host screen
+// (jkGuiNetHost) instead of Classic, the default. The game that made an
+// attack decides what it hit, by what its player saw, and the target's game
+// checks each hit before it counts (stdComm_WSRelayHitCheck.h). Classic
+// keeps the original rules, where each game decides the hits on its own
+// player by where it has the attacker and the attack: about a round trip of
+// the network ago, so a swing or a shot that hit on the attacker's screen
+// often missed there.
 //
 // In a match played by Hit what you see:
 //   - When this game's attack (its player's saber swing, a shot it fired, or
@@ -167,7 +168,7 @@ typedef struct WSRelayHitsAttack
     WSRelayHitVec blast;
 } WSRelayHitsAttack;
 
-int stdComm_WSRelay_bClassicHits = 0;
+int stdComm_WSRelay_bClassicHits = 1;
 int stdComm_WSRelay_hitReachMs = STDCOMM_WSRELAY_REACH_DEFAULT;
 
 // This match's rules: the host's choice.

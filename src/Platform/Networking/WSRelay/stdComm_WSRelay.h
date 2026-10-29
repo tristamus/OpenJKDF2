@@ -80,7 +80,7 @@ void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t d
 
 // ---- Hit what you see (stdComm_WSRelayHits.c).
 
-// The rules a match plays by: the host's choice, on its Advanced screen.
+// The rules a match plays by: the host's choice, on its host screen.
 #define STDCOMM_WSRELAY_HITS_CLASSIC (0)
 #define STDCOMM_WSRELAY_HITS_HWYS (1)
 
@@ -105,7 +105,8 @@ void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t d
 // the shooter is farther than this from there, in JKU.
 #define STDCOMM_WSRELAY_SHOT_START_SLACK (0.3)
 
-// The host's settings (jkGuiNetHost), which it plays by when it hosts.
+// The host's settings (jkGuiNetHost), which it plays by when it hosts:
+// Classic unless it picks Hit what you see.
 extern int stdComm_WSRelay_bClassicHits;
 extern int stdComm_WSRelay_hitReachMs;
 

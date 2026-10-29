@@ -58,6 +58,14 @@ enum jkGuiNetHostElement_t
     NETHOST_PERSONALITIES_CHECKBOX = 25,
     NETHOST_JEDIONLY_CHECKBOX = 26,
 #endif
+
+#ifdef PLATFORM_WSRELAY
+    // Added: the hit rules (stdComm_WSRelayHits.c), after MotS's checkboxes in
+    // both lists.
+    NETHOST_HITRULES_TEXT = NETHOST_JEDIONLY_CHECKBOX + 1,
+    NETHOST_CLASSICHITS_CHECKBOX = NETHOST_JEDIONLY_CHECKBOX + 2,
+    NETHOST_HWYSHITS_CHECKBOX = NETHOST_JEDIONLY_CHECKBOX + 3,
+#endif
 };
 
 enum jkGuiNetHostAdvancedElement_t
@@ -71,10 +79,10 @@ enum jkGuiNetHostAdvancedElement_t
     NETHOST_ADVANCED_ADDED = 4,
 #endif
 #ifdef PLATFORM_WSRELAY
-    // Added: the hit rules (stdComm_WSRelayHits.c).
-    NETHOST_CLASSICHITS_CHECKBOX = NETHOST_ADVANCED_ADDED,
-    NETHOST_HITREACH_TEXTBOX = NETHOST_ADVANCED_ADDED + 2,
-    NETHOST_ADVANCED_OK_BUTTON = NETHOST_ADVANCED_ADDED + 3,
+    // Added: how far back a hit can reach, with Hit what you see
+    // (stdComm_WSRelayHits.c).
+    NETHOST_HITREACH_TEXTBOX = NETHOST_ADVANCED_ADDED + 1,
+    NETHOST_ADVANCED_OK_BUTTON = NETHOST_ADVANCED_ADDED + 2,
 #else
     NETHOST_ADVANCED_OK_BUTTON = NETHOST_ADVANCED_ADDED,
 #endif
@@ -83,8 +91,12 @@ enum jkGuiNetHostAdvancedElement_t
 
 static int32_t jkGuiNetHost_aIdk[2] = {0xd, 0xe};
 
+#ifdef PLATFORM_WSRELAY
+static int jkGuiNetHost_HitRulesClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, int redraw);
+#endif
+
 // MOTS altered
-static jkGuiElement jkGuiNetHost_aElements[28] =
+static jkGuiElement jkGuiNetHost_aElements[] =
 {
     { ELEMENT_TEXT,         0, 0, NULL, 3, { 0, 410, 640, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 6, "GUI_MULTIPLAYER", 3, { 20, 20, 600, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -105,9 +117,16 @@ static jkGuiElement jkGuiNetHost_aElements[28] =
     { ELEMENT_TEXT,         0, 0, "GUINET_PASSWORD", 2, { 20, 340, 270, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBOX,      0, 0, NULL, 16, { 20, 380, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 150, 240, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: the lists are a row shorter each, for the hit rules under them.
+    { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 175, 320, 66 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSELEVEL", 2, { 310, 246, 260, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_LISTBOX,      1, 0, NULL, 0, { 310, 270, 320, 96 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#else
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 175, 320, 80 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, "GUI_CHOOSELEVEL", 2, { 310, 265, 260, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_LISTBOX,      1, 0, NULL, 0, { 310, 290, 320, 110 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
     { ELEMENT_TEXTBUTTON,   GUI_ADVANCED, 2, "GUI_ADVANCED", 3, { 220, 430, 200, 40 }, 1, 0, "GUI_ADVANCED_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON,   GUI_OK,  2, "GUI_OK", 3, { 420, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON,   GUI_CANCEL, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -115,6 +134,18 @@ static jkGuiElement jkGuiNetHost_aElements[28] =
     { ELEMENT_TEXT, 0, 0, "GUIEXT_SERVER_PORT", 2, { 540, 80, 90, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBOX, 0, 0, NULL, 16, { 540, 125, 90, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     
+#endif
+#ifdef PLATFORM_WSRELAY
+    // Added: MotS's game type checkboxes' places, so the hit rules have the
+    // same places in both lists.
+    { ELEMENT_TEXT,         0, 0, NULL, 2, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,         0, 0, NULL, 2, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
+#ifdef PLATFORM_WSRELAY
+    // Added: the hit rules, a pair like MotS's game types, above Ok.
+    { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -127,7 +158,7 @@ static jkGuiMenu jkGuiNetHost_menu =
 // MOTS added: MotS's host screen, with its positions. MotS adds the game type checkboxes
 // (personalities or ranked Jedi only) and drops the GUI_MAXSTARS label. The elements keep
 // the order of the list above so the same indices work for both, with the checkboxes last.
-static jkGuiElement jkGuiNetHost_aElementsMots[30] =
+static jkGuiElement jkGuiNetHost_aElementsMots[] =
 {
     { ELEMENT_TEXT,         0, 0, NULL, 3, { 0, 410, 640, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 6, "GUI_MULTIPLAYER", 3, { 20, 15, 600, 50 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -148,9 +179,16 @@ static jkGuiElement jkGuiNetHost_aElementsMots[30] =
     { ELEMENT_TEXT,         0, 0, "GUINET_PASSWORD", 2, { 20, 360, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBOX,      0, 0, NULL, 16, { 20, 380, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 173, 240, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: the lists are a row shorter each, for the hit rules under them.
+    { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 195, 320, 51 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSELEVEL", 2, { 310, 250, 260, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_LISTBOX,      1, 0, NULL, 0, { 310, 272, 320, 96 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#else
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 195, 320, 75 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, "GUI_CHOOSELEVEL", 2, { 310, 268, 260, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_LISTBOX,      1, 0, NULL, 0, { 310, 290, 320, 110 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
     { ELEMENT_TEXTBUTTON,   GUI_ADVANCED, 2, "GUI_ADVANCED", 3, { 220, 430, 200, 40 }, 1, 0, "GUI_ADVANCED_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON,   GUI_OK,  2, "GUI_OK", 3, { 420, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON,   GUI_CANCEL, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -161,6 +199,12 @@ static jkGuiElement jkGuiNetHost_aElementsMots[30] =
 #endif
     { ELEMENT_CHECKBOX,     0, 0, "GUI_TYPEPERSONALITIES", 0, { 310, 88, 330, 20 }, 1, 0, "GUI_PERSONALITIES_HINT", NULL, &jkGuiNetHost_PersonalitiesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUI_TYPEJEDIONLY", 0, { 310, 108, 330, 20 }, 1, 0, "GUI_JEDIONLY_HINT", NULL, &jkGuiNetHost_JediOnlyClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: the hit rules, a pair like MotS's game types, above Ok.
+    { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
 
@@ -184,9 +228,8 @@ static jkGuiElement jkGuiNetHost_aSettingsElements[] =
     { ELEMENT_CHECKBOX, 0, 0, "GUIEXT_COOP", 0, { 70, 300, 200, 40 }, 1, 0, "GUIEXT_COOP_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
 #ifdef PLATFORM_WSRELAY
-    { ELEMENT_CHECKBOX, 0, 0, "GUIEXT_CLASSIC_HITS", 0, { 70, 330, 300, 40 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT, 0, 0, "GUIEXT_HIT_REACH", 2, { 70, 360, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXTBOX, 0, 0, NULL, 0, { 280, 370, 50, 20 }, 1, 0, "GUIEXT_HIT_REACH_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT, 0, 0, "GUIEXT_HIT_REACH", 2, { 70, 330, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBOX, 0, 0, NULL, 0, { 280, 340, 50, 20 }, 1, 0, "GUIEXT_HIT_REACH_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_TEXTBUTTON, GUI_OK, 2, "GUI_OK", 3, { 420, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, GUI_CANCEL, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -227,21 +270,44 @@ int wstr_to_int_clamped(char16_t *pWstr, int minVal, int maxVal)
 }
 
 #ifdef PLATFORM_WSRELAY
-// Added: the hit rules this game hosts by, on the Advanced screen: Hit what
-// you see unless Classic is checked, and how far back a hit can reach.
+// Added: the hit rules this game hosts by, on the host screen above Ok:
+// Classic unless Hit what you see is picked. How far back a hit can reach
+// is on the Advanced screen.
 static char16_t jkGuiNetHost_hitReachText[32];
 
 static void jkGuiNetHost_ShowHitRules()
 {
-    jkGuiNetHost_aSettingsElements[NETHOST_CLASSICHITS_CHECKBOX].selectedTextEntry = !!stdComm_WSRelay_bClassicHits;
+    jkGuiNetHost_pElements[NETHOST_CLASSICHITS_CHECKBOX].selectedTextEntry = !!stdComm_WSRelay_bClassicHits;
+    jkGuiNetHost_pElements[NETHOST_HWYSHITS_CHECKBOX].selectedTextEntry = !stdComm_WSRelay_bClassicHits;
+}
+
+static void jkGuiNetHost_TakeHitRules()
+{
+    stdComm_WSRelay_bClassicHits = !jkGuiNetHost_pElements[NETHOST_HWYSHITS_CHECKBOX].selectedTextEntry;
+}
+
+static int jkGuiNetHost_HitRulesClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, int redraw)
+{
+    int bClassic = (pElement == &jkGuiNetHost_pElements[NETHOST_CLASSICHITS_CHECKBOX]);
+    jkGuiNetHost_pElements[NETHOST_CLASSICHITS_CHECKBOX].selectedTextEntry = bClassic;
+    jkGuiNetHost_pElements[NETHOST_HWYSHITS_CHECKBOX].selectedTextEntry = !bClassic;
+    if (pMenu)
+    {
+        jkGuiRend_UpdateAndDrawClickable(pElement, pMenu, 1);
+        jkGuiRend_Paint(pMenu);
+    }
+    return 0;
+}
+
+static void jkGuiNetHost_ShowHitReach()
+{
     jk_snwprintf(jkGuiNetHost_hitReachText, 0x20u, u"%d", stdComm_WSRelay_ClampReach(stdComm_WSRelay_hitReachMs));
     jkGuiNetHost_aSettingsElements[NETHOST_HITREACH_TEXTBOX].wstr = jkGuiNetHost_hitReachText;
     jkGuiNetHost_aSettingsElements[NETHOST_HITREACH_TEXTBOX].selectedTextEntry = 8;
 }
 
-static void jkGuiNetHost_TakeHitRules()
+static void jkGuiNetHost_TakeHitReach()
 {
-    stdComm_WSRelay_bClassicHits = !!jkGuiNetHost_aSettingsElements[NETHOST_CLASSICHITS_CHECKBOX].selectedTextEntry;
     stdComm_WSRelay_hitReachMs = wstr_to_int_clamped(jkGuiNetHost_hitReachText, STDCOMM_WSRELAY_REACH_MIN, STDCOMM_WSRELAY_REACH_MAX);
 }
 #endif
@@ -489,6 +555,9 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
         jkGuiNetHost_aElementsMots[NETHOST_JEDIONLY_CHECKBOX].selectedTextEntry = !!(jkGuiNetHost_gameFlags & MULTIMODEFLAG_1000);
         jkGuiNetHost_SetRankVisible(!!(jkGuiNetHost_gameFlags & MULTIMODEFLAG_1000));
     }
+#ifdef PLATFORM_WSRELAY
+    jkGuiNetHost_ShowHitRules();
+#endif
     if ( !jkGuiNetHost_gameName[0] )
     {
         jk_snwprintf(jkGuiNetHost_gameName, 0x20u, jkStrings_GetUniStringWithFallback("GUI_DEFAULT_GAME_NAME"), jkPlayer_playerShortName);
@@ -607,6 +676,9 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
             pMultiEntry->tickRateMs = jkGuiNetHost_tickRate;
             pMultiEntry->sessionFlags = jkGuiNetHost_sessionFlags;
             jkGuiNetHost_gameFlags = pMultiEntry->multiModeFlags;
+#ifdef PLATFORM_WSRELAY
+            jkGuiNetHost_TakeHitRules();
+#endif
 #ifdef QOL_IMPROVEMENTS
             jkGuiNetHost_portNum = wstr_to_int_clamped(jkGuiNetHost_portText, 1, 65535);
             wuRegistry_SetWString("serverPassword", pMultiEntry->wPassword);
@@ -646,7 +718,7 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
             jkGuiNetHost_aSettingsElements[NETHOST_COOP_CHECKBOX].selectedTextEntry = jkGuiNetHost_bIsCoop;
 #endif
 #ifdef PLATFORM_WSRELAY
-            jkGuiNetHost_ShowHitRules();
+            jkGuiNetHost_ShowHitReach();
 #endif
             // Fixed: Return and Escape are Ok and Cancel. They were the
             // checkboxes Added under them, so Return checked Dedicated Server.
@@ -659,7 +731,7 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
                 jkGuiNetHost_tickRate = pMultiEntry->tickRateMs;
                 jkGuiNetHost_sessionFlags = pMultiEntry->sessionFlags;
 #ifdef PLATFORM_WSRELAY
-                jkGuiNetHost_TakeHitRules();
+                jkGuiNetHost_TakeHitReach();
 #endif
             }
 #ifdef QOL_IMPROVEMENTS
@@ -696,7 +768,7 @@ int jkGuiNetHost_sub_4118C0(jkMultiEntry3 *pEntry)
     jkGuiNetHost_aSettingsElements[NETHOST_TICKRATE_TEXTBOX].wstr = a1a;
     jkGuiNetHost_aSettingsElements[NETHOST_TICKRATE_TEXTBOX].selectedTextEntry = 32;
 #ifdef PLATFORM_WSRELAY
-    jkGuiNetHost_ShowHitRules();
+    jkGuiNetHost_ShowHitReach();
 #endif
     // Fixed: Ok and Cancel, as above.
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiNetHost_menuSettings, &jkGuiNetHost_aSettingsElements[NETHOST_ADVANCED_OK_BUTTON]);
@@ -710,7 +782,7 @@ int jkGuiNetHost_sub_4118C0(jkMultiEntry3 *pEntry)
         jkGuiNetHost_tickRate = tickRate;
         jkGuiNetHost_sessionFlags = pEntry->sessionFlags;
 #ifdef PLATFORM_WSRELAY
-        jkGuiNetHost_TakeHitRules();
+        jkGuiNetHost_TakeHitReach();
 #endif
     }
     return v1;

@@ -1,4 +1,4 @@
-MSGS 121          # <--- DON'T FORGET TO UPDATE THIS COUNT
+MSGS 124          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
 #  "<key>"     <unused number>   "<string>"
 
@@ -83,10 +83,13 @@ MSGS 121          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_COOP"                    0 "Experimental Co-op"
    "GUIEXT_COOP_HINT"               0 "Launch server with actors enabled."
    "GUIEXT_SERVER_PORT"             0 "Server Port:"
-   "GUIEXT_CLASSIC_HITS"            0 "Classic hit rules"
+   "GUIEXT_HIT_RULES"               0 "Hit rules:"
+   "GUIEXT_CLASSIC_HITS"            0 "Classic"
    "GUIEXT_CLASSIC_HITS_HINT"       0 "Each game decides the hits on its own player, as the original did."
+   "GUIEXT_HWYS_HITS"               0 "Hit what you see"
+   "GUIEXT_HWYS_HITS_HINT"          0 "Hits count where the attacker sees them, checked by the target's game."
    "GUIEXT_HIT_REACH"               0 "Hit reach (ms):"
-   "GUIEXT_HIT_REACH_HINT"          0 "How far back a hit you see can count: 150 to 500 ms."
+   "GUIEXT_HIT_REACH_HINT"          0 "With Hit what you see: how far back a hit can count, 150 to 500 ms."
 
    #"GUIEXT_"                0 ""
 
