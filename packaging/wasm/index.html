@@ -607,6 +607,16 @@
       .footer p { margin: 0 0 6px; }
       .footer a { margin-right: 14px; }
 
+      /* Keep the Lobby Running: what the site costs a year, and a link to
+         PayPal's donate page (a plain link, so no PayPal code runs here). */
+      .support-costs { border-collapse: collapse; margin: 2px 0 6px; font-size: 13px; }
+      .support-costs td { padding: 1px 0; }
+      .support-costs td + td { padding-left: 18px; text-align: right; font-weight: bold; font-variant-numeric: tabular-nums; }
+      .support-costs tr.total td { border-top: 1px solid var(--teal-light); padding-top: 3px; }
+      #zone a.support-button { display: inline-block; margin-top: 2px; color: #fff; text-decoration: none; }
+      .style-2001 .support-costs tr.total td { border-top-color: var(--sky); }
+      .style-2001 #zone a.support-button { color: var(--navy); }
+
       @media (max-width: 700px) {
         .layout { flex-direction: column; align-items: stretch; }
         .sidebar { width: auto; border-bottom-right-radius: 0; }
@@ -1637,6 +1647,18 @@
                 <li>Won't start, or only a few frames per second? Turn on graphics acceleration in your
                   browser's settings and restart it. This page shows how when it's off.</li>
               </ul>
+            </section>
+            <section id="support" aria-labelledby="support-title">
+              <h2 class="ruled" id="support-title">Keep the Lobby Running</h2>
+              <p>jkdf2mp is free, with no ads. Here's what it costs to run each year:</p>
+              <table class="support-costs">
+                <tr><td>Cloudflare (the lobby server and this website)</td><td>$60</td></tr>
+                <tr><td>The jediknight.zone address</td><td>$66</td></tr>
+                <tr class="total"><td>Total</td><td>$126</td></tr>
+              </table>
+              <p class="note">Want to help? Donations go straight to these bills. The game stays free either way.</p>
+              <a class="zone-button support-button" href="https://www.paypal.com/donate/?hosted_button_id=CSBG7FWWAAYW4"
+                target="_blank" rel="noopener">Donate with PayPal</a>
             </section>
           </main>
         </div>
