@@ -1459,6 +1459,16 @@
         <p class="tagline">Free to play. No account needed.</p>
         <section class="gfx-notice" id="gfx-notice" role="alert" hidden></section>
         <section class="gfx-notice jit-notice" id="jit-notice" role="status" hidden></section>
+        <section class="gfx-notice move-notice" id="move-notice" role="status" hidden>
+          <h2>jkdf2mp has moved to jediknight.zone</h2>
+          <p>If you played at the old address, jkdf2mp.jkdf2mp-lobby.workers.dev, your characters, controls,
+            saved game files, mods and screenshots are saved in this browser under that address. Bring them
+            here?</p>
+          <p class="move-actions"><button class="zone-button" type="button" data-move-in>Bring them over</button>
+            <button class="zone-button" type="button" data-move-fresh>Start fresh</button></p>
+          <p class="fine move-status">A small window from the old address opens for a moment, hands them over and
+            closes. Nothing goes through our server, and the old address keeps its copy.</p>
+        </section>
 
         <div class="layout">
           <aside class="sidebar">
@@ -1616,6 +1626,11 @@
                 <li>So are your screenshots, under <a href="#screenshots">Your Screenshots</a>. Clearing this
                   site's data in your browser deletes them, so download the ones you want to keep. It deletes
                   the saved game files too, and the page asks for your game folder again.</li>
+                <li id="move-files" hidden><b>Played at the old address?</b> This site moved from
+                  jkdf2mp.jkdf2mp-lobby.workers.dev to jediknight.zone, and a browser keeps each address's
+                  files apart. <button class="text-button" type="button" data-move-in>Bring your characters,
+                  controls, saved game files, mods and screenshots over from the old address.</button> If the
+                  game asks for your game folder again, pick it once more.</li>
               </ul>
             </section>
 
@@ -1850,9 +1865,10 @@
       };
       Module.setStatus('Downloading...');
       // The address's options go to the engine, which quits on one it doesn't
-      // know, so the page's own are left out.
+      // know, so the page's own are left out (moved: the lobby sent this page
+      // load here from the old address, see moveIn).
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length && ['keycheck', 'netlog', 'bench', 'netstats', 'netsim', 'nettest', 'netold'].indexOf(i.split('=')[0]) < 0)
+        .filter(i => i.length && ['keycheck', 'netlog', 'bench', 'netstats', 'netsim', 'nettest', 'netold', 'moved'].indexOf(i.split('=')[0]) < 0)
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
       // ?netstats (this window pings the other players) and ?netsim (its
       // packets wait as if its connection were slower) are for netstats.js,
@@ -3289,6 +3305,302 @@
           showJitNotice(document.getElementById('jit-notice'), r);
         });
       }
+
+      // ---- The site moved from jkdf2mp.jkdf2mp-lobby.workers.dev to
+      // jediknight.zone; the lobby sends page loads on the old address here,
+      // with ?moved (jkdf2mp-bb-server, src/moved.js). A page can only read
+      // what was saved under its own address, so a player's characters and
+      // controls, settings, saved game files, mods, maps, screenshots and page
+      // settings stay behind there. Bring them over opens move-out.html on the
+      // old address in a small window, which reads them and answers this
+      // page's questions with postMessage: the list, then each store's records
+      // a batch at a time. This page writes them here and reloads. It copies,
+      // so the old address keeps its own. A database that already has
+      // something here is left as it is, and so is a page setting. The kept
+      // game folders can't come along (a folder's permission belongs to the
+      // address that was given it), but the saved game files do, so the game
+      // starts from them without asking for the folder.
+      var MOVE_FROM = 'https://jkdf2mp.jkdf2mp-lobby.workers.dev';
+      var MOVE_TO = 'https://jediknight.zone';
+      // offer (the notice shows until a choice), done or declined.
+      var MOVE_SETTING = 'jkdf2mp-move-in';
+      // How long the old address may take to answer a question.
+      var MOVE_WAIT_MS = 30000;
+      var MOVE_LABELS = {
+        '/jk1/player': 'Jedi Knight characters and controls',
+        '/mots/player': 'Mysteries of the Sith characters and controls',
+        '/jk1/persist': 'Jedi Knight settings',
+        '/mots/persist': 'Mysteries of the Sith settings',
+        'jkdf2mp-game-files': 'saved game files',
+        'jkdf2mp-mods': 'saved mods',
+        'jkdf2mp-maps': 'downloaded maps',
+        'jkdf2mp-screenshots': 'screenshots',
+        local: 'page settings'
+      };
+
+      function moveLabels(names) {
+        var words = names.map(function(n) { return MOVE_LABELS[n] || n; });
+        return words.length < 2 ? words.join('') :
+          words.slice(0, -1).join(', ') + ' and ' + words[words.length - 1];
+      }
+
+      // Page settings from the old address, unless this page has its own.
+      // Returns how many it took.
+      function moveInLocal(storage, items) {
+        var n = 0;
+        for (var k in items) {
+          if (!/^jkdf2mp-/.test(k) || k === MOVE_SETTING || typeof items[k] !== 'string' || storage.getItem(k) !== null)
+            continue;
+          storage.setItem(k, items[k]);
+          n++;
+        }
+        return n;
+      }
+
+      // Opens a database here for what comes from the old address (d, from its
+      // list): the same version, with any store or index it lacks. Resolves to
+      // the database, or null when one of the stores that has records there
+      // already has some here, so it's left as it is.
+      async function moveInOpen(idb, d) {
+        function open(version) {
+          return new Promise(function(resolve, reject) {
+            var req = version ? idb.open(d.name, version) : idb.open(d.name);
+            req.onupgradeneeded = function() {
+              var db = req.result, tx = req.transaction;
+              for (var s of d.stores) {
+                var store = db.objectStoreNames.contains(s.name) ? tx.objectStore(s.name) :
+                  db.createObjectStore(s.name, { keyPath: s.keyPath, autoIncrement: s.autoIncrement });
+                for (var ix of s.indexes) {
+                  if (!store.indexNames.contains(ix.name))
+                    store.createIndex(ix.name, ix.keyPath, { unique: ix.unique, multiEntry: ix.multiEntry });
+                }
+              }
+            };
+            req.onsuccess = function() { resolve(req.result); };
+            req.onerror = function() { reject(req.error); };
+            req.onblocked = function() { reject(new Error('another tab of this site has it open')); };
+          });
+        }
+        var db;
+        try {
+          db = await open(d.version);
+        } catch (e) {
+          // A later version here: take it as it is.
+          if (!e || e.name !== 'VersionError') throw e;
+          db = await open(0);
+        }
+        var names = d.stores.filter(function(s) { return s.count > 0; }).map(function(s) { return s.name; });
+        var missing = names.filter(function(n) { return !db.objectStoreNames.contains(n); });
+        if (missing.length) {
+          db.close();
+          throw new Error('it has no ' + missing.join(', ') + ' here');
+        }
+        var has = await new Promise(function(resolve, reject) {
+          var tx = db.transaction(names), found = false;
+          names.forEach(function(n) {
+            var req = tx.objectStore(n).count();
+            req.onsuccess = function() { if (req.result > 0) found = true; };
+          });
+          tx.oncomplete = function() { resolve(found); };
+          tx.onerror = tx.onabort = function() { reject(tx.error); };
+        });
+        if (has) {
+          db.close();
+          return null;
+        }
+        return db;
+      }
+
+      function moveInWrite(db, s, batch) {
+        return new Promise(function(resolve, reject) {
+          var tx = db.transaction(s.name, 'readwrite'), store = tx.objectStore(s.name);
+          batch.keys.forEach(function(k, i) {
+            if (s.keyPath === null) store.put(batch.values[i], k);
+            else store.put(batch.values[i]);
+          });
+          tx.oncomplete = function() { resolve(); };
+          tx.onerror = tx.onabort = function() { reject(tx.error); };
+        });
+      }
+
+      // A database that failed partway is emptied again, so trying again
+      // doesn't find it here and leave it.
+      function moveInClear(db, names) {
+        return new Promise(function(resolve) {
+          var tx = db.transaction(names, 'readwrite');
+          names.forEach(function(n) { tx.objectStore(n).clear(); });
+          tx.oncomplete = tx.onerror = tx.onabort = function() { resolve(); };
+        });
+      }
+
+      // Talks to move-out.html in win, at address from: asks for the list,
+      // then each store's records a batch at a time, and writes them here.
+      // progress(text) says how far it is. Resolves to { moved, kept, failed }:
+      // names (local for the page settings), and { name, error } for failed.
+      async function moveIn(win, idb, storage, from, progress) {
+        var waiting = null;
+        function onMessage(ev) {
+          if (ev.origin !== from || ev.source !== win || !waiting) return;
+          var m = ev.data;
+          if (!m || typeof m !== 'object' || typeof m.jkdf2mpMove !== 'string') return;
+          var w = waiting;
+          waiting = null;
+          clearTimeout(w.timer);
+          if (m.jkdf2mpMove === 'error') w.reject(new Error(String(m.error)));
+          else w.resolve(m);
+        }
+        // Rejects when the window is closed or stops answering.
+        function ask(question) {
+          return new Promise(function(resolve, reject) {
+            waiting = { resolve: resolve, reject: reject, timer: setTimeout(function() {
+              waiting = null;
+              reject(new Error('the old address stopped answering'));
+            }, MOVE_WAIT_MS) };
+            if (question) win.postMessage(question, from);
+          });
+        }
+        var watch = setInterval(function() {
+          if (win.closed && waiting) {
+            var w = waiting;
+            waiting = null;
+            clearTimeout(w.timer);
+            w.reject(new Error('the window from the old address was closed'));
+          }
+        }, 500);
+        window.addEventListener('message', onMessage);
+        var result = { moved: [], kept: [], failed: [] };
+        try {
+          progress('Waiting for the old address…');
+          var hello = await ask(null);
+          if (hello.jkdf2mpMove !== 'hello') throw new Error('the old address answered something else');
+          var list = await ask({ jkdf2mpMove: 'list' });
+          if (moveInLocal(storage, list.local || {})) result.moved.push('local');
+          var dbs = (list.dbs || []).filter(function(d) {
+            return d.stores.some(function(s) { return s.count > 0; });
+          });
+          for (var i = 0; i < dbs.length; i++) {
+            var d = dbs[i];
+            progress('Moving ' + moveLabels([d.name]) + ' (' + (i + 1) + ' of ' + dbs.length + ')…');
+            var db = null, written = [];
+            try {
+              db = await moveInOpen(idb, d);
+              if (!db) {
+                result.kept.push(d.name);
+                continue;
+              }
+              for (var s of d.stores) {
+                if (!s.count) continue;
+                var after = null;
+                for (;;) {
+                  var batch = await ask({ jkdf2mpMove: 'records', db: d.name, store: s.name, after: after });
+                  if (batch.keys.length) {
+                    if (written.indexOf(s.name) < 0) written.push(s.name);
+                    await moveInWrite(db, s, batch);
+                    after = batch.keys[batch.keys.length - 1];
+                  }
+                  if (!batch.more) break;
+                }
+              }
+              result.moved.push(d.name);
+            } catch (e) {
+              if (db && written.length) await moveInClear(db, written);
+              result.failed.push({ name: d.name, error: String((e && e.message) || e) });
+              if (win.closed) break;
+            } finally {
+              if (db) db.close();
+            }
+          }
+        } catch (e) {
+          result.failed.push({ name: 'list', error: String((e && e.message) || e) });
+        } finally {
+          clearInterval(watch);
+          window.removeEventListener('message', onMessage);
+          try { win.postMessage({ jkdf2mpMove: 'done' }, from); } catch (e) {}
+        }
+        return result;
+      }
+
+      function moveSetting(value) {
+        try {
+          if (value) localStorage.setItem(MOVE_SETTING, value);
+          return localStorage.getItem(MOVE_SETTING);
+        } catch (e) {
+          return null;
+        }
+      }
+
+      // What the player reads once a move is over.
+      function moveResultText(r) {
+        var parts = [];
+        if (r.moved.length) parts.push('Moved: ' + moveLabels(r.moved) + '.');
+        if (r.kept.length) parts.push('Already here, so left as they were: ' + moveLabels(r.kept) + '.');
+        if (r.failed.length) {
+          parts.push("Couldn't move " + r.failed.map(function(f) {
+            return (f.name === 'list' ? 'anything' : moveLabels([f.name])) + ' (' + f.error + ')';
+          }).join(', ') + '. The old address still has them, so you can try again.');
+        }
+        if (!parts.length) parts.push('Nothing was saved under the old address in this browser.');
+        return parts.join(' ');
+      }
+
+      var moveNotice = document.getElementById('move-notice');
+      var moving = false;
+
+      function showMove(text, actions) {
+        moveNotice.querySelector('.move-actions').hidden = !actions;
+        if (text) moveNotice.querySelector('.move-status').textContent = text;
+        moveNotice.hidden = false;
+      }
+
+      function startMove() {
+        if (moving) return;
+        // Opened by the click, so the browser allows it.
+        var win = window.open(MOVE_FROM + '/move-out.html', 'jkdf2mp-move', 'popup,width=520,height=300');
+        if (!win) {
+          showMove('Your browser blocked the window from the old address. Allow pop-ups for this site, ' +
+                   'then click Bring them over again.', true);
+          return;
+        }
+        moving = true;
+        showMove('Waiting for the old address…', false);
+        moveNotice.scrollIntoView({ block: 'nearest' });
+        moveIn(win, indexedDB, localStorage, MOVE_FROM, function(text) { showMove(text, false); }).then(function(r) {
+          moving = false;
+          var text = moveResultText(r);
+          if (r.failed.length) {
+            showMove(text, true);
+            return;
+          }
+          moveSetting('done');
+          if (!r.moved.length) {
+            showMove(text, false);
+            return;
+          }
+          // The page read what's saved as it opened; reloading reads it again.
+          showMove(text + ' The page reloads to use them.', false);
+          setTimeout(function() { location.reload(); }, 2500);
+        });
+      }
+
+      // ?moved comes off the address, so a reload or a copied link doesn't
+      // carry it. The notice shows until the player picks.
+      (function() {
+        var search = location.search.replace(/[?&]moved(=[^&]*)?(?=&|$)/, '').replace(/^&/, '?');
+        var moved = search !== location.search;
+        if (moved) history.replaceState(history.state, '', location.pathname + search + location.hash);
+        if (location.origin !== MOVE_TO) return;
+        document.getElementById('move-files').hidden = false;
+        var state = moveSetting(null);
+        if (moved && state !== 'done' && state !== 'declined') state = moveSetting('offer');
+        if (state === 'offer') showMove(null, true);
+        document.querySelectorAll('[data-move-in]').forEach(function(b) {
+          b.addEventListener('click', startMove);
+        });
+        moveNotice.querySelector('[data-move-fresh]').addEventListener('click', function() {
+          moveSetting('declined');
+          moveNotice.hidden = true;
+        });
+      })();
 
       // Characters (player/<name>/: the .plr with controls, difficulty and
       // weapon settings, plus saved games) and OpenJKDF2's settings (persist/)

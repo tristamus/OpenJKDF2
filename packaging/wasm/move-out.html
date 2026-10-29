@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex">
+    <title>Moving your files to jediknight.zone</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 18px 22px;
+        background-color: #336666;
+        color: #ffffff;
+        font: 15px Verdana, Geneva, sans-serif;
+      }
+      h1 { margin: 0 0 8px; font: bold 18px Verdana, Geneva, sans-serif; color: #ffcc66; }
+      p { margin: 0 0 8px; }
+      a { color: #ffcc66; }
+    </style>
+  </head>
+  <body>
+    <h1>Moving your files to jediknight.zone</h1>
+    <p id="status">This window hands what this browser saved here to jediknight.zone, then closes by itself.</p>
+    <script>
+      // The game's old address (jkdf2mp.jkdf2mp-lobby.workers.dev) serves
+      // this page; the lobby sends every other page load there on to
+      // jediknight.zone. A page can only read what was saved under its own
+      // address, so the page on jediknight.zone opens this one in a small
+      // window when a player asks to bring their files over (index.html,
+      // moveIn): characters and settings (the IDBFS folders), saved game
+      // files, mods, maps, screenshots and page settings. This page reads
+      // them here and answers that page's questions with postMessage, only
+      // to MOVE_TO, and only to the window that opened it. It changes
+      // nothing here. The kept game folders stay: a folder's permission
+      // belongs to the address that was given it.
+      var MOVE_TO = 'https://jediknight.zone';
+      // Records go over in batches of about this many bytes, so a big mod
+      // or map doesn't sit in memory twice all at once.
+      var BATCH_BYTES = 32 * 1024 * 1024;
+      // What the page saves under these names, other than the kept folders.
+      var KNOWN_DBS = ['/jk1/player', '/mots/player', '/jk1/persist', '/mots/persist', 'jkdf2mp-game-files',
+                       'jkdf2mp-mods', 'jkdf2mp-maps', 'jkdf2mp-screenshots'];
+
+      function movable(name) {
+        return (/^jkdf2mp-/.test(name) && name !== 'jkdf2mp-kept-folders') ||
+               /^\/(jk1|mots)\/(player|persist)$/.test(name);
+      }
+
+      // The databases to move. Without indexedDB.databases(), the known ones;
+      // opening one that isn't here makes an empty one, which has nothing
+      // to send.
+      async function databaseNames(idb) {
+        if (typeof idb.databases !== 'function') return KNOWN_DBS.slice();
+        var list = await idb.databases();
+        return list.map(function(d) { return d.name; }).filter(movable).sort();
+      }
+
+      var opened = {};
+
+      function openDb(idb, name) {
+        if (!opened[name]) {
+          opened[name] = new Promise(function(resolve, reject) {
+            var req = idb.open(name);
+            req.onsuccess = function() { resolve(req.result); };
+            req.onerror = function() { reject(req.error); };
+            req.onblocked = function() { reject(new Error(name + ' is busy')); };
+          });
+        }
+        return opened[name];
+      }
+
+      // A database's version and stores, each with its key path, indexes and
+      // how many records it holds.
+      async function describe(idb, name) {
+        var db = await openDb(idb, name);
+        var names = Array.from(db.objectStoreNames);
+        var stores = [];
+        if (names.length) {
+          await new Promise(function(resolve, reject) {
+            var tx = db.transaction(names);
+            names.forEach(function(n) {
+              var store = tx.objectStore(n);
+              var s = { name: n, keyPath: store.keyPath, autoIncrement: store.autoIncrement, count: 0,
+                        indexes: Array.from(store.indexNames).map(function(i) {
+                          var ix = store.index(i);
+                          return { name: i, keyPath: ix.keyPath, unique: ix.unique, multiEntry: ix.multiEntry };
+                        }) };
+              stores.push(s);
+              var req = store.count();
+              req.onsuccess = function() { s.count = req.result; };
+            });
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = tx.onabort = function() { reject(tx.error); };
+          });
+        }
+        return { name: name, version: db.version, stores: stores };
+      }
+
+      // Bytes a record holds in arrays, which are copied when it's sent.
+      // Blobs and Files go over as references.
+      function arrayBytes(v, depth) {
+        if (v instanceof ArrayBuffer) return v.byteLength;
+        if (ArrayBuffer.isView(v)) return v.byteLength;
+        if (!v || typeof v !== 'object' || depth > 2 || v instanceof Blob) return 0;
+        var n = 0;
+        for (var k in v) n += arrayBytes(v[k], depth + 1);
+        return n;
+      }
+
+      // The records after key after (from the first when null), up to about
+      // BATCH_BYTES: { keys, values, more }.
+      async function records(idb, name, storeName, after) {
+        var db = await openDb(idb, name);
+        return new Promise(function(resolve, reject) {
+          var tx = db.transaction(storeName);
+          var range = after === null ? null : IDBKeyRange.lowerBound(after, true);
+          var keys = [], values = [], bytes = 0, more = false;
+          var req = tx.objectStore(storeName).openCursor(range);
+          req.onsuccess = function() {
+            var c = req.result;
+            if (!c) return;
+            if (keys.length && bytes >= BATCH_BYTES) {
+              more = true;
+              return;
+            }
+            keys.push(c.primaryKey);
+            values.push(c.value);
+            bytes += 1024 + arrayBytes(c.value, 0);
+            c.continue();
+          };
+          tx.oncomplete = function() { resolve({ keys: keys, values: values, more: more }); };
+          tx.onerror = tx.onabort = function() { reject(tx.error); };
+        });
+      }
+
+      // The page's own settings in this browser.
+      function localSettings(storage) {
+        var out = {};
+        for (var i = 0; i < storage.length; i++) {
+          var k = storage.key(i);
+          if (/^jkdf2mp-/.test(k)) out[k] = storage.getItem(k);
+        }
+        return out;
+      }
+
+      // One answer per question: list, records, or done (close).
+      async function answer(m) {
+        if (m.jkdf2mpMove === 'list') {
+          var local = {};
+          try { local = localSettings(localStorage); } catch (e) {}
+          var dbs = [];
+          for (var name of await databaseNames(indexedDB)) dbs.push(await describe(indexedDB, name));
+          return { jkdf2mpMove: 'list', local: local, dbs: dbs };
+        }
+        if (m.jkdf2mpMove === 'records') {
+          if (typeof m.db !== 'string' || !movable(m.db) || typeof m.store !== 'string')
+            throw new Error('no such store');
+          var batch = await records(indexedDB, m.db, m.store, m.after === undefined ? null : m.after);
+          return { jkdf2mpMove: 'records', keys: batch.keys, values: batch.values, more: batch.more };
+        }
+        return null;
+      }
+
+      var statusLine = document.getElementById('status');
+      if (!window.opener) {
+        statusLine.innerHTML = 'Nothing to do here. To bring your files over, open ' +
+          '<a href="' + MOVE_TO + '/">jediknight.zone</a> and click <b>Bring them over</b>.';
+      } else {
+        window.addEventListener('message', function(ev) {
+          if (ev.origin !== MOVE_TO || ev.source !== window.opener) return;
+          var m = ev.data;
+          if (!m || typeof m !== 'object') return;
+          if (m.jkdf2mpMove === 'done') {
+            statusLine.textContent = 'Done. This window closes now.';
+            window.close();
+            return;
+          }
+          answer(m).then(function(reply) {
+            if (reply) window.opener.postMessage(reply, MOVE_TO);
+          }, function(err) {
+            window.opener.postMessage({ jkdf2mpMove: 'error', error: String((err && err.message) || err) }, MOVE_TO);
+          });
+        });
+        // postMessage to MOVE_TO only reaches the opener if it's that page.
+        window.opener.postMessage({ jkdf2mpMove: 'hello' }, MOVE_TO);
+      }
+    </script>
+  </body>
+</html>
