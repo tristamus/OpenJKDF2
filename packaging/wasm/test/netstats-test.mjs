@@ -827,6 +827,207 @@ test('names and the log line', () => {
     assert.ok(host.notes.some(n => /^netstats: player 2 direct ping \d+ ms jitter \d+ ms loss/.test(n)), host.notes.join('\n'));
 });
 
+// Window.c's ring of frame end times, fps a second from now on.
+function framing(world, game, fps) {
+    const frames = { size: 4096, count: 0, ends: new Float64Array(4096) };
+    game.Module.jkFrames = frames;
+    const step = () => {
+        for (let i = 0; i < fps / 10; i++) frames.ends[frames.count++ % frames.size] = world.now();
+        world.later(step, 100);
+    };
+    step();
+}
+
+// Each game sends the other its position every 100 ms, as a player in a
+// match does about 50 times a second.
+function moving(world, a, b) {
+    const step = () => {
+        a.send(position(a, b));
+        b.send(position(b, a));
+        world.later(step, 100);
+    };
+    step();
+}
+
+test('counting in steps: the middle, the tail and how many reached each value', () => {
+    const h = new (makeGame(makeWorld(), { id: 1 }).ns.lib.Hist)(5, 100);
+    assert.equal(h.at(0.5), null);
+    for (const v of [12, 14, 31, 47, 52, 99, 250, -3, NaN, 'x']) h.add(v);
+    assert.equal(h.n, 7, 'numbers only, none below 0');
+    assert.equal(h.at(0.5), 47.5);
+    assert.equal(h.at(0.1), 12.5);
+    assert.equal(h.at(1), 250, 'past the top: the most');
+    assert.equal(h.most, 250);
+    assert.deepEqual([h.from(0), h.from(30), h.from(50), h.from(100)], [7, 5, 3, 1]);
+});
+
+test('the match summary: the match, each other player and the hits each way, without names, once', () => {
+    const { world, host, join } = match({ hostMeasures: false, joinMeasures: false });
+    // As the engine does: its facts, then the players' names.
+    for (const g of [host, join]) {
+        g.ns.facts(1, 300, false, '1234abcd');
+        g.ns.name(1, 'Jerec');
+        g.ns.name(2, 'Kyle');
+        g.ns.hello(g === host ? 2 : 1, 2);
+    }
+    framing(world, join, 50);
+    moving(world, host, join);
+    world.run(3000);
+    // The joiner's swings hit the host on its screen. The host's game counted
+    // three claims, at moments 120, 180 and 350 ms back, the last past the
+    // reach, and turned one down.
+    for (const [n, outcome, flags, why, age] of [[21, HIT, BY_CLAIM | MOMENT, 0, 120], [22, HIT, BY_CLAIM | MOMENT, 0, 180],
+                                                 [23, HIT, BY_CLAIM | MOMENT | PAST_REACH, 0, 350],
+                                                 [24, TURNED_DOWN, BY_CLAIM | MOMENT, NOT_THERE, 90]]) {
+        join.ns.hit(1, true, SABER, HIT, 40, 0, n);
+        world.run(20);
+        host.ns.hit(2, false, SABER, outcome, 40, flags, n, why, 0.02, age);
+        world.run(500);
+    }
+    // And a Grip that played there.
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.01, 140);
+    // How the joiner drew the host, each second.
+    for (let i = 0; i < 30; i++) {
+        join.ns.motion(1, { buffer: 40, steps: 150, carried: 3, held: 0, jumps: i === 4 ? 1 : 0, warps: 0, restarts: 1 });
+        world.run(1000);
+    }
+    const s = join.ns.summary();
+    assert.deepEqual([s.v, s.game, s.build, s.rules, s.reach, s.host, s.players], [1, 'jk', '1234abcd', 'hwys', 300, false, 2]);
+    near(s.secs, 35, 1, 'time in the match');
+    assert.deepEqual(s.fps, { median: 50, low: 50 });
+    assert.equal(s.others.length, 1);
+    const o = s.others[0];
+    assert.deepEqual([o.hello, o.link], [2, 'direct']);
+    near(o.secs, 35, 1, 'time with the host');
+    assert.equal(o.ping, undefined, 'nobody pinged');
+    assert.deepEqual(o.drawn, { behind: null, buffer: 40, buffer90: 40, carried: 0.02, held: 0, jumps: 1, warps: 0 });
+    assert.deepEqual(o.mine.saber, { shown: 4, counted: 3, turnedDown: 1, claims: 4, moments: 4, pastReach: 1,
+                                     why: { 'not there': 1 } });
+    assert.deepEqual(o.mine.Force, { targeted: 1, claims: 1, moments: 1 });
+    assert.equal(o.theirs, undefined, 'the host made no hits');
+    assert.ok(!/Jerec|Kyle/.test(JSON.stringify(s)), 'no names');
+    assert.equal(join.ns.summary(), null, 'once');
+
+    // The host's: the claims on its player, and how far back they reached.
+    const t = host.ns.summary().others[0].theirs;
+    assert.deepEqual(t.saber, { counted: 3, turnedDown: 1, claims: 4, moments: 4, pastReach: 1, why: { 'not there': 1 },
+                                ages: { n: 4, median: 123, p90: 350, p99: 350, most: 350,
+                                        from: { 150: 2, 200: 1, 250: 1, 300: 1, 400: 0, 500: 0 } } });
+    assert.deepEqual(t.Force, { targeted: 1, claims: 1, moments: 1,
+                                ages: { n: 1, median: 140, p90: 140, p99: 140, most: 140,
+                                        from: { 150: 0, 200: 0, 250: 0, 300: 0, 400: 0, 500: 0 } } });
+    assert.equal(host.ns.summary(), null);
+});
+
+test('the match summary: none for a short match or one alone, and it says when the match was a test', () => {
+    const short = match();
+    short.world.run(20000);
+    assert.equal(short.join.ns.summary(), null, 'under 30 s');
+    short.world.run(15000);
+    assert.ok(short.join.ns.summary(), 'over 30 s');
+
+    // Hosting alone.
+    const world = makeWorld();
+    const alone = makeGame(world, { id: 1, isHost: true });
+    alone.ns.start(true);
+    alone.ns.live(1, 1, true);
+    ticking(world, [alone]);
+    world.run(60000);
+    assert.equal(alone.ns.summary(), null, 'nobody else');
+
+    // Not in the match: the clock stops.
+    const { world: w2, host, join } = match({ joinSim: 'rtt:100' });
+    moving(w2, host, join);
+    join.Module.jkNetTest = 'attack:all';
+    w2.run(20000);
+    join.ns.live(0, 2, false);
+    w2.run(60000);
+    assert.equal(join.ns.summary(), null, 'only 20 s in it');
+    join.ns.live(1, 2, false);
+    w2.run(15000);
+    const s = join.ns.summary();
+    near(s.secs, 35, 1, 'in the match');
+    assert.deepEqual([s.sim, s.test, s.netstats, s.host, s.rules, s.game], [true, true, true, false, 'classic', 'jk']);
+    assert.ok(s.others[0].ping > 0, 'with ?netstats, pings');
+    // A new game starts over.
+    join.ns.start(false);
+    join.ns.live(1, 2, false);
+    w2.run(40000);
+    assert.equal(join.ns.summary(), null, 'nobody heard from in the new one');
+});
+
+test('the match summary: blocks counted or missed there, and time together only while the engine names the player', () => {
+    const { world, host, join } = match({ hostMeasures: false, joinMeasures: false });
+    // Each game's engine names the players in the match every 2 s, after
+    // its facts, and each sends its position every 100 ms, until the joiner
+    // leaves.
+    let joined = true;
+    const engine = g => {
+        if (g === join && !joined) return;
+        g.ns.facts(0, 300, false, '1234abcd');
+        if (g === join || joined) g.ns.name(g === host ? 2 : 1, '');
+        world.later(() => engine(g), 2000);
+    };
+    const moves = () => {
+        if (!joined) return;
+        host.send(position(host, join));
+        join.send(position(join, host));
+        world.later(moves, 100);
+    };
+    engine(host);
+    engine(join);
+    moves();
+    world.run(3000);
+    // Classic: blocks shown here, one the host's game counted as a hit, one
+    // it never saw and one it blocked too.
+    join.ns.hit(1, true, SABER, BLOCK, 10, false);
+    host.ns.hit(2, false, SABER, HIT, 10, false);
+    world.run(500);
+    join.ns.hit(1, true, SABER, BLOCK, 10, false);
+    world.run(3000);
+    join.ns.hit(1, true, SABER, BLOCK, 10, false);
+    host.ns.hit(2, false, SABER, BLOCK, 10, false);
+    world.run(30000);
+    const s = join.ns.summary();
+    assert.equal(s.rules, 'classic');
+    assert.deepEqual(s.others[0].mine.saber, { blocks: 3, blocksCounted: 1, blocksMissed: 1 });
+    // The joiner leaves, 37 s in. The host's engine stops naming it, and its
+    // time with the host stops within a roll call, not GONE_MS after it was
+    // last heard from.
+    joined = false;
+    world.run(20000);
+    const h = host.ns.summary();
+    near(h.secs, 57, 1, 'the host in the match');
+    near(h.others[0].secs, 37, 2, 'with the joiner');
+    assert.deepEqual(h.others[0].theirs.saber, { counted: 1, blocked: 1 });
+});
+
+test('the match summary of a big match stays under what sendBeacon sends', () => {
+    const fit = makeGame(makeWorld(), { id: 1 }).ns.lib.fit;
+    const why = { 'dead': 9, 'not there': 99, 'too late': 9, 'already counted': 9 };
+    const kinds = side => Object.fromEntries(['saber', 'shot', 'splash', 'Force', 'other'].map(k => [k,
+        side === 'mine' ? { shown: 9999, counted: 9999, blocked: 99, missed: 99, dead: 99, turnedDown: 999, landed: 99, blocks: 999,
+                            blocksCounted: 99, blocksMissed: 99, claims: 9999, moments: 9999, pastReach: 999, targeted: 99, targetedTurnedDown: 9, why: { ...why } }
+                        : { counted: 9999, blocked: 99, dead: 99, turnedDown: 999, targeted: 99, claims: 9999, moments: 9999,
+                            pastReach: 999, why: { ...why },
+                            ages: { n: 9999, median: 123, p90: 260, p99: 330, most: 1999,
+                                    from: { 150: 999, 200: 999, 250: 999, 300: 999, 400: 99, 500: 9 } } }]));
+    const others = n => Array.from({ length: n }, (_, i) => ({
+        secs: 100 + i, hello: 2, link: 'direct', ping: 48, rtt: 41,
+        drawn: { behind: 72, buffer: 48, buffer90: 55, carried: 0.012, held: 0, jumps: 1, warps: 0 },
+        mine: kinds('mine'), theirs: kinds('theirs') }));
+    const small = { v: 1, game: 'jk', others: others(3) };
+    assert.deepEqual(fit(structuredClone(small)), small, 'a small one stays as it is');
+    const big = fit({ v: 1, game: 'jk', others: others(31) });
+    const size = JSON.stringify(big).length;
+    assert.ok(size <= 60000, size + ' bytes');
+    assert.ok(!/"why"/.test(JSON.stringify(big)), 'without the reasons');
+    assert.equal(big.others.length + big.dropped, 31);
+    assert.ok(big.dropped > 0 && big.dropped < 31);
+    assert.deepEqual(big.others.map(o => o.secs), big.others.map(o => o.secs).sort((a, b) => b - a), 'the longest together first');
+    assert.equal(big.others[0].secs, 130);
+});
+
 test('stdComm_WSRelay.c passes packets to netstats.js as this test does (transport-test.mjs runs its code)', () => {
     for (const line of [
         "Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takePeerPacket(id, d); });",
@@ -839,7 +1040,10 @@ test('stdComm_WSRelay.c passes packets to netstats.js as this test does (transpo
         "{ negotiated: true, id: 3, ordered: false, maxRetransmits: 0 }",
         "if (Module.jkNetStats) Module.jkNetStats.start(isHost);",
         "if (Module.jkNetStats) Module.jkNetStats.live(live, id, isHost);",
-        "if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance);",
+        "if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance, ageMs);",
+        "if (Module.jkNetStats && Module.jkNetStats.facts) Module.jkNetStats.facts(rules, reachMs, !!mots, UTF8ToString(pBuild));",
+        "if (Module.jkNetStats && Module.jkNetStats.hello) Module.jkNetStats.hello(id, version);",
+        "var s = stats && stats.summary ? stats.summary() : null;",
         "Module.jkNetStats.motion(otherId, { buffer: bufferMs, steps: steps, carried: carried, held: held, jumps: jumps, warps: warps, restarts: restarts });",
     ])
         assert.ok(relayC.includes(line), 'stdComm_WSRelay.c has: ' + line);

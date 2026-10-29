@@ -36,6 +36,16 @@
 // The page's ?netstats panel (index.html) shows them, and the network log gets
 // a line every 10 s in a game.
 //
+// When this game leaves a match, or its tab closes in one, stdComm_WSRelay.c
+// posts the lobby a summary of it (summary()), ?netstats or not, so the
+// defaults can be set from real matches: the game, its build, the hit rules
+// and reach, how long this game was in the match and at what frame rate, and
+// for each other player, by kind, how their link went, how far behind they
+// were drawn, and the hits each way, counted or turned down and why, with how
+// far back each claim on this game's player reached (the engine says, from
+// the moment it named). Counts only: no names, no player numbers. None for a
+// match this game was in for under 30 s, or with nobody else.
+//
 // With ?netsim in the address (Module.jkNetSim), this window's game packets
 // wait as if its connection were slower: "rtt:150,jitter:20,loss:2" adds
 // 150 ms to each round trip (half on the way in, half on the way out), up to
@@ -109,12 +119,53 @@
     var WHY_REPEAT = 6;
     var KEEP_DISTANCES = 200;
     var KEEP_BUFFERS = 60;      // seconds of each player's buffer kept
+    var SUMMARY_MIN_MS = 30000; // in a match for less: no summary
+    var SUMMARY_EVERY_MS = 5000; // the frame rate and each link, for it
+    // Browsers send at most 64 KB with sendBeacon (and fetch's keepalive).
+    var SUMMARY_MAX_BYTES = 60000;
+    // How far back claims reached, for the summary: how many reached at least
+    // each of these, the reaches a host can pick and a few between.
+    var REACHES = [150, 200, 250, 300, 400, 500];
 
     var clock = {
         now: function() { return performance.now(); },
         later: function(fn, ms) { return setTimeout(fn, ms); },
         every: function(fn, ms) { return setInterval(fn, ms); },
         random: function() { return Math.random(); }
+    };
+
+    // Values counted in steps of `step`, up to `top` and one count for
+    // everything past it: a whole match's middle and tail, without keeping
+    // every value.
+    function Hist(step, top) {
+        this.step = step;
+        this.counts = [];
+        for (var i = 0; i <= Math.ceil(top / step); i++) this.counts.push(0);
+        this.n = 0;
+        this.most = null;
+    }
+    Hist.prototype.add = function(v) {
+        if (typeof v !== 'number' || !isFinite(v) || v < 0) return;
+        this.counts[Math.min(this.counts.length - 1, Math.floor(v / this.step))]++;
+        this.n++;
+        if (this.most === null || v > this.most) this.most = v;
+    };
+    // The value q of the way up (0.5, the middle), as the middle of its step
+    // (past the top, the most), or null with none.
+    Hist.prototype.at = function(q) {
+        if (!this.n) return null;
+        var want = Math.max(1, Math.ceil(q * this.n)), sum = 0, last = this.counts.length - 1;
+        for (var i = 0; i < last; i++) {
+            sum += this.counts[i];
+            if (sum >= want) return Math.min((i + 0.5) * this.step, this.most);
+        }
+        return this.most;
+    };
+    // How many were v or more, for v a whole number of steps.
+    Hist.prototype.from = function(v) {
+        var sum = 0;
+        for (var i = Math.floor(v / this.step); i < this.counts.length; i++) sum += this.counts[i];
+        return sum;
     };
 
     // ---- The simulator.
@@ -232,12 +283,25 @@
 
     var me = { live: false, id: 0, isHost: false };
     var players = {};
-    // The players the engine says are in the match, by id: their names.
+    // The players the engine says are in the match, by id: their names. And
+    // the roll call each was last named in: the engine names the players in
+    // the match every 2 s, after its facts(), which start a roll call, so a
+    // player who left stops counting toward the summary's time together.
     var names = {};
+    var named = {};
     // ?nettest=attack:all's steps (stdComm_WSRelayTest.c): the one under way,
     // {name, sim}, and the ones done, oldest first, with their counts.
     var step = null, steps = [];
     var lastLog = 0, lastRoutes = 0;
+    // This match, for its summary: what the engine says about it (facts()),
+    // how long this game has been in it, its frame rates, whether ?netsim
+    // slowed it, and whether the summary's gone.
+    var match = newMatch();
+
+    function newMatch() {
+        return { rules: 0, reach: 0, mots: false, build: '', liveMs: 0, at: 0, sampledAt: 0,
+                 fps: new Hist(1, 500), sim: false, sent: false, roll: 0 };
+    }
 
     function newPath() {
         // sent: seq -> time, for pings not yet answered; pings: the last
@@ -249,12 +313,17 @@
         return players[id] || (players[id] = {
             id: id, heard: 0, via: '', route: null, positions: [], fast: [],
             game: newPath(), ns: newPath(), offsets: [], syncSince: 0,
-            shown: [], receipts: [], tally: {}, taken: {}, motion: newMotion()
+            shown: [], receipts: [], tally: {}, taken: {}, motion: newMotion(),
+            // For the match summary: the hello version their game and this
+            // one agreed on (-1 unknown), how long they were in the match with
+            // this one, how often each kind of link was up, every ping on the
+            // game's path, and the round trip the browser measured on the link.
+            hello: -1, liveMs: 0, links: {}, pings: new Hist(5, 2000), rtts: new Hist(5, 2000)
         });
     }
 
     function newMotion() {
-        return { steps: 0, carried: 0, held: 0, jumps: 0, warps: 0, restarts: 0, buffers: [] };
+        return { steps: 0, carried: 0, held: 0, jumps: 0, warps: 0, restarts: 0, buffers: [], allBuffers: new Hist(5, 1000) };
     }
 
     function tallyOf(p, kind) {
@@ -284,15 +353,19 @@
     function takenOf(p, kind) {
         return p.taken[kind] || (p.taken[kind] = {
             hit: 0, block: 0, dead: 0, byMessage: 0, turnedDown: 0,
-            claims: 0, moments: 0, pastReach: 0, why: {}, distances: [], turnedDownDistances: []
+            claims: 0, moments: 0, pastReach: 0, why: {}, distances: [], turnedDownDistances: [],
+            // How far back each claim's moment was when this game checked it.
+            ages: new Hist(5, 2000)
         });
     }
 
-    // A claim's numbers, in tally or taken c.
-    function noteClaim(c, outcome, why, distance, flags) {
+    // A claim's numbers, in tally or taken c, and in taken, how far back its
+    // moment was (age, ms).
+    function noteClaim(c, outcome, why, distance, flags, age) {
         c.claims++;
         if (flags & F_MOMENT) c.moments++;
         if (flags & F_MOMENT && flags & F_PAST_REACH) c.pastReach++;
+        if (c.ages && flags & F_MOMENT) c.ages.add(age);
         if (outcome === O_TURNED_DOWN) {
             var words = WHY[why] || 'other';
             c.why[words] = (c.why[words] || 0) + 1;
@@ -371,6 +444,7 @@
         var t = clock.now(), rtt = t - sent;
         path.rtts.push(rtt);
         if (path.rtts.length > KEEP_RTTS) path.rtts.shift();
+        if (path === p.game) p.pings.add(rtt);
         path.quiet = 0;
         for (var i = path.pings.length - 1; i >= 0; i--) {
             if (path.pings[i].seq === seq) {
@@ -578,8 +652,9 @@
     // claim without one; F_DECIDED, this game's block on the other player,
     // which is final.
     // attack: the saber swing's or the shot's number, the same in both
-    // games, or 0.
-    function hit(otherId, mine, kind, outcome, damage, flags, attack, why, distance) {
+    // games, or 0. age: for a claim on this game's player that named a
+    // moment, how far back that was when this game checked it (ms).
+    function hit(otherId, mine, kind, outcome, damage, flags, attack, why, distance, age) {
         if (!me.live || !otherId || otherId === me.id || !KINDS[kind]) return;
         var p = player(otherId);
         flags = flags | 0;
@@ -595,7 +670,7 @@
         if (outcome === O_TURNED_DOWN) c.turnedDown++;
         else if (flags & F_BY_MESSAGE) c.byMessage++;
         else c[outcome === O_BLOCK ? 'block' : outcome === O_DEAD ? 'dead' : 'hit']++;
-        if (flags & F_BY_CLAIM) noteClaim(c, outcome, why, distance, flags);
+        if (flags & F_BY_CLAIM) noteClaim(c, outcome, why, distance, flags, age);
         sendReceipt(p, kind, outcome, damage, flags & (F_BY_MESSAGE|F_BY_CLAIM|F_MOMENT|F_PAST_REACH), attack, why, distance);
     }
 
@@ -612,6 +687,7 @@
         c.restarts = m.restarts | 0;
         c.buffers.push(+m.buffer);
         if (c.buffers.length > KEEP_BUFFERS) c.buffers.shift();
+        c.allBuffers.add(+m.buffer);
     }
 
     // How this game draws player p from their buffer, or null if it doesn't:
@@ -630,7 +706,11 @@
     function tick() {
         var t = clock.now();
         expire(t);
-        if (!me.live) return;
+        if (!me.live) {
+            match.at = 0;
+            return;
+        }
+        keepTime(t);
         var net = Module.jkNet;
         var measure = !!Module['jkNetMeasure'];
         Object.keys(players).forEach(function(key) {
@@ -676,10 +756,12 @@
                 });
                 if (!pair) return;
                 var local = cands[pair.localCandidateId], remote = cands[pair.remoteCandidateId];
-                player(Number(id)).route = {
+                var p = player(Number(id));
+                p.route = {
                     local: local ? local.candidateType : '?', remote: remote ? remote.candidateType : '?',
                     rtt: typeof pair.currentRoundTripTime === 'number' ? pair.currentRoundTripTime * 1000 : null
                 };
+                if (me.live && p.route.rtt !== null) p.rtts.add(p.route.rtt);
             }).catch(function() {});
         });
     }
@@ -750,6 +832,156 @@
             return p.route && (p.route.local === 'relay' || p.route.remote === 'relay') ? 'TURN' : 'direct';
         if (me.isHost || p.id === 1) return 'lobby relay';
         return p.via === 'relay' ? 'lobby relay' : 'via host';
+    }
+
+    // ---- The match summary.
+
+    // Each tick in a match: this game's time in it, and each other player's
+    // time in it with this one, while the engine's last roll call named them
+    // and they're heard from; every SUMMARY_EVERY_MS, the kind of link each
+    // player is on, and the frame rate over the last 5 s, once those were all
+    // in the match, while the page shows (a hidden tab's says nothing about
+    // the computer).
+    function keepTime(t) {
+        var dt = match.at ? Math.max(0, Math.min(t - match.at, 1000)) : 0;
+        match.at = t;
+        match.liveMs += dt;
+        if (sim) match.sim = true;
+        var sample = t - match.sampledAt >= SUMMARY_EVERY_MS;
+        if (sample) {
+            match.sampledAt = t;
+            if (match.liveMs >= 5000 && !(typeof document !== 'undefined' && document.hidden)) match.fps.add(frameRate(t));
+        }
+        Object.keys(names).forEach(function(key) {
+            var p = players[key];
+            if (!p || p.id === me.id || t - p.heard > GONE_MS || named[key] !== match.roll) return;
+            p.liveMs += dt;
+            if (sample) {
+                var path = pathOf(p);
+                p.links[path] = (p.links[path] || 0) + 1;
+            }
+        });
+    }
+
+    function round(v) { return v === null || v === undefined ? null : Math.round(v); }
+
+    // A count object without its zeros, or null if all are.
+    function counts(pairs) {
+        var out = {}, any = false;
+        for (var k in pairs) {
+            if (pairs[k]) {
+                out[k] = pairs[k];
+                any = true;
+            }
+        }
+        return any ? out : null;
+    }
+
+    // This game's hits on another player, of one kind, by what their game
+    // said.
+    function mineOf(c) {
+        var x = counts({
+            shown: c.counted + c.blockedThere + c.missedHit + c.deadThere + c.turnedDown,
+            counted: c.counted, blocked: c.blockedThere, missed: c.missedHit, dead: c.deadThere,
+            turnedDown: c.turnedDown, landed: c.notShown + c.blockNotShown,
+            blocks: c.blockAgreed + c.hitThere + c.missedBlock + c.blockDecided,
+            blocksCounted: c.hitThere, blocksMissed: c.missedBlock,
+            claims: c.claims, moments: c.moments, pastReach: c.pastReach,
+            targeted: c.byMessage, targetedTurnedDown: c.byMessageTurnedDown
+        });
+        if (x && Object.keys(c.why).length) x.why = counts(c.why);
+        return x;
+    }
+
+    // Another player's hits on this game's player, of one kind, as this game
+    // decided them, and how far back the claims among them reached.
+    function theirsOf(c) {
+        var x = counts({
+            counted: c.hit, blocked: c.block, dead: c.dead, turnedDown: c.turnedDown, targeted: c.byMessage,
+            claims: c.claims, moments: c.moments, pastReach: c.pastReach
+        });
+        if (!x) return null;
+        if (Object.keys(c.why).length) x.why = counts(c.why);
+        var a = c.ages;
+        if (a.n) {
+            x.ages = { n: a.n, median: round(a.at(0.5)), p90: round(a.at(0.9)), p99: round(a.at(0.99)), most: round(a.most),
+                       from: {} };
+            REACHES.forEach(function(ms) { x.ages.from[ms] = a.from(ms); });
+        }
+        return x;
+    }
+
+    function otherOf(p) {
+        var o = { secs: Math.round(p.liveMs / 1000), hello: p.hello };
+        var link = null;
+        Object.keys(p.links).forEach(function(k) { if (link === null || p.links[k] > p.links[link]) link = k; });
+        o.link = link || pathOf(p);
+        var ping = p.pings.at(0.5), rtt = p.rtts.at(0.5);
+        if (ping !== null) o.ping = round(ping);
+        if (rtt !== null) o.rtt = round(rtt);
+        var m = p.motion;
+        if (m.steps) {
+            var buffer = m.allBuffers.at(0.5);
+            o.drawn = { behind: buffer !== null && ping !== null ? round(buffer + ping / 2) : null, buffer: round(buffer),
+                        buffer90: round(m.allBuffers.at(0.9)), carried: Math.round(m.carried / m.steps * 1000) / 1000,
+                        held: Math.round(m.held / m.steps * 1000) / 1000, jumps: m.jumps, warps: m.warps };
+        }
+        var mine = {}, theirs = {};
+        Object.keys(p.tally).forEach(function(kind) {
+            var x = mineOf(p.tally[kind]);
+            if (x) mine[KINDS[kind]] = x;
+        });
+        Object.keys(p.taken).forEach(function(kind) {
+            var x = theirsOf(p.taken[kind]);
+            if (x) theirs[KINDS[kind]] = x;
+        });
+        if (Object.keys(mine).length) o.mine = mine;
+        if (Object.keys(theirs).length) o.theirs = theirs;
+        return o;
+    }
+
+    // A summary over SUMMARY_MAX_BYTES (a big match, with every kind of hit
+    // between many players) leaves out why claims were turned down, then the
+    // players this game spent the least time with, and says how many.
+    function fit(s) {
+        if (JSON.stringify(s).length <= SUMMARY_MAX_BYTES) return s;
+        s.others.forEach(function(o) {
+            ['mine', 'theirs'].forEach(function(side) {
+                for (var kind in o[side] || {}) delete o[side][kind].why;
+            });
+        });
+        s.others.sort(function(a, b) { return b.secs - a.secs; });
+        var dropped = 0;
+        while (s.others.length > 1 && JSON.stringify(s).length > SUMMARY_MAX_BYTES - 20) {
+            s.others.pop();
+            dropped++;
+        }
+        if (dropped) s.dropped = dropped;
+        return s;
+    }
+
+    // The summary of the match this game is in, for the page to send once
+    // (stdComm_WSRelay.c's net.sendSummary), or null: sent already, under
+    // SUMMARY_MIN_MS in the match, or nobody else in it.
+    function summary() {
+        if (match.sent || match.liveMs < SUMMARY_MIN_MS) return null;
+        expire(clock.now());
+        var others = Object.keys(players).map(Number).sort(function(a, b) { return a - b; })
+            .filter(function(id) { return id !== me.id && players[id].liveMs > 0; })
+            .map(function(id) { return otherOf(players[id]); });
+        if (!others.length) return null;
+        match.sent = true;
+        var s = {
+            v: 1, game: match.mots ? 'mots' : 'jk', build: match.build, rules: match.rules === 1 ? 'hwys' : 'classic',
+            reach: match.reach, host: me.isHost, secs: Math.round(match.liveMs / 1000),
+            players: Math.max(Object.keys(names).length, others.length + 1),
+            fps: { median: round(match.fps.at(0.5)), low: round(match.fps.at(0.1)) },
+            others: others
+        };
+        if (match.sim) s.sim = true;
+        if (Module['jkNetTest']) s.test = true;
+        if (Module['jkNetMeasure']) s.netstats = true;
+        return fit(s);
     }
 
     // ---- The report: for the panel, Copy report and the network log.
@@ -1001,7 +1233,8 @@
         }).join('; ') || 'nobody heard from lately';
     }
 
-    // Clears the counts, but not who's who.
+    // Clears the counts, but not who's who, and starts the match summary's
+    // over with them.
     function reset() {
         for (var id in players) {
             var p = players[id];
@@ -1018,7 +1251,14 @@
             p.ns.rtts = [];
             p.ns.pings = [];
             p.ns.sent = {};
+            p.liveMs = 0;
+            p.links = {};
+            p.pings = new Hist(5, 2000);
+            p.rtts = new Hist(5, 2000);
         }
+        match.liveMs = 0;
+        match.fps = new Hist(1, 500);
+        match.sim = !!sim;
     }
 
     // A game starts (hosting or joining): what's still waiting from the last
@@ -1027,7 +1267,9 @@
         end();
         players = {};
         names = {};
+        named = {};
         me.isHost = !!isHost;
+        match = newMatch();
     }
 
     // A game ends. Its counts stay up until the next one starts.
@@ -1043,6 +1285,7 @@
             clock: clock, parseSim: parseSim, setSim: setSim,
             isFrame: isFrame, isPosition: isPosition, median: median, jitterOf: jitterOf,
             updatesOf: updatesOf, spread: spread, tick: tick, players: function() { return players; },
+            Hist: Hist, REACHES: REACHES, fit: fit,
             O_HIT: O_HIT, O_BLOCK: O_BLOCK, O_DEAD: O_DEAD, O_TURNED_DOWN: O_TURNED_DOWN,
             F_BY_MESSAGE: F_BY_MESSAGE, F_BY_CLAIM: F_BY_CLAIM, F_DECIDED: F_DECIDED, F_MOMENT: F_MOMENT,
             F_PAST_REACH: F_PAST_REACH,
@@ -1061,7 +1304,22 @@
             me.id = id;
             me.isHost = !!isHost;
         },
-        name: function(id, name) { if (id) names[id] = name; },
+        name: function(id, name) {
+            if (!id) return;
+            names[id] = name;
+            named[id] = match.roll;
+        },
+        // The match's rules (1 Hit what you see) and reach, whether this game
+        // runs MotS, and its build; and the hello version this game and
+        // player id agreed on, 0 for none.
+        facts: function(rules, reach, mots, build) {
+            match.roll++;
+            match.rules = rules | 0;
+            match.reach = reach | 0;
+            match.mots = !!mots;
+            match.build = String(build || '').slice(0, 16);
+        },
+        hello: function(id, version) { if (id && id !== me.id) player(id).hello = version | 0; },
         hit: hit,
         motion: motion,
         sync: sync,
@@ -1070,6 +1328,7 @@
         report: report,
         text: text,
         reset: reset,
+        summary: summary,
         sim: function() { return sim; },
         setSim: setSim,
         // stdComm_WSRelayTest.c's ?nettest=attack:all.

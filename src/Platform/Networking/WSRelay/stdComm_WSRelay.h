@@ -93,15 +93,16 @@ double stdComm_WSRelay_Now();
 // STDCOMM_WSRELAY_HITS_NOT_PLAYING). distance: how close its player came to
 // where the claim showed it, -1 if that wasn't checked. moment: whether the
 // claim named the moment the attacker's game drew the player at, and how it
-// was checked (STDCOMM_WSRELAY_MOMENT_*).
-void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance, int moment);
+// was checked (STDCOMM_WSRELAY_MOMENT_*). ageMs: how far back that moment
+// was when it was checked, on the motion clock, -1 without one.
+void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance, int moment, float ageMs);
 
 // The hit ledger: a targeted Force power on this game's player from player
 // otherId, sent with the moment its game drew this one's player at
 // (stdComm_WSRelay_ForceTakes), which played (STDCOMM_WSRELAY_HIT) or was
-// turned down (STDCOMM_WSRELAY_TURNED_DOWN) for reason. distance and moment
-// as for NoteTurnedDown.
-void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float distance, int moment);
+// turned down (STDCOMM_WSRELAY_TURNED_DOWN) for reason. distance, moment and
+// ageMs as for NoteTurnedDown.
+void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float distance, int moment, float ageMs);
 
 // ---- Hit what you see (stdComm_WSRelayHits.c).
 
@@ -157,9 +158,10 @@ int stdComm_WSRelay_ClaimHit(SithThing* pVictim, SithThing* pSource, flex_t dama
 #define STDCOMM_WSRELAY_MOMENT_PAST_REACH (2)
 
 // While a claim's damage is applied: the ledger's kind and attack number for
-// it, how close the player came to where the claim showed them, and how it
-// named the moment (STDCOMM_WSRELAY_MOMENT_*).
-int stdComm_WSRelay_ApplyingClaim(int* pKind, uint32_t* pAttack, float* pDistance, int* pMoment);
+// it, how close the player came to where the claim showed them, how it named
+// the moment (STDCOMM_WSRELAY_MOMENT_*), and how far back that was (ms, -1
+// without one).
+int stdComm_WSRelay_ApplyingClaim(int* pKind, uint32_t* pAttack, float* pDistance, int* pMoment, float* pAgeMs);
 
 // Whether this game claims its hits on player pPlayer, and so decides its
 // blocks against them too.
@@ -234,6 +236,11 @@ void stdComm_WSRelay_DescribeHits(int idx, int bShort, char16_t* pOut, int maxCh
 // timed updates: both play Hit what you see, and both games have it (hello
 // version 2).
 int stdComm_WSRelay_MotionWith(int slot);
+
+// The hello version this game and player slot's agreed on (the lower of the
+// two), or 0 if their game hasn't said hello: a build from before Hit what
+// you see, or not yet. For the match summary (netstats.js).
+int stdComm_WSRelay_HelloWith(int slot);
 
 // Where this game's player is at t on the motion clock, for the record
 // claims are checked against: each physics step, and each frame's end.
