@@ -18,6 +18,9 @@ extern "C" {
 extern int stdComm_Imperial_bActive;
 
 void stdComm_Imperial_Startup();
+// Console callvote, vote, servermaps, rcon, rcon_password, rcon_address, as the
+// desktop build's (its Main/jkServer.c).
+void stdComm_Imperial_RegisterCommands();
 void stdComm_Imperial_Idle();
 int stdComm_Imperial_OpenConnection();
 void stdComm_Imperial_CloseConnection();
@@ -32,6 +35,9 @@ BOOL stdComm_Imperial_SetSessionFlagidk(int bJoinable);
 void stdComm_Imperial_EnumPlayers();
 BOOL stdComm_Imperial_Send(DPID idFrom, DPID idTo, void* lpData, DWORD dwDataSize);
 int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut);
+// The next level a dedicated server named and its episode (1), or 0 if it
+// hasn't named one or this isn't an Imperial Network Protocol game.
+int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int outLen);
 void stdComm_Imperial_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars);
 
 #endif // PLATFORM_WSRELAY

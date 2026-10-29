@@ -18,9 +18,13 @@
 // host means wss://<host>/imperial, host:port ws://host:port/
 // (jkrelay_client.c).
 //
+// A dedicated server's next level (its rotation, an admin's or a vote's pick)
+// comes in its game's description (stdComm_Imperial_GetSessionNextMap,
+// jkMain_FollowHostMap). The console has the desktop's callvote, vote,
+// servermaps and rcon.
+//
 // Not here yet: map and mod downloads (the joiner needs the host's), the hit
-// rules a host picks (Classic: what the desktop plays), a dedicated server's
-// map rotation (joiners go on through the episode by themselves).
+// rules a host picks (Classic: what the desktop plays).
 
 #include "stdComm_Imperial.h"
 
@@ -29,12 +33,14 @@
 #include "Win95/stdComm.h"
 #include "Win95/WinIdk.h"
 #include "Dss/sithMulti.h"
+#include "Devices/sithConsole.h"
 #include "General/stdString.h"
 #include "Main/jkRes.h"
 #include "stdPlatform.h"
 #include "jk.h"
 
 #include <emscripten.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -46,6 +52,7 @@ void jkrelay_SetServer(const char* server); // jkrelay_client.c
 void jkrelay_Idle(void);
 int jkrelay_LostReason(int* pMinutes);
 int jkrelay_JoinRefusal(int* pMinutes);
+int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs);
 
 // As the desktop's stdComm_dplay.c.
 #define IMPERIAL_MAX_SESSIONS (32)
@@ -504,6 +511,21 @@ int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut)
     }
 }
 
+int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int outLen)
+{
+    dps_session s;
+    jkMultiEntry e;
+    if (outLen <= 0 || gobLen <= 0) return 0;
+    pOut[0] = 0;
+    pGob[0] = 0;
+    if (!stdComm_Imperial_bActive || !imperial_bInGame || jkrelay_GetSessionDesc(&s) < 0 || !(s.flags & IMPERIAL_SESSION_NEXTMAP))
+        return 0;
+    imperial_SessionToEntry(&s, &e);
+    stdString_SafeStrCopy(pOut, e.mapJklFname, outLen);
+    stdString_SafeStrCopy(pGob, e.episodeGobName, gobLen);
+    return pOut[0] != 0;
+}
+
 void stdComm_Imperial_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars)
 {
     const char* text = "";
@@ -514,6 +536,180 @@ void stdComm_Imperial_DescribeHits(int idx, int bShort, char16_t* pOut, int maxC
     for (; text[i] && i < maxChars - 1; i++)
         pOut[i] = (char16_t)(uint8_t)text[i];
     pOut[i] = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Console: a dedicated server's votes and rcon, as the desktop build's
+// (its Main/jkServer.c, where the server's side is)
+// ---------------------------------------------------------------------------
+
+#define IMPERIAL_RCON_OUTPUT_MAX 16384
+#define IMPERIAL_RCON_TIMEOUT_MS 15000 // a command can wait out the scores screen
+
+static char imperial_aRconPassword[128];
+static char imperial_aRconAddress[256];
+
+static void imperial_Print(const char* fmt, ...)
+{
+    va_list ap;
+    char aLine[512];
+    va_start(ap, fmt);
+    vsnprintf(aLine, sizeof(aLine), fmt, ap);
+    va_end(ap);
+    sithConsole_PrintString(aLine);
+}
+
+static void imperial_Trim(const char* pIn, char* pOut, size_t outLen)
+{
+    size_t n;
+    while ( pIn && (*pIn == ' ' || *pIn == '\t') ) pIn++;
+    stdString_SafeStrCopy(pOut, pIn ? pIn : "", outLen);
+    n = strlen(pOut);
+    while ( n && (pOut[n - 1] == ' ' || pOut[n - 1] == '\t') ) pOut[--n] = 0;
+    if ( n >= 2 && pOut[0] == '"' && pOut[n - 1] == '"' )
+    {
+        memmove(pOut, pOut + 1, n - 2);
+        pOut[n - 2] = 0;
+    }
+}
+
+static void imperial_PrintLines(char* pText)
+{
+    for ( char* pLine = strtok(pText, "\n"); pLine; pLine = strtok(NULL, "\n") )
+        sithConsole_PrintString(pLine);
+}
+
+// "callvote ..." / "vote ...": chat for the dedicated server alone, "!callvote ..."
+// (its jkServer_HandleChat counts it).
+static void imperial_SendVoteCommand(const char* pWhich, const char* pArgStr)
+{
+    char aArgs[128], aMsg[160];
+    if ( !sithNet_isMulti || !stdComm_Imperial_bActive )
+    {
+        sithConsole_PrintString("Votes are for Imperial Network Protocol dedicated servers.");
+        return;
+    }
+    if ( sithNet_isServer )
+    {
+        sithConsole_PrintString("Only a dedicated server counts votes.");
+        return;
+    }
+    imperial_Trim(pArgStr, aArgs, sizeof(aArgs));
+    snprintf(aMsg, sizeof(aMsg), "!%s %s", pWhich, aArgs);
+    sithMulti_SendChatTo(aMsg, -1, -1, sithNet_serverNetId);
+}
+
+static int imperial_CmdCallVote(stdDebugConsoleCmd* pCmd, const char* pArgStr)
+{
+    char aArgs[128];
+    imperial_Trim(pArgStr, aArgs, sizeof(aArgs));
+    if ( !aArgs[0] )
+    {
+        sithConsole_PrintString("callvote map <level> | kick <name or slot> | rank <0-8> | scorelimit <points> | timelimit <minutes>");
+        sithConsole_PrintString("servermaps [text] lists the server's levels; vote yes / vote no votes.");
+        return 1;
+    }
+    imperial_SendVoteCommand("callvote", aArgs);
+    return 1;
+}
+
+static int imperial_CmdVote(stdDebugConsoleCmd* pCmd, const char* pArgStr)
+{
+    imperial_SendVoteCommand("vote", pArgStr);
+    return 1;
+}
+
+// Where rcon goes: rcon_address, else the server of the game we're in or were last in.
+static void imperial_RconServer(char* pOut, size_t outLen)
+{
+    stdString_SafeStrCopy(pOut, imperial_aRconAddress[0] ? imperial_aRconAddress : imperial_server, outLen);
+}
+
+static int imperial_CmdRconPassword(stdDebugConsoleCmd* pCmd, const char* pArgStr)
+{
+    char aArg[128];
+    imperial_Trim(pArgStr, aArg, sizeof(aArg));
+    if ( !aArg[0] )
+    {
+        sithConsole_PrintString(imperial_aRconPassword[0] ? "rcon password set (rcon_password <password> to change it)."
+                                                          : "rcon_password <password>");
+        return 1;
+    }
+    stdString_SafeStrCopy(imperial_aRconPassword, aArg, sizeof(imperial_aRconPassword));
+    sithConsole_PrintString("rcon password set (until the page closes).");
+    return 1;
+}
+
+static int imperial_CmdRconAddress(stdDebugConsoleCmd* pCmd, const char* pArgStr)
+{
+    char aArg[256];
+    imperial_Trim(pArgStr, aArg, sizeof(aArg));
+    if ( aArg[0] )
+        stdString_SafeStrCopy(imperial_aRconAddress, aArg, sizeof(imperial_aRconAddress));
+    if ( imperial_aRconAddress[0] )
+        imperial_Print("rcon goes to %s.", imperial_aRconAddress);
+    else
+        imperial_Print(imperial_server[0] ? "rcon goes to %s (the game you're in or were last in)." : "rcon_address <server>", imperial_server);
+    return 1;
+}
+
+static int imperial_CmdRcon(stdDebugConsoleCmd* pCmd, const char* pArgStr)
+{
+    static char aOutput[IMPERIAL_RCON_OUTPUT_MAX];
+    char aCmd[512], aServer[256];
+
+    imperial_Trim(pArgStr, aCmd, sizeof(aCmd));
+    if ( !aCmd[0] )
+    {
+        sithConsole_PrintString("rcon <command>   (rcon_password first; rcon_address picks the server)");
+        return 1;
+    }
+    if ( !imperial_aRconPassword[0] )
+    {
+        sithConsole_PrintString("Set the server's rcon password first: rcon_password <password>");
+        return 1;
+    }
+    imperial_RconServer(aServer, sizeof(aServer));
+    if ( !aServer[0] )
+    {
+        sithConsole_PrintString("Which server? rcon_address <server>");
+        return 1;
+    }
+    if ( !jkrelay_Rcon(aServer, imperial_aRconPassword, aCmd, aOutput, sizeof(aOutput), IMPERIAL_RCON_TIMEOUT_MS) )
+    {
+        imperial_Print("No answer from %s (rcon reaches dedicated servers running their own server, with an rconPassword and a wsPort).", aServer);
+        return 1;
+    }
+    imperial_PrintLines(aOutput);
+    return 1;
+}
+
+// "servermaps [text]": the server's levels ("maplist", which its rcon answers
+// without the password).
+static int imperial_CmdServerMaps(stdDebugConsoleCmd* pCmd, const char* pArgStr)
+{
+    static char aOutput[IMPERIAL_RCON_OUTPUT_MAX];
+    char aArgs[64], aCmd[96], aServer[256];
+    imperial_Trim(pArgStr, aArgs, sizeof(aArgs));
+    snprintf(aCmd, sizeof(aCmd), aArgs[0] ? "maplist %s" : "maplist", aArgs);
+    imperial_RconServer(aServer, sizeof(aServer));
+    if ( !aServer[0] || !jkrelay_Rcon(aServer, "", aCmd, aOutput, sizeof(aOutput), IMPERIAL_RCON_TIMEOUT_MS) )
+    {
+        sithConsole_PrintString("The server didn't answer (dedicated servers running their own server list their levels).");
+        return 1;
+    }
+    imperial_PrintLines(aOutput);
+    return 1;
+}
+
+void stdComm_Imperial_RegisterCommands()
+{
+    sithConsole_RegisterCommand(imperial_CmdCallVote, "callvote", 0);
+    sithConsole_RegisterCommand(imperial_CmdVote, "vote", 0);
+    sithConsole_RegisterCommand(imperial_CmdServerMaps, "servermaps", 0);
+    sithConsole_RegisterCommand(imperial_CmdRcon, "rcon", 0);
+    sithConsole_RegisterCommand(imperial_CmdRconPassword, "rcon_password", 0);
+    sithConsole_RegisterCommand(imperial_CmdRconAddress, "rcon_address", 0);
 }
 
 #endif // PLATFORM_WSRELAY
