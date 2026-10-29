@@ -48,8 +48,7 @@
 // updates (stdComm_WSRelayMotion.c): two such games send each other times
 // on their updates, and claims that name the moment the target was drawn
 // at, which its game checks its record at. Version 1 gets Phase 2 claims.
-// MotS says version 1 for now, so its matches keep Phase 2's claims until
-// timed updates are tested with MotS's weapons and Force powers.
+// Jedi Knight and MotS games say the same version.
 //
 // All of it is one engine message, past DSS_MAX so older engines ignore it
 // (STDCOMM_WSRELAY_HITS_MSG), sent without a resend id: the links under it
@@ -86,7 +85,6 @@
 #include "World/sithWorld.h"
 #include "Engine/sithPuppet.h"
 #include "Cog/sithCog.h"
-#include "Main/Main.h"
 #include "Primitives/rdMatrix.h"
 #include "Primitives/rdVector.h"
 #include "stdPlatform.h"
@@ -1349,18 +1347,12 @@ int stdComm_WSRelay_HelloWith(int slot)
 
 // ---- Each frame, and each message.
 
-// The hello version this game says: 1 in MotS (see the top).
-static int hits_Version(void)
-{
-    return Main_bMotsCompat ? 1 : HITS_VERSION;
-}
-
 static void hits_SendHello(WSRelayHitsPeer* p, double now)
 {
     uint8_t body[8];
     WSRelayHitsOut o = { body, 0 };
     hits_PutU8(&o, HITS_HELLO);
-    hits_PutU8(&o, hits_Version());
+    hits_PutU8(&o, HITS_VERSION);
     hits_PutU8(&o, (stdComm_bIsServer ? HITS_HELLO_HOST : 0) | (p->bHello ? HITS_HELLO_HEARD : 0));
     hits_PutU8(&o, hits_rules);
     hits_PutU16(&o, hits_reachMs);
@@ -1383,7 +1375,7 @@ static void hits_TakeHello(int fromNetId, int slot, WSRelayHitsIn* in)
     int bFirst = !p->bHello;
     p->bHello = 1;
     // The lower of the two: both games have to read what the other sends.
-    p->version = version < hits_Version() ? version : hits_Version();
+    p->version = version < HITS_VERSION ? version : HITS_VERSION;
     p->bHeardMe = !!(flags & HITS_HELLO_HEARD);
     p->rules = (rules == STDCOMM_WSRELAY_HITS_HWYS) ? STDCOMM_WSRELAY_HITS_HWYS : STDCOMM_WSRELAY_HITS_CLASSIC;
 
