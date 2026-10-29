@@ -4101,30 +4101,44 @@
       // folder in it is opened too, since some mods are zipped the way
       // they're installed; levels in an episode folder in it are left out.
       // Zips with the game's own files, zips in the game's own folders or
-      // JK Patch Commander's, and zips that use anything but deflate or no
-      // compression, or a password, stay closed.
+      // JK Patch Commander's, zips with a password and zips with a method in
+      // them that isn't in ZIP_METHODS stay closed. ZIP64 zips open too.
       var ZIP_SKIPPED = ['episode', 'player', 'music', 'netmods', 'jkmods', 'jkpatch'];
-      var ZIP_MAX_BYTES = 512 * 1048576;
+      var ZIP_MAX_BYTES = 2048 * 1048576;
+      // The compression methods zips can use here: stored (0) and deflated
+      // (8), which the browser unpacks itself, and the rest of unzip.js's,
+      // which it unpacks in a worker: Shrink, Reduce and Implode (1 to 6),
+      // Deflate64 (9), BZip2 (12), LZMA (14), Zstandard (93), XZ (95) and
+      // PPMd (98).
+      var ZIP_METHODS = [0, 1, 2, 3, 4, 5, 6, 8, 9, 12, 14, 93, 95, 98];
+      var ZIP_METHOD_NAMES = { 1: 'Shrink', 2: 'Reduce', 3: 'Reduce', 4: 'Reduce', 5: 'Reduce', 6: 'Implode',
+                               9: 'Deflate64', 12: 'BZip2', 14: 'LZMA', 93: 'Zstandard', 95: 'XZ', 98: 'PPMd' };
 
-      async function openZips(files, isMots) {
+      // status, if given, is told which zip is being opened.
+      async function openZips(files, isMots, status) {
         var ext = isMots ? '.goo' : '.gob';
         var retail = REQUIRED_JK.concat(REQUIRED_MOTS, RETAIL_RESOURCE[ext]).map(function(r) {
           return r.split('/').pop().toLowerCase();
         }).filter(function(n) { return n.endsWith(ext); });
         var out = [];
-        for (var e of files) {
-          var lower = e.path.toLowerCase();
-          if (!lower.endsWith('.zip') || ZIP_SKIPPED.indexOf(lower.split('/')[0]) >= 0) { out.push(e); continue; }
-          var inside = null;
-          try {
-            inside = await zipMod(e.file, ext, retail);
-          } catch (err) {
-            console.warn('OpenJKDF2: could not open ' + e.path + ': ' + err);
+        try {
+          for (var e of files) {
+            var lower = e.path.toLowerCase();
+            if (!lower.endsWith('.zip') || ZIP_SKIPPED.indexOf(lower.split('/')[0]) >= 0) { out.push(e); continue; }
+            var inside = null;
+            if (status) status('Opening zipped mods: ' + e.path.split('/').pop() + '...');
+            try {
+              inside = await zipMod(e.file, ext, retail);
+            } catch (err) {
+              console.warn('OpenJKDF2: could not open ' + e.path + ': ' + err);
+            }
+            if (!inside) { out.push(e); continue; }
+            console.log('OpenJKDF2: opened ' + e.path + ' (' + inside.length + ' files)');
+            var depth = e.path.split('/').length;
+            for (var f of inside) out.push({ path: e.path + '/' + f.path, file: f.file, zipDepth: depth, zip: e.file });
           }
-          if (!inside) { out.push(e); continue; }
-          console.log('OpenJKDF2: opened ' + e.path + ' (' + inside.length + ' files)');
-          var depth = e.path.split('/').length;
-          for (var f of inside) out.push({ path: e.path + '/' + f.path, file: f.file, zipDepth: depth, zip: e.file });
+        } finally {
+          unzipDone();
         }
         return out;
       }
@@ -4157,40 +4171,73 @@
           if ((parts.length <= 2 && parts[parts.length - 1].endsWith(ext)) ||
               (parts.length > 1 && MOD_RESOURCE_DIRS.indexOf(parts[0]) >= 0) ||
               (parts.length > 2 && MOD_RESOURCE_DIRS.indexOf(parts[1]) >= 0)) isMod = true;
-          if ((z.flags & 1) || (z.method !== 0 && z.method !== 8)) return null;
+          if ((z.flags & 1) || ZIP_METHODS.indexOf(z.method) < 0) return null;
           bytes += z.size;
           kept.push({ path: rel, z: z });
         }
         if (!isMod || bytes > ZIP_MAX_BYTES) return null;
-        if (kept.some(function(k) { return k.z.method === 8; }) && typeof DecompressionStream === 'undefined') return null;
+        if (typeof Worker === 'undefined' && kept.some(function(k) {
+          return k.z.method !== 0 && (k.z.method !== 8 || typeof DecompressionStream === 'undefined');
+        })) return null;
         for (var k of kept) k.file = await zipRead(file, k.z);
         return kept;
       }
 
       // A zip's entries, from its central directory at the end. Names not
       // marked as UTF-8 are read a byte a character, which is right for the
-      // plain names mods use.
+      // plain names mods use. A ZIP64 zip has the directory's place, size
+      // and count in a record of its own, which a locator right before the
+      // usual end record points to, and an entry's sizes and place that
+      // don't fit 32 bits in its extra field 1.
       async function zipList(file) {
-        var tailLen = Math.min(file.size, 22 + 65535);
+        var tailLen = Math.min(file.size, 22 + 65535 + 20);
         var tail = new Uint8Array(await file.slice(file.size - tailLen).arrayBuffer());
         var t = new DataView(tail.buffer);
         var i = tail.length - 22;
         while (i >= 0 && t.getUint32(i, true) !== 0x06054b50) i--;
         if (i < 0) return null;
         var count = t.getUint16(i + 10, true), cdSize = t.getUint32(i + 12, true), cdAt = t.getUint32(i + 16, true);
-        if (count === 0xffff || cdAt === 0xffffffff || cdAt + cdSize > file.size) return null;
+        if (i >= 20 && t.getUint32(i - 20, true) === 0x07064b50) {
+          var recAt = zip64(t, i - 12);
+          var rec = new DataView(await file.slice(recAt, recAt + 56).arrayBuffer());
+          if (rec.byteLength < 56 || rec.getUint32(0, true) !== 0x06064b50) return null;
+          count = zip64(rec, 32);
+          cdSize = zip64(rec, 40);
+          cdAt = zip64(rec, 48);
+        } else if (count === 0xffff || cdAt === 0xffffffff) {
+          return null;
+        }
+        if (cdAt + cdSize > file.size) return null;
         var cd = new Uint8Array(await file.slice(cdAt, cdAt + cdSize).arrayBuffer());
         var c = new DataView(cd.buffer), list = [];
         for (var p = 0, n = 0; n < count; n++) {
           if (p + 46 > cd.length || c.getUint32(p, true) !== 0x02014b50) return null;
           var flags = c.getUint16(p + 8, true), nameLen = c.getUint16(p + 28, true);
+          var extra = p + 46 + nameLen, extraEnd = extra + c.getUint16(p + 30, true);
+          if (extraEnd > cd.length) return null;
           var raw = cd.subarray(p + 46, p + 46 + nameLen);
-          list.push({ name: ((flags & 0x800) ? new TextDecoder().decode(raw) : String.fromCharCode.apply(null, raw)).replace(/\\/g, '/'),
-                      flags: flags, method: c.getUint16(p + 10, true), csize: c.getUint32(p + 20, true),
-                      size: c.getUint32(p + 24, true), at: c.getUint32(p + 42, true) });
-          p += 46 + nameLen + c.getUint16(p + 30, true) + c.getUint16(p + 32, true);
+          var z = { name: ((flags & 0x800) ? new TextDecoder().decode(raw) : String.fromCharCode.apply(null, raw)).replace(/\\/g, '/'),
+                    flags: flags, method: c.getUint16(p + 10, true), crc: c.getUint32(p + 16, true),
+                    csize: c.getUint32(p + 20, true), size: c.getUint32(p + 24, true), at: c.getUint32(p + 42, true) };
+          for (var x = extra; x + 4 <= extraEnd; x += 4 + c.getUint16(x + 2, true)) {
+            if (c.getUint16(x, true) !== 1) continue;
+            var q = x + 4, qEnd = Math.min(extraEnd, q + c.getUint16(x + 2, true));
+            for (var key of ['size', 'csize', 'at']) {
+              if (z[key] !== 0xffffffff) continue;
+              if (q + 8 > qEnd) return null;
+              z[key] = zip64(c, q);
+              q += 8;
+            }
+            break;
+          }
+          list.push(z);
+          p = extraEnd + c.getUint16(p + 32, true);
         }
         return list;
+      }
+
+      function zip64(view, at) {
+        return view.getUint32(at, true) + view.getUint32(at + 4, true) * 4294967296;
       }
 
       async function zipRead(file, z) {
@@ -4198,10 +4245,63 @@
         if (head.byteLength < 30 || head.getUint32(0, true) !== 0x04034b50) throw new Error('no file at ' + z.at);
         var start = z.at + 30 + head.getUint16(26, true) + head.getUint16(28, true);
         var data = file.slice(start, start + z.csize);
-        var out = z.method === 0 ? data :
-          await new Response(data.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+        var out;
+        if (z.method === 0)
+          out = data;
+        else if (z.method === 8 && typeof DecompressionStream !== 'undefined')
+          out = await new Response(data.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+        else
+          out = new Blob([await unzip(z, await data.arrayBuffer())]);
         if (out.size !== z.size) throw new Error(z.name + ' came out the wrong size');
         return out;
+      }
+
+      // The methods the browser has nothing for are unpacked by unzip.js in a
+      // worker, so a big mod doesn't stall the page; it checks each entry's
+      // CRC-32 too. One worker does a whole folder's zips, and goes once
+      // they're open (unzipDone), with whatever memory it took.
+      var unzipper = null;
+
+      function unzip(z, data) {
+        if (!unzipper) {
+          var worker = new Worker('unzip.js'), calls = {}, next = 1;
+          var fail = function(why) {
+            for (var id in calls) calls[id].reject(new Error(why));
+            calls = {};
+            if (unzipper && unzipper.worker === worker) unzipper = null;
+            worker.terminate();
+          };
+          worker.onmessage = function(ev) {
+            var call = calls[ev.data.id];
+            if (!call) return;
+            delete calls[ev.data.id];
+            if (ev.data.error) call.reject(new Error(ev.data.error));
+            else call.resolve(new Uint8Array(ev.data.data));
+          };
+          // A worker that couldn't load, or ran out of memory.
+          worker.onerror = function(ev) {
+            ev.preventDefault();
+            fail('the unzipper stopped' + (ev.message ? ': ' + ev.message : ''));
+          };
+          unzipper = {
+            worker: worker,
+            run: function(msg) {
+              return new Promise(function(resolve, reject) {
+                msg.id = next++;
+                calls[msg.id] = { resolve: resolve, reject: reject };
+                worker.postMessage(msg, [msg.data]);
+              });
+            },
+            done: function() { fail('done'); }
+          };
+        }
+        var name = ZIP_METHOD_NAMES[z.method] || 'Deflate';
+        console.log('OpenJKDF2: unpacking ' + z.name + ' (' + name + ', ' + (z.size / 1048576).toFixed(1) + ' MB)');
+        return unzipper.run({ method: z.method, flags: z.flags, data: data, size: z.size, crc: z.crc });
+      }
+
+      function unzipDone() {
+        if (unzipper) unzipper.done();
       }
 
       // ---- Which files each mod changes, to tell when two ticked mods change
@@ -4398,7 +4498,7 @@
                                     : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
                           (m.optional ? ". Graphics pack: only you see it. Players joining you don't need it, " +
                                         'and it stays on in games you join' :
-                           m.bytes > 250 * 1048576 ? ". Too big to send: players need their own copy" : '') };
+                           m.bytes > 1024 * 1048576 ? ". Too big to send: players need their own copy" : '') };
         });
         for (var s of saved) {
           options.push({ name: s.name, path: 'netmods/' + s.sha256.substring(0, 16), saved: true,
@@ -4954,7 +5054,7 @@
         // Zipped mods are opened first, so they're found and loaded like the rest.
         if (Module['arguments'].indexOf('-path') < 0 && files.some(function(e) { return /\.zip$/i.test(e.path); })) {
           showPickerResult('Opening zipped mods...');
-          files = await openZips(files, isMots);
+          files = await openZips(files, isMots, showPickerResult);
           lap('opening zips');
         }
         // Windows folders ignore case but MEMFS doesn't, so "Episode/AODpc.gob" and

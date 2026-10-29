@@ -35,47 +35,107 @@ export function makeGob(files, { overlap } = {}) {
     return out;
 }
 
-// ---- Made-up zips: [{ name, bytes, store }], deflated unless store is set.
+// ---- Made-up zips: [{ name, bytes, store }], deflated unless store is set,
+// or with method and data, bytes packed some other way (and flags for them).
+// zip64 writes it as a ZIP64 zip, with every size and place in the ZIP64
+// fields, as zips over 4 GB have them.
 
-export function makeZip(entries) {
+export function makeZip(entries, { zip64 } = {}) {
     const locals = [], centrals = [];
     let at = 0;
+    const big = zip64 ? 0xffffffff : null;
     for (const e of entries) {
         const name = Buffer.from(e.name, 'utf8');
-        const data = e.store ? Buffer.from(e.bytes) : deflateRawSync(e.bytes);
-        const method = e.store ? 0 : 8, crc = crc32(e.bytes);
+        const method = e.method !== undefined ? e.method : e.store ? 0 : 8;
+        const data = e.data ? Buffer.from(e.data) : e.store ? Buffer.from(e.bytes) : deflateRawSync(e.bytes);
+        const crc = crc32(e.bytes), flags = 0x800 | (e.flags || 0);
+        const extra = Buffer.alloc(zip64 ? 28 : 0);
+        if (zip64) {
+            extra.writeUInt16LE(1, 0);
+            extra.writeUInt16LE(24, 2);
+            extra.writeBigUInt64LE(BigInt(e.bytes.length), 4);
+            extra.writeBigUInt64LE(BigInt(data.length), 12);
+            extra.writeBigUInt64LE(BigInt(at), 20);
+        }
         const local = Buffer.alloc(30);
         local.writeUInt32LE(0x04034b50, 0);
-        local.writeUInt16LE(20, 4);
-        local.writeUInt16LE(0x800, 6);
+        local.writeUInt16LE(zip64 ? 45 : 20, 4);
+        local.writeUInt16LE(flags, 6);
         local.writeUInt16LE(method, 8);
         local.writeUInt32LE(crc, 14);
-        local.writeUInt32LE(data.length, 18);
-        local.writeUInt32LE(e.bytes.length, 22);
+        local.writeUInt32LE(big ?? data.length, 18);
+        local.writeUInt32LE(big ?? e.bytes.length, 22);
         local.writeUInt16LE(name.length, 26);
-        locals.push(local, name, data);
+        local.writeUInt16LE(zip64 ? 20 : 0, 28);
+        // The local header's ZIP64 field has the sizes only.
+        const localExtra = Buffer.from(extra.subarray(0, zip64 ? 20 : 0));
+        if (zip64)
+            localExtra.writeUInt16LE(16, 2);
+        locals.push(local, name, localExtra, data);
         const central = Buffer.alloc(46);
         central.writeUInt32LE(0x02014b50, 0);
-        central.writeUInt16LE(20, 4);
-        central.writeUInt16LE(20, 6);
-        central.writeUInt16LE(0x800, 8);
+        central.writeUInt16LE(zip64 ? 45 : 20, 4);
+        central.writeUInt16LE(zip64 ? 45 : 20, 6);
+        central.writeUInt16LE(flags, 8);
         central.writeUInt16LE(method, 10);
         central.writeUInt32LE(crc, 16);
-        central.writeUInt32LE(data.length, 20);
-        central.writeUInt32LE(e.bytes.length, 24);
+        central.writeUInt32LE(big ?? data.length, 20);
+        central.writeUInt32LE(big ?? e.bytes.length, 24);
         central.writeUInt16LE(name.length, 28);
-        central.writeUInt32LE(at, 42);
-        centrals.push(central, name);
-        at += 30 + name.length + data.length;
+        central.writeUInt16LE(extra.length, 30);
+        central.writeUInt32LE(big ?? at, 42);
+        centrals.push(central, name, extra);
+        at += 30 + name.length + (zip64 ? 20 : 0) + data.length;
     }
     const cd = Buffer.concat(centrals);
+    const tail = [];
+    if (zip64) {
+        const rec = Buffer.alloc(56), loc = Buffer.alloc(20);
+        rec.writeUInt32LE(0x06064b50, 0);
+        rec.writeBigUInt64LE(44n, 4);
+        rec.writeUInt16LE(45, 12);
+        rec.writeUInt16LE(45, 14);
+        rec.writeBigUInt64LE(BigInt(entries.length), 24);
+        rec.writeBigUInt64LE(BigInt(entries.length), 32);
+        rec.writeBigUInt64LE(BigInt(cd.length), 40);
+        rec.writeBigUInt64LE(BigInt(at), 48);
+        loc.writeUInt32LE(0x07064b50, 0);
+        loc.writeBigUInt64LE(BigInt(at + cd.length), 8);
+        loc.writeUInt32LE(1, 16);
+        tail.push(rec, loc);
+    }
     const end = Buffer.alloc(22);
     end.writeUInt32LE(0x06054b50, 0);
-    end.writeUInt16LE(entries.length, 8);
-    end.writeUInt16LE(entries.length, 10);
-    end.writeUInt32LE(cd.length, 12);
-    end.writeUInt32LE(at, 16);
-    return Buffer.concat([...locals, cd, end]);
+    end.writeUInt16LE(zip64 ? 0xffff : entries.length, 8);
+    end.writeUInt16LE(zip64 ? 0xffff : entries.length, 10);
+    end.writeUInt32LE(zip64 ? 0xffffffff : cd.length, 12);
+    end.writeUInt32LE(zip64 ? 0xffffffff : at, 16);
+    return Buffer.concat([...locals, cd, ...tail, end]);
+}
+
+// The entries of a zip, raw: [{ name, method, flags, crc, size, data }], data
+// as it's packed in the zip.
+export function zipEntries(buf) {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let e = buf.length - 22;
+    while (dv.getUint32(e, true) !== 0x06054b50)
+        e--;
+    const out = [];
+    for (let i = 0, p = dv.getUint32(e + 16, true); i < dv.getUint16(e + 10, true); i++) {
+        const nlen = dv.getUint16(p + 28, true);
+        const at = dv.getUint32(p + 42, true);
+        const data = at + 30 + dv.getUint16(at + 26, true) + dv.getUint16(at + 28, true);
+        out.push({
+            name: new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nlen)),
+            flags: dv.getUint16(p + 8, true),
+            method: dv.getUint16(p + 10, true),
+            crc: dv.getUint32(p + 16, true),
+            size: dv.getUint32(p + 24, true),
+            data: buf.subarray(data, data + dv.getUint32(p + 20, true)),
+        });
+        p += 46 + nlen + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+    }
+    return out;
 }
 
 export function sha(bytes) {

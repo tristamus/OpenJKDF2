@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { makeGob, makeZip, makeIDB } from './helpers.mjs';
+import { makeGob, makeZip, makeIDB, zipEntries } from './helpers.mjs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 function cut(from, to) {
@@ -18,12 +18,12 @@ function cut(from, to) {
 }
 const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, filesToSave,
         gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge,
-        REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows } = new Function(
+        REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows, ZIP_METHODS } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
     '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, ' +
     'filesToSave, gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, ' +
-    'keptMerge, REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows };')();
+    'keptMerge, REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows, ZIP_METHODS };')();
 const { checkGraphicsPack } = new Function(
     cut('      async function gobTable', '      async function modContents') + '\nreturn { checkGraphicsPack };')();
 
@@ -106,6 +106,131 @@ test('zips that are not mods stay closed', async () => {
     const after = await openZips(before, false);
     assert.deepEqual(after.map(e => e.path), before.map(e => e.path));
     assert.deepEqual(list(after), []);
+});
+
+// unzip.js as a browser runs it for the page, in a worker: in a scope of its
+// own, with messages that move their buffers across. Here it's the same
+// thread, a turn later.
+const unzipSrc = readFileSync(new URL('../unzip.js', import.meta.url), 'utf8');
+const JkUnzip = new Function(unzipSrc + '\nreturn JkUnzip;')();
+const workers = [];
+class FakeWorker {
+    constructor(url) {
+        assert.equal(url, 'unzip.js');
+        workers.push(this);
+        class WorkerGlobalScope {}
+        this.scope = new WorkerGlobalScope();
+        this.scope.postMessage = (data, transfer) => {
+            const moved = structuredClone(data, { transfer });
+            setTimeout(() => this.terminated || this.onmessage({ data: moved }));
+        };
+        new Function('self', 'WorkerGlobalScope', unzipSrc)(this.scope, WorkerGlobalScope);
+    }
+    postMessage(data, transfer) {
+        assert.ok(!this.terminated);
+        const moved = structuredClone(data, { transfer });
+        assert.equal(data.data.byteLength, 0, 'the page hands its copy over');
+        setTimeout(() => this.scope.onmessage({ data: moved }));
+    }
+    terminate() {
+        this.terminated = true;
+    }
+}
+globalThis.Worker = FakeWorker;
+
+// One entry of each method from the zips unzip-test.mjs uses (made by
+// PKZIP, 7-Zip and the rest), with what it unpacks to.
+const packed = {};
+for (const z of ['pkzip-multi.zip', '7zip.zip', 'python.zip']) {
+    const buf = readFileSync(new URL('fixtures/zips/' + z, import.meta.url));
+    for (const en of zipEntries(buf))
+        if (en.size > 1 && !packed[en.method])
+            packed[en.method] = { ...en, bytes: Buffer.from(JkUnzip.unzip(en.method, en.flags, en.data, en.size, en.crc)) };
+}
+const packedAs = (name, m) => ({ name, method: m, flags: packed[m].flags, data: packed[m].data, bytes: packed[m].bytes });
+
+test('the page takes the methods unzip.js has', () => {
+    assert.deepEqual(ZIP_METHODS, JkUnzip.methods);
+    assert.deepEqual(Object.keys(packed).map(Number).sort((a, b) => a - b), JkUnzip.methods);
+});
+
+test('zipped mods packed with every method open, unpacked in a worker but for stored and deflated', async () => {
+    workers.length = 0;
+    const zips = {};
+    for (const m of ZIP_METHODS)
+        zips['mod/M' + m + '.zip'] = makeZip([packedAs('m' + m + '.gob', m)]);
+    const files = await openZips(pick(zips), false);
+    for (const m of ZIP_METHODS) {
+        const e = files.find(e => e.path === 'mod/M' + m + '.zip/m' + m + '.gob');
+        assert.ok(e, 'method ' + m);
+        assert.ok(Buffer.from(await e.file.arrayBuffer()).equals(packed[m].bytes), 'method ' + m);
+    }
+    assert.deepEqual(list(files).sort(), ZIP_METHODS.map(m => 'M' + m + ' (mod/M' + m + '.zip)').sort());
+    assert.equal(workers.length, 1, 'one worker for them all');
+    assert.ok(workers[0].terminated, 'and it goes once they are open');
+});
+
+test('a ZIP64 zip opens', async () => {
+    const sbx = gob('3do\\bow0.3do', 'sbx bow');
+    const files = await openZips(pick({
+        'mod/SBX.zip': makeZip([{ name: 'SBX/sbx.gob', bytes: sbx }, { name: 'SBX/cog/s.cog', bytes: Buffer.from('S'), store: true },
+                                packedAs('SBX/mat/s.mat', 14)], { zip64: true }),
+    }), false);
+    const opened = (p) => files.find(e => e.path === p).file.arrayBuffer().then(b => Buffer.from(b));
+    assert.ok((await opened('mod/SBX.zip/sbx.gob')).equals(Buffer.from(sbx)));
+    assert.equal((await opened('mod/SBX.zip/cog/s.cog')).toString(), 'S');
+    assert.ok((await opened('mod/SBX.zip/mat/s.mat')).equals(packed[14].bytes));
+    assert.deepEqual(list(files), ['SBX (mod/SBX.zip)']);
+});
+
+test('zips with a method unzip.js lacks, a password or an entry that comes out wrong stay closed', async () => {
+    const warn = console.warn;
+    const warned = [];
+    console.warn = (text) => warned.push(text);
+    try {
+        const wrong = { ...packedAs('w.gob', 12), bytes: Buffer.concat([packed[12].bytes.subarray(1), Buffer.from('x')]) };
+        const before = pick({
+            'mod/AES.zip': makeZip([{ name: 'a.gob', method: 99, data: Buffer.alloc(40), bytes: Buffer.alloc(20) }]),
+            'mod/Locked.zip': makeZip([{ name: 'l.gob', bytes: gob('x', 'y'), flags: 1 }]),
+            'mod/Wrong.zip': makeZip([wrong]),
+            'mod/Cut.zip': makeZip([{ ...packedAs('c.gob', 14), data: packed[14].data.subarray(0, 40) }]),
+        });
+        const after = await openZips(before, false);
+        assert.deepEqual(after.map(e => e.path), before.map(e => e.path));
+        assert.deepEqual(list(after), []);
+        assert.equal(warned.length, 2, warned.join('\n'));
+        assert.match(warned[0], /mod\/Wrong\.zip: Error: CRC mismatch/);
+        assert.match(warned[1], /mod\/Cut\.zip: Error: corrupt data/);
+    } finally {
+        console.warn = warn;
+    }
+});
+
+test('deflated zips open in the worker where the browser has no DecompressionStream', async () => {
+    const ds = globalThis.DecompressionStream;
+    delete globalThis.DecompressionStream;
+    workers.length = 0;
+    try {
+        const files = await openZips(pick({ 'mod/D.zip': makeZip([{ name: 'd.gob', bytes: gob('cog\\d.cog', 'deflated') }]) }), false);
+        assert.ok(Buffer.from(await files.find(e => e.path === 'mod/D.zip/d.gob').file.arrayBuffer()).equals(Buffer.from(gob('cog\\d.cog', 'deflated'))));
+        assert.equal(workers.length, 1);
+    } finally {
+        globalThis.DecompressionStream = ds;
+    }
+});
+
+test('without workers, only stored and deflated zips open', async () => {
+    delete globalThis.Worker;
+    try {
+        const files = await openZips(pick({
+            'mod/D.zip': makeZip([{ name: 'd.gob', bytes: gob('cog\\d.cog', 'deflated') }]),
+            'mod/L.zip': makeZip([packedAs('l.gob', 14)]),
+        }), false);
+        assert.deepEqual(list(files), ['D (mod/D.zip)']);
+        assert.ok(files.some(e => e.path === 'mod/L.zip'));
+    } finally {
+        globalThis.Worker = FakeWorker;
+    }
 });
 
 // Laid out like a Steam Mysteries of the Sith folder with the MotS
