@@ -2912,7 +2912,7 @@
         modChoice.hidden = true;
         picker.onclick = null;
         var problem = browserProblem();
-        showPickerResult(problem || '', !!problem);
+        showPickerResult(problem || phoneNote() || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
         showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio);
         if (!picker.open) picker.showModal();
@@ -2994,16 +2994,22 @@
         });
       };
 
-      // What the game can't run without, checked before anyone picks a folder,
-      // so players see what's wrong instead of a page that never starts.
-      function browserProblem() {
+      // A phone or tablet plays with the game files on it and a keyboard and
+      // mouse attached, so the folder prompt says so, without stopping anyone.
+      function phoneNote() {
         var ua = navigator.userAgent;
         // iPadOS reports itself as a Mac; touch points give it away.
         var touchMac = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
         if ((navigator.userAgentData && navigator.userAgentData.mobile) ||
             /Android|iPhone|iPad|iPod/i.test(ua) || touchMac) {
-          return "This needs a computer. Phones and tablets can't open a game folder.";
+          return "On a phone or tablet, you need the game files on it and a keyboard and mouse attached.";
         }
+        return null;
+      }
+
+      // What the game can't run without, checked before anyone picks a folder,
+      // so players see what's wrong instead of a page that never starts.
+      function browserProblem() {
         if (typeof WebAssembly !== 'object') {
           return "This browser has WebAssembly turned off, and the game needs it. " +
                  "Use a current Chrome or Firefox.";
