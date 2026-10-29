@@ -1609,6 +1609,11 @@
                   players who join without it get a copy from your browser, directly or passed through our
                   server, which doesn't keep it. Files from the original game are never sent: each player's
                   browser fills those in from their own copy.</li>
+                <li><b>Size limits.</b> A host can send a custom map of up to 1 GB, and up to 1 GB of mods
+                  together. Anything bigger isn't sent, so players who join need their own copy. A zipped mod
+                  opens if what's inside comes to 2 GB or less. Maps and mods you get from a host are kept in
+                  this browser, up to 2 GB of maps and 2 GB of mods. Past that, the ones you used longest ago
+                  are deleted.</li>
                 <li><b>Why we ask for the folder.</b> This web version comes with no game files at all, so it
                   only runs from a copy of the game you already have. The check makes sure the folder holds
                   the game's files before it starts.</li>
@@ -1648,7 +1653,9 @@
             <section id="help" aria-labelledby="help-title">
               <h2 class="ruled" id="help-title">Game Help</h2>
               <ul class="info">
-                <li>Use a current Chrome or Firefox on a computer. Phones and tablets can't open a game folder.</li>
+                <li>Use a current Chrome or Firefox on a computer. Phones and tablets also work if you have the
+                  game files on them, and have a keyboard and mouse attached, and are able to upload them from
+                  your device... =]</li>
                 <li>If the page says files are missing, you picked a folder one level too high or too low.
                   Pick the one that has <code>episode</code> and <code>resource</code> directly inside.</li>
                 <li>The game needs graphics acceleration. If it won't start, or runs at a few frames per
