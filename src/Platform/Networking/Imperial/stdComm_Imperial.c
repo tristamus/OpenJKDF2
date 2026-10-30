@@ -23,8 +23,12 @@
 // jkMain_FollowHostMap). The console has the desktop's callvote, vote,
 // servermaps and rcon.
 //
-// Not here yet: map and mod downloads (the joiner needs the host's), the hit
-// rules a host picks (Classic: what the desktop plays).
+// Hit rules: the host's (a dedicated server's sv_hitRules, a browser host's
+// host screen), which its hellos tell the other games (stdComm_WSRelayHits.c);
+// its game lists Hit what you see with IMPERIAL_SESSION_HWYS. Position
+// updates are numbered in the relay's data header for its claims.
+//
+// Not here yet: map and mod downloads (the joiner needs the host's).
 
 #include "stdComm_Imperial.h"
 
@@ -33,6 +37,8 @@
 #include "Win95/stdComm.h"
 #include "Win95/WinIdk.h"
 #include "Dss/sithMulti.h"
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#include "Gameplay/sithPlayer.h"
 #include "Devices/sithConsole.h"
 #include "General/stdString.h"
 #include "Main/jkRes.h"
@@ -52,6 +58,8 @@ void jkrelay_SetServer(const char* server); // jkrelay_client.c
 void jkrelay_Idle(void);
 int jkrelay_LostReason(int* pMinutes);
 int jkrelay_JoinRefusal(int* pMinutes);
+void jkrelay_SetSendSeq(uint32_t seq);
+int jkrelay_LastRecvSeq(uint32_t* pSeq);
 int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs);
 
 // As the desktop's stdComm_dplay.c.
@@ -62,6 +70,7 @@ int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char
 #define IMPERIAL_SESSIONFLAG_MASK (~(uint32_t)SESSIONFLAG_ISDEDICATED)
 #define IMPERIAL_SESSION_NEXTMAP 0x40000000u        // a dedicated host named the next level
 #define IMPERIAL_SESSION_OPENJKDF2WIRE 0x20000000u  // the game's messages use OpenJKDF2's layouts
+#define IMPERIAL_SESSION_HWYS 0x10000000u           // its host plays Hit what you see
 
 static const uint8_t imperial_kJkAppGuid[16] = {
     0xC0, 0x13, 0x06, 0xBF, 0x79, 0xDE, 0xD0, 0x11, 0x99, 0xC9, 0x00, 0xA0, 0x24, 0x76, 0xAD, 0x4B
@@ -72,7 +81,9 @@ static int imperial_bStarted = 0;
 static int imperial_bInGame = 0;
 static int imperial_numListed = 0;
 static int imperial_aListedWire[IMPERIAL_MAX_SESSIONS];
+static int imperial_aListedHwys[IMPERIAL_MAX_SESSIONS];
 static char imperial_server[256];
+static char imperial_aJoinError[160]; // why the last join failed, for the join screen's dialog
 
 EM_JS(void, imperial_js_server, (char* pOut, int outLen), {
     var url = Module['jkImperialUrl'];
@@ -258,6 +269,7 @@ static int imperial_SessionCallback(void* ctx, const dps_session* s)
         return 0;
     imperial_SessionToEntry(s, &jkGuiMultiplayer_aEntries[imperial_numListed]);
     imperial_aListedWire[imperial_numListed] = (s->flags & IMPERIAL_SESSION_OPENJKDF2WIRE) != 0;
+    imperial_aListedHwys[imperial_numListed] = (s->flags & IMPERIAL_SESSION_HWYS) != 0;
     imperial_numListed++;
     return 1;
 }
@@ -283,9 +295,20 @@ static void imperial_ReasonText(int reason, int minutes, char* pOut, int outLen)
         pOut[0] = 0;
 }
 
+// Why a join failed, as the join screen's dialog says it (and the console).
+static void imperial_JoinError(const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(imperial_aJoinError, sizeof(imperial_aJoinError), fmt, ap);
+    va_end(ap);
+    stdPlatform_Printf("OpenJKDF2: Couldn't join: %s\n", imperial_aJoinError);
+}
+
 int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
 {
     jkrelay_StopEnumSessions();
+    imperial_aJoinError[0] = 0;
 
     if (idx < 0 || idx >= imperial_numListed)
         return (int)0x80004005; // E_FAIL
@@ -294,17 +317,30 @@ int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
     // IMPERIAL_SESSION_OPENJKDF2WIRE.
     if (!imperial_aListedWire[idx])
     {
-        stdPlatform_Printf("OpenJKDF2: This game's host runs an older OpenJKDF2, whose messages this one can't read.\n");
-        return (int)0x887700FA; // GUINET_NOTAVAIL
+        imperial_JoinError("The game's host runs an older OpenJKDF2, which browsers can't play with.");
+        return (int)0x80004005;
     }
+
+    // What's left of a game we were kicked from or lost: the relay client
+    // turns a new join down while it thinks it's still in one.
+    jkrelay_Close();
+    stdComm_WSRelay_ResetHits(); // Classic until the host's hello says otherwise
 
     long hr = jkrelay_OpenJoin((const uint8_t*)&jkGuiMultiplayer_aEntries[idx].guidInstance, (const uint16_t*)pwPassword);
     if (hr < 0)
     {
         int minutes = 0;
+        int reason = jkrelay_JoinRefusal(&minutes);
         char why[96];
-        imperial_ReasonText(jkrelay_JoinRefusal(&minutes), minutes, why, sizeof(why));
-        stdPlatform_Printf("OpenJKDF2: Couldn't join (error %08x)%s%s.\n", (unsigned)hr, why[0] ? ": " : "", why);
+        imperial_ReasonText(reason, minutes, why, sizeof(why));
+        if (why[0])
+            imperial_JoinError("You are %s.", why);
+        else if (hr == (long)0x887700FA)
+            imperial_JoinError("The server didn't answer.");
+        else if (hr == (long)0x88770168)
+            imperial_JoinError("That game isn't on the server any more.");
+        else if (hr != (long)0x8877014A && hr != (long)0x88770154) // full, wrong password: the dialog says so
+            imperial_JoinError("The server turned the join down (error %08x).", (unsigned)hr);
         return (int)hr;
     }
 
@@ -315,6 +351,7 @@ int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
     uint32_t id = 0;
     if (jkrelay_CreatePlayer((const uint16_t*)jkPlayer_playerShortName, &id) < 0 || !id)
     {
+        imperial_JoinError("The server didn't take this player.");
         jkrelay_Close();
         return (int)0x80004005;
     }
@@ -348,6 +385,13 @@ int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry)
     imperial_EntryToSession(pEntry, &s);
     s.flags |= IMPERIAL_SESSION_OPENJKDF2WIRE;
 
+    // The host screen's hit rules, which its hellos tell the other games.
+    stdComm_WSRelay_ResetHits();
+    stdComm_WSRelay_SetHitRules(stdComm_WSRelay_bClassicHits ? STDCOMM_WSRELAY_HITS_CLASSIC : STDCOMM_WSRELAY_HITS_HWYS,
+                                stdComm_WSRelay_hitReachMs);
+    if (!stdComm_WSRelay_bClassicHits)
+        s.flags |= IMPERIAL_SESSION_HWYS;
+
     long hr = jkrelay_OpenCreate(&s);
     if (hr < 0)
     {
@@ -370,7 +414,7 @@ int stdComm_Imperial_GetSession_passwordidk(jkMultiEntry* pEntry)
 
     imperial_EntryToSession(pEntry, &s);
     memcpy(s.guidInstance, cur.guidInstance, 16);
-    s.flags |= cur.flags & IMPERIAL_SESSION_OPENJKDF2WIRE;
+    s.flags |= cur.flags & (IMPERIAL_SESSION_OPENJKDF2WIRE | IMPERIAL_SESSION_HWYS);
     return jkrelay_SetSessionDesc(&s) >= 0;
 }
 
@@ -444,6 +488,69 @@ void stdComm_Imperial_EnumPlayers()
     jkrelay_EnumPlayers(imperial_PlayerCallback, NULL);
 }
 
+// Hit what you see: this player's own position updates to each player get a
+// number, in the relay's data header (jkrelay_SetSendSeq), as the fast lane
+// numbers them (stdComm_WSRelay.c); a hit claim names the update its game had
+// on screen. As the desktop build's stdComm_dplay.c.
+typedef struct ImperialSeqTo
+{
+    uint32_t id;
+    uint32_t next;
+    uint32_t aSeqs[256];
+    double aAt[256];
+} ImperialSeqTo;
+static ImperialSeqTo imperial_aSeqTo[IMPERIAL_MAX_SESSIONS];
+static uint32_t imperial_recvSeq = 0;
+
+static int imperial_IsOwnPosition(const void* pData, uint32_t size)
+{
+    const uint8_t* p = (const uint8_t*)pData;
+    if (size != 4 + 52 && size != 4 + 64)
+        return 0;
+    if (*(const uint16_t*)&p[0] != DSS_THINGPOS || *(const uint16_t*)&p[2] != 0)
+        return 0;
+    return sithPlayer_g_pLocalPlayerThing && *(const int32_t*)&p[4] == sithPlayer_g_pLocalPlayerThing->guid;
+}
+
+static ImperialSeqTo* imperial_SeqTo(uint32_t id, int bAdd)
+{
+    ImperialSeqTo* pFree = NULL;
+    for (int i = 0; i < IMPERIAL_MAX_SESSIONS; i++)
+    {
+        if (imperial_aSeqTo[i].id == id)
+            return &imperial_aSeqTo[i];
+        if (!pFree && !imperial_aSeqTo[i].id)
+            pFree = &imperial_aSeqTo[i];
+    }
+    if (!bAdd)
+        return NULL;
+    if (!pFree)
+        pFree = &imperial_aSeqTo[id % IMPERIAL_MAX_SESSIONS];
+    memset(pFree, 0, sizeof(*pFree));
+    pFree->id = id;
+    pFree->next = ((uint32_t)rand() << 16) ^ (uint32_t)rand();
+    return pFree;
+}
+
+int stdComm_Imperial_InGame()
+{
+    return stdComm_Imperial_bActive && imperial_bInGame;
+}
+
+int stdComm_Imperial_RecvSeq(uint32_t* pSeq)
+{
+    *pSeq = imperial_recvSeq;
+    return imperial_recvSeq != 0;
+}
+
+double stdComm_Imperial_SeqSentAt(int toId, uint32_t seq)
+{
+    ImperialSeqTo* t = imperial_SeqTo((uint32_t)toId, 0);
+    if (!t || t->aSeqs[seq & 255] != seq || !t->aAt[seq & 255])
+        return -1.0;
+    return t->aAt[seq & 255];
+}
+
 BOOL stdComm_Imperial_Send(DPID idFrom, DPID idTo, void* lpData, DWORD dwDataSize)
 {
     if (!imperial_bInGame)
@@ -451,6 +558,16 @@ BOOL stdComm_Imperial_Send(DPID idFrom, DPID idTo, void* lpData, DWORD dwDataSiz
     // A host's sends to everyone include itself (slot 0, stdComm_SendToPlayer).
     if (idTo && idTo == (DPID)stdComm_dplayIdSelf)
         return 1;
+    if (idTo && imperial_IsOwnPosition(lpData, (uint32_t)dwDataSize))
+    {
+        ImperialSeqTo* t = imperial_SeqTo((uint32_t)idTo, 1);
+        uint32_t seq = ++t->next;
+        if (!seq)
+            seq = ++t->next;
+        t->aSeqs[seq & 255] = seq;
+        t->aAt[seq & 255] = stdComm_WSRelay_Now();
+        jkrelay_SetSendSeq(seq);
+    }
     return jkrelay_Send((uint32_t)idFrom, (uint32_t)idTo, lpData, (uint32_t)dwDataSize) >= 0;
 }
 
@@ -477,6 +594,7 @@ int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut)
             memcpy(pMsgIdOut, data, size);
             *pLenOut = (int)size;
             *pIdOut = (int)from;
+            jkrelay_LastRecvSeq(&imperial_recvSeq);
             return 0;
         }
 
@@ -511,6 +629,17 @@ int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut)
     }
 }
 
+int stdComm_Imperial_JoinErrorText(char16_t* pOut, int maxChars)
+{
+    if (!stdComm_Imperial_bActive || !imperial_aJoinError[0] || maxChars <= 0)
+        return 0;
+    int i = 0;
+    for (; imperial_aJoinError[i] && i < maxChars - 1; i++)
+        pOut[i] = (char16_t)(uint8_t)imperial_aJoinError[i];
+    pOut[i] = 0;
+    return 1;
+}
+
 int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int outLen)
 {
     dps_session s;
@@ -529,7 +658,9 @@ int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int o
 void stdComm_Imperial_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars)
 {
     const char* text = "";
-    if (idx >= 0 && idx < imperial_numListed)
+    if (idx >= 0 && idx < imperial_numListed && imperial_aListedHwys[idx])
+        text = bShort ? "Hit what you see" : "Hit rules: Hit what you see";
+    else if (idx >= 0 && idx < imperial_numListed)
         text = bShort ? "Classic hits" : "Hit rules: Classic";
 
     int i = 0;

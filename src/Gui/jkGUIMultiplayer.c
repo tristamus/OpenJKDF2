@@ -1,4 +1,7 @@
 #include "jkGUIMultiplayer.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_JoinErrorText
+#endif
 
 #include "General/stdBitmap.h"
 #include "General/stdFont.h"
@@ -403,6 +406,12 @@ LABEL_29:
             {
                 v27 = jkStrings_GetUniStringWithFallback("GUINET_NOGAMECONNECT");
                 v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
+#ifdef PLATFORM_WSRELAY
+                // Added: why, when the Imperial Network Protocol connection knows
+                static char16_t wReason[160];
+                if ( stdComm_Imperial_JoinErrorText(wReason, 160) )
+                    v27 = wReason;
+#endif
             }
             jkGuiDialog_ErrorDialog(v11, v27);
             goto LABEL_28;

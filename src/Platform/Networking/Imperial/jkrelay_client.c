@@ -237,6 +237,7 @@ typedef struct jkr_event
     struct jkr_event* next;
     int        type;          // DPS_RECV_DATA / DPS_RECV_SYS
     uint32_t   from, size;
+    uint32_t   seq;           // data: the sender's update number (jkrelay_SetSendSeq), 0 if none
     dps_sysmsg sys;
     uint8_t    data[];
 } jkr_event;
@@ -299,6 +300,7 @@ static struct
     jkr_event* evHead;
     jkr_event* evTail;
     jkr_event* evLast;     // returned by Receive; freed on the next call
+    uint32_t   sendSeq;    // for the next Send's header (jkrelay_SetSendSeq)
 
     uint8_t   rx[2048];
 } R;
@@ -1907,11 +1909,11 @@ long dps_EnumPlayers(dps_player_cb cb, void* ctx)
 }
 
 // One game packet, over the link if given, else through the server.
-static void jkr_SendData(jkr_link* l, uint32_t idFrom, uint32_t idTo, const void* data, uint32_t size)
+static void jkr_SendData(jkr_link* l, uint32_t idFrom, uint32_t idTo, const void* data, uint32_t size, uint32_t seq)
 {
     uint8_t pkt[JKR_MAX_PACKET];
     if (JKR_HDR_SIZE + 8 + size > sizeof(pkt)) return;
-    jkr_PutHdr(pkt, JKR_DATA, 0);
+    jkr_PutHdr(pkt, JKR_DATA, seq);
     if (l) wr32(pkt + 8, l->key);
     wr32(pkt + JKR_HDR_SIZE, idFrom);
     wr32(pkt + JKR_HDR_SIZE + 4, idTo);
@@ -1927,15 +1929,15 @@ static void jkr_SendData(jkr_link* l, uint32_t idFrom, uint32_t idTo, const void
 
 // Host: to one other machine, over its link or through the server. 'to' 0 =
 // everyone; through the server that becomes the machine's system player.
-static void jkr_SendToMachine(uint32_t sysId, uint32_t idFrom, uint32_t idTo, const void* data, uint32_t size)
+static void jkr_SendToMachine(uint32_t sysId, uint32_t idFrom, uint32_t idTo, const void* data, uint32_t size, uint32_t seq)
 {
     jkr_link* l = jkr_UpLink(sysId);
-    jkr_SendData(l, idFrom, (idTo || l) ? idTo : sysId, data, size);
+    jkr_SendData(l, idFrom, (idTo || l) ? idTo : sysId, data, size, seq);
 }
 
 // Host: a packet for everyone ('to' 0) or one player, to every other machine
 // that should get it, except 'skipSys' (where it came from).
-static void jkr_HostSend(uint32_t skipSys, uint32_t idFrom, uint32_t idTo, const void* data, uint32_t size)
+static void jkr_HostSend(uint32_t skipSys, uint32_t idFrom, uint32_t idTo, const void* data, uint32_t size, uint32_t seq)
 {
     jkr_player* t = idTo ? jkr_Find(idTo) : NULL;
     if (idTo && !t) return;
@@ -1944,7 +1946,7 @@ static void jkr_HostSend(uint32_t skipSys, uint32_t idFrom, uint32_t idTo, const
         jkr_player* m = &R.players[i];
         if (!m->used || m->local || !(m->flags & JKR_PF_SYSTEM) || m->id == skipSys) continue;
         if (t && t->sysId != m->id) continue;
-        jkr_SendToMachine(m->id, idFrom, idTo, data, size);
+        jkr_SendToMachine(m->id, idFrom, idTo, data, size, seq);
     }
 }
 
@@ -1952,6 +1954,7 @@ static void jkr_HostSend(uint32_t skipSys, uint32_t idFrom, uint32_t idTo, const
 static void jkr_HandleData(const uint8_t* b, const uint8_t* end, jkr_link* via)
 {
     uint32_t from, to;
+    uint32_t seq = rd32(b - JKR_HDR_SIZE + 12);   // the sender's update number (jkrelay_SetSendSeq)
     jkr_player* dst;
     if (!R.inSession || end - b < 8) return;
     from = rd32(b);
@@ -1962,20 +1965,23 @@ static void jkr_HandleData(const uint8_t* b, const uint8_t* end, jkr_link* via)
         jkr_player* src = jkr_Find(from);
         if (!src || src->sysId != via->sysId) return;
         if (!to || !(dst = jkr_Find(to)) || !dst->local)
-            jkr_HostSend(via->sysId, from, to, b + 8, (uint32_t)(end - b - 8));
+            jkr_HostSend(via->sysId, from, to, b + 8, (uint32_t)(end - b - 8), seq);
     }
     dst = to ? jkr_Find(to) : NULL;
     if (to && (!dst || !dst->local)) return;
     jkr_Push(DPS_RECV_DATA, from, b + 8, (uint32_t)(end - b - 8), 0, 0);
+    if (R.evTail) R.evTail->seq = seq;
 }
 
 long dps_Send(uint32_t idFrom, uint32_t idTo, const void* data, uint32_t size)
 {
+    uint32_t seq = R.sendSeq;
+    R.sendSeq = 0;
     if (!R.inSession) return JKR_ERR_NOCONNECTION;
     if (JKR_HDR_SIZE + 8 + size > JKR_MAX_PACKET) return JKR_ERR_GENERIC;
     if (R.isHost && jkr_AnyLinkUp())
     {
-        jkr_HostSend(0, idFrom, idTo, data, size);   // per machine: links, or the server
+        jkr_HostSend(0, idFrom, idTo, data, size, seq);   // per machine: links, or the server
         return JKR_OK_HR;
     }
     if (!R.isHost)
@@ -1984,11 +1990,11 @@ long dps_Send(uint32_t idFrom, uint32_t idTo, const void* data, uint32_t size)
         for (int i = 0; i < JKR_MAX_PLAYERS; i++)
             if (jkr_LinkUsable(&R.links[i]))
             {
-                jkr_SendData(&R.links[i], idFrom, idTo, data, size);
+                jkr_SendData(&R.links[i], idFrom, idTo, data, size, seq);
                 return JKR_OK_HR;
             }
     }
-    jkr_SendData(NULL, idFrom, idTo, data, size);
+    jkr_SendData(NULL, idFrom, idTo, data, size, seq);
     return JKR_OK_HR;
 }
 
@@ -2013,6 +2019,23 @@ int dps_Receive(uint32_t* fromOut, const void** dataOut, uint32_t* sizeOut, dps_
     }
     *sysOut = e->sys;
     return DPS_RECV_SYS;
+}
+
+// Hit what you see (2026-10-29): a number for the next Send, which goes in its
+// header's seq (0 in game data before; servers and older clients pass it on
+// and ignore it). The game numbers its own position updates to each player,
+// so a hit claim can name the one it had on screen (stdComm_WSRelayHits.c).
+void jkrelay_SetSendSeq(uint32_t seq)
+{
+    R.sendSeq = seq;
+}
+
+// The number the data Receive returned last came with (1), if it had one.
+int jkrelay_LastRecvSeq(uint32_t* pSeq)
+{
+    uint32_t seq = (R.evLast && R.evLast->type == DPS_RECV_DATA) ? R.evLast->seq : 0;
+    if (pSeq) *pSeq = seq;
+    return seq != 0;
 }
 
 const dps_backend jkrelay_backend = DPS_BACKEND_TABLE(jkrelay);

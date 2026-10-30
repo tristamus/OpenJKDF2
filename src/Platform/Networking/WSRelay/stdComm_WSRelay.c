@@ -2265,19 +2265,24 @@ static const char* wsrelay_HostGoneReason()
 
 int stdComm_WSRelay_RecvSeq(uint32_t* pSeq)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection's
+        return stdComm_Imperial_RecvSeq(pSeq);
     *pSeq = (uint32_t)wsrelay_aRecvSeq[1];
     return wsrelay_aRecvSeq[0];
 }
 
 double stdComm_WSRelay_SeqSentAt(int toId, uint32_t seq)
 {
+    if (stdComm_Imperial_bActive) // Added: as above
+        return stdComm_Imperial_SeqSentAt(toId, seq);
     return wsrelay_js_seq_sent_at(toId, seq);
 }
 
-// Added: the lobby's links resend and keep order.
+// Added: the lobby's links resend and keep order; the Imperial Network
+// Protocol's desktops are on UDP.
 int stdComm_WSRelay_HitsResend()
 {
-    return 0;
+    return stdComm_Imperial_bActive;
 }
 
 double stdComm_WSRelay_Now()
@@ -2298,7 +2303,8 @@ double stdComm_WSRelay_ClockOffset(int netId)
 
 int stdComm_WSRelay_InMatch()
 {
-    if ((!wsrelay_bHosting && !wsrelay_bJoined) || !sithNet_isMulti || !sithWorld_g_pCurrentWorld || !sithPlayer_g_pLocalPlayerThing)
+    // Added: or in an Imperial Network Protocol game (stdComm_Imperial.c)
+    if ((!wsrelay_bHosting && !wsrelay_bJoined && !stdComm_Imperial_InGame()) || !sithNet_isMulti || !sithWorld_g_pCurrentWorld || !sithPlayer_g_pLocalPlayerThing)
         return 0;
 
     // A joiner is in once the host has welcomed it into the level

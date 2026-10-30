@@ -35,9 +35,17 @@ BOOL stdComm_Imperial_SetSessionFlagidk(int bJoinable);
 void stdComm_Imperial_EnumPlayers();
 BOOL stdComm_Imperial_Send(DPID idFrom, DPID idTo, void* lpData, DWORD dwDataSize);
 int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut);
+// Why the last join failed (1), for the join screen's dialog, or 0 to show the usual text.
+int stdComm_Imperial_JoinErrorText(char16_t* pOut, int maxChars);
 // The next level a dedicated server named and its episode (1), or 0 if it
 // hasn't named one or this isn't an Imperial Network Protocol game.
 int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int outLen);
+// Hit what you see on this connection: whether it's in a game, the number the
+// packet being handled came with (1 if it had one), and when this player's
+// position update numbered seq went to player toId (-1 if unknown).
+int stdComm_Imperial_InGame();
+int stdComm_Imperial_RecvSeq(uint32_t* pSeq);
+double stdComm_Imperial_SeqSentAt(int toId, uint32_t seq);
 void stdComm_Imperial_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars);
 
 #endif // PLATFORM_WSRELAY
