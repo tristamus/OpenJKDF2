@@ -97,6 +97,19 @@
 #define WSRELAY_TEST_THROW_MS (800)     // a thermal detonator goes further
                                         // the longer fire is held: this lobs
                                         // it about 0.8 (weap_thermdet.cog)
+#define WSRELAY_TEST_FREEZE_MS (2000)   // MotS's carbonite gun freezes a
+                                        // player its fire finds 5 times in a
+                                        // row, 0.2 s apart, and each press
+                                        // starts the count over
+                                        // (weap_carbgun_m.cog)
+#define WSRELAY_TEST_CHARGE_MS (2500)   // MotS's Blastech charges its second
+                                        // fire up to 4 bolts, one every
+                                        // 0.75 s, and fires them when let go
+                                        // (weap_blastech_m.cog)
+#define WSRELAY_TEST_SPREAD_MS (1400)   // MotS's crossbow fires 5 bolts when
+                                        // let go after 1.2 s, 3 after 0.6 s
+                                        // (weap_crossbow_m.cog)
+#define WSRELAY_TEST_LONG_REST_MS (400) // ...each then let go this long
 #define WSRELAY_TEST_BACKOFF_MS (2500)  // after dropping a sequencer charge,
                                         // run back from it this long
 #define WSRELAY_TEST_REPORT_MS (5000)   // between lines in the console
@@ -144,6 +157,10 @@ static const struct
     {"flashbomb", 0, SITHBIN_MOTS_FLASH_BOMB},
     {"seeker", 0, SITHBIN_MOTS_RAIL_SEEKER},
     {"carbonite", 0, SITHBIN_MOTS_CARBO_GUN},
+    {"blastech", 0, SITHBIN_MOTS_BLASTECH},
+    {"scope", 0, SITHBIN_MOTS_STORMTROOPER_SCOPE},
+    {"crossbow", 0, SITHBIN_MOTS_TUSKEN_PROD},
+    {"manualseq", 0, SITHBIN_MOTS_MANUAL_SEQUENCER},
 };
 #define WSRELAY_TEST_NUM_WEAPONS ((int)(sizeof(wsrelay_aTestWeapons) / sizeof(wsrelay_aTestWeapons[0])))
 
@@ -165,13 +182,18 @@ static const struct
 #define WSRELAY_TEST_NUM_POWERS ((int)(sizeof(wsrelay_aTestPowers) / sizeof(wsrelay_aTestPowers[0])))
 
 // attack:all's steps: each weapon, and its second fire where that's another
-// shot (the Bryar, rifle and fists fire the same way with either), then each
-// targeted Force power (with the saber in hand). The saber is there to
-// compare with. Explosives come last, and last of all the mines a sequencer
-// charge's second fire leaves, which wait 60 s for someone to touch them
-// (+seqchrg2), so no other step counts their blasts. A step whose weapon or
-// power this game doesn't have is left out: the bowcaster in MotS, and
-// MotS's own weapons and powers in Jedi Knight.
+// shot (the Bryar, rifle and fists fire the same way with either, as MotS's
+// flash bomb does, and its scope's second fire zooms), then each targeted
+// Force power (with the saber in hand).
+// The saber is there to compare with. Explosives come last, and last of all
+// the mines a sequencer charge's second fire leaves, which wait 60 s for
+// someone to touch them (+seqchrg2), so no other step counts their blasts.
+// MotS's manual sequencer charge lays a charge with its fire and sets it off
+// with its second, so it's one step. A step whose weapon or power this game
+// doesn't have is left out: the bowcaster in MotS, and MotS's own weapons and
+// powers in Jedi Knight. MotS's E-Web is left out too: it's mounted on an
+// emplacement a level places (weap_EWEB_m.cog), and the test's level has
+// none.
 static const struct
 {
     const char* pWeapon;
@@ -180,7 +202,9 @@ static const struct
     const char* pName;
 } wsrelay_aTestSteps[] = {
     {"saber", 0, NULL, "saber"}, {"fists", 0, NULL, "fists"}, {"bryar", 0, NULL, "bryar"}, {"rifle", 0, NULL, "rifle"},
+    {"blastech", 0, NULL, "blastech"}, {"blastech", 1, NULL, "blastech alt"}, {"scope", 0, NULL, "scope"},
     {"bowcaster", 0, NULL, "bowcaster"}, {"bowcaster", 1, NULL, "bowcaster alt"},
+    {"crossbow", 0, NULL, "crossbow"}, {"crossbow", 1, NULL, "crossbow alt"},
     {"repeater", 0, NULL, "repeater"}, {"repeater", 1, NULL, "repeater alt"},
     {"carbonite", 0, NULL, "carbonite"}, {"carbonite", 1, NULL, "carbonite alt"},
     {"saber", 0, "grip", "grip"}, {"saber", 0, "pull", "pull"}, {"saber", 0, "blinding", "blinding"},
@@ -188,9 +212,9 @@ static const struct
     {"saber", 0, "chainlightning", "chain lightning"}, {"saber", 0, "saberthrow", "saber throw"},
     {"concussion", 0, NULL, "concussion"}, {"concussion", 1, NULL, "concussion alt"},
     {"thermal", 0, NULL, "thermal"}, {"thermal", 1, NULL, "thermal alt"},
-    {"flashbomb", 0, NULL, "flash bomb"}, {"flashbomb", 1, NULL, "flash bomb alt"},
+    {"flashbomb", 0, NULL, "flash bomb"},
     {"rail", 0, NULL, "rail"}, {"rail", 1, NULL, "rail alt"}, {"seeker", 0, NULL, "seeker"}, {"seeker", 1, NULL, "seeker alt"},
-    {"sequencer", 0, NULL, "sequencer"}, {"sequencer", 1, NULL, "sequencer alt"},
+    {"manualseq", 0, NULL, "manual sequencer"}, {"sequencer", 0, NULL, "sequencer"}, {"sequencer", 1, NULL, "sequencer alt"},
 };
 #define WSRELAY_TEST_NUM_STEPS ((int)(sizeof(wsrelay_aTestSteps) / sizeof(wsrelay_aTestSteps[0])))
 
@@ -220,6 +244,7 @@ static uint32_t wsrelay_testMsecJump = 0;
 static uint32_t wsrelay_testMsecSeen = 0;
 static uint32_t wsrelay_testMsecReport = 0;
 static int wsrelay_testWasDead = 0;
+static int wsrelay_testLaid = 0;        // a manual sequencer charge to set off
 static int wsrelay_testJumps = 0;
 static int wsrelay_testDescribed = 0;
 
@@ -293,11 +318,49 @@ static int wsrelay_TestThrown(int bin)
            || bin == SITHBIN_MOTS_FLASH_BOMB;
 }
 
-// How far from the target the attacker stays with the weapon in bin, between
-// the players' middles. 0: as close as with the saber, as for a sequencer
-// charge, which is dropped at the player's feet.
-static flex_t wsrelay_TestDistance(int bin)
+// The bin whose count drops when the weapon in bin lays a charge at the
+// player's feet, or 0: a sequencer charge's own, and MotS's manual sequencer
+// charge lays those too (weap_manseq_m.cog).
+static int wsrelay_TestDropBin(int bin)
 {
+    if (bin == SITHBIN_SEQUENCER_CHARGE || bin == SITHBIN_MOTS_SEQUENCER_CHARGE)
+        return bin;
+    return bin == SITHBIN_MOTS_MANUAL_SEQUENCER ? SITHBIN_MOTS_SEQUENCER_CHARGE : 0;
+}
+
+// Another bin the weapon in bin needs, or 0: MotS's scope works only with the
+// rifle (weap_stscope_m.cog's autoselect), and its manual sequencer charge
+// lays sequencer charges.
+static int wsrelay_TestNeeds(int bin)
+{
+    if (bin == SITHBIN_MOTS_STORMTROOPER_SCOPE)
+        return SITHBIN_MOTS_STORMTROOPER_RIFLE;
+    return bin == SITHBIN_MOTS_MANUAL_SEQUENCER ? SITHBIN_MOTS_SEQUENCER_CHARGE : 0;
+}
+
+// How long fire is held with the weapon in bin, and its second fire if alt,
+// and how long it's then let go (*pRestMs).
+static uint32_t wsrelay_TestHoldMs(int bin, int alt, uint32_t* pRestMs)
+{
+    *pRestMs = WSRELAY_TEST_LONG_REST_MS;
+    if (bin == SITHBIN_MOTS_CARBO_GUN && !alt)
+        return WSRELAY_TEST_FREEZE_MS;
+    if (bin == SITHBIN_MOTS_BLASTECH && alt)
+        return WSRELAY_TEST_CHARGE_MS;
+    if (bin == SITHBIN_MOTS_TUSKEN_PROD && !alt)
+        return WSRELAY_TEST_SPREAD_MS;
+    *pRestMs = WSRELAY_TEST_REST_MS;
+    return wsrelay_TestThrown(bin) ? WSRELAY_TEST_THROW_MS : WSRELAY_TEST_FIRE_MS;
+}
+
+// How far from the target the attacker stays with the weapon in bin, and its
+// second fire if alt, between the players' middles. 0: as close as with the
+// saber, as for a sequencer charge, which is dropped at the player's feet,
+// and the butt of MotS's carbonite gun (its second fire, +bigpunch).
+static flex_t wsrelay_TestDistance(int bin, int alt)
+{
+    if (bin == SITHBIN_MOTS_CARBO_GUN && alt)
+        return 0.0;
     switch (bin)
     {
         case SITHBIN_FISTS:
@@ -306,6 +369,7 @@ static flex_t wsrelay_TestDistance(int bin)
         case SITHBIN_MOTS_FISTS:
         case SITHBIN_MOTS_LIGHTSABER:
         case SITHBIN_MOTS_SEQUENCER_CHARGE:
+        case SITHBIN_MOTS_MANUAL_SEQUENCER:
             return 0.0;
         case SITHBIN_RAIL_DETONATOR:
         case SITHBIN_MOTS_RAIL_DETONATOR:
@@ -329,6 +393,7 @@ static void wsrelay_TestUse(int bin, int alt, int power)
     wsrelay_testTries = 0;
     wsrelay_testCount = 0.0;
     wsrelay_testMsecBackOff = 0;
+    wsrelay_testLaid = 0;
 }
 
 // Whether this game has step i's weapon, and its Force power if it has one.
@@ -568,12 +633,19 @@ static void wsrelay_TestPress(int inputFunc)
 // seeker rails, which Jedi Knight's items.dat doesn't list.
 static void wsrelay_TestArm(SithThing* pPlayer, int bin)
 {
-    // Before the last one is used, or its cog picks another weapon.
-    flex_t most = sithInventory_g_aTypes[bin].max;
-    if (sithInventory_GetInventory(pPlayer, bin) < most * 0.5)
-        sithInventory_SetInventory(pPlayer, bin, most);
-    if (!sithInventory_IsInventoryAvailable(pPlayer, bin))
-        sithInventory_SetInventoryAvailable(pPlayer, bin, 1);
+    // Before the last one is used, or its cog picks another weapon. And what
+    // it needs, the same.
+    int aBins[2] = {bin, wsrelay_TestNeeds(bin)};
+    for (int i = 0; i < 2 && aBins[i]; i++)
+    {
+        // MotS's manual sequencer charge's bin only says it can be picked
+        // (weap_manseq_m.cog): 1, or 2 while charges are laid.
+        flex_t most = aBins[i] == SITHBIN_MOTS_MANUAL_SEQUENCER ? 1.0 : sithInventory_g_aTypes[aBins[i]].max;
+        if (sithInventory_GetInventory(pPlayer, aBins[i]) < most * 0.5)
+            sithInventory_SetInventory(pPlayer, aBins[i], most);
+        if (!sithInventory_IsInventoryAvailable(pPlayer, aBins[i]))
+            sithInventory_SetInventoryAvailable(pPlayer, aBins[i], 1);
+    }
 
     static const int aAmmo[] = {SITHBIN_ENERGY, SITHBIN_POWER, SITHBIN_RAILCHARGES, SITHBIN_CARBPELLETS,
                                 SITHBIN_SEEKRAILS};
@@ -739,6 +811,7 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
         wsrelay_testTries = 0;
         wsrelay_testCount = 0.0;
         wsrelay_testMsecBackOff = 0;
+        wsrelay_testLaid = 0;
     }
 
     // The target heals, so a test isn't held up while it respawns.
@@ -753,19 +826,25 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     if (!wsrelay_TestMelee(bin))
     {
         // A sequencer charge lands at the player's feet: once one is
-        // dropped, run back from it.
-        if ((bin == SITHBIN_SEQUENCER_CHARGE || bin == SITHBIN_MOTS_SEQUENCER_CHARGE)
-            && sithInventory_GetInventory(pPlayer, bin) < wsrelay_testCount)
+        // dropped, run back from it. A manual one's then set off.
+        int dropBin = wsrelay_TestDropBin(bin);
+        if (dropBin && sithInventory_GetInventory(pPlayer, dropBin) < wsrelay_testCount)
+        {
             wsrelay_testMsecBackOff = now;
+            wsrelay_testLaid = bin == SITHBIN_MOTS_MANUAL_SEQUENCER;
+        }
         wsrelay_TestArm(pPlayer, bin);
-        wsrelay_testCount = sithInventory_GetInventory(pPlayer, bin);
+        wsrelay_testCount = sithInventory_GetInventory(pPlayer, dropBin ? dropBin : bin);
     }
     if (wsrelay_testPower)
         wsrelay_TestForce(pPlayer, wsrelay_testPower);
     int backOff = wsrelay_testMsecBackOff && now - wsrelay_testMsecBackOff < WSRELAY_TEST_BACKOFF_MS;
+    // Only while the player has it: a thrown saber (MotS's Saber Throw) is
+    // back 5 s later (force_saberthrow.cog), and its key does nothing till then.
     if (sithInventory_GetCurrentWeapon(pPlayer) == bin)
         wsrelay_testTries = 0;
-    else if (wsrelay_testTries < 5 && now - wsrelay_testMsecSelect >= WSRELAY_TEST_SELECT_MS && wsrelay_TestKeyFor(bin))
+    else if (wsrelay_testTries < 5 && now - wsrelay_testMsecSelect >= WSRELAY_TEST_SELECT_MS && wsrelay_TestKeyFor(bin)
+             && sithInventory_GetInventory(pPlayer, bin) > 0.0)
     {
         wsrelay_testMsecSelect = now;
         wsrelay_testTries++;
@@ -793,7 +872,7 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     // Attack: keep the target in sight and in reach. Distances are between
     // the players' middles, which can't get closer than their sizes allow.
     flex_t touch = pPlayer->collideSize + pTarget->collideSize;
-    flex_t away = wsrelay_testPower ? WSRELAY_TEST_FORCE : wsrelay_TestDistance(bin);
+    flex_t away = wsrelay_testPower ? WSRELAY_TEST_FORCE : wsrelay_TestDistance(bin, wsrelay_testFire == INPUT_FUNC_FIRE2);
     flex_t close = away == 0.0 ? touch + WSRELAY_TEST_CLOSE : away;
     flex_t reach = away == 0.0 ? touch + WSRELAY_TEST_REACH : away * 1.5;
     int inSight = wsrelay_TestCanSee(pPlayer, pTarget);
@@ -825,8 +904,8 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     // next to the attacker blows it up. And only with this weapon in hand,
     // so a new life's Bryar doesn't count as another weapon's. A Force power
     // the same, with any weapon in hand: it's used when let go.
-    uint32_t hold = wsrelay_TestThrown(bin) ? WSRELAY_TEST_THROW_MS : WSRELAY_TEST_FIRE_MS;
-    uint32_t rest = WSRELAY_TEST_REST_MS;
+    uint32_t rest;
+    uint32_t hold = wsrelay_TestHoldMs(bin, wsrelay_testFire == INPUT_FUNC_FIRE2, &rest);
     if (wsrelay_testPower)
     {
         hold = WSRELAY_TEST_FORCE_MS;
@@ -835,7 +914,16 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     if (now - wsrelay_testMsecFire >= hold + rest)
         wsrelay_testMsecFire = now;
     int inHand = wsrelay_testPower || sithInventory_GetCurrentWeapon(pPlayer) == bin;
-    if (now - wsrelay_testMsecFire < hold && dist <= reach && inSight && inHand && !backOff && !quiet)
+    if (wsrelay_testLaid && !backOff && inHand)
+    {
+        // A manual sequencer charge laid and run back from: its second fire
+        // sets it off, from wherever the attacker is, and while its step's
+        // hits settle too, so no later step counts its blast.
+        wsrelay_TestPress(INPUT_FUNC_FIRE2);
+        wsrelay_testLaid = 0;
+        wsrelay_testMsecFire = now;
+    }
+    else if (now - wsrelay_testMsecFire < hold && dist <= reach && inSight && inHand && !backOff && !quiet)
         wsrelay_aTestHeld[wsrelay_testPower ? INPUT_FUNC_USESKILL : wsrelay_testFire] = 1;
 
     // What it's doing, now and then, for whoever is watching the console.
