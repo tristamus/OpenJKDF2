@@ -1185,6 +1185,9 @@ static void jkMain_FollowHostMap(void)
     if ( !__strcmpi(aJkl, jkMain_aLevelJklFname) && (!aGob[0] || !__strcmpi(aGob, jkRes_episodeGobName)) )
         return;
     stdPlatform_Printf("OpenJKDF2: the server goes on with %s:%s\n", aGob, aJkl);
+    // An episode we lack, or have another copy of: the server's, if it serves it
+    if ( aGob[0] && __strcmpi(aGob, jkRes_episodeGobName) )
+        stdComm_Imperial_FetchHostMap(aGob);
     if ( aGob[0] && !jkMain_SwitchEpisode(aGob, aJkl) )
     {
         stdString_snprintf(jkMain_aMissingMap, sizeof(jkMain_aMissingMap), "%s (%s)", aJkl, aGob);

@@ -28,7 +28,9 @@
 // its game lists Hit what you see with IMPERIAL_SESSION_HWYS. Position
 // updates are numbered in the relay's data header for its claims.
 //
-// Not here yet: map and mod downloads (the joiner needs the host's).
+// Maps: a joiner gets the host's custom episode before the level loads, as on
+// the lobby (maps.js), from a host that says it serves it
+// (IMPERIAL_SESSION_XFER); see imperial_XferPump. Not here yet: mods.
 
 #include "stdComm_Imperial.h"
 
@@ -60,6 +62,11 @@ int jkrelay_LostReason(int* pMinutes);
 int jkrelay_JoinRefusal(int* pMinutes);
 void jkrelay_SetSendSeq(uint32_t seq);
 int jkrelay_LastRecvSeq(uint32_t* pSeq);
+void jkrelay_SetBigHandler(void (*fn)(uint32_t from, const uint8_t* p, size_t n));
+int jkrelay_SendBig(uint32_t idFrom, uint32_t idTo, const uint8_t* p, size_t n);
+uint32_t jkrelay_LocalSystemId(void);
+uint32_t jkrelay_HostSystemId(void);
+int jkrelay_IsHost(void);
 int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs);
 
 // As the desktop's stdComm_dplay.c.
@@ -71,6 +78,7 @@ int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char
 #define IMPERIAL_SESSION_NEXTMAP 0x40000000u        // a dedicated host named the next level
 #define IMPERIAL_SESSION_OPENJKDF2WIRE 0x20000000u  // the game's messages use OpenJKDF2's layouts
 #define IMPERIAL_SESSION_HWYS 0x10000000u           // its host plays Hit what you see
+#define IMPERIAL_SESSION_XFER 0x08000000u           // its host serves its map (and mod) to joiners
 
 static const uint8_t imperial_kJkAppGuid[16] = {
     0xC0, 0x13, 0x06, 0xBF, 0x79, 0xDE, 0xD0, 0x11, 0x99, 0xC9, 0x00, 0xA0, 0x24, 0x76, 0xAD, 0x4B
@@ -82,6 +90,7 @@ static int imperial_bInGame = 0;
 static int imperial_numListed = 0;
 static int imperial_aListedWire[IMPERIAL_MAX_SESSIONS];
 static int imperial_aListedHwys[IMPERIAL_MAX_SESSIONS];
+static int imperial_aListedXfer[IMPERIAL_MAX_SESSIONS];
 static char imperial_server[256];
 static char imperial_aJoinError[160]; // why the last join failed, for the join screen's dialog
 
@@ -220,6 +229,138 @@ static void imperial_SessionToEntry(const dps_session* s, jkMultiEntry* e)
     e->tickRateMs     = (int32_t)s->user[3];
 }
 
+// ---------------------------------------------------------------------------
+// Map downloads (maps.js) on this connection, as on the desktop
+// (stdComm_dplay.c): its frames go between machines as the relay client's big
+// frames. maps.js knows players as the lobby numbers them, the host 1 and
+// joiners 2..64, so a host gives each joiner's machine a number. maps.js puts
+// what it sends in a queue (Module.jkImperial.mapSend), which the engine
+// sends from (imperial_XferPump), at most IMPERIAL_XFER_RATE bytes a second.
+// ---------------------------------------------------------------------------
+#define IMPERIAL_XFER_RATE  (1024 * 1024)
+#define IMPERIAL_XFER_BURST (64 * 1024)
+#define IMPERIAL_XFER_MAX   (64 * 1024 + 64)
+
+static uint32_t imperial_aXferSys[65];   // [2..64]: the machine a number stands for
+static int imperial_nextXferAlias = 2;
+static double imperial_xferTokens = IMPERIAL_XFER_BURST;
+static uint32_t imperial_xferTokensMs = 0;
+static uint8_t imperial_aXferBuf[IMPERIAL_XFER_MAX];
+
+EM_JS(void, imperial_js_xfer_init, (int bActive), {
+    if (!Module.jkImperial) {
+        Module.jkImperial = { out: [] };
+        Module.jkImperial.mapSend = function(id, bytes, via) {
+            if (!Module.jkImperial.active) return null;
+            Module.jkImperial.out.push({ id: id, b: new Uint8Array(bytes.slice(0)) });
+            return 'direct';
+        };
+        Module.jkImperial.mapDirect = function(id) { return !!Module.jkImperial.active; };
+    }
+    Module.jkImperial.active = !!bActive;
+    if (!bActive) Module.jkImperial.out = [];
+});
+
+// The next frame maps.js queued (its size, with *pTo), 0 if it doesn't fit, -1 if none.
+EM_JS(int, imperial_js_xfer_take, (uint8_t* buf, int cap, int* pTo), {
+    var q = Module.jkImperial && Module.jkImperial.out;
+    if (!q || !q.length) return -1;
+    var f = q.shift();
+    if (f.b.length > cap) return 0;
+    HEAPU8.set(f.b, buf);
+    HEAP32[pTo >> 2] = f.id;
+    return f.b.length;
+});
+
+EM_JS(void, imperial_js_xfer_frame, (int from, const uint8_t* p, int n), {
+    if (Module.jkMaps) Module.jkMaps.onFrame(from, HEAPU8.slice(p, p + n).buffer, 'direct');
+});
+
+EM_JS(void, imperial_js_map_fetch, (const char* pName, const char* pExt), {
+    if (Module.jkMaps) Module.jkMaps.fetch(UTF8ToString(pName), UTF8ToString(pExt));
+});
+
+EM_JS(int, imperial_js_map_state, (), {
+    return Module.jkMaps ? Module.jkMaps.state() : 1;
+});
+
+EM_JS(void, imperial_js_map_abort, (const char* pReason), {
+    if (Module.jkMaps) Module.jkMaps.abort(UTF8ToString(pReason));
+});
+
+EM_JS(void, imperial_js_map_host, (const char* pName, const char* pExt), {
+    if (Module.jkMaps) Module.jkMaps.host(UTF8ToString(pName), UTF8ToString(pExt));
+});
+
+EM_JS(void, imperial_js_map_unhost, (), {
+    if (Module.jkMaps) Module.jkMaps.unhost();
+});
+
+static uint32_t imperial_XferAliasOf(uint32_t sysId)
+{
+    for (int i = 2; i <= 64; i++)
+        if (imperial_aXferSys[i] == sysId) return (uint32_t)i;
+    int a = imperial_nextXferAlias;
+    imperial_nextXferAlias = a >= 64 ? 2 : a + 1;
+    imperial_aXferSys[a] = sysId;
+    return (uint32_t)a;
+}
+
+static void imperial_BigFrame(uint32_t from, const uint8_t* p, size_t n)
+{
+    if (n < 16 || memcmp(p + 8, "JKMT", 4))
+        return;
+    if (jkrelay_IsHost())
+        imperial_js_xfer_frame((int)imperial_XferAliasOf(from), p, (int)n);
+    else if (from == jkrelay_HostSystemId())
+        imperial_js_xfer_frame(1, p, (int)n);
+}
+
+// Sends what maps.js queued, as fast as IMPERIAL_XFER_RATE allows.
+static void imperial_XferPump()
+{
+    uint32_t now = stdPlatform_GetTimeMsec();
+    imperial_xferTokens += (double)(now - imperial_xferTokensMs) * (IMPERIAL_XFER_RATE / 1000.0);
+    if (imperial_xferTokens > IMPERIAL_XFER_BURST)
+        imperial_xferTokens = IMPERIAL_XFER_BURST;
+    imperial_xferTokensMs = now;
+
+    while (imperial_xferTokens > 0)
+    {
+        int to = 0;
+        int n = imperial_js_xfer_take(imperial_aXferBuf, sizeof(imperial_aXferBuf), &to);
+        if (n < 0)
+            break;
+        if (n == 0)
+            continue;
+        uint32_t dst = jkrelay_IsHost() ? (to >= 2 && to <= 64 ? imperial_aXferSys[to] : 0) : (to == 1 ? jkrelay_HostSystemId() : 0);
+        if (!dst)
+            continue;
+        imperial_xferTokens -= n;
+        jkrelay_SendBig(jkrelay_LocalSystemId(), dst, imperial_aXferBuf, (size_t)n);
+    }
+}
+
+// The host's map, before the level loads (maps.js shows how it goes). 1 when it's in place.
+static int imperial_GetHostMap(const char* pEpisode)
+{
+    char name[32];
+    stdString_SafeStrCopy(name, pEpisode, sizeof(name));
+    imperial_js_map_fetch(name, JKRES_GOB_EXT);
+
+    int state;
+    while ((state = imperial_js_map_state()) == 0) // maps.js STATE_BUSY
+    {
+        imperial_XferPump();
+        jkrelay_Idle();
+        if (!jkrelay_HostSystemId())
+            imperial_js_map_abort("host-left");
+        else
+            emscripten_sleep(10);
+    }
+    return state == 1; // STATE_READY
+}
+
 void stdComm_Imperial_Startup()
 {
     jk_snwprintf(jkGuiMultiplayer_aConnections[STDCOMM_IMPERIAL_CONNECTION].name, 0x80, u"Imperial Network Protocol");
@@ -232,7 +373,11 @@ void stdComm_Imperial_Startup()
 void stdComm_Imperial_Idle()
 {
     if (imperial_bStarted)
+    {
         jkrelay_Idle();
+        if (imperial_bInGame)
+            imperial_XferPump();
+    }
 }
 
 int stdComm_Imperial_OpenConnection()
@@ -248,6 +393,8 @@ int stdComm_Imperial_OpenConnection()
     }
     imperial_js_server(imperial_server, sizeof(imperial_server));
     jkrelay_SetServer(imperial_server);
+    jkrelay_SetBigHandler(imperial_BigFrame);
+    imperial_js_xfer_init(1);
     stdPlatform_Printf("OpenJKDF2: Imperial Network Protocol server %s\n", imperial_server);
     stdComm_dword_8321DC = 1;
     return 0;
@@ -255,6 +402,7 @@ int stdComm_Imperial_OpenConnection()
 
 void stdComm_Imperial_CloseConnection()
 {
+    imperial_js_xfer_init(0);
     if (stdComm_dword_8321DC)
     {
         stdComm_Imperial_Close();
@@ -270,6 +418,7 @@ static int imperial_SessionCallback(void* ctx, const dps_session* s)
     imperial_SessionToEntry(s, &jkGuiMultiplayer_aEntries[imperial_numListed]);
     imperial_aListedWire[imperial_numListed] = (s->flags & IMPERIAL_SESSION_OPENJKDF2WIRE) != 0;
     imperial_aListedHwys[imperial_numListed] = (s->flags & IMPERIAL_SESSION_HWYS) != 0;
+    imperial_aListedXfer[imperial_numListed] = (s->flags & IMPERIAL_SESSION_XFER) != 0;
     imperial_numListed++;
     return 1;
 }
@@ -344,6 +493,14 @@ int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
         return (int)hr;
     }
 
+    // The host's map, before the level loads, from a host that serves it.
+    if (imperial_aListedXfer[idx] && !imperial_GetHostMap(jkGuiMultiplayer_aEntries[idx].episodeGobName))
+    {
+        imperial_JoinError("Couldn't get the host's map %s.", jkGuiMultiplayer_aEntries[idx].episodeGobName);
+        jkrelay_Close();
+        return (int)0x80004005;
+    }
+
     stdComm_dword_8321E8 = 0;
     stdComm_bIsServer = 0;
 
@@ -365,6 +522,8 @@ int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
 
 void stdComm_Imperial_Close()
 {
+    if (imperial_bInGame && jkrelay_IsHost())
+        imperial_js_map_unhost();
     if (stdComm_dword_8321E0)
     {
         if (stdComm_dplayIdSelf)
@@ -391,6 +550,7 @@ int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry)
                                 stdComm_WSRelay_hitReachMs);
     if (!stdComm_WSRelay_bClassicHits)
         s.flags |= IMPERIAL_SESSION_HWYS;
+    s.flags |= IMPERIAL_SESSION_XFER; // maps.js serves our map (below)
 
     long hr = jkrelay_OpenCreate(&s);
     if (hr < 0)
@@ -399,6 +559,8 @@ int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry)
         return (int)hr;
     }
     imperial_bInGame = 1;
+    memset(imperial_aXferSys, 0, sizeof(imperial_aXferSys));
+    imperial_js_map_host(pEntry->episodeGobName, JKRES_GOB_EXT);
 
     if (jkrelay_GetSessionDesc(&s) >= 0)
         memcpy(&pEntry->guidInstance, s.guidInstance, 16);
@@ -441,8 +603,11 @@ void stdComm_Imperial_SetSessionDesc(const char* pJklFname, DWORD maxPlayers)
     memset(e.mapJklFname, 0, sizeof(e.mapJklFname));
     if (pJklFname)
         stdString_SafeStrCopy(e.mapJklFname, pJklFname, sizeof(e.mapJklFname));
-    if (jkRes_episodeGobName[0])
+    if (jkRes_episodeGobName[0] && __strcmpi(e.episodeGobName, jkRes_episodeGobName))
+    {
         stdString_SafeStrCopy(e.episodeGobName, jkRes_episodeGobName, sizeof(e.episodeGobName));
+        imperial_js_map_host(e.episodeGobName, JKRES_GOB_EXT); // joiners get this one now
+    }
 
     imperial_EncodeSessionName(s.name, DPS_NAME_MAX, &e);
     s.flags &= ~IMPERIAL_SESSION_NEXTMAP;
@@ -573,6 +738,8 @@ BOOL stdComm_Imperial_Send(DPID idFrom, DPID idTo, void* lpData, DWORD dwDataSiz
 
 int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut)
 {
+    imperial_XferPump();
+
     for (;;)
     {
         uint32_t from = 0, size = 0;
@@ -627,6 +794,19 @@ int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut)
                 continue;
         }
     }
+}
+
+// Following a dedicated server into another episode (jkMain_FollowHostMap): its copy,
+// if we lack it or have another one and it serves it. 1 when it's in place (or
+// there's nothing to get).
+int stdComm_Imperial_FetchHostMap(const char* pEpisode)
+{
+    dps_session s;
+    if (!stdComm_Imperial_InGame() || jkrelay_IsHost() || !pEpisode || !pEpisode[0])
+        return 1;
+    if (jkrelay_GetSessionDesc(&s) < 0 || !(s.flags & IMPERIAL_SESSION_XFER))
+        return 1;
+    return imperial_GetHostMap(pEpisode);
 }
 
 int stdComm_Imperial_JoinErrorText(char16_t* pOut, int maxChars)

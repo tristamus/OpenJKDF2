@@ -752,6 +752,7 @@ static void jkr_LinkTick(uint64_t now)
 }
 
 static void jkr_HandleData(const uint8_t* b, const uint8_t* end, jkr_link* via);
+static int jkr_BigPiece(uint32_t from, const uint8_t* p, size_t n);
 static void jkr_ResumeStart(void);
 static void jkr_ResumeReply(const uint8_t* p, int len);
 static void jkr_ResumeTick(uint64_t now);
@@ -1969,6 +1970,7 @@ static void jkr_HandleData(const uint8_t* b, const uint8_t* end, jkr_link* via)
     }
     dst = to ? jkr_Find(to) : NULL;
     if (to && (!dst || !dst->local)) return;
+    if (jkr_BigPiece(from, b + 8, (size_t)(end - b - 8))) return;   // a piece of a big frame, not the game's
     jkr_Push(DPS_RECV_DATA, from, b + 8, (uint32_t)(end - b - 8), 0, 0);
     if (R.evTail) R.evTail->seq = seq;
 }
@@ -2019,6 +2021,132 @@ int dps_Receive(uint32_t* fromOut, const void** dataOut, uint32_t* sizeOut, dps_
     }
     *sysOut = e->sys;
     return DPS_RECV_SYS;
+}
+
+// ---------------------------------------------------------------------------
+// Big frames (2026-10-29): map and mod downloads (jkweb_xfer.c, and the browser
+// build's maps.js/mods.js) send frames of up to 64 KiB, which go in pieces as
+// game data: 'J' 'F' (a message id past DSS_MAX, which engines ignore) 0 0,
+// u32 key, u16 index, u16 count, u32 total size, then the piece. The receiver
+// puts them back together and hands the frame to jkrelay_SetBigHandler's
+// function instead of the game. A frame missing a piece for 10 s is dropped
+// (the transfer asks for it again).
+// ---------------------------------------------------------------------------
+
+#define JKR_BIG_HDR      16
+#define JKR_BIG_PIECE    (JKR_MAX_PACKET - JKR_HDR_SIZE - 8 - JKR_BIG_HDR)
+#define JKR_BIG_MAX      (64 * JKR_BIG_PIECE)
+#define JKR_BIG_SLOTS    8
+#define JKR_BIG_STALE_MS 10000
+
+static struct
+{
+    uint32_t from, key, total;
+    uint16_t count;
+    uint64_t have;
+    uint64_t startMs;
+    uint8_t* buf;
+} jkr_aBig[JKR_BIG_SLOTS];
+static void (*jkr_pfnBig)(uint32_t from, const uint8_t* p, size_t n) = NULL;
+static uint32_t jkr_bigKey = 0;
+
+void jkrelay_SetBigHandler(void (*fn)(uint32_t from, const uint8_t* p, size_t n))
+{
+    jkr_pfnBig = fn;
+}
+
+int jkrelay_SendBig(uint32_t idFrom, uint32_t idTo, const uint8_t* p, size_t n)
+{
+    uint8_t piece[JKR_BIG_HDR + JKR_BIG_PIECE];
+    uint16_t count = (uint16_t)((n + JKR_BIG_PIECE - 1) / JKR_BIG_PIECE);
+    if (!R.inSession || !n || n > JKR_BIG_MAX) return 0;
+    if (!++jkr_bigKey) jkr_bigKey = 1;
+    for (uint16_t i = 0; i < count; i++)
+    {
+        size_t off = (size_t)i * JKR_BIG_PIECE;
+        size_t len = n - off < JKR_BIG_PIECE ? n - off : JKR_BIG_PIECE;
+        piece[0] = 'J'; piece[1] = 'F'; piece[2] = 0; piece[3] = 0;
+        wr32(piece + 4, jkr_bigKey);
+        wr16(piece + 8, i);
+        wr16(piece + 10, count);
+        wr32(piece + 12, (uint32_t)n);
+        memcpy(piece + JKR_BIG_HDR, p + off, len);
+        if (dps_Send(idFrom, idTo, piece, (uint32_t)(JKR_BIG_HDR + len)) != JKR_OK_HR) return 0;
+    }
+    return 1;
+}
+
+// A piece of a big frame (1, taken), or game data (0).
+static int jkr_BigPiece(uint32_t from, const uint8_t* p, size_t n)
+{
+    uint32_t key, total;
+    uint16_t idx, count;
+    uint64_t now = jkr_NowMs();
+    int slot = -1, oldest = 0;
+    if (n < JKR_BIG_HDR || p[0] != 'J' || p[1] != 'F' || p[2] || p[3]) return 0;
+    key = rd32(p + 4);
+    idx = rd16(p + 8);
+    count = rd16(p + 10);
+    total = rd32(p + 12);
+    if (!count || count > 64 || idx >= count || !total || total > JKR_BIG_MAX
+        || (uint32_t)count != (total + JKR_BIG_PIECE - 1) / JKR_BIG_PIECE) return 1;
+    if (n - JKR_BIG_HDR != (idx + 1 < count ? (size_t)JKR_BIG_PIECE : total - (size_t)idx * JKR_BIG_PIECE)) return 1;
+    for (int i = 0; i < JKR_BIG_SLOTS; i++)
+    {
+        if (jkr_aBig[i].buf && now - jkr_aBig[i].startMs > JKR_BIG_STALE_MS)
+        {
+            free(jkr_aBig[i].buf);
+            jkr_aBig[i].buf = NULL;
+        }
+        if (jkr_aBig[i].buf && jkr_aBig[i].from == from && jkr_aBig[i].key == key) slot = i;
+        if (!jkr_aBig[i].buf || (jkr_aBig[oldest].buf && jkr_aBig[i].startMs < jkr_aBig[oldest].startMs)) oldest = i;
+    }
+    if (slot < 0)
+    {
+        slot = oldest;
+        free(jkr_aBig[slot].buf);
+        memset(&jkr_aBig[slot], 0, sizeof(jkr_aBig[slot]));
+        if (!(jkr_aBig[slot].buf = (uint8_t*)malloc(total))) return 1;
+        jkr_aBig[slot].from = from;
+        jkr_aBig[slot].key = key;
+        jkr_aBig[slot].total = total;
+        jkr_aBig[slot].count = count;
+        jkr_aBig[slot].startMs = now;
+    }
+    if (jkr_aBig[slot].total != total || jkr_aBig[slot].count != count) return 1;
+    memcpy(jkr_aBig[slot].buf + (size_t)idx * JKR_BIG_PIECE, p + JKR_BIG_HDR, n - JKR_BIG_HDR);
+    jkr_aBig[slot].have |= (uint64_t)1 << idx;
+    if (jkr_aBig[slot].have == (count == 64 ? ~(uint64_t)0 : (((uint64_t)1 << count) - 1)))
+    {
+        uint8_t* buf = jkr_aBig[slot].buf;
+        jkr_aBig[slot].buf = NULL;
+        if (jkr_pfnBig) jkr_pfnBig(from, buf, total);
+        free(buf);
+    }
+    return 1;
+}
+
+// Machines, by their system players: this one's, and the host's (0 if
+// unknown). Big frames go between machines, before a joiner has a player.
+uint32_t jkrelay_LocalSystemId(void)
+{
+    return R.inSession ? R.localSysId : 0;
+}
+
+uint32_t jkrelay_HostSystemId(void)
+{
+    if (!R.inSession) return 0;
+    if (R.isHost) return R.localSysId;
+    for (int i = 0; i < JKR_MAX_PLAYERS; i++)
+        if (R.players[i].used && (R.players[i].flags & (JKR_PF_SYSTEM | JKR_PF_HOST)) == (JKR_PF_SYSTEM | JKR_PF_HOST))
+            return R.players[i].id;
+    return 0;
+}
+
+// Whether this machine hosts the game it's in.
+int jkrelay_IsHost(void)
+{
+    return R.inSession && R.isHost;
 }
 
 // Hit what you see (2026-10-29): a number for the next Send, which goes in its

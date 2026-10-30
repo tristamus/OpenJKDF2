@@ -35,6 +35,8 @@ BOOL stdComm_Imperial_SetSessionFlagidk(int bJoinable);
 void stdComm_Imperial_EnumPlayers();
 BOOL stdComm_Imperial_Send(DPID idFrom, DPID idTo, void* lpData, DWORD dwDataSize);
 int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut);
+// Following a dedicated server into another episode: gets its copy if needed (1 ok).
+int stdComm_Imperial_FetchHostMap(const char* pEpisode);
 // Why the last join failed (1), for the join screen's dialog, or 0 to show the usual text.
 int stdComm_Imperial_JoinErrorText(char16_t* pOut, int maxChars);
 // The next level a dedicated server named and its episode (1), or 0 if it

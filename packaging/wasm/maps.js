@@ -955,8 +955,16 @@
         return b[0] === MAGIC[0] && b[1] === MAGIC[1] && b[2] === MAGIC[2] && b[3] === MAGIC[3];
     }
 
+    // The connection the frames go over: the lobby's (stdComm_WSRelay.c), or
+    // while that one is picked the Imperial Network Protocol's
+    // (stdComm_Imperial.c), which has the same mapSend and mapDirect.
+    function link() {
+        var imp = Module.jkImperial;
+        return imp && imp.active ? imp : Module.jkNet;
+    }
+
     function send(id, f, via) {
-        var net = Module.jkNet;
+        var net = link();
         return net && net.mapSend ? net.mapSend(id, f.buf, via) : null;
     }
 
@@ -1327,13 +1335,13 @@
     }
 
     function directUp() {
-        var net = Module.jkNet;
+        var net = link();
         return !!(net && net.mapDirect && net.mapDirect(1));
     }
 
     // No direct link is coming when WebRTC is off in this browser.
     function directPossible() {
-        var net = Module.jkNet;
+        var net = link();
         return !(net && net.rtcEnabled && !net.rtcEnabled());
     }
 
