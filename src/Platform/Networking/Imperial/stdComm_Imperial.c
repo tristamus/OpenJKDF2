@@ -565,6 +565,7 @@ int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
     // turns a new join down while it thinks it's still in one.
     jkrelay_Close();
     stdComm_WSRelay_ResetHits(); // Classic until the host's hello says otherwise
+    stdComm_WSRelay_ResetMotion();
 
     long hr = jkrelay_OpenJoin((const uint8_t*)&jkGuiMultiplayer_aEntries[idx].guidInstance, (const uint16_t*)pwPassword);
     if (hr < 0)
@@ -666,6 +667,7 @@ int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry)
 
     // The host screen's hit rules, which its hellos tell the other games.
     stdComm_WSRelay_ResetHits();
+    stdComm_WSRelay_ResetMotion();
     stdComm_WSRelay_SetHitRules(stdComm_WSRelay_bClassicHits ? STDCOMM_WSRELAY_HITS_CLASSIC : STDCOMM_WSRELAY_HITS_HWYS,
                                 stdComm_WSRelay_hitReachMs);
     if (!stdComm_WSRelay_bClassicHits)

@@ -1474,7 +1474,7 @@
     // The ways to the host a block can be asked for on now: the map channel
     // and the extra links for transfers (net.mapLanes), or the relay.
     function lanes() {
-        var net = Module.jkNet;
+        var net = link();
         if (net && net.mapLanes) {
             var l = net.mapLanes(1);
             if (l.length)
@@ -1488,7 +1488,7 @@
     // Asks the network code for the extra links to the host while a transfer
     // runs, and lets them go after it.
     function bulk(on) {
-        var net = Module.jkNet;
+        var net = link();
         if (net && net.mapBulk)
             net.mapBulk(1, on);
     }
