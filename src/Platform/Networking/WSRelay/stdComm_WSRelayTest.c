@@ -77,6 +77,7 @@
 #define WSRELAY_TEST_RESPAWN_MS (500)   // between presses of activate, dead
 #define WSRELAY_TEST_JUMP_MS (3000)     // between jumps to the target
 #define WSRELAY_TEST_UNSEEN_MS (1000)   // out of sight this long: jump
+#define WSRELAY_TEST_STUCK_MS (3000)    // out of reach this long: jump
 #define WSRELAY_TEST_FAR (2.0)          // further than this: jump
 #define WSRELAY_TEST_CLOSE (0.03)       // with the saber or fists, this far
                                         // apart (between the players' edges)
@@ -242,6 +243,7 @@ static uint32_t wsrelay_testMsecSelect = 0;
 static uint32_t wsrelay_testMsecRespawn = 0;
 static uint32_t wsrelay_testMsecJump = 0;
 static uint32_t wsrelay_testMsecSeen = 0;
+static uint32_t wsrelay_testMsecInReach = 0;
 static uint32_t wsrelay_testMsecReport = 0;
 static int wsrelay_testWasDead = 0;
 static int wsrelay_testLaid = 0;        // a manual sequencer charge to set off
@@ -394,6 +396,7 @@ static void wsrelay_TestUse(int bin, int alt, int power)
     wsrelay_testCount = 0.0;
     wsrelay_testMsecBackOff = 0;
     wsrelay_testLaid = 0;
+    wsrelay_testMsecInReach = 0;
 }
 
 // Whether this game has step i's weapon, and its Force power if it has one.
@@ -879,10 +882,17 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     if (inSight)
         wsrelay_testMsecSeen = now;
     int unseen = now - wsrelay_testMsecSeen >= WSRELAY_TEST_UNSEEN_MS;
-    if ((dist > WSRELAY_TEST_FAR || unseen) && now - wsrelay_testMsecJump >= WSRELAY_TEST_JUMP_MS)
+    // Out of reach a while, though in sight and not far: stuck where walking
+    // forward doesn't get it closer. In MotS's test level the attacker stood
+    // on a ledge 1.4 above the target, 1.47 away, from step 4 to 30.
+    if (dist <= reach || backOff || !wsrelay_testMsecInReach)
+        wsrelay_testMsecInReach = now;
+    int stuck = now - wsrelay_testMsecInReach >= WSRELAY_TEST_STUCK_MS;
+    if ((dist > WSRELAY_TEST_FAR || unseen || stuck) && now - wsrelay_testMsecJump >= WSRELAY_TEST_JUMP_MS)
     {
         wsrelay_testMsecJump = now;
         wsrelay_testMsecSeen = now;
+        wsrelay_testMsecInReach = now;
         wsrelay_TestJumpTo(pPlayer, pTarget, close);
         wsrelay_TestFace(pPlayer, pTarget);
         dist = rdVector_Dist3(&pTarget->position, &pPlayer->position);
