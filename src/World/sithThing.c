@@ -497,6 +497,11 @@ flex_t sithThing_DamageThing(SithThing *pThing, SithThing *pDamageThing, flex_t 
 #endif
     if ( (pThing->flags & (SITH_TF_DISABLED|SITH_TF_DEAD|SITH_TF_DESTROYED)) != 0 )
         return 0.0;
+#ifdef PLATFORM_WSRELAY
+    // Added: ?nettest counts hits by things no player fired.
+    if ( sithNet_isMulti && pThing->type == SITH_THING_PLAYER && pDamageThing )
+        stdComm_WSRelay_TestHit(pThing, pDamageThing, damage);
+#endif
     if ( (pThing->flags & SITH_TF_CAPTURED) != 0 && (pThing->flags & SITH_TF_INVULN) == 0 )
     {
         param1 = (flex_t)(unsigned int)hitType; // FLEXTODO

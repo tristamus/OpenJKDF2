@@ -764,6 +764,11 @@ int sithWeapon_ThingCollisionHandler(SithThing *pWeapon, SithThing *pThing, Sith
     // Added: who fired the bolt, for the hit ledger below. A saber that turns
     // it away makes it the blocker's.
     SithThing* pShooter = sithThing_GetThingParent(pWeapon);
+
+    // Added: ?nettest counts the bolts that reach a player's ready saber.
+    int bTestReady = sithNet_isMulti && pThing->type == SITH_THING_PLAYER
+                     && (pThing->weaponParams.flags & SITH_WF_INSTANT_IMPACT) && bFlagsHadWfImpactSoundFxEarlier
+                     && !(pThing->flags & (SITH_TF_DEAD|SITH_TF_DESTROYED));
 #endif
     if (pThing->weaponParams.flags & SITH_WF_INSTANT_IMPACT
       && bFlagsHadWfImpactSoundFxEarlier
@@ -792,9 +797,15 @@ int sithWeapon_ThingCollisionHandler(SithThing *pWeapon, SithThing *pThing, Sith
             // path in every game.
             stdComm_WSRelay_BoltTurned(pWeapon, pThing);
         }
+        if ( bTestReady )
+            stdComm_WSRelay_TestBolt(pWeapon, pShooter, pThing, 1);
 #endif
         return 1;
     }
+#ifdef PLATFORM_WSRELAY
+    if ( bTestReady )
+        stdComm_WSRelay_TestBolt(pWeapon, pShooter, pThing, 0);
+#endif
     if ( pWeapon->weaponParams.damage == 0.0 && !(pWeapon->weaponParams.flags & (SITH_WF_ATTACHTHING | SITH_WF_THINGHITEXPLODE)))
         return 0;
 
