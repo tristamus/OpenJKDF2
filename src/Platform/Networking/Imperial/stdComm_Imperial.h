@@ -46,6 +46,8 @@ int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int o
 // packet being handled came with (1 if it had one), and when this player's
 // position update numbered seq went to player toId (-1 if unknown).
 int stdComm_Imperial_InGame();
+void stdComm_Imperial_SyncClock(int netId, int bOn);
+double stdComm_Imperial_ClockOffset(int netId);
 int stdComm_Imperial_RecvSeq(uint32_t* pSeq);
 double stdComm_Imperial_SeqSentAt(int toId, uint32_t seq);
 void stdComm_Imperial_DescribeMod(int idx, char16_t* pOut, int maxChars);

@@ -2292,15 +2292,19 @@ double stdComm_WSRelay_Now()
 
 void stdComm_WSRelay_SyncClock(int netId, int bOn)
 {
-    // Added: netstats.js pings over the lobby's links, which an Imperial
-    // Network Protocol game doesn't have: its players' clocks stay unknown.
-    if (netId && !stdComm_Imperial_bActive)
+    // Added: netstats.js pings over the lobby's links; the Imperial Network
+    // Protocol connection measures its players' clocks itself.
+    if (netId && stdComm_Imperial_bActive)
+        stdComm_Imperial_SyncClock(netId, bOn);
+    else if (netId)
         wsrelay_js_net_sync(netId, bOn);
 }
 
 double stdComm_WSRelay_ClockOffset(int netId)
 {
-    return (netId && !stdComm_Imperial_bActive) ? wsrelay_js_net_clock(netId) : NAN; // Added: as above
+    if (stdComm_Imperial_bActive) // Added: as above
+        return netId ? stdComm_Imperial_ClockOffset(netId) : NAN;
+    return netId ? wsrelay_js_net_clock(netId) : NAN;
 }
 
 int stdComm_WSRelay_InMatch()

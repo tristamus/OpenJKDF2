@@ -70,6 +70,9 @@ uint32_t jkrelay_LocalSystemId(void);
 uint32_t jkrelay_HostSystemId(void);
 int jkrelay_IsHost(void);
 void jkrelay_SetHostTail(const char* hex);
+void jkrelay_SetClock(double (*fn)(void));
+void jkrelay_SyncClock(uint32_t id, int on);
+double jkrelay_ClockOffset(uint32_t id);
 const char* jkrelay_GetSessionTail(const uint8_t guid[16]);
 int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs);
 
@@ -464,6 +467,7 @@ int stdComm_Imperial_OpenConnection()
     imperial_js_server(imperial_server, sizeof(imperial_server));
     jkrelay_SetServer(imperial_server);
     jkrelay_SetBigHandler(imperial_BigFrame);
+    jkrelay_SetClock(stdComm_WSRelay_Now); // the clock players' clock offsets are measured on
     imperial_js_xfer_init(1);
     stdPlatform_Printf("OpenJKDF2: Imperial Network Protocol server %s\n", imperial_server);
     stdComm_dword_8321DC = 1;
@@ -823,6 +827,18 @@ static ImperialSeqTo* imperial_SeqTo(uint32_t id, int bAdd)
     pFree->id = id;
     pFree->next = ((uint32_t)rand() << 16) ^ (uint32_t)rand();
     return pFree;
+}
+
+// Hit what you see: another player's clock less ours, pinged by the relay client
+// (jkrelay_client.c) as netstats.js does on the lobby's links.
+void stdComm_Imperial_SyncClock(int netId, int bOn)
+{
+    jkrelay_SyncClock((uint32_t)netId, bOn);
+}
+
+double stdComm_Imperial_ClockOffset(int netId)
+{
+    return jkrelay_ClockOffset((uint32_t)netId);
 }
 
 int stdComm_Imperial_InGame()

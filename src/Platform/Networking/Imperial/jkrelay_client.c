@@ -32,6 +32,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <math.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -756,6 +757,8 @@ static void jkr_LinkTick(uint64_t now)
 static void jkr_HandleData(const uint8_t* b, const uint8_t* end, jkr_link* via);
 static int jkr_BigPiece(uint32_t from, const uint8_t* p, size_t n);
 static void jkr_SendDescNow(void);
+static int jkr_ClockPacket(uint32_t from, const uint8_t* p, size_t n);
+static void jkr_ClockTick(void);
 static void jkr_ResumeStart(void);
 static void jkr_ResumeReply(const uint8_t* p, int len);
 static void jkr_ResumeTick(uint64_t now);
@@ -911,6 +914,7 @@ static void jkr_Pump(int waitMs)
 {
     uint64_t now;
     if (R.sock == JKR_BADSOCK) return;
+    jkr_ClockTick();   // pings for the clocks asked for (jkrelay_SyncClock)
 
 #ifdef _WIN32
     {
@@ -2049,6 +2053,7 @@ static void jkr_HandleData(const uint8_t* b, const uint8_t* end, jkr_link* via)
     dst = to ? jkr_Find(to) : NULL;
     if (to && (!dst || !dst->local)) return;
     if (jkr_BigPiece(from, b + 8, (size_t)(end - b - 8))) return;   // a piece of a big frame, not the game's
+    if (jkr_ClockPacket(from, b + 8, (size_t)(end - b - 8))) return; // a clock ping or its answer
     jkr_Push(DPS_RECV_DATA, from, b + 8, (uint32_t)(end - b - 8), 0, 0);
     if (R.evTail) R.evTail->seq = seq;
 }
@@ -2200,6 +2205,136 @@ static int jkr_BigPiece(uint32_t from, const uint8_t* p, size_t n)
         jkr_aBig[slot].buf = NULL;
         if (jkr_pfnBig) jkr_pfnBig(from, buf, total);
         free(buf);
+    }
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Clocks (2026-10-29): another player's game clock less ours, which Hit what you
+// see asks for (stdComm_WSRelayMotion.c), measured as the browser build's
+// netstats.js does: while asked, their machine is pinged every second for 10 s,
+// then every 5 s, and the answer to the ping with the shortest round trip of the
+// last 16 says it, the way NTP picks. Pings go as game data the receiver takes
+// before the game sees it:
+//   'J' 'P' 0 0, u8 type (1 ping, 2 answer), 0 0 0, u32 seq, f64 sent, f64 got
+// (the ping's time on the asking game's clock, the answering game's clock).
+// The clock is the caller's (jkrelay_SetClock), in ms.
+// ---------------------------------------------------------------------------
+
+#define JKR_CLOCK_SIZE       28
+#define JKR_CLOCK_FIRST_MS   10000.0
+#define JKR_CLOCK_FAST_MS    1000.0
+#define JKR_CLOCK_SLOW_MS    5000.0
+#define JKR_CLOCK_SAMPLES    16
+
+static double (*jkr_pfnClock)(void) = NULL;
+static struct
+{
+    uint32_t player;           // 0: free
+    double since, nextAt;      // asked for since; next ping
+    uint32_t seq, sentSeq;     // the last ping
+    double sentAt;
+    struct { double rtt, offset; } aSample[JKR_CLOCK_SAMPLES];
+    int numSamples, nextSample;
+} jkr_aClock[JKR_MAX_PLAYERS];
+
+void jkrelay_SetClock(double (*fn)(void))
+{
+    jkr_pfnClock = fn;
+}
+
+static void jkr_ClockSend(uint32_t toSys, int type, uint32_t seq, double sent, double got)
+{
+    uint8_t m[JKR_CLOCK_SIZE];
+    memset(m, 0, sizeof(m));
+    m[0] = 'J'; m[1] = 'P'; m[4] = (uint8_t)type;
+    wr32(m + 8, seq);
+    memcpy(m + 12, &sent, 8);
+    memcpy(m + 20, &got, 8);
+    dps_Send(R.localSysId, toSys, m, sizeof(m));
+}
+
+// Whether to measure player id's clock (on), or no longer. Each start begins afresh.
+void jkrelay_SyncClock(uint32_t id, int on)
+{
+    int free = -1;
+    for (int i = 0; i < JKR_MAX_PLAYERS; i++)
+    {
+        if (jkr_aClock[i].player == id)
+        {
+            if (!on) jkr_aClock[i].player = 0;
+            return;
+        }
+        if (free < 0 && !jkr_aClock[i].player) free = i;
+    }
+    if (!on || free < 0 || !jkr_pfnClock) return;
+    memset(&jkr_aClock[free], 0, sizeof(jkr_aClock[free]));
+    jkr_aClock[free].player = id;
+    jkr_aClock[free].since = jkr_pfnClock();
+}
+
+// Their clock less ours in ms, NaN if not known (yet).
+double jkrelay_ClockOffset(uint32_t id)
+{
+    for (int i = 0; i < JKR_MAX_PLAYERS; i++)
+    {
+        int best = -1;
+        if (jkr_aClock[i].player != id) continue;
+        for (int k = 0; k < jkr_aClock[i].numSamples; k++)
+            if (best < 0 || jkr_aClock[i].aSample[k].rtt < jkr_aClock[i].aSample[best].rtt) best = k;
+        return best < 0 ? NAN : jkr_aClock[i].aSample[best].offset;
+    }
+    return NAN;
+}
+
+static void jkr_ClockTick(void)
+{
+    double now;
+    if (!jkr_pfnClock || !R.inSession || !R.localSysId) return;
+    now = jkr_pfnClock();
+    for (int i = 0; i < JKR_MAX_PLAYERS; i++)
+    {
+        jkr_player* p;
+        if (!jkr_aClock[i].player || now < jkr_aClock[i].nextAt) continue;
+        p = jkr_Find(jkr_aClock[i].player);
+        if (!p || p->local) continue;
+        jkr_aClock[i].sentSeq = ++jkr_aClock[i].seq;
+        jkr_aClock[i].sentAt = now;
+        jkr_aClock[i].nextAt = now + (now - jkr_aClock[i].since < JKR_CLOCK_FIRST_MS ? JKR_CLOCK_FAST_MS : JKR_CLOCK_SLOW_MS);
+        jkr_ClockSend(p->sysId, 1, jkr_aClock[i].sentSeq, now, 0.0);
+    }
+}
+
+// A ping or its answer (1, taken), or game data (0).
+static int jkr_ClockPacket(uint32_t from, const uint8_t* p, size_t n)
+{
+    uint32_t seq;
+    double sent, got, now;
+    if (n != JKR_CLOCK_SIZE || p[0] != 'J' || p[1] != 'P' || p[2] || p[3]) return 0;
+    if (!jkr_pfnClock) return 1;
+    now = jkr_pfnClock();
+    seq = rd32(p + 8);
+    memcpy(&sent, p + 12, 8);
+    memcpy(&got, p + 20, 8);
+    if (p[4] == 1)
+    {
+        jkr_ClockSend(from, 2, seq, sent, now);   // at once, to the machine that asked
+        return 1;
+    }
+    if (p[4] != 2) return 1;
+    for (int i = 0; i < JKR_MAX_PLAYERS; i++)
+    {
+        jkr_player* pl;
+        if (!jkr_aClock[i].player || jkr_aClock[i].sentSeq != seq || jkr_aClock[i].sentAt != sent) continue;
+        pl = jkr_Find(jkr_aClock[i].player);
+        if (!pl || pl->sysId != from) continue;
+        jkr_aClock[i].sentSeq = 0;
+        jkr_aClock[i].aSample[jkr_aClock[i].nextSample].rtt = now - sent;
+        jkr_aClock[i].aSample[jkr_aClock[i].nextSample].offset = got - (sent + now) / 2;
+        jkr_aClock[i].nextSample = (jkr_aClock[i].nextSample + 1) % JKR_CLOCK_SAMPLES;
+        if (jkr_aClock[i].numSamples < JKR_CLOCK_SAMPLES) jkr_aClock[i].numSamples++;
+        jkr_Log(0, "clock of player %08x: %+.1f ms (round trip %.1f ms)\n", jkr_aClock[i].player, got - (sent + now) / 2, now - sent);
+        break;
     }
     return 1;
 }
