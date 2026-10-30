@@ -47,8 +47,11 @@
 // version 2 is a game that draws other players from buffers of their timed
 // updates (stdComm_WSRelayMotion.c): two such games send each other times
 // on their updates, and claims that name the moment the target was drawn
-// at, which its game checks its record at. Version 1 gets Phase 2 claims.
-// Jedi Knight and MotS games say the same version.
+// at, which its game checks its record at. Version 3 also claims the
+// explosions a blast makes in turn (a MotS flash bomb's): an older game
+// decides those for its own player and never claims them, so with one they
+// stay as they were, both ways. Version 1 gets Phase 2 claims. Jedi Knight
+// and MotS games say the same version.
 //
 // All of it is one engine message, past DSS_MAX so older engines ignore it
 // (STDCOMM_WSRELAY_HITS_MSG), sent without a resend id: the links under it
@@ -99,7 +102,9 @@
 #define HITS_DETONATE (4)
 #define HITS_WAIT (5)
 
-#define HITS_VERSION (2)
+#define HITS_VERSION (3)
+// The first version that claims explosions made in turn (hits_ClaimedWith).
+#define HITS_VERSION_PARTS (3)
 
 #define HITS_HELLO_HOST (1)
 #define HITS_HELLO_HEARD (2)
@@ -195,6 +200,7 @@ typedef struct WSRelayHitsAttack
     uint32_t attack;        // the swing's number, or the shot's guid
     SithThing* pCredit;     // the player it counts for
     WSRelayHitVec blast;
+    int bPart;              // an explosion its blast made in turn
 } WSRelayHitsAttack;
 
 int stdComm_WSRelay_bClassicHits = 1;
@@ -225,6 +231,7 @@ static struct
     int idx;
     uint32_t signature;
     int weaponGuid;
+    int bPart;              // made in turn (stdComm_WSRelay_NoteBlastPart)
 } hits_aBlasts[HITS_BLASTS];
 static int hits_nextBlast = 0;
 
@@ -538,24 +545,34 @@ int stdComm_WSRelay_GetHitRules(int* pReachMs)
 
 // ---- What made a hit.
 
-static int hits_BlastWeapon(SithThing* pExplosion)
+static int hits_BlastWeapon(SithThing* pExplosion, int* pbPart)
 {
     for (int i = 0; i < HITS_BLASTS; i++)
     {
         if (hits_aBlasts[i].weaponGuid && hits_aBlasts[i].idx == (int)pExplosion->idx && hits_aBlasts[i].signature == pExplosion->signature)
+        {
+            if (pbPart)
+                *pbPart = hits_aBlasts[i].bPart;
             return hits_aBlasts[i].weaponGuid;
+        }
     }
     return 0;
 }
 
-void stdComm_WSRelay_NoteBlast(SithThing* pExplosion, SithThing* pWeapon)
+static void hits_NoteBlast(SithThing* pExplosion, SithThing* pWeapon, int bPart)
 {
     if (!pExplosion || !pWeapon)
         return;
     hits_aBlasts[hits_nextBlast].idx = pExplosion->idx;
     hits_aBlasts[hits_nextBlast].signature = pExplosion->signature;
     hits_aBlasts[hits_nextBlast].weaponGuid = pWeapon->guid;
+    hits_aBlasts[hits_nextBlast].bPart = bPart;
     hits_nextBlast = (hits_nextBlast + 1) % HITS_BLASTS;
+}
+
+void stdComm_WSRelay_NoteBlast(SithThing* pExplosion, SithThing* pWeapon)
+{
+    hits_NoteBlast(pExplosion, pWeapon, 0);
 }
 
 // The shot whose blast sithWeapon_CreateWeaponExplosion is making, while it
@@ -572,12 +589,12 @@ SithThing* stdComm_WSRelay_MakingBlast(SithThing* pWeapon)
 void stdComm_WSRelay_NoteBlastPart(SithThing* pThing)
 {
     if (hits_pBlastShot && pThing && pThing->type == SITH_THING_EXPLOSION)
-        stdComm_WSRelay_NoteBlast(pThing, hits_pBlastShot);
+        hits_NoteBlast(pThing, hits_pBlastShot, 1);
 }
 
 int stdComm_WSRelay_BlastShot(SithThing* pExplosion)
 {
-    return pExplosion ? hits_BlastWeapon(pExplosion) : 0;
+    return pExplosion ? hits_BlastWeapon(pExplosion, NULL) : 0;
 }
 
 // Whose attack pSource is, if it's a player's swing, shot or blast.
@@ -601,7 +618,7 @@ static int hits_Classify(SithThing* pSource, int damageType, WSRelayHitsAttack* 
     }
     else if (pSource->type == SITH_THING_EXPLOSION)
     {
-        int guid = hits_BlastWeapon(pSource);
+        int guid = hits_BlastWeapon(pSource, &a->bPart);
         if (!guid)
             return 0;
         a->source = WSRELAYHIT_SPLASH;
@@ -626,6 +643,14 @@ static int hits_Classify(SithThing* pSource, int damageType, WSRelayHitsAttack* 
 static uint32_t hits_LedgerAttack(int kind, uint32_t attack)
 {
     return (kind == STDCOMM_WSRELAY_KIND_SABER || kind == STDCOMM_WSRELAY_KIND_SHOT) ? attack : 0;
+}
+
+// Whether this game and that player's play attack a by claims: an explosion
+// a blast made in turn only when both say version 3. An older game decides
+// those for its own player and never claims them (see the top).
+static int hits_ClaimedWith(WSRelayHitsPeer* p, const WSRelayHitsAttack* a)
+{
+    return !a->bPart || (p && p->version >= HITS_VERSION_PARTS);
 }
 
 // ---- Other players' attacks, as their messages tell this game.
@@ -745,7 +770,7 @@ static WSRelayHitsShot* hits_FindShot(WSRelayHitsPeer* p, int guid)
 static int hits_TimesHits(WSRelayHitsPeer* p, int slot, int source, uint32_t attack)
 {
     WSRelayHitsShot* s = NULL;
-    if (source == WSRELAYHIT_SPLASH && hits_MakerOf((int)attack) == slot)
+    if (source == WSRELAYHIT_SPLASH && hits_MakerOf((int)attack) == slot && p->version >= HITS_VERSION_PARTS)
         s = hits_FindShot(p, (int)attack);
     return s && s->blasts > 1 ? s->blasts : 1;
 }
@@ -795,9 +820,14 @@ int stdComm_WSRelay_ClaimHit(SithThing* pVictim, SithThing* pSource, flex_t dama
     {
         if (a.maker == (int)playerThingIdx)
             return 0;
+        // An explosion made in turn, from a game older than version 3: this
+        // one decides it, as before, since that game never claims those.
+        WSRelayHitsPeer* pm = hits_Peer(a.maker);
+        if (pm && pm->bHello && !hits_ClaimedWith(pm, &a))
+            return 0;
         // That game decides, or its claim for this attack counted already:
         // it can start sending claims a moment before this game hears so.
-        if (hits_DecidedBy(hits_Peer(a.maker)) || stdComm_WSRelayHit_Seen(&hits_claimed, now, a.maker, a.source, a.attack))
+        if (hits_DecidedBy(pm) || stdComm_WSRelayHit_Seen(&hits_claimed, now, a.maker, a.source, a.attack))
             return 1;
         // That game doesn't send claims, or not yet: this one decides, as
         // before, and a claim for the same attack would count it twice.
@@ -809,7 +839,7 @@ int stdComm_WSRelay_ClaimHit(SithThing* pVictim, SithThing* pSource, flex_t dama
     if (a.maker != (int)playerThingIdx || !hits_IsShownAlive(pVictim))
         return 0;
     WSRelayHitsPeer* pv = hits_Peer(hits_SlotOf(pVictim));
-    if (!hits_ClaimsTo(pv))
+    if (!hits_ClaimsTo(pv) || !hits_ClaimedWith(pv, &a))
         return 0;
 
     // The moment this game drew them at, if it drew them from their timed
@@ -1039,7 +1069,9 @@ int stdComm_WSRelay_DecidedElsewhere(SithThing* pSource, int damageType)
         return 0;
     if (!hits_Classify(pSource, damageType, &a) || a.maker == (int)playerThingIdx)
         return 0;
-    return hits_DecidedBy(hits_Peer(a.maker)) || stdComm_WSRelayHit_Seen(&hits_claimed, hits_Now(), a.maker, a.source, a.attack);
+    WSRelayHitsPeer* pm = hits_Peer(a.maker);
+    return hits_ClaimedWith(pm, &a)
+           && (hits_DecidedBy(pm) || stdComm_WSRelayHit_Seen(&hits_claimed, hits_Now(), a.maker, a.source, a.attack));
 }
 
 // ---- Targeted Force powers.
