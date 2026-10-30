@@ -527,8 +527,13 @@ static void test_seen(void)
     stdComm_WSRelayHit_ClearSeen(&seen);
     CHECK(!stdComm_WSRelayHit_Seen(&seen, 1000.0, 2, WSRELAYHIT_SABER, 7), "nothing seen yet");
     stdComm_WSRelayHit_AddSeen(&seen, 1000.0, 2, WSRELAYHIT_SABER, 7);
-    CHECK(stdComm_WSRelayHit_Seen(&seen, 1500.0, 2, WSRELAYHIT_SABER, 7), "seen");
+    CHECK(stdComm_WSRelayHit_Seen(&seen, 1500.0, 2, WSRELAYHIT_SABER, 7) == 1, "seen once");
     CHECK(!stdComm_WSRelayHit_Seen(&seen, 1500.0, 3, WSRELAYHIT_SABER, 7), "another attacker");
+    // A blast with two explosions (MotS's flash bomb) counts twice.
+    stdComm_WSRelayHit_AddSeen(&seen, 1200.0, 2, WSRELAYHIT_SPLASH, 9);
+    CHECK(stdComm_WSRelayHit_Seen(&seen, 1500.0, 2, WSRELAYHIT_SPLASH, 9) == 1, "one of a blast's explosions");
+    stdComm_WSRelayHit_AddSeen(&seen, 1200.0, 2, WSRELAYHIT_SPLASH, 9);
+    CHECK(stdComm_WSRelayHit_Seen(&seen, 1500.0, 2, WSRELAYHIT_SPLASH, 9) == 2, "both of them");
     CHECK(!stdComm_WSRelayHit_Seen(&seen, 1500.0, 2, WSRELAYHIT_SPLASH, 7), "another kind: a shot's blast after the shot");
     CHECK(!stdComm_WSRelayHit_Seen(&seen, 1000.0 + WSRELAYHIT_SEEN_MS + 1.0, 2, WSRELAYHIT_SABER, 7), "forgotten after a while");
     for (int i = 0; i < WSRELAYHIT_SEEN_LEN; i++)

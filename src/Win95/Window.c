@@ -24,6 +24,10 @@
 #include <emscripten.h>
 #endif
 
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
+
 #ifdef SDL2_RENDER
 
 #include <fcntl.h> 
@@ -660,9 +664,19 @@ static void Window_WasmKeepPointerLock()
         // windows. Treat it as the Esc the game never got, so one press opens
         // the menu (or closes chat) as players expect, and the menu frees the
         // mouse instead of the view turning with the cursor.
-        stdPlatform_Printf("Browser released the mouse, sending Esc\n");
-        Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, 0);
-        Window_msg_main_handler(g_hWnd, WM_CHAR, VK_ESCAPE, 0);
+#ifdef PLATFORM_WSRELAY
+        // Added: but not under ?nettest's scripted player, which plays
+        // without the mouse: the menu would only hide its match from the
+        // test's screenshots.
+        if (stdComm_WSRelay_bTestInput)
+            stdPlatform_Printf("Browser released the mouse; the scripted player plays on\n");
+        else
+#endif
+        {
+            stdPlatform_Printf("Browser released the mouse, sending Esc\n");
+            Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, 0);
+            Window_msg_main_handler(g_hWnd, WM_CHAR, VK_ESCAPE, 0);
+        }
         Window_bWasmSentEsc = 1;
     }
     else if (bLocked) {

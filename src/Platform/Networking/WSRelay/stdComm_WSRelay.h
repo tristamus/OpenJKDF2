@@ -200,6 +200,15 @@ void stdComm_WSRelay_NotePos(SithThing* pThing, int fromNetId);
 // by its blast is known by the shot's guid.
 void stdComm_WSRelay_NoteBlast(SithThing* pExplosion, SithThing* pWeapon);
 
+// MakingBlast: pWeapon's blast is being made (NULL: no longer), and the one
+// before, which it returns, when that's done. NoteBlastPart: pThing was made
+// in turn (sithThing_CreateThingAtPos's creatething): if it's an explosion,
+// it's the shot's blast too. BlastShot: the guid of the shot an explosion
+// came from, or 0.
+SithThing* stdComm_WSRelay_MakingBlast(SithThing* pWeapon);
+void stdComm_WSRelay_NoteBlastPart(SithThing* pThing);
+int stdComm_WSRelay_BlastShot(SithThing* pExplosion);
+
 // Whether player pBlocker's saber turning pWeapon away here is another
 // game's to decide (the one that fired it), which then says so.
 int stdComm_WSRelay_BlockDecidedElsewhere(SithThing* pWeapon, SithThing* pBlocker);

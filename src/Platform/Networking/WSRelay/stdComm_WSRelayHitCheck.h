@@ -155,7 +155,7 @@ int stdComm_WSRelayHit_MomentWindow(double now, double reachMs, double r, double
                                     double* pFrom, double* pTo);
 
 // Attacks that already counted on this player, by attacker, kind and number,
-// for 5 s.
+// for 5 s. Seen: how many times one did (a blast's explosions each can).
 #define WSRELAYHIT_SEEN_LEN (128)
 #define WSRELAYHIT_SEEN_MS (5000.0)
 
