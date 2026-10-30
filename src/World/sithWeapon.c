@@ -930,7 +930,16 @@ void sithWeapon_CreateWeaponExplosion(SithThing *pWeapon, SithThing *pExplosionT
     if (pExplosionTemplate)
     {
         SithThing* player = sithThing_GetThingParent(pWeapon);
+#ifdef PLATFORM_WSRELAY
+        // Added: Hit what you see: and so is any explosion the blast's
+        // template makes in turn (creatething), as MotS's flash bomb's are.
+        SithThing* pWasBlast = sithNet_isMulti ? stdComm_WSRelay_MakingBlast(pWeapon) : NULL;
+#endif
         SithThing* spawned = sithThing_CreateThingAtPos(pExplosionTemplate, &pWeapon->position, &rdroid_identMatrix34, pWeapon->sector, player);
+#ifdef PLATFORM_WSRELAY
+        if ( sithNet_isMulti )
+            stdComm_WSRelay_MakingBlast(pWasBlast);
+#endif
         if (spawned)
         {
 #ifdef PLATFORM_WSRELAY

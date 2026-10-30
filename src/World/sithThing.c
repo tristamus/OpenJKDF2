@@ -1143,6 +1143,12 @@ SithThing* sithThing_CreateThingAtPos(SithThing *pTemplate, const rdVector3 *pos
             {
                 v26->flags |= SITH_TF_INVULN;
             }
+#ifdef PLATFORM_WSRELAY
+            // Added: Hit what you see: an explosion a shot's blast makes in
+            // turn is known by the shot too (stdComm_WSRelay_MakingBlast).
+            if ( sithNet_isMulti )
+                stdComm_WSRelay_NoteBlastPart(v26);
+#endif
         }
     }
     return pThingRet;

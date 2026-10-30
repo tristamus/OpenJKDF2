@@ -122,6 +122,9 @@
 #define HITS_TURNS (16)
 // Explosions, by the shot they came from.
 #define HITS_BLASTS (64)
+// How far down a blast's templates (creatething) to look for more of its
+// explosions.
+#define HITS_BLAST_CHAIN (8)
 
 #define HITS_OUTBOX (64)
 #define HITS_MAX_BODY (96)
@@ -147,6 +150,8 @@ typedef struct WSRelayHitsShot
     float blastRange;       // its blast's, or 0
     float blastDamage;
     int blastDamageType;
+    int blasts;             // the explosions in its blast, which can each
+                            // hit a player once
 } WSRelayHitsShot;
 
 // Another player's game, by their player slot.
@@ -553,6 +558,28 @@ void stdComm_WSRelay_NoteBlast(SithThing* pExplosion, SithThing* pWeapon)
     hits_nextBlast = (hits_nextBlast + 1) % HITS_BLASTS;
 }
 
+// The shot whose blast sithWeapon_CreateWeaponExplosion is making, while it
+// makes it.
+static SithThing* hits_pBlastShot = NULL;
+
+SithThing* stdComm_WSRelay_MakingBlast(SithThing* pWeapon)
+{
+    SithThing* pWas = hits_pBlastShot;
+    hits_pBlastShot = pWeapon;
+    return pWas;
+}
+
+void stdComm_WSRelay_NoteBlastPart(SithThing* pThing)
+{
+    if (hits_pBlastShot && pThing && pThing->type == SITH_THING_EXPLOSION)
+        stdComm_WSRelay_NoteBlast(pThing, hits_pBlastShot);
+}
+
+int stdComm_WSRelay_BlastShot(SithThing* pExplosion)
+{
+    return pExplosion ? hits_BlastWeapon(pExplosion) : 0;
+}
+
 // Whose attack pSource is, if it's a player's swing, shot or blast.
 static int hits_Classify(SithThing* pSource, int damageType, WSRelayHitsAttack* a)
 {
@@ -669,19 +696,32 @@ void stdComm_WSRelay_NoteShot(SithThing* pTemplate, const rdVector3* pFirePos, i
         s->damage *= absScale;
     s->damageType = pTemplate->weaponParams.damageType;
 
+    // Its blast: the explosion its template makes where it hits, and any
+    // more that explosion's template makes in turn (creatething), as MotS's
+    // flash bomb's does: a thing with a cog, which makes a narrow explosion
+    // and a wide one. Each of them can hit a player once, and a claim is
+    // bounded by the widest and the hardest.
     SithThing* aBlasts[2] = { pTemplate->weaponParams.pExplosionTemplate, pTemplate->weaponParams.fleshHitTemplate };
     for (int i = 0; i < 2; i++)
     {
+        int blasts = 0;
         SithThing* pBlast = aBlasts[i];
-        if (!pBlast || pBlast->type != SITH_THING_EXPLOSION)
-            continue;
-        if (pBlast->explosionParams.range > s->blastRange)
-            s->blastRange = pBlast->explosionParams.range;
-        if (pBlast->explosionParams.damage > s->blastDamage)
+        for (int depth = 0; pBlast && depth < HITS_BLAST_CHAIN; depth++, pBlast = pBlast->pCreateThingTemplate)
         {
-            s->blastDamage = pBlast->explosionParams.damage;
-            s->blastDamageType = pBlast->explosionParams.damageType;
+            if (pBlast->type != SITH_THING_EXPLOSION || (depth && pBlast->explosionParams.damage <= 0.0))
+                continue;
+            if (pBlast->explosionParams.damage > 0.0)
+                blasts++;
+            if (pBlast->explosionParams.range > s->blastRange)
+                s->blastRange = pBlast->explosionParams.range;
+            if (pBlast->explosionParams.damage > s->blastDamage)
+            {
+                s->blastDamage = pBlast->explosionParams.damage;
+                s->blastDamageType = pBlast->explosionParams.damageType;
+            }
         }
+        if (blasts > s->blasts)
+            s->blasts = blasts;
     }
 }
 
@@ -698,6 +738,16 @@ static WSRelayHitsShot* hits_FindShot(WSRelayHitsPeer* p, int guid)
             return &p->aCharges[i];
     }
     return NULL;
+}
+
+// How many times an attack can hit this game's player: once, or a blast as
+// many times as it has explosions (stdComm_WSRelay_NoteShot).
+static int hits_TimesHits(WSRelayHitsPeer* p, int slot, int source, uint32_t attack)
+{
+    WSRelayHitsShot* s = NULL;
+    if (source == WSRELAYHIT_SPLASH && hits_MakerOf((int)attack) == slot)
+        s = hits_FindShot(p, (int)attack);
+    return s && s->blasts > 1 ? s->blasts : 1;
 }
 
 static int hits_TurnedBy(WSRelayHitsPeer* p, int guid, int blockerGuid)
@@ -845,7 +895,7 @@ static void hits_TakeClaim(int fromNetId, int slot, WSRelayHitsIn* in, double no
     {
         v.result = STDCOMM_WSRELAY_HITS_NOT_PLAYING;
     }
-    else if (stdComm_WSRelayHit_Seen(&hits_seen, now, slot, claim.source, attack))
+    else if (stdComm_WSRelayHit_Seen(&hits_seen, now, slot, claim.source, attack) >= hits_TimesHits(p, slot, claim.source, attack))
     {
         v.result = WSRELAYHIT_REPEAT;
     }

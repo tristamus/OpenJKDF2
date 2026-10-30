@@ -269,13 +269,14 @@ void stdComm_WSRelayHit_ClearSeen(WSRelayHitSeen* pSeen)
 
 int stdComm_WSRelayHit_Seen(const WSRelayHitSeen* pSeen, double now, int attacker, int source, uint32_t attack)
 {
+    int times = 0;
     for (int i = 0; i < WSRELAYHIT_SEEN_LEN; i++)
     {
         if (pSeen->aSeen[i].attack == attack && pSeen->aSeen[i].attacker == attacker && pSeen->aSeen[i].source == source
             && pSeen->aSeen[i].t > 0.0 && now - pSeen->aSeen[i].t <= WSRELAYHIT_SEEN_MS)
-            return 1;
+            times++;
     }
-    return 0;
+    return times;
 }
 
 void stdComm_WSRelayHit_AddSeen(WSRelayHitSeen* pSeen, double now, int attacker, int source, uint32_t attack)
