@@ -2272,6 +2272,12 @@ double stdComm_WSRelay_SeqSentAt(int toId, uint32_t seq)
     return wsrelay_js_seq_sent_at(toId, seq);
 }
 
+// Added: the lobby's links resend and keep order.
+int stdComm_WSRelay_HitsResend()
+{
+    return 0;
+}
+
 double stdComm_WSRelay_Now()
 {
     return wsrelay_js_now();
