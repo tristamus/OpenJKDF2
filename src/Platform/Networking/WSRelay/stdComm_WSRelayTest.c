@@ -51,16 +51,25 @@
 //                          rounds from a ghost it rides (weap_EWEB_m.cog): no
 //                          player fired them, so each game decides its own
 //                          player's hits, as before Hit what you see.
+//                          "attack:crate" sets a crate down just in front of
+//                          the attacker every 10 s, walks into it for a
+//                          second, pushing it toward the target, then steps
+//                          back and stands. A player drawn from Hit what you
+//                          see's buffer skips physics and pushes loose things
+//                          on its own (stdComm_WSRelayMotion.c), so every
+//                          game says where it has each crate near its
+//                          player, to compare (wsrelay_TestReportCrates).
 //   ?nettest=attack:all    attacks with every weapon in turn, each fire
-//                          that's different, each Force power, and a ghost's
-//                          bolts (wsrelay_aTestSteps, those this game has),
-//                          for 60 s with no added lag, then 60 s as if this
-//                          window's connection were slower (the plan's test
-//                          condition: 100 ms more round trip, 20 ms jitter, 2%
-//                          loss). The hit ledger keeps each step's counts
-//                          apart. "attack:all,30" takes 30 s a step, and
-//                          names after "all" keep only those steps:
-//                          "attack:all,30,grip,throw,eweb".
+//                          that's different, each Force power, a ghost's
+//                          bolts and a crate pushed (wsrelay_aTestSteps,
+//                          those this game has), for 60 s with no added lag,
+//                          then 60 s as if this window's connection were
+//                          slower (the plan's test condition: 100 ms more
+//                          round trip, 20 ms jitter, 2% loss). The hit ledger
+//                          keeps each step's counts apart. "attack:all,30"
+//                          takes 30 s a step, and names after "all" keep
+//                          only those steps:
+//                          "attack:all,30,grip,throw,eweb,crate".
 //
 // Both respawn when their player dies, though the target heals every frame,
 // so only a hit bigger than its health kills it. So the two players stay in
@@ -130,6 +139,11 @@
                                         // front of the attacker
 #define WSRELAY_TEST_CRATE_GAP (0.05)   // a crate to throw, this far from
                                         // the attacker
+#define WSRELAY_TEST_PUSH_GAP (0.02)    // attack:crate, a crate this far in
+                                        // front of the attacker...
+#define WSRELAY_TEST_PUSH_EVERY_MS (10000) // ...this often...
+#define WSRELAY_TEST_PUSH_MS (1000)     // ...walked into this long, then
+                                        // stepped back from as long
 #define WSRELAY_TEST_SWING_MS (3400)    // strafe:swing, a strike this often...
 #define WSRELAY_TEST_HEAVY_MS (1000)    // ...a heavy slash this long after it...
 #define WSRELAY_TEST_SWING_HOLD_MS (150) // ...and fire held this long, or a
@@ -147,9 +161,11 @@
                                         // fire up to 4 bolts, one every
                                         // 0.75 s, and fires them when let go
                                         // (weap_blastech_m.cog)
-#define WSRELAY_TEST_SPREAD_MS (1400)   // MotS's crossbow fires 5 bolts when
-                                        // let go after 1.2 s, 3 after 0.6 s
-                                        // (weap_crossbow_m.cog)
+#define WSRELAY_TEST_SPREAD_MS (1400)   // Jedi Knight's bowcaster and MotS's
+                                        // crossbow fire 5 bolts when let go
+                                        // after 1.2 s, 3 after 0.6 s
+                                        // (weap_crossbow.cog,
+                                        // weap_crossbow_m.cog)
 #define WSRELAY_TEST_LONG_REST_MS (400) // ...each then let go this long
 #define WSRELAY_TEST_BACKOFF_MS (2500)  // after dropping a sequencer charge,
                                         // run back from it this long
@@ -241,6 +257,7 @@ static const struct
 // and powers in the other. MotS's E-Web is mounted on an emplacement only its
 // single-player levels place (pow_eweb_m.cog), so "e-web bolts" fires as it
 // does instead, with fists in hand, in both games (wsrelay_TestGhostFire).
+// "crate push" needs Jedi Knight's crate (throwcrate1), which MotS hasn't.
 static const struct
 {
     const char* pWeapon;
@@ -248,6 +265,7 @@ static const struct
     const char* pPower;
     const char* pName;
     int ghost;                          // a ghost's bolts (attack:eweb)
+    int push;                           // a crate pushed (attack:crate)
 } wsrelay_aTestSteps[] = {
     {"saber", 0, NULL, "saber"}, {"fists", 0, NULL, "fists"}, {"bryar", 0, NULL, "bryar"}, {"rifle", 0, NULL, "rifle"},
     {"blastech", 0, NULL, "blastech"}, {"blastech", 1, NULL, "blastech alt"}, {"scope", 0, NULL, "scope"},
@@ -255,7 +273,7 @@ static const struct
     {"crossbow", 0, NULL, "crossbow"}, {"crossbow", 1, NULL, "crossbow alt"},
     {"repeater", 0, NULL, "repeater"}, {"repeater", 1, NULL, "repeater alt"},
     {"carbonite", 0, NULL, "carbonite"}, {"carbonite", 1, NULL, "carbonite alt"},
-    {"fists", 0, NULL, "e-web bolts", 1},
+    {"fists", 0, NULL, "e-web bolts", 1}, {"fists", 0, NULL, "crate push", 0, 1},
     {"saber", 0, "grip", "grip"}, {"saber", 0, "pull", "pull"}, {"saber", 0, "blinding", "blinding"},
     {"saber", 0, "deadlysight", "deadly sight"}, {"saber", 0, "push", "push"},
     {"saber", 0, "chainlightning", "chain lightning"}, {"saber", 0, "saberthrow", "saber throw"},
@@ -280,6 +298,9 @@ static int wsrelay_testTries = 0;       // presses of its key since it was in ha
 static int wsrelay_testFire = INPUT_FUNC_FIRE1;
 static int wsrelay_testPower = 0;       // a Force power's bin, used instead
 static int wsrelay_testGhost = 0;       // a ghost's bolts instead (attack:eweb)
+static int wsrelay_testPush = 0;        // a crate pushed instead (attack:crate)
+static uint32_t wsrelay_testMsecPush = 0; // when it was set down
+static rdVector3 wsrelay_testPushFrom;  // where
 static uint32_t wsrelay_testStrafeMs = 700;
 static uint32_t wsrelay_testSwingMs = 0; // strafe:swing
 static uint32_t wsrelay_testSwing = 0;  // its swings so far: strikes even,
@@ -440,7 +461,7 @@ static uint32_t wsrelay_TestHoldMs(int bin, int alt, uint32_t* pRestMs)
         return WSRELAY_TEST_FREEZE_MS;
     if (bin == SITHBIN_MOTS_BLASTECH && alt)
         return WSRELAY_TEST_CHARGE_MS;
-    if (bin == SITHBIN_MOTS_TUSKEN_PROD && !alt)
+    if ((bin == SITHBIN_TUSKEN_PROD || bin == SITHBIN_MOTS_TUSKEN_PROD) && !alt)
         return WSRELAY_TEST_SPREAD_MS;
     *pRestMs = WSRELAY_TEST_REST_MS;
     return wsrelay_TestThrown(bin) ? WSRELAY_TEST_THROW_MS : WSRELAY_TEST_FIRE_MS;
@@ -599,14 +620,59 @@ static void wsrelay_TestCrate(SithThing* pPlayer, SithThing* pTarget)
     wsrelay_TestMakeThing(pPlayer, pTemplate, &pos, &dir);
 }
 
+// attack:crate: a crate set down just in front of the attacker, between it
+// and the target, where nothing's in the way, for it to push.
+static void wsrelay_TestPushCrate(SithThing* pPlayer, SithThing* pTarget)
+{
+    SithThing* pTemplate = sithTemplate_GetTemplate("throwcrate1");
+    if (!pTemplate)
+        return;
+    rdVector3 dir;
+    rdVector_Sub3(&dir, &pTarget->position, &pPlayer->position);
+    dir.z = 0.0;
+    if (rdVector_Normalize3Acc(&dir) == 0.0)
+        return;
+    rdVector3 pos = pPlayer->position;
+    rdVector_ScaleAdd3Acc(&pos, &dir, pPlayer->collideSize + pTemplate->collideSize + WSRELAY_TEST_PUSH_GAP);
+    SithThing* pCrate = wsrelay_TestMakeThing(pPlayer, pTemplate, &pos, &dir);
+    if (!pCrate)
+        return;
+    wsrelay_testPushFrom = pCrate->position;
+    stdPlatform_Printf("OpenJKDF2: ?nettest: set down crate %u at %.3f %.3f %.3f\n", (unsigned)pCrate->guid,
+                       (double)pCrate->position.x, (double)pCrate->position.y, (double)pCrate->position.z);
+}
+
+// Where this game has each crate (throwcrate1) within 2 of its player, for
+// whoever reads the console: the two games' lines show whether a crate one
+// player pushed moved in the other game too. A crate is the same thing in
+// every game (its guid).
+static void wsrelay_TestReportCrates(SithThing* pPlayer)
+{
+    SithThing* pTemplate = sithTemplate_GetTemplate("throwcrate1");
+    SithWorld* pWorld = sithWorld_g_pCurrentWorld;
+    for (int i = 0; pTemplate && pWorld && pWorld->aThings && i <= pWorld->numThings; i++)
+    {
+        SithThing* pThing = &pWorld->aThings[i];
+        if (pThing->type == SITH_THING_FREE || pThing->pTemplate != pTemplate || !pThing->sector
+            || (pThing->flags & (SITH_TF_DISABLED|SITH_TF_DESTROYED))
+            || rdVector_Dist3(&pThing->position, &pPlayer->position) > WSRELAY_TEST_FAR)
+            continue;
+        stdPlatform_Printf("OpenJKDF2: ?nettest: crate %u at %.3f %.3f %.3f\n", (unsigned)pThing->guid,
+                           (double)pThing->position.x, (double)pThing->position.y, (double)pThing->position.z);
+    }
+}
+
 // Attack with the weapon in bin, and its second fire if alt, or with the Force
-// power in bin power, that weapon in hand, or with a ghost's bolts if ghost.
-static void wsrelay_TestUse(int bin, int alt, int power, int ghost)
+// power in bin power, that weapon in hand, or with a ghost's bolts if ghost,
+// or push crates if push.
+static void wsrelay_TestUse(int bin, int alt, int power, int ghost, int push)
 {
     wsrelay_testBin = bin;
     wsrelay_testFire = alt ? INPUT_FUNC_FIRE2 : INPUT_FUNC_FIRE1;
     wsrelay_testPower = power;
     wsrelay_testGhost = ghost;
+    wsrelay_testPush = push;
+    wsrelay_testMsecPush = 0;
     wsrelay_testTries = 0;
     wsrelay_testCount = 0.0;
     wsrelay_testMsecBackOff = 0;
@@ -616,12 +682,13 @@ static void wsrelay_TestUse(int bin, int alt, int power, int ghost)
 }
 
 // Whether attack:all's names after it keep step i: its power's name, or else
-// its weapon's, or "eweb" for a ghost's bolts.
+// its weapon's, or "eweb" for a ghost's bolts, or "crate" for a crate pushed.
 static int wsrelay_TestStepKept(int i)
 {
     if (!wsrelay_testNumOnly)
         return 1;
     const char* pName = wsrelay_aTestSteps[i].ghost    ? "eweb"
+                        : wsrelay_aTestSteps[i].push   ? "crate"
                         : wsrelay_aTestSteps[i].pPower ? wsrelay_aTestSteps[i].pPower
                                                        : wsrelay_aTestSteps[i].pWeapon;
     for (int j = 0; j < wsrelay_testNumOnly; j++)
@@ -633,12 +700,15 @@ static int wsrelay_TestStepKept(int i)
 }
 
 // Whether this game has step i's weapon, and its Force power if it has one,
-// or the templates for a ghost's bolts, and attack:all's names keep it.
+// or the templates for a ghost's bolts or a crate, and attack:all's names
+// keep it.
 static int wsrelay_TestStepHere(int i)
 {
     if (!wsrelay_TestStepKept(i) || !wsrelay_TestHas(wsrelay_TestWeaponBin(wsrelay_aTestSteps[i].pWeapon)))
         return 0;
     if (wsrelay_aTestSteps[i].ghost && (!sithTemplate_GetTemplate("ghost") || !wsrelay_TestRound()))
+        return 0;
+    if (wsrelay_aTestSteps[i].push && !sithTemplate_GetTemplate("throwcrate1"))
         return 0;
     return !wsrelay_aTestSteps[i].pPower || wsrelay_TestHas(wsrelay_TestPowerBin(wsrelay_aTestSteps[i].pPower));
 }
@@ -685,7 +755,8 @@ static int wsrelay_TestCycle(uint32_t now)
     const char* pLag = wsrelay_aTestLags[wsrelay_testStep % 2];
     const char* pPower = wsrelay_aTestSteps[i].pPower;
     wsrelay_TestUse(wsrelay_TestWeaponBin(wsrelay_aTestSteps[i].pWeapon), wsrelay_aTestSteps[i].alt,
-                    pPower ? wsrelay_TestPowerBin(pPower) : 0, wsrelay_aTestSteps[i].ghost);
+                    pPower ? wsrelay_TestPowerBin(pPower) : 0, wsrelay_aTestSteps[i].ghost,
+                    wsrelay_aTestSteps[i].push);
     wsrelay_js_nettest_step(wsrelay_aTestSteps[i].pName, pLag);
     stdPlatform_Printf("OpenJKDF2: ?nettest: step %d of %d, %s, %s.\n", before + wsrelay_testStep % 2 + 1, numHere,
                        wsrelay_aTestSteps[i].pName, pLag[0] ? pLag : "no added lag");
@@ -719,15 +790,24 @@ static void wsrelay_TestReadMode()
     int alt = 0;
     int power = 0;
     int ghost = 0;
+    int push = 0;
     for (char* pArg = pArgs ? strtok(pArgs, ",") : NULL; pArg; pArg = strtok(NULL, ","))
     {
-        if ((wsrelay_TestWeaponBin(pArg) >= 0 || wsrelay_TestPowerBin(pArg) >= 0 || !strcmp(pArg, "eweb"))
+        if ((wsrelay_TestWeaponBin(pArg) >= 0 || wsrelay_TestPowerBin(pArg) >= 0 || !strcmp(pArg, "eweb")
+             || !strcmp(pArg, "crate"))
             && wsrelay_testNumOnly < WSRELAY_TEST_MAX_ONLY && strlen(pArg) < sizeof(wsrelay_aTestOnly[0]))
             strcpy(wsrelay_aTestOnly[wsrelay_testNumOnly++], pArg);
 
         if (!strcmp(pArg, "eweb") && wsrelay_testMode == WSRELAY_TEST_ATTACK)
         {
             ghost = 1;
+            bin = wsrelay_TestWeaponBin("fists");
+        }
+        else if (!strcmp(pArg, "crate") && wsrelay_testMode == WSRELAY_TEST_ATTACK)
+        {
+            push = sithTemplate_GetTemplate("throwcrate1") != NULL;
+            if (!push)
+                stdPlatform_Printf("OpenJKDF2: ?nettest: this game has no crate to push.\n");
             bin = wsrelay_TestWeaponBin("fists");
         }
         else if (!strcmp(pArg, "swing") && wsrelay_testMode == WSRELAY_TEST_STRAFE)
@@ -763,7 +843,7 @@ static void wsrelay_TestReadMode()
     }
     if (!wsrelay_testCycle)
         wsrelay_testNumOnly = 0;
-    wsrelay_TestUse(bin, alt, power, ghost);
+    wsrelay_TestUse(bin, alt, power, ghost, push);
 
     stdPlatform_Printf("OpenJKDF2: ?nettest: %s plays this window's player in a match.\n", shown);
 }
@@ -1223,6 +1303,7 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
             wsrelay_testMsecReport = now;
             stdPlatform_Printf("OpenJKDF2: ?nettest: strafing, the nearest other player %.2f away\n", (double)dist);
             wsrelay_TestReportWhere(pPlayer, pTarget);
+            wsrelay_TestReportCrates(pPlayer);
             wsrelay_TestReportCounts();
         }
         return;
@@ -1231,9 +1312,9 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     // Attack: keep the target in sight and in reach. Distances are between
     // the players' middles, which can't get closer than their sizes allow.
     flex_t touch = pPlayer->collideSize + pTarget->collideSize;
-    flex_t away = wsrelay_testPower   ? wsrelay_TestPowerDistance(wsrelay_testPower)
-                  : wsrelay_testGhost ? WSRELAY_TEST_GUN
-                                      : wsrelay_TestDistance(bin, wsrelay_testFire == INPUT_FUNC_FIRE2);
+    flex_t away = wsrelay_testPower                      ? wsrelay_TestPowerDistance(wsrelay_testPower)
+                  : (wsrelay_testGhost || wsrelay_testPush) ? WSRELAY_TEST_GUN
+                                                         : wsrelay_TestDistance(bin, wsrelay_testFire == INPUT_FUNC_FIRE2);
     flex_t close = away == 0.0 ? touch + WSRELAY_TEST_CLOSE : away;
     flex_t reach = away == 0.0 ? touch + WSRELAY_TEST_REACH : away * 1.5;
     int inSight = wsrelay_TestCanSee(pPlayer, pTarget);
@@ -1283,7 +1364,7 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     int start = now - wsrelay_testMsecFire >= hold + rest;
     if (start)
         wsrelay_testMsecFire = now;
-    int inHand = wsrelay_testPower || wsrelay_testGhost || sithInventory_GetCurrentWeapon(pPlayer) == bin;
+    int inHand = wsrelay_testPower || wsrelay_testGhost || wsrelay_testPush || sithInventory_GetCurrentWeapon(pPlayer) == bin;
     int ready = dist <= reach && inSight && inHand && !backOff && !quiet;
     if (wsrelay_testLaid && !backOff && inHand)
     {
@@ -1298,6 +1379,29 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
     {
         if (start && ready)
             wsrelay_TestGhostFire(pPlayer, pTarget);
+    }
+    else if (wsrelay_testPush)
+    {
+        // A crate set down in front of the attacker, pushed walking into it,
+        // then stepped back from and left where it lies till the next, the
+        // attacker standing still. Before it's taken away, where it went in
+        // this game.
+        if (ready && (!wsrelay_testMsecPush || now - wsrelay_testMsecPush >= WSRELAY_TEST_PUSH_EVERY_MS))
+        {
+            SithThing* pCrate = wsrelay_pTestThing;
+            if (wsrelay_testMsecPush && pCrate && pCrate->type != SITH_THING_FREE
+                && pCrate->signature == wsrelay_testThingSignature)
+                stdPlatform_Printf("OpenJKDF2: ?nettest: pushed crate %u %.3f, to %.3f %.3f %.3f\n", (unsigned)pCrate->guid,
+                                   (double)rdVector_Dist3(&pCrate->position, &wsrelay_testPushFrom),
+                                   (double)pCrate->position.x, (double)pCrate->position.y, (double)pCrate->position.z);
+            wsrelay_testMsecPush = now;
+            wsrelay_TestPushCrate(pPlayer, pTarget);
+        }
+        uint32_t since = now - wsrelay_testMsecPush;
+        if (wsrelay_testMsecPush)
+            wsrelay_aTestAxis[INPUT_FUNC_FORWARD] = since < WSRELAY_TEST_PUSH_MS       ? 1.0
+                                                    : since < 2 * WSRELAY_TEST_PUSH_MS ? -1.0
+                                                                                       : 0.0;
     }
     else if (now - wsrelay_testMsecFire < hold && ready)
     {
@@ -1315,6 +1419,7 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs)
                            (double)dist, (double)reach, unseen ? "out of sight" : "in sight",
                            sithInventory_GetCurrentWeapon(pPlayer), wsrelay_testPower, wsrelay_testJumps);
         wsrelay_TestReportWhere(pPlayer, pTarget);
+        wsrelay_TestReportCrates(pPlayer);
         wsrelay_TestReportCounts();
     }
 }
