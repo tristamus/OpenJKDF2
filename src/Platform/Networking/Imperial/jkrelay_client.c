@@ -191,9 +191,9 @@ static void jkr_WsClose(int sk)
 
 // Servers listed on a master are joined at their own address, which browsers can't reach.
 #ifdef __EMSCRIPTEN__
-#define JKR_LIST_FLAGS          0
+#define JKR_LIST_FLAGS          JKR_LF_TAILS
 #else
-#define JKR_LIST_FLAGS          JKR_LF_SERVERS
+#define JKR_LIST_FLAGS          (JKR_LF_SERVERS | JKR_LF_TAILS)
 #endif
 
 #define JKR_OK_HR               0
@@ -268,6 +268,8 @@ static struct
     // session list from the last LIST
     dps_session sessions[JKR_MAX_SESSIONS];
     struct sockaddr_in sessionAddr[JKR_MAX_SESSIONS];   // a listed server's own address (port 0: on the relay server)
+    char      sessionTail[JKR_MAX_SESSIONS][JKR_MAX_TAIL + 1];   // its host's mod ("": not said)
+    char      hostTail[JKR_MAX_TAIL + 1];   // ours, when we host (jkrelay_SetHostTail)
     int       numSessions;
     int       numRelaySessions;       // the first numSessions came from the relay server, the rest from master servers
     // master servers (net_masterServers), asked for their games as well: "host[:port]" each,
@@ -753,6 +755,7 @@ static void jkr_LinkTick(uint64_t now)
 
 static void jkr_HandleData(const uint8_t* b, const uint8_t* end, jkr_link* via);
 static int jkr_BigPiece(uint32_t from, const uint8_t* p, size_t n);
+static void jkr_SendDescNow(void);
 static void jkr_ResumeStart(void);
 static void jkr_ResumeReply(const uint8_t* p, int len);
 static void jkr_ResumeTick(uint64_t now);
@@ -1037,15 +1040,28 @@ static int jkr_Hello(int timeoutMs)
 // With addrs, each game's address to join it at: a server listed there at its own
 // address, else 'server' itself (a game hosted on it).
 static int jkr_ProbeList(const char* server, const uint8_t appGuid[16], int timeoutMs, dps_session* out,
-                         struct sockaddr_in* addrs, int maxOut);
+                         struct sockaddr_in* addrs, char (*tails)[JKR_MAX_TAIL + 1], int maxOut);
+
+// A list reply's mod tail at p (jkrelay_proto.h, "Mods") into out; returns its size, 0 if cut short.
+static size_t jkr_GetTail(const uint8_t* p, const uint8_t* end, char* out)
+{
+    if (out) out[0] = 0;
+    if (p >= end || p + 1 + p[0] > end) return 0;
+    if (out)
+    {
+        for (int i = 0; i < p[0]; i++) out[i] = (p[1 + i] >= 32 && p[1 + i] < 127) ? (char)p[1 + i] : '?';
+        out[p[0]] = 0;
+    }
+    return 1 + (size_t)p[0];
+}
 
 int jkrelay_Probe(const char* server, const uint8_t appGuid[16], int timeoutMs, dps_session* out, int maxOut)
 {
-    return jkr_ProbeList(server, appGuid, timeoutMs, out, NULL, maxOut);
+    return jkr_ProbeList(server, appGuid, timeoutMs, out, NULL, NULL, maxOut);
 }
 
 static int jkr_ProbeList(const char* server, const uint8_t appGuid[16], int timeoutMs, dps_session* out,
-                         struct sockaddr_in* addrs, int maxOut)
+                         struct sockaddr_in* addrs, char (*tails)[JKR_MAX_TAIL + 1], int maxOut)
 {
     struct sockaddr_in to;
     jkr_sock sk;
@@ -1105,6 +1121,7 @@ static int jkr_ProbeList(const char* server, const uint8_t appGuid[16], int time
         {
             int count = rd16(rx + JKR_HDR_SIZE + 2);
             int bAddrs = (rd16(rx + 6) & JKR_LR_ADDRS) != 0;
+            int bTails = (rd16(rx + 6) & JKR_LR_TAILS) != 0;
             const uint8_t* p = rx + JKR_HDR_SIZE + 4;
             result = rd16(rx + JKR_HDR_SIZE);
             if (!count) result = 0;
@@ -1128,6 +1145,13 @@ static int jkr_ProbeList(const char* server, const uint8_t appGuid[16], int time
                     }
                 }
                 p += bAddrs ? JKR_LIST_ADDR_SIZE : 0;
+                if (tails && i < maxOut) tails[i][0] = 0;
+                if (bTails)
+                {
+                    size_t tn = jkr_GetTail(p, rx + len, tails && i < maxOut ? tails[i] : NULL);
+                    if (!tn) { result = i + 1; break; }
+                    p += tn;
+                }
             }
         }
     }
@@ -1355,9 +1379,11 @@ static void jkr_RequestList(int waitMs)
     int t, total, count, got = 0;
     dps_session list[JKR_MAX_SESSIONS];
     struct sockaddr_in addrs[JKR_MAX_SESSIONS];
+    static char tails[JKR_MAX_SESSIONS][JKR_MAX_TAIL + 1];
 
     if (!jkr_Hello(waitMs)) return;
     memset(addrs, 0, sizeof(addrs));
+    memset(tails, 0, sizeof(tails));
     do
     {
         memcpy(body, R.appGuid, 16);
@@ -1368,6 +1394,7 @@ static void jkr_RequestList(int waitMs)
         const uint8_t* p = R.reply + JKR_HDR_SIZE;
         const uint8_t* end = R.reply + R.replyLen;
         int bAddrs = (rd16(R.reply + 6) & JKR_LR_ADDRS) != 0;   // an older server doesn't send them
+        int bTails = (rd16(R.reply + 6) & JKR_LR_TAILS) != 0;
         total = rd16(p);
         count = rd16(p + 2);
         p += 4;
@@ -1389,6 +1416,12 @@ static void jkr_RequestList(int waitMs)
                 }
                 p += JKR_LIST_ADDR_SIZE;
             }
+            if (bTails)
+            {
+                size_t tn = jkr_GetTail(p, end, tails[got]);
+                if (!tn) break;
+                p += tn;
+            }
             got++;
         }
         if (!count) break;
@@ -1396,6 +1429,7 @@ static void jkr_RequestList(int waitMs)
 
     memcpy(R.sessions, list, sizeof(dps_session) * (size_t)got);
     memcpy(R.sessionAddr, addrs, sizeof(addrs[0]) * (size_t)got);
+    memcpy(R.sessionTail, tails, sizeof(tails[0]) * (size_t)got);
     R.numSessions = got;
     R.numRelaySessions = got;
     R.lastListMs = jkr_NowMs();
@@ -1418,6 +1452,7 @@ static void jkr_AddMasterLists(void)
 {
     dps_session list[JKR_MAX_SESSIONS];
     struct sockaddr_in addrs[JKR_MAX_SESSIONS];
+    static char tails[JKR_MAX_SESSIONS][JKR_MAX_TAIL + 1];
 
     R.numSessions = R.numRelaySessions;
     for (int m = 0; m < R.numMasters; m++)
@@ -1425,7 +1460,7 @@ static void jkr_AddMasterLists(void)
         int got;
         if (R.server[0] && jkr_SameServer(R.masters[m], R.server)) continue;   // listed already
         if (R.masterRetryMs[m] && jkr_NowMs() < R.masterRetryMs[m]) continue;
-        got = jkr_ProbeList(R.masters[m], R.appGuid, JKR_MASTER_WAIT_MS, list, addrs, JKR_MAX_SESSIONS);
+        got = jkr_ProbeList(R.masters[m], R.appGuid, JKR_MASTER_WAIT_MS, list, addrs, tails, JKR_MAX_SESSIONS);
         if (got < 0)
         {
             R.masterRetryMs[m] = jkr_NowMs() + JKR_MASTER_RETRY_MS;
@@ -1441,6 +1476,7 @@ static void jkr_AddMasterLists(void)
             if (dup) continue;
             R.sessions[R.numSessions] = list[i];
             R.sessionAddr[R.numSessions] = addrs[i];
+            memcpy(R.sessionTail[R.numSessions], tails[i], sizeof(tails[i]));
             R.numSessions++;
         }
     }
@@ -1505,6 +1541,7 @@ long dps_OpenCreate(const dps_session* desc)
     R.isHost = 1;
     R.lastRxMs = jkr_NowMs();
     jkr_Log(1, "hosting on relay server %s\n", R.server);
+    if (R.hostTail[0]) jkr_SendDescNow();   // our mod (jkrelay_SetHostTail), which HOST doesn't carry
     return JKR_OK_HR;
 }
 
@@ -1782,6 +1819,7 @@ static void jkr_ResumeReply(const uint8_t* p, int len)
         R.resumedMs = now;
         R.serverQuiet = 0;
         jkr_Log(1, "game back on relay server %s (%.1f s)\n", R.server, (now - R.resumeStartMs) / 1000.0);
+        if (R.isHost && R.hostTail[0]) jkr_SendDescNow();   // our mod: REHOST doesn't carry it
         return;
     }
     if (type == JKR_FAIL)
@@ -1833,6 +1871,47 @@ static void jkr_ResumeTick(uint64_t now)
     }
 }
 
+// JKR_SETDESC's body: the desc, the password, and our mod (jkrelay_proto.h, "Mods").
+static size_t jkr_PutDescBody(uint8_t* body, const dps_session* d)
+{
+    size_t n = jkr_PutDesc(body, d, jkr_CountPlayers());
+    size_t tl = strlen(R.hostTail);
+    n += jkr_PutStr(body + n, d->password, JKR_MAX_PASSWORD);
+    body[n++] = (uint8_t)tl;
+    memcpy(body + n, R.hostTail, tl);
+    return n + tl;
+}
+
+// The same, without waiting for the answer (from inside packet handling).
+static void jkr_SendDescNow(void)
+{
+    uint8_t pkt[JKR_MAX_PACKET];
+    size_t n;
+    if (!R.inSession || !R.isHost || R.resuming) return;
+    n = jkr_PutDescBody(pkt + JKR_HDR_SIZE, &R.desc);
+    jkr_PutHdr(pkt, JKR_SETDESC, ++R.nextSeq);
+    jkr_SendRaw(pkt, JKR_HDR_SIZE + n);
+}
+
+// Our mod, as the web lobby says it (jkmod.c's tail), which the game list shows
+// joiners when we host ("" for none said).
+void jkrelay_SetHostTail(const char* hex)
+{
+    if (!hex) hex = "";
+    if (!strcmp(hex, R.hostTail)) return;
+    snprintf(R.hostTail, sizeof(R.hostTail), "%s", hex);
+    jkr_SendDescNow();
+}
+
+// The mod a listed game's host runs, or NULL if its server or host doesn't say.
+const char* jkrelay_GetSessionTail(const uint8_t guid[16])
+{
+    for (int i = 0; i < R.numSessions; i++)
+        if (!memcmp(R.sessions[i].guidInstance, guid, 16))
+            return R.sessionTail[i][0] ? R.sessionTail[i] : NULL;
+    return NULL;
+}
+
 long dps_GetSessionDesc(dps_session* out)
 {
     if (!R.inSession) return JKR_ERR_NOCONNECTION;
@@ -1855,8 +1934,7 @@ long dps_SetSessionDesc(const dps_session* in)
         R.desc = d;   // JKR_REHOST carries it
         return JKR_OK_HR;
     }
-    n = jkr_PutDesc(body, &d, jkr_CountPlayers());
-    n += jkr_PutStr(body + n, d.password, JKR_MAX_PASSWORD);
+    n = jkr_PutDescBody(body, &d);
     if (jkr_Request(JKR_SETDESC, body, n, JKR_REQUEST_TIMEOUT_MS) != JKR_OK) return JKR_ERR_GENERIC;
     R.desc = d;
     return JKR_OK_HR;

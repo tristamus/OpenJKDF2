@@ -3034,8 +3034,7 @@ void stdComm_WSRelay_DescribeMod(int idx, char16_t* pOut, int maxChars)
 {
     if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
     {
-        if (maxChars > 0)
-            pOut[0] = 0;
+        stdComm_Imperial_DescribeMod(idx, pOut, maxChars);
         return;
     }
 

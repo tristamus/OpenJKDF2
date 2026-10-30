@@ -48,6 +48,7 @@ int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int o
 int stdComm_Imperial_InGame();
 int stdComm_Imperial_RecvSeq(uint32_t* pSeq);
 double stdComm_Imperial_SeqSentAt(int toId, uint32_t seq);
+void stdComm_Imperial_DescribeMod(int idx, char16_t* pOut, int maxChars);
 void stdComm_Imperial_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars);
 
 #endif // PLATFORM_WSRELAY

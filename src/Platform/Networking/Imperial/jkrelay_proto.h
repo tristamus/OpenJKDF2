@@ -144,6 +144,18 @@ enum
 #define JKR_LIST_ADDR_SIZE    7
 #define JKR_LA_SERVER         0x1   // a server of its own, at the address given
 #define JKR_LA_AT_SERVER      0x2   // ...on the relay server's own network: use the relay server's address
+// Mods (2026-10-29): a game can say which mod its host runs, as a "tail" (the
+// web lobby's: ASCII hex, Platform/Networking/DPlay/jkmod.c, the browser
+// build's mods.js), so joiners can get onto it before joining. The host appends
+//   u8 len, len bytes (0 = says nothing)
+// to JKR_SETDESC after the password, and a dedicated server's JKR_ANNOUNCE
+// after the port. LIST flag JKR_LF_TAILS asks for them: the reply (JKR_LR_TAILS
+// in the reserved field) has the same after each desc (after its address, with
+// JKR_LF_SERVERS). Older servers ignore what they don't read; older clients
+// never ask.
+#define JKR_LF_TAILS          0x2
+#define JKR_LR_TAILS          0x2
+#define JKR_MAX_TAIL          255
 #define JKR_ANNOUNCE_MS       10000
 #define JKR_ANNOUNCE_TTL_MS   35000
 

@@ -30,7 +30,9 @@
 //
 // Maps: a joiner gets the host's custom episode before the level loads, as on
 // the lobby (maps.js), from a host that says it serves it
-// (IMPERIAL_SESSION_XFER); see imperial_XferPump. Not here yet: mods.
+// (IMPERIAL_SESSION_XFER); see imperial_XferPump. Mods: the game list carries
+// each host's mods.js tail (jkrelay_proto.h, "Mods"); a joiner gets onto the
+// host's mod (mods.js) after joining, restarting into it if it has to.
 
 #include "stdComm_Imperial.h"
 
@@ -67,6 +69,8 @@ int jkrelay_SendBig(uint32_t idFrom, uint32_t idTo, const uint8_t* p, size_t n);
 uint32_t jkrelay_LocalSystemId(void);
 uint32_t jkrelay_HostSystemId(void);
 int jkrelay_IsHost(void);
+void jkrelay_SetHostTail(const char* hex);
+const char* jkrelay_GetSessionTail(const uint8_t guid[16]);
 int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs);
 
 // As the desktop's stdComm_dplay.c.
@@ -91,6 +95,7 @@ static int imperial_numListed = 0;
 static int imperial_aListedWire[IMPERIAL_MAX_SESSIONS];
 static int imperial_aListedHwys[IMPERIAL_MAX_SESSIONS];
 static int imperial_aListedXfer[IMPERIAL_MAX_SESSIONS];
+static char imperial_aListedTail[IMPERIAL_MAX_SESSIONS][256];   // its host's mod (mods.js tail), "" if not said
 static char imperial_server[256];
 static char imperial_aJoinError[160]; // why the last join failed, for the join screen's dialog
 
@@ -296,6 +301,50 @@ EM_JS(void, imperial_js_map_unhost, (), {
     if (Module.jkMaps) Module.jkMaps.unhost();
 });
 
+// mods.js: the same states as maps.js, and IMPERIAL_MOD_RESTART: the engine
+// has to restart into the host's mod (or out of ours).
+#define IMPERIAL_MOD_RESTART (3)
+
+EM_JS(void, imperial_js_mod_tail, (char* pOut, int maxLen), {
+    stringToUTF8(Module.jkMods ? Module.jkMods.tail() : "", pOut, maxLen);
+});
+
+EM_JS(void, imperial_js_mod_fetch, (const char* pTail), {
+    if (Module.jkMods) Module.jkMods.fetch(UTF8ToString(pTail));
+});
+
+EM_JS(int, imperial_js_mod_state, (), {
+    return Module.jkMods ? Module.jkMods.state() : 1;
+});
+
+EM_JS(void, imperial_js_mod_abort, (const char* pReason), {
+    if (Module.jkMods) Module.jkMods.abort(UTF8ToString(pReason));
+});
+
+EM_JS(void, imperial_js_mod_restart, (char* pOut, int maxLen), {
+    stringToUTF8(Module.jkMods ? Module.jkMods.restart() : "", pOut, maxLen);
+});
+
+EM_JS(void, imperial_js_mod_host, (), {
+    if (Module.jkMods) Module.jkMods.host();
+});
+
+EM_JS(void, imperial_js_mod_unhost, (), {
+    if (Module.jkMods) Module.jkMods.unhost();
+});
+
+EM_JS(void, imperial_js_mod_describe, (const char* pTail, char* pOut, int maxLen), {
+    stringToUTF8(Module.jkMods ? Module.jkMods.describe(UTF8ToString(pTail)) : "", pOut, maxLen);
+});
+
+// The game to select again after restarting into its host's mod (kept by the page
+// across the engine's restart), as 32 hex digits, "" for none.
+EM_JS(void, imperial_js_pending, (const char* pSet, char* pOut, int maxLen), {
+    if (!Module.jkImperial) Module.jkImperial = { out: [] };
+    if (pSet) Module.jkImperial.pendingGuid = UTF8ToString(pSet);
+    if (pOut) stringToUTF8(Module.jkImperial.pendingGuid || "", pOut, maxLen);
+});
+
 static uint32_t imperial_XferAliasOf(uint32_t sysId)
 {
     for (int i = 2; i <= 64; i++)
@@ -339,6 +388,27 @@ static void imperial_XferPump()
         imperial_xferTokens -= n;
         jkrelay_SendBig(jkrelay_LocalSystemId(), dst, imperial_aXferBuf, (size_t)n);
     }
+}
+
+// Gets this game onto the host's mod (mods.js), from its tail: 1 ready (or it says
+// nothing), IMPERIAL_MOD_RESTART, or 2 failed (mods.js has said why).
+static int imperial_GetHostMod(const char* pTail)
+{
+    if (!pTail || !pTail[0])
+        return 1;
+    imperial_js_mod_fetch(pTail);
+
+    int state;
+    while ((state = imperial_js_mod_state()) == 0) // BUSY
+    {
+        imperial_XferPump();
+        jkrelay_Idle();
+        if (!jkrelay_HostSystemId())
+            imperial_js_mod_abort("host-left");
+        else
+            emscripten_sleep(10);
+    }
+    return state;
 }
 
 // The host's map, before the level loads (maps.js shows how it goes). 1 when it's in place.
@@ -419,6 +489,10 @@ static int imperial_SessionCallback(void* ctx, const dps_session* s)
     imperial_aListedWire[imperial_numListed] = (s->flags & IMPERIAL_SESSION_OPENJKDF2WIRE) != 0;
     imperial_aListedHwys[imperial_numListed] = (s->flags & IMPERIAL_SESSION_HWYS) != 0;
     imperial_aListedXfer[imperial_numListed] = (s->flags & IMPERIAL_SESSION_XFER) != 0;
+    {
+        const char* tail = jkrelay_GetSessionTail(s->guidInstance);
+        stdString_SafeStrCopy(imperial_aListedTail[imperial_numListed], tail ? tail : "", sizeof(imperial_aListedTail[0]));
+    }
     imperial_numListed++;
     return 1;
 }
@@ -429,6 +503,23 @@ int stdComm_Imperial_EnumSessions()
     memset(jkGuiMultiplayer_aEntries, 0, sizeof(jkMultiEntry) * IMPERIAL_MAX_SESSIONS);
     long hr = jkrelay_EnumSessions(imperial_SessionCallback, NULL);
     dplay_dword_55D618 = imperial_numListed;
+
+    // Back from restarting into a game's mod: select it again.
+    {
+        char pending[40];
+        imperial_js_pending(NULL, pending, sizeof(pending));
+        for (int i = 0; pending[0] && i < imperial_numListed; i++)
+        {
+            char guid[40];
+            const uint8_t* g = (const uint8_t*)&jkGuiMultiplayer_aEntries[i].guidInstance;
+            for (int k = 0; k < 16; k++)
+                snprintf(guid + 2 * k, 3, "%02x", g[k]);
+            if (strcmp(guid, pending))
+                continue;
+            jkGui_guid_556040 = jkGuiMultiplayer_aEntries[i].guidInstance;
+            imperial_js_pending("", NULL, 0);
+        }
+    }
     return (int)hr;
 }
 
@@ -493,6 +584,32 @@ int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
         return (int)hr;
     }
 
+    // The host's mod first: on another one, the engine restarts before any map matters.
+    {
+        int modState = imperial_GetHostMod(imperial_aListedTail[idx]);
+        if (modState == IMPERIAL_MOD_RESTART)
+        {
+            char path[sizeof(openjkdf2_aRestartPath)], guid[40];
+            const uint8_t* g = (const uint8_t*)&jkGuiMultiplayer_aEntries[idx].guidInstance;
+            imperial_js_mod_restart(path, sizeof(path));
+            for (int i = 0; i < 16; i++)
+                snprintf(guid + 2 * i, 3, "%02x", g[i]);
+            imperial_js_pending(guid, NULL, 0);
+            stdPlatform_Printf("OpenJKDF2: Restarting with mod path \"%s\" to join the game\n", path);
+            jkrelay_Close();
+            stdString_SafeStrCopy(openjkdf2_aRestartPath, path, sizeof(openjkdf2_aRestartPath));
+            openjkdf2_restartMode = OPENJKDF2_RESTART_PATH;
+            g_should_exit = 1;
+            return STDCOMM_WSRELAY_RESTART;
+        }
+        if (modState != 1)
+        {
+            imperial_JoinError("Couldn't get onto the host's mod.");
+            jkrelay_Close();
+            return (int)0x80004005;
+        }
+    }
+
     // The host's map, before the level loads, from a host that serves it.
     if (imperial_aListedXfer[idx] && !imperial_GetHostMap(jkGuiMultiplayer_aEntries[idx].episodeGobName))
     {
@@ -523,7 +640,10 @@ int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
 void stdComm_Imperial_Close()
 {
     if (imperial_bInGame && jkrelay_IsHost())
+    {
         imperial_js_map_unhost();
+        imperial_js_mod_unhost();
+    }
     if (stdComm_dword_8321E0)
     {
         if (stdComm_dplayIdSelf)
@@ -552,6 +672,11 @@ int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry)
         s.flags |= IMPERIAL_SESSION_HWYS;
     s.flags |= IMPERIAL_SESSION_XFER; // maps.js serves our map (below)
 
+    {
+        char tail[256];
+        imperial_js_mod_tail(tail, sizeof(tail));
+        jkrelay_SetHostTail(tail); // the game list says our mod
+    }
     long hr = jkrelay_OpenCreate(&s);
     if (hr < 0)
     {
@@ -561,6 +686,7 @@ int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry)
     imperial_bInGame = 1;
     memset(imperial_aXferSys, 0, sizeof(imperial_aXferSys));
     imperial_js_map_host(pEntry->episodeGobName, JKRES_GOB_EXT);
+    imperial_js_mod_host();
 
     if (jkrelay_GetSessionDesc(&s) >= 0)
         memcpy(&pEntry->guidInstance, s.guidInstance, 16);
@@ -833,6 +959,18 @@ int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int o
     stdString_SafeStrCopy(pOut, e.mapJklFname, outLen);
     stdString_SafeStrCopy(pGob, e.episodeGobName, gobLen);
     return pOut[0] != 0;
+}
+
+void stdComm_Imperial_DescribeMod(int idx, char16_t* pOut, int maxChars)
+{
+    char text[128];
+    text[0] = 0;
+    if (idx >= 0 && idx < imperial_numListed && imperial_aListedTail[idx][0])
+        imperial_js_mod_describe(imperial_aListedTail[idx], text, sizeof(text));
+    int i = 0;
+    for (; text[i] && i < maxChars - 1; i++)
+        pOut[i] = (char16_t)(uint8_t)text[i];
+    pOut[i] = 0;
 }
 
 void stdComm_Imperial_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars)
