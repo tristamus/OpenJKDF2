@@ -2473,12 +2473,15 @@ void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThi
         flags |= WSRELAY_HITFLAG_BY_MESSAGE;
 
     // The attack, by a number both games know: the saber swing, or the shot's
-    // id, a thrown saber's too (MotS's Saber Throw), as its claim names it
+    // id, a thrown saber's too (MotS's Saber Throw), and that shot's for the
+    // blast where it hits, which does saber damage too: as its claim names it
     // (hits_Classify). 0 for the rest, which the ledger matches by time
     // instead.
     uint32_t attack = 0;
     if (pSource->type == SITH_THING_WEAPON && (kind == STDCOMM_WSRELAY_KIND_SHOT || kind == STDCOMM_WSRELAY_KIND_SABER))
         attack = (uint32_t)(stdComm_WSRelay_fireGuid ? stdComm_WSRelay_fireGuid : pSource->guid);
+    else if (pSource->type == SITH_THING_EXPLOSION && kind == STDCOMM_WSRELAY_KIND_SABER)
+        attack = (uint32_t)stdComm_WSRelay_BlastShot(pSource);
     else if (kind == STDCOMM_WSRELAY_KIND_SABER)
         attack = stdComm_WSRelay_GetSwing(pAttacker);
 
