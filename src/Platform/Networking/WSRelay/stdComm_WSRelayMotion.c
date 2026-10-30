@@ -25,7 +25,9 @@
 //     adjoins from where they were. Their own physics and movement are
 //     skipped (sithThing_Update), so nothing steers or blocks them; their
 //     walk animation follows the buffer's velocity, and they stand on the
-//     floor or leave it as their updates say, landing as they would.
+//     floor or leave it as their updates say, landing as they would. Loose
+//     things they walk into, a crate say, are pushed as their own move
+//     pushes them, so they move here too (motion_Push).
 //   - A claim for a hit on a player drawn from the buffer names the moment
 //     they were drawn at, on their game's clock, and the updates around it
 //     (stdComm_WSRelay_MotionMoment), which their game checks its record
@@ -57,6 +59,7 @@
 #include "Engine/sithIntersect.h"
 #include "Engine/sithPhysics.h"
 #include "Engine/sithPuppet.h"
+#include "General/stdMath.h"
 #include "Primitives/rdMatrix.h"
 #include "Primitives/rdVector.h"
 #include "stdPlatform.h"
@@ -579,6 +582,45 @@ static void motion_LandSound(SithThing* pThing)
         sithSoundClass_PlayModeRandom(pThing, SITH_SC_LANDHARD);
 }
 
+// Loose things it walks into on its way, a crate say, are pushed as its own
+// move pushes them (sithCollision_MoveThing, sithCollision_ThingCollisionHandler),
+// by how fast its updates say it closes on them, so they move here too.
+// Nothing here stops or turns it, their cogs aren't told it touched them, and
+// players and actors aren't pushed, as nothing pushes it.
+static void motion_Push(SithThing* pThing, const rdVector3* pMoved, const rdVector3* pVel)
+{
+    rdVector3 dir = *pMoved;
+    flex_t dist = rdVector_Normalize3Acc(&dir);
+    if (dist <= 0.0 || dist > MOTION_WARP_JKU || !pThing->sector || pThing->collide == SITH_COLLIDE_NONE
+        || pThing->moveType != SITH_MT_PHYSICS || pThing->physicsParams.mass <= 0.0)
+        return;
+
+    sithCollision_SearchForCollisions(pThing->sector, pThing, &pThing->position, &dir, dist, pThing->moveSize,
+                                      RAYCAST_200 | RAYCAST_800);
+    for (SithCollision* pHit = sithCollision_PopStack(); pHit; pHit = sithCollision_PopStack())
+    {
+        SithThing* pOther = pHit->pThingCollided;
+        if (!(pHit->type & SITHCOLLISION_THING) || !pOther
+            || (pOther->type != SITH_THING_DEBRIS && pOther->type != SITH_THING_COG)
+            || pOther->moveType != SITH_MT_PHYSICS || pOther->physicsParams.mass <= 0.0)
+            continue;
+        flex_t closing = stdMath_ClipNearZero(rdVector_Dot3(&pOther->physicsParams.vel, &pHit->hitNorm)
+                                              - rdVector_Dot3(pVel, &pHit->hitNorm));
+        if (closing <= 0.0)
+            continue;
+        if (!(pThing->physicsParams.flags & SITH_PF_SURFACEBOUNCE))
+            closing *= 0.5;
+        if (!(pOther->physicsParams.flags & SITH_PF_SURFACEBOUNCE))
+            closing *= 0.5;
+        flex_t mass = pThing->physicsParams.mass;
+        flex_t massOther = pOther->physicsParams.mass;
+        rdVector3 force;
+        rdVector_Scale3(&force, &pHit->hitNorm, -closing * 2.0 * mass * massOther / (mass + massOther));
+        sithPhysics_ApplyForce(pOther, &force);
+    }
+    sithCollision_DecreaseStackLevel();
+}
+
 static void motion_Draw(SithThing* pThing, WSRelayMotionPeer* p, double now)
 {
     WSRelayPlayoutPose pose;
@@ -591,6 +633,13 @@ static void motion_Draw(SithThing* pThing, WSRelayMotionPeer* p, double now)
     {
         rdVector3 moved;
         rdVector_Sub3(&moved, &pos, &pThing->position);
+        // Walking on from where it was drawn, not back to life or moved
+        // further than it could go.
+        if (p->bDrawn && pose.warp == p->lastWarp)
+        {
+            rdVector3 vel = { pose.vel.x, pose.vel.y, pose.vel.z };
+            motion_Push(pThing, &moved, &vel);
+        }
         pThing->position = pos;
         if (pSector != pThing->sector)
             sithThing_SetSector(pThing, pSector, 0);
