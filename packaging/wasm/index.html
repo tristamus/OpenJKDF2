@@ -1878,9 +1878,9 @@
       // (stdComm_WSRelay.c).
       // ?imperial=<server> turns on the Imperial Network Protocol connection
       // (stdComm_Imperial.c) with that server, only at an address in
-      // IMPERIAL_HOSTS: off unless asked for, and never on the site itself.
-      // Without it the Multiplayer menu has only the lobby's connection.
-      var IMPERIAL_HOSTS = ['beta.jediknight.zone', 'localhost', '127.0.0.1'];
+      // IMPERIAL_HOSTS: off unless asked for. Without it the Multiplayer menu
+      // has only the lobby's connection.
+      var IMPERIAL_HOSTS = ['jediknight.zone', 'beta.jediknight.zone', 'localhost', '127.0.0.1'];
       (function() {
         var params = new URLSearchParams(window.location.search);
         if (params.has('netstats')) Module['jkNetMeasure'] = true;
