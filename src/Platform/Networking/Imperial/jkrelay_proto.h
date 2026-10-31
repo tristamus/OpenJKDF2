@@ -93,6 +93,7 @@ enum
 #define JKR_LOST_HOST_LEFT  0
 #define JKR_LOST_KICKED     1
 #define JKR_LOST_BANNED     2
+#define JKR_LOST_RECONNECT  3   // the server's admin asked everyone to join again (its settings changed); 2026-10-30
 
 // Direct links (2026-10-27). The server introduces a host and each joiner that
 // both asked for it; they punch through their NATs from the socket they use for
@@ -191,9 +192,11 @@ enum
 //
 // Hosts' admin (2026-10-29): a game's host can have the relay server enforce its
 // kicks and bans, as a dedicated server's own server does:
-//   JKR_HOSTKICK    u32 player id, s32 ban minutes (-1 a kick, 0 a ban for good):
-//                   the player's machine is told why (JKR_EV_SESSION_LOST) and taken
-//                   out -> OK u32 its IPv4 (network order), or FAIL
+//   JKR_HOSTKICK    u32 player id, s32 ban minutes (-1 a kick, 0 a ban for good,
+//                   JKR_KICK_RECONNECT: asked to join again, no ban): the player's
+//                   machine is told why (JKR_EV_SESSION_LOST) and taken out
+//                   -> OK u32 its IPv4 (network order), or FAIL. (An older relay
+//                   server takes JKR_KICK_RECONNECT for a kick.)
 //   JKR_SETBANS     u16 count, then u32 IPv4 (network order), u16 minutes left (0 for
 //                   good) each: the game's bans, which JOIN and REJOIN are refused
 //                   for (JKR_LOST_BANNED), replacing the last list -> OK
@@ -216,6 +219,7 @@ enum
 
 #define JKR_RCON_TAG_SIZE     20
 #define JKR_TUNNEL_MS         30000
+#define JKR_KICK_RECONNECT    (-2)
 #define JKR_MAX_HOST_BANS     128
 #define JKR_RCON_PAD          32
 #define JKR_RCON_MAX_CMD      480

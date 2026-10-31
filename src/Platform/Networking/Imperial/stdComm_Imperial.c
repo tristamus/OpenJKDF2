@@ -539,6 +539,8 @@ static void imperial_ReasonText(int reason, int minutes, char* pOut, int outLen)
         snprintf(pOut, outLen, "banned from this server");
     else if (reason == 1)
         snprintf(pOut, outLen, "kicked from this server");
+    else if (reason == 3)
+        snprintf(pOut, outLen, "the server asked everyone to reconnect (its settings changed): join the game again");
     else
         pOut[0] = 0;
 }
@@ -946,8 +948,18 @@ int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut)
             {
                 int minutes = 0;
                 char why[96];
-                imperial_ReasonText(jkrelay_LostReason(&minutes), minutes, why, sizeof(why));
+                int reason = jkrelay_LostReason(&minutes);
+                imperial_ReasonText(reason, minutes, why, sizeof(why));
                 stdPlatform_Printf("OpenJKDF2: Leaving the game: %s.\n", why[0] ? why : "the server closed it");
+                if (reason == 3 && imperial_bLastGuid)
+                {
+                    // The server's reconnectall: the join list has this game selected again.
+                    char guid[40];
+                    for (int i = 0; i < 16; i++)
+                        snprintf(guid + 2 * i, 3, "%02x", imperial_aLastGuid[i]);
+                    imperial_js_pending(guid, NULL, 0);
+                    sithConsole_PrintString("The server asked everyone to reconnect: join the game again.");
+                }
                 // As the host leaving (sithMulti_HandleNewPlayerLost: SERVER_LEFT_GAME).
                 *pIdOut = (int)sithNet_serverNetId;
                 return IMPERIAL_RET_PLAYERLOST;
