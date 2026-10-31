@@ -2853,6 +2853,8 @@ int DirectPlay_EarlyInit(char16_t* pwIdk, char16_t* pwPlayerName)
 
 DPID DirectPlay_CreatePlayer(char16_t* pwIdk, int idk2)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_CreatePlayer(pwIdk);
     return 1;
 }
 

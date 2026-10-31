@@ -28,6 +28,8 @@ int stdComm_Imperial_EnumSessions();
 int stdComm_Imperial_Open(int idx, char16_t* pwPassword);
 void stdComm_Imperial_Close();
 int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry);
+// The host's own player, a real one on the relay server (joiners address it by its id).
+DPID stdComm_Imperial_CreatePlayer(char16_t* pwName);
 int stdComm_Imperial_GetSession_passwordidk(jkMultiEntry* pEntry);
 int stdComm_Imperial_IdkSessionDesc(jkMultiEntry* pEntry);
 void stdComm_Imperial_SetSessionDesc(const char* pJklFname, DWORD maxPlayers);

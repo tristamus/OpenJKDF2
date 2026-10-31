@@ -699,6 +699,17 @@ int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry)
     return 0;
 }
 
+// As the desktop build: the host's player is a player on the relay server like
+// everyone's, not the lobby's id 1, which desktop joiners (and the relay server)
+// don't know: its messages went nowhere and joiners sat on "Contacting host computer".
+DPID stdComm_Imperial_CreatePlayer(char16_t* pwName)
+{
+    uint32_t id = 0;
+    if (jkrelay_CreatePlayer((const uint16_t*)pwName, &id) < 0)
+        return 0;
+    return (DPID)id;
+}
+
 int stdComm_Imperial_GetSession_passwordidk(jkMultiEntry* pEntry)
 {
     dps_session cur, s;
