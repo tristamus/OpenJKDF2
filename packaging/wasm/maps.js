@@ -445,15 +445,17 @@
         var hashed = typeof info.streamSha256 === 'string' && /^[0-9a-f]{64}$/.test(info.streamSha256);
         if (hashed && await sha256(sentStream(out, refs).bytes()) !== info.streamSha256)
             return { ok: false, reason: 'mismatch' };
-        var mine = {};
+        var mine = {}, episodes = {};
         retailSources.forEach(function(src) {
-            if (src.always)
-                src.entries.forEach(function(e) { if (e.name) mine[gobName(e.name)] = true; });
+            src.entries.forEach(function(e) {
+                if (e.name)
+                    (src.always ? mine : episodes)[gobName(e.name)] = true;
+            });
         });
         var dir = parseGob(memReader(out), out.length);
         if (!dir)
             return { ok: false, reason: hashed ? 'not-gob' : 'missing-retail' };
-        var keep = [];
+        var keep = [], lacking = [];
         for (var e of dir.entries) {
             var hits = missing.filter(function(m) {
                 return e.size > 0 && e.offset < m.offset + m.size && m.offset < e.offset + e.size;
@@ -465,7 +467,13 @@
             var inside = hits.length === 1 && hits[0].offset <= e.offset &&
                          e.offset + e.size <= hits[0].offset + hits[0].size;
             if (!inside || !mine[gobName(e.name)])
-                return { ok: false, reason: 'missing-retail' };
+                lacking.push(e.name + (!inside ? ' (part of a file)' : episodes[gobName(e.name)] ? ' (only in an episode GOB)' : ''));
+        }
+        // Which ones, for whoever reads the console.
+        if (lacking.length) {
+            console.log('OpenJKDF2: original files in this map that this game folder has no copy of: ' +
+                        lacking.slice(0, 20).join(', ') + (lacking.length > 20 ? ' and ' + (lacking.length - 20) + ' more' : ''));
+            return { ok: false, reason: 'missing-retail' };
         }
         // A host from before this can't vouch for what it sent.
         if (!hashed)
