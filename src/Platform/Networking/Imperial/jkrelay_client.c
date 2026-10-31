@@ -68,6 +68,19 @@ typedef int jkr_sock;
 #define JKR_WS_MAX_SOCKS 8
 static char jkr_wsUrls[JKR_WS_MAX_NAMES][256];
 static int jkr_wsNumUrls = 0;
+static char jkr_wsGateway[256];   // the relay server's URL: other addresses go through its gateway
+
+// The URL for a server named as the player typed it: a ws:// or wss:// URL as it is,
+// host:port as ws://host:port/, a bare host as wss://<host>/imperial.
+static void jkr_WsUrlFor(const char* server, char* url, size_t cap)
+{
+    if (!strncmp(server, "ws://", 5) || !strncmp(server, "wss://", 6))
+        snprintf(url, cap, "%s", server);
+    else if (strchr(server, ':'))
+        snprintf(url, cap, "ws://%s/", server);
+    else
+        snprintf(url, cap, "wss://%s/imperial", server);
+}
 static struct { int used, ws; struct sockaddr_in peer; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
 
 EM_JS(int, jkr_js_open, (const char* url), {
@@ -123,11 +136,18 @@ static int jkr_WsSocket(void)
     return -1;
 }
 
+// A made-up address's URL; any other address (a dedicated server the relay server lists)
+// through the relay server's gateway: <its URL>?to=a.b.c.d:port (jkrelay_proto.h, "Gateway").
 static const char* jkr_WsUrlOf(const struct sockaddr_in* a)
 {
+    static char gw[320];
     uint32_t ip = ntohl(a->sin_addr.s_addr);
-    if ((ip & 0xFFFFFF00u) != 0x7F010000u || (int)(ip & 0xFF) >= jkr_wsNumUrls) return NULL;
-    return jkr_wsUrls[ip & 0xFF];
+    if ((ip & 0xFFFFFF00u) == 0x7F010000u)
+        return (int)(ip & 0xFF) < jkr_wsNumUrls ? jkr_wsUrls[ip & 0xFF] : NULL;
+    if (!jkr_wsGateway[0]) return NULL;
+    snprintf(gw, sizeof(gw), "%s%sto=%u.%u.%u.%u:%u", jkr_wsGateway, strchr(jkr_wsGateway, '?') ? "&" : "?",
+             ip >> 24, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, (unsigned)ntohs(a->sin_port));
+    return gw;
 }
 
 static int jkr_WsSendTo(int sk, const void* p, int n, const struct sockaddr_in* to)
@@ -192,7 +212,7 @@ static void jkr_WsClose(int sk)
 
 // Servers listed on a master are joined at their own address, which browsers can't reach.
 #ifdef __EMSCRIPTEN__
-#define JKR_LIST_FLAGS          JKR_LF_TAILS
+#define JKR_LIST_FLAGS          (JKR_LF_TAILS | JKR_LF_SERVERS | JKR_LF_GATEWAY)   // listed servers through the gateway
 #else
 #define JKR_LIST_FLAGS          (JKR_LF_SERVERS | JKR_LF_TAILS)
 #endif
@@ -271,6 +291,9 @@ static struct
     struct sockaddr_in sessionAddr[JKR_MAX_SESSIONS];   // a listed server's own address (port 0: on the relay server)
     char      sessionTail[JKR_MAX_SESSIONS][JKR_MAX_TAIL + 1];   // its host's mod ("": not said)
     char      hostTail[JKR_MAX_TAIL + 1];   // ours, when we host (jkrelay_SetHostTail)
+    uint8_t   hostBans[6 * JKR_MAX_HOST_BANS];   // ours (jkrelay_HostSetBans), sent again after a resume
+    int       numHostBans;
+    void    (*pfnTunnel)(uint32_t ip, uint16_t port, const uint8_t* p, size_t n);   // rcon through the relay
     int       numSessions;
     int       numRelaySessions;       // the first numSessions came from the relay server, the rest from master servers
     // master servers (net_masterServers), asked for their games as well: "host[:port]" each,
@@ -398,12 +421,7 @@ static int jkr_ResolveAddr(const char* server, uint16_t defPort, struct sockaddr
     char url[256];
     int i;
     if (!server || !server[0]) return 0;
-    if (!strncmp(server, "ws://", 5) || !strncmp(server, "wss://", 6))
-        snprintf(url, sizeof(url), "%s", server);
-    else if (strchr(server, ':'))
-        snprintf(url, sizeof(url), "ws://%s/", server);
-    else
-        snprintf(url, sizeof(url), "wss://%s/imperial", server);
+    jkr_WsUrlFor(server, url, sizeof(url));
     for (i = 0; i < jkr_wsNumUrls && strcmp(jkr_wsUrls[i], url); i++) {}
     if (i == jkr_wsNumUrls)
     {
@@ -757,6 +775,7 @@ static void jkr_LinkTick(uint64_t now)
 static void jkr_HandleData(const uint8_t* b, const uint8_t* end, jkr_link* via);
 static int jkr_BigPiece(uint32_t from, const uint8_t* p, size_t n);
 static void jkr_SendDescNow(void);
+static void jkr_SendBansNow(void);
 static int jkr_ClockPacket(uint32_t from, const uint8_t* p, size_t n);
 static void jkr_ClockTick(void);
 static void jkr_ResumeStart(void);
@@ -881,6 +900,16 @@ static void jkr_HandlePacket(const uint8_t* p, int len)
     }
     switch (type)
     {
+        case JKR_TUNNEL:   // rcon for our game, through the relay server (jkrelay_proto.h)
+            if (R.isHost && R.pfnTunnel && end - b >= 6 + JKR_HDR_SIZE)
+            {
+                uint32_t ip;
+                uint16_t port;
+                memcpy(&ip, b, 4);
+                memcpy(&port, b + 4, 2);
+                R.pfnTunnel(ip, port, b + 6, (size_t)(end - b - 6));
+            }
+            return;
         case JKR_EVENT:
         {
             uint8_t ack[JKR_HDR_SIZE];
@@ -1171,7 +1200,9 @@ done:
 // Console "rcon" (dps_Rcon): a command for a dedicated server's own server
 // ("host[:port]", JKR_DEFAULT_SERVER_PORT if none), on a socket of its own. Its
 // output goes to out. 1 if it answered, 0 if not within timeoutMs.
-int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs)
+// guid: the game it's for (NULL: the server's own), so a relay server can pass it to
+// that game's host (jkrelay_proto.h, "Rcon through a relay").
+int jkrelay_Rcon(const char* server, const uint8_t* guid, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs)
 {
     struct sockaddr_in to;
     jkr_sock sk;
@@ -1204,6 +1235,7 @@ int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char
             {
                 pkt[4] = JKR_RCON_CHALLENGE;
                 memset(pkt + n, 0, JKR_RCON_PAD);
+                if (guid) { memcpy(pkt + n, "JKRT", 4); memcpy(pkt + n + 4, guid, 16); }
                 n += JKR_RCON_PAD;
             }
             else
@@ -1217,6 +1249,7 @@ int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char
                 wr16(pkt + n + 48, (uint16_t)cmdLen);
                 memcpy(pkt + n + 50, cmd, cmdLen);
                 n += 50 + cmdLen;
+                if (guid) { memcpy(pkt + n, "JKRT", 4); memcpy(pkt + n + 4, guid, 16); n += JKR_RCON_TAG_SIZE; }
             }
             sendto(sk, (const char*)pkt, (int)n, 0, (struct sockaddr*)&to, sizeof(to));
             lastSend = jkr_NowMs();
@@ -1285,6 +1318,10 @@ static void jkr_LeaveDirect(void)
 void jkrelay_SetServer(const char* server)
 {
     if (!server) server = "";
+#ifdef __EMSCRIPTEN__
+    if (server[0]) jkr_WsUrlFor(server, jkr_wsGateway, sizeof(jkr_wsGateway));
+    else jkr_wsGateway[0] = 0;
+#endif
     if (!strcmp(server, R.server)) return;
     strncpy(R.server, server, sizeof(R.server) - 1);
     R.server[sizeof(R.server) - 1] = 0;
@@ -1399,6 +1436,7 @@ static void jkr_RequestList(int waitMs)
         const uint8_t* end = R.reply + R.replyLen;
         int bAddrs = (rd16(R.reply + 6) & JKR_LR_ADDRS) != 0;   // an older server doesn't send them
         int bTails = (rd16(R.reply + 6) & JKR_LR_TAILS) != 0;
+        int bGateway = (rd16(R.reply + 6) & JKR_LR_GATEWAY) != 0;   // browsers reach listed servers through it
         total = rd16(p);
         count = rd16(p + 2);
         p += 4;
@@ -1407,6 +1445,7 @@ static void jkr_RequestList(int waitMs)
             size_t n = jkr_GetDesc(p, end, &list[got]);
             if (!n) break;
             p += n;
+            int bSkip = 0;
             if (bAddrs)
             {
                 if (end - p < JKR_LIST_ADDR_SIZE) break;
@@ -1415,8 +1454,13 @@ static void jkr_RequestList(int waitMs)
                     addrs[got].sin_family = AF_INET;
                     addrs[got].sin_addr.s_addr = htonl(rd32(p));
                     addrs[got].sin_port = htons(rd16(p + 4));
+#ifdef __EMSCRIPTEN__
+                    bSkip = !bGateway;   // a browser can't reach it but through the gateway
+#else
+                    (void)bGateway;
                     if (p[6] & JKR_LA_AT_SERVER)
                         addrs[got].sin_addr = R.serverAddr.sin_addr;   // next to the relay server: where we reach it
+#endif
                 }
                 p += JKR_LIST_ADDR_SIZE;
             }
@@ -1426,6 +1470,7 @@ static void jkr_RequestList(int waitMs)
                 if (!tn) break;
                 p += tn;
             }
+            if (bSkip) { memset(&addrs[got], 0, sizeof(addrs[got])); continue; }
             got++;
         }
         if (!count) break;
@@ -1546,6 +1591,7 @@ long dps_OpenCreate(const dps_session* desc)
     R.lastRxMs = jkr_NowMs();
     jkr_Log(1, "hosting on relay server %s\n", R.server);
     if (R.hostTail[0]) jkr_SendDescNow();   // our mod (jkrelay_SetHostTail), which HOST doesn't carry
+    if (R.numHostBans) jkr_SendBansNow();   // and our bans (jkrelay_HostSetBans)
     return JKR_OK_HR;
 }
 
@@ -1824,6 +1870,7 @@ static void jkr_ResumeReply(const uint8_t* p, int len)
         R.serverQuiet = 0;
         jkr_Log(1, "game back on relay server %s (%.1f s)\n", R.server, (now - R.resumeStartMs) / 1000.0);
         if (R.isHost && R.hostTail[0]) jkr_SendDescNow();   // our mod: REHOST doesn't carry it
+        if (R.isHost && R.numHostBans) jkr_SendBansNow();   // and our bans
         return;
     }
     if (type == JKR_FAIL)
@@ -2360,6 +2407,95 @@ uint32_t jkrelay_HostSystemId(void)
 int jkrelay_IsHost(void)
 {
     return R.inSession && R.isHost;
+}
+
+// ---------------------------------------------------------------------------
+// Hosts' admin (2026-10-29, jkrelay_proto.h): a dedicated server hosting here has
+// the relay server enforce its kicks and bans, and gets its rcon through it.
+// ---------------------------------------------------------------------------
+
+// The server of the game we're in, as rcon can name it: in a browser a URL (a
+// dedicated server's through the gateway), else "a.b.c.d:port". 0 if none.
+int jkrelay_CurrentServerName(char* out, size_t cap)
+{
+    if (!cap || !R.serverResolved) return 0;
+#ifdef __EMSCRIPTEN__
+    {
+        const char* url = jkr_WsUrlOf(&R.serverAddr);
+        if (!url) return 0;
+        snprintf(out, cap, "%s", url);
+    }
+#else
+    snprintf(out, cap, "%s:%u", inet_ntoa(R.serverAddr.sin_addr), (unsigned)ntohs(R.serverAddr.sin_port));
+#endif
+    return 1;
+}
+
+void jkrelay_SetTunnelHandler(void (*fn)(uint32_t ip, uint16_t port, const uint8_t* p, size_t n))
+{
+    R.pfnTunnel = fn;
+}
+
+// An answer to a tunnelled packet, to ip:port (network order) through the relay.
+void jkrelay_TunnelReply(uint32_t ip, uint16_t port, const void* p, size_t n)
+{
+    uint8_t pkt[JKR_MAX_PACKET];
+    if (!R.inSession || !R.isHost || JKR_HDR_SIZE + 6 + n > sizeof(pkt)) return;
+    jkr_PutHdr(pkt, JKR_TUNNEL_REPLY, 0);
+    memcpy(pkt + JKR_HDR_SIZE, &ip, 4);
+    memcpy(pkt + JKR_HDR_SIZE + 4, &port, 2);
+    memcpy(pkt + JKR_HDR_SIZE + 6, p, n);
+    jkr_SendRaw(pkt, JKR_HDR_SIZE + 6 + n);
+}
+
+// The relay server takes player id out of our game (banMinutes < 0 a kick, else a ban
+// for that long, 0 for good). 1 with its IPv4 (network order), 0 if it couldn't (an
+// older relay server doesn't answer).
+int jkrelay_HostKick(uint32_t id, int banMinutes, uint32_t* pIp)
+{
+    uint8_t body[8];
+    if (!R.inSession || !R.isHost) return 0;
+    wr32(body, id);
+    wr32(body + 4, (uint32_t)banMinutes);
+    if (jkr_Request(JKR_HOSTKICK, body, sizeof(body), 1500) != JKR_OK || R.replyLen < JKR_HDR_SIZE + 4) return 0;
+    if (pIp) memcpy(pIp, R.reply + JKR_HDR_SIZE, 4);
+    return 1;
+}
+
+// Where player id plays from ("a.b.c.d:port"), 0 if unknown.
+int jkrelay_HostPlayerAddr(uint32_t id, char* out, size_t cap)
+{
+    uint8_t body[4];
+    struct in_addr a;
+    uint16_t port;
+    if (!R.inSession || !R.isHost || !cap) return 0;
+    wr32(body, id);
+    if (jkr_Request(JKR_PLAYERADDR, body, sizeof(body), 1500) != JKR_OK || R.replyLen < JKR_HDR_SIZE + 6) return 0;
+    memcpy(&a.s_addr, R.reply + JKR_HDR_SIZE, 4);
+    memcpy(&port, R.reply + JKR_HDR_SIZE + 4, 2);
+    snprintf(out, cap, "%s:%u", inet_ntoa(a), (unsigned)ntohs(port));
+    return 1;
+}
+
+static void jkr_SendBansNow(void)
+{
+    uint8_t pkt[JKR_HDR_SIZE + 2 + sizeof(R.hostBans)];
+    if (!R.inSession || !R.isHost || R.resuming) return;
+    jkr_PutHdr(pkt, JKR_SETBANS, ++R.nextSeq);
+    wr16(pkt + JKR_HDR_SIZE, (uint16_t)R.numHostBans);
+    memcpy(pkt + JKR_HDR_SIZE + 2, R.hostBans, 6 * (size_t)R.numHostBans);
+    jkr_SendRaw(pkt, JKR_HDR_SIZE + 2 + 6 * (size_t)R.numHostBans);
+}
+
+// Our game's bans (u32 IPv4 in network order, u16 minutes left, 0 for good, each),
+// which the relay server refuses joins for. Sent now, and again after a resume.
+void jkrelay_HostSetBans(const uint8_t* list, int n)
+{
+    if (n > JKR_MAX_HOST_BANS) n = JKR_MAX_HOST_BANS;
+    if (n < 0) n = 0;
+    memcpy(R.hostBans, list, 6 * (size_t)n);
+    R.numHostBans = n;
+    jkr_SendBansNow();
 }
 
 // Hit what you see (2026-10-29): a number for the next Send, which goes in its

@@ -74,7 +74,8 @@ void jkrelay_SetClock(double (*fn)(void));
 void jkrelay_SyncClock(uint32_t id, int on);
 double jkrelay_ClockOffset(uint32_t id);
 const char* jkrelay_GetSessionTail(const uint8_t guid[16]);
-int jkrelay_Rcon(const char* server, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs);
+int jkrelay_CurrentServerName(char* out, size_t cap);
+int jkrelay_Rcon(const char* server, const uint8_t* guid, const char* password, const char* cmd, char* out, size_t cap, int timeoutMs);
 
 // As the desktop's stdComm_dplay.c.
 #define IMPERIAL_MAX_SESSIONS (32)
@@ -101,6 +102,9 @@ static int imperial_aListedXfer[IMPERIAL_MAX_SESSIONS];
 static char imperial_aListedTail[IMPERIAL_MAX_SESSIONS][256];   // its host's mod (mods.js tail), "" if not said
 static char imperial_server[256];
 static char imperial_aJoinError[160]; // why the last join failed, for the join screen's dialog
+static uint8_t imperial_aLastGuid[16]; // the game joined last, which rcon is for (a dedicated server on a relay server)
+static int imperial_bLastGuid = 0;
+static char imperial_aLastServer[320]; // its server: the relay server's URL, or a dedicated server's through its gateway
 
 EM_JS(void, imperial_js_server, (char* pOut, int outLen), {
     var url = Module['jkImperialUrl'];
@@ -638,6 +642,10 @@ int stdComm_Imperial_Open(int idx, char16_t* pwPassword)
     stdComm_dplayIdSelf = id;
     stdComm_dword_8321E0 = 1;
     imperial_bInGame = 1;
+    memcpy(imperial_aLastGuid, &jkGuiMultiplayer_aEntries[idx].guidInstance, 16);
+    imperial_bLastGuid = 1;
+    if (!jkrelay_CurrentServerName(imperial_aLastServer, sizeof(imperial_aLastServer)))
+        imperial_aLastServer[0] = 0;
     jkGuiMultiplayer_checksumSeed = jkGuiMultiplayer_aEntries[idx].checksumSeed;
     return 0;
 }
@@ -1100,7 +1108,8 @@ static int imperial_CmdVote(stdDebugConsoleCmd* pCmd, const char* pArgStr)
 // Where rcon goes: rcon_address, else the server of the game we're in or were last in.
 static void imperial_RconServer(char* pOut, size_t outLen)
 {
-    stdString_SafeStrCopy(pOut, imperial_aRconAddress[0] ? imperial_aRconAddress : imperial_server, outLen);
+    stdString_SafeStrCopy(pOut, imperial_aRconAddress[0] ? imperial_aRconAddress
+                                : imperial_aLastServer[0] ? imperial_aLastServer : imperial_server, outLen);
 }
 
 static int imperial_CmdRconPassword(stdDebugConsoleCmd* pCmd, const char* pArgStr)
@@ -1127,7 +1136,11 @@ static int imperial_CmdRconAddress(stdDebugConsoleCmd* pCmd, const char* pArgStr
     if ( imperial_aRconAddress[0] )
         imperial_Print("rcon goes to %s.", imperial_aRconAddress);
     else
-        imperial_Print(imperial_server[0] ? "rcon goes to %s (the game you're in or were last in)." : "rcon_address <server>", imperial_server);
+    {
+        char aServer[320];
+        imperial_RconServer(aServer, sizeof(aServer));
+        imperial_Print(aServer[0] ? "rcon goes to %s (the game you're in or were last in)." : "rcon_address <server>", aServer);
+    }
     return 1;
 }
 
@@ -1153,9 +1166,10 @@ static int imperial_CmdRcon(stdDebugConsoleCmd* pCmd, const char* pArgStr)
         sithConsole_PrintString("Which server? rcon_address <server>");
         return 1;
     }
-    if ( !jkrelay_Rcon(aServer, imperial_aRconPassword, aCmd, aOutput, sizeof(aOutput), IMPERIAL_RCON_TIMEOUT_MS) )
+    if ( !jkrelay_Rcon(aServer, imperial_bLastGuid ? imperial_aLastGuid : NULL, imperial_aRconPassword, aCmd, aOutput,
+                       sizeof(aOutput), IMPERIAL_RCON_TIMEOUT_MS) )
     {
-        imperial_Print("No answer from %s (rcon reaches dedicated servers running their own server, with an rconPassword and a wsPort).", aServer);
+        imperial_Print("No answer from %s (rcon reaches dedicated servers with an rconPassword: on their own server with a wsPort, or on a relay server that passes rcon on).", aServer);
         return 1;
     }
     imperial_PrintLines(aOutput);
@@ -1171,7 +1185,8 @@ static int imperial_CmdServerMaps(stdDebugConsoleCmd* pCmd, const char* pArgStr)
     imperial_Trim(pArgStr, aArgs, sizeof(aArgs));
     snprintf(aCmd, sizeof(aCmd), aArgs[0] ? "maplist %s" : "maplist", aArgs);
     imperial_RconServer(aServer, sizeof(aServer));
-    if ( !aServer[0] || !jkrelay_Rcon(aServer, "", aCmd, aOutput, sizeof(aOutput), IMPERIAL_RCON_TIMEOUT_MS) )
+    if ( !aServer[0] || !jkrelay_Rcon(aServer, imperial_bLastGuid ? imperial_aLastGuid : NULL, "", aCmd, aOutput,
+                                      sizeof(aOutput), IMPERIAL_RCON_TIMEOUT_MS) )
     {
         sithConsole_PrintString("The server didn't answer (dedicated servers running their own server list their levels).");
         return 1;

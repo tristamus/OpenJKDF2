@@ -42,6 +42,9 @@ enum
     JKR_ANNOUNCE      = 11,  // see "Master server" below -> OK | FAIL
     JKR_RCON_CHALLENGE = 12, // see "Rcon" below (no token)  -> RCON_NONCE
     JKR_RCON          = 13,  // see "Rcon" below (no token)  -> RCON_OUTPUT...
+    JKR_HOSTKICK      = 14,  // see "Hosts' admin" below (host only) -> OK u32 ip | FAIL
+    JKR_SETBANS       = 15,  // see "Hosts' admin" below (host only) -> OK
+    JKR_PLAYERADDR    = 16,  // see "Hosts' admin" below (host only) -> OK u32 ip, u16 port | FAIL
 
     // server -> client replies
     JKR_WELCOME       = 32,  // token
@@ -66,6 +69,13 @@ enum
 
     // player <-> player over a direct link (token = the link's key), unreliable
     JKR_PUNCH         = 66,  // u32 sender's system player id, u8 heard (1 = your punches reach me)
+
+    // relay server <-> a game's host, unreliable (see "Rcon through a relay" below)
+    JKR_TUNNEL        = 67,  // server -> host: ip[4], port[2] (network order), the packet as sent
+    JKR_TUNNEL_REPLY  = 68,  // host -> server: ip[4], port[2], the answer to send there as it is
+
+    // relay server <-> a dedicated server it lists, unreliable (see "Gateway" below)
+    JKR_VIA           = 69,  // ip[4], port[2] (network order) of the browser player, its packet as it is
 };
 
 // Event kinds (first byte of an EVENT body)
@@ -169,6 +179,44 @@ enum
 //                       -> JKR_RCON_OUTPUT parts (the command's console output,
 //                          or "Bad rcon password."), the last one with JKR_RCON_LAST
 // After JKR_RCON_MAX_BAD wrong ones, an address is ignored for JKR_RCON_BLOCK_MS.
+// Rcon through a relay (2026-10-29): a dedicated server hosting on a relay server
+// has no port of its own, so rcon to it goes through the relay. The asker names
+// the game: "JKRT" and the game's guid (JKR_RCON_TAG_SIZE bytes) at the start of
+// the CHALLENGE's padding, and after the RCON's command. A relay server passes such
+// a packet on to that game's host as JKR_TUNNEL, with where it came from; the host
+// checks it as its own server would (the password never reaches the relay) and
+// sends its answers back as JKR_TUNNEL_REPLY, which the relay sends on, only to an
+// address that asked that game in the last JKR_TUNNEL_MS. A dedicated server's own
+// server ignores the tag; older relay servers ignore the packets (no answer).
+//
+// Hosts' admin (2026-10-29): a game's host can have the relay server enforce its
+// kicks and bans, as a dedicated server's own server does:
+//   JKR_HOSTKICK    u32 player id, s32 ban minutes (-1 a kick, 0 a ban for good):
+//                   the player's machine is told why (JKR_EV_SESSION_LOST) and taken
+//                   out -> OK u32 its IPv4 (network order), or FAIL
+//   JKR_SETBANS     u16 count, then u32 IPv4 (network order), u16 minutes left (0 for
+//                   good) each: the game's bans, which JOIN and REJOIN are refused
+//                   for (JKR_LOST_BANNED), replacing the last list -> OK
+//   JKR_PLAYERADDR  u32 player id -> OK u32 IPv4, u16 port (network order), or FAIL
+// Gateway (2026-10-29): browsers can't send UDP, so a relay server that takes
+// WebSockets (-w) also carries their packets to the dedicated servers it lists as
+// master server, which then play with them as with any player. A browser opens a
+// WebSocket to <the relay's address>?to=a.b.c.d:port (a server the relay lists,
+// and reached); each message it sends goes to that server as JKR_VIA with the
+// browser's own address, from the relay server's port, and what the server sends
+// back as JKR_VIA for that address goes to that WebSocket. A dedicated server takes
+// JKR_VIA only from its master server, and answers players reached that way the
+// same way, so bans, status and rcon see their own addresses. LIST flag
+// JKR_LF_GATEWAY asks for the listed servers for browsers: a relay server that
+// carries them says so with JKR_LR_GATEWAY (an older one may list them anyway,
+// with JKR_LF_SERVERS, without it: browsers can't reach those).
+#define JKR_LF_GATEWAY        0x4
+#define JKR_LR_GATEWAY        0x4
+#define JKR_VIA_SIZE          6
+
+#define JKR_RCON_TAG_SIZE     20
+#define JKR_TUNNEL_MS         30000
+#define JKR_MAX_HOST_BANS     128
 #define JKR_RCON_PAD          32
 #define JKR_RCON_MAX_CMD      480
 #define JKR_RCON_NONCE_MS     10000
