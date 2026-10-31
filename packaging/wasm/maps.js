@@ -448,7 +448,7 @@
         var mine = {}, episodes = {};
         retailSources.forEach(function(src) {
             src.entries.forEach(function(e) {
-                if (e.name)
+                if (e.name && !src.spare)
                     (src.always ? mine : episodes)[gobName(e.name)] = true;
             });
         });
@@ -701,20 +701,50 @@
     }
 
     // The retail GOBs this install has, with their file lists. always: one
-    // in resource/, which the engine loads whatever the level.
+    // in resource/, which the engine loads whatever the level. spare: a copy
+    // of one in a folder in resource/, which the engine never loads, kept
+    // when a fan pack replaced it (the MotS Remastered pack keeps the
+    // original JKMsndLO.goo in resource/Backup Sounds/; the page reads it,
+    // see isSpareRetail in index.html). Its files are found by content only.
     function retailSources(root, ext) {
         var out = [];
-        for (var rel of RETAIL_FILES[ext] || []) {
-            var path = findPath(root, rel);
-            if (!path || !isFile(path))
-                continue;
+        var add = function(path, flags) {
             var read = fileReader(path);
             var size = FS().stat(path).size;
             var dir = parseGob(read, size);
             // The whole GOB too, for a mod that carries a copy of one.
             if (dir)
-                out.push({ read: read, entries: dir.entries.concat([{ offset: 0, size: size, name: '' }]),
-                           always: /^resource\//.test(rel) });
+                out.push(Object.assign({ read: read, entries: dir.entries.concat([{ offset: 0, size: size, name: '' }]) },
+                                       flags));
+        };
+        for (var rel of RETAIL_FILES[ext] || []) {
+            var path = findPath(root, rel);
+            if (path && isFile(path))
+                add(path, { always: /^resource\//.test(rel) });
+        }
+        for (var path of spareRetail(root, ext))
+            add(path, { always: false, spare: true });
+        return out;
+    }
+
+    function spareRetail(root, ext) {
+        var fs = FS();
+        var resource = findPath(root, 'resource');
+        var names = (RETAIL_FILES[ext] || []).filter(function(rel) { return /^resource\//.test(rel); })
+                                             .map(function(rel) { return rel.substring(9).toLowerCase(); });
+        var out = [];
+        if (!resource)
+            return out;
+        for (var sub of fs.readdir(resource)) {
+            var dir = resource + '/' + sub;
+            if (sub === '.' || sub === '..' || isFile(dir))
+                continue;
+            var list;
+            try { list = fs.readdir(dir); } catch (e) { continue; }
+            for (var n of list) {
+                if (names.indexOf(n.toLowerCase()) >= 0 && isFile(dir + '/' + n))
+                    out.push(dir + '/' + n);
+            }
         }
         return out;
     }

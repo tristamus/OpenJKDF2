@@ -321,23 +321,26 @@ test('a MotS joiner with the Remastered sounds gets a map that bundles original 
     assert.deepEqual(Buffer.from(g2.join.FS.files.get('/mots/episode/sith5.goo')), Buffer.from(sith5));
 });
 
+// What a host from before streamSha256 sends: its map's INFO without it.
+function asOldHost(f) {
+    if (f.to !== 'join' || new Uint8Array(f.bytes)[12] !== 2)
+        return null;
+    const info = JSON.parse(new TextDecoder().decode(new Uint8Array(f.bytes, 16)));
+    assert.match(info.streamSha256, /^[0-9a-f]{64}$/);
+    delete info.streamSha256;
+    const json = new TextEncoder().encode(JSON.stringify(info));
+    const out = new Uint8Array(16 + json.length);
+    out.set(new Uint8Array(f.bytes, 0, 16));
+    out.set(json, 16);
+    return out.buffer;
+}
+
 test('a host from before this tells a Remastered joiner to have it reload', async () => {
     const g = makeGame({
         hostFiles: { '/mots/resource/JKMsndLO.goo': stockSounds, '/mots/episode/sith5.goo': sith5 },
         joinFiles: { '/mots/resource/JKMsndLO.goo': remasteredSounds },
         cwd: '/mots',
-        rewrite: f => {
-            if (f.to !== 'join' || new Uint8Array(f.bytes)[12] !== 2)
-                return null;
-            const info = JSON.parse(new TextDecoder().decode(new Uint8Array(f.bytes, 16)));
-            assert.match(info.streamSha256, /^[0-9a-f]{64}$/);
-            delete info.streamSha256;
-            const json = new TextEncoder().encode(JSON.stringify(info));
-            const out = new Uint8Array(16 + json.length);
-            out.set(new Uint8Array(f.bytes, 0, 16));
-            out.set(json, 16);
-            return out.buffer;
-        },
+        rewrite: asOldHost,
     });
     const said = [];
     const log = console.log;
@@ -352,6 +355,64 @@ test('a host from before this tells a Remastered joiner to have it reload', asyn
     }
     assert.ok(said.some(l => /map sith5\.goo not installed: retail-changed/.test(l)), said.join('\n'));
     assert.ok(!g.join.FS.files.has('/mots/episode/sith5.goo'));
+});
+
+// The MotS Remastered pack's installer keeps the original JKMsndLO.goo in
+// resource/Backup Sounds/, which the page reads when it isn't the one loaded.
+const backupSounds = '/mots/resource/Backup Sounds/JKMSNDLO.GOO';
+
+test('original sounds kept in Backup Sounds rebuild a map exactly, from any host', async () => {
+    const stock = { '/mots/resource/JKMsndLO.goo': stockSounds, '/mots/resource/Jkmres.goo': motsRes };
+    const remastered = { '/mots/resource/JKMsndLO.goo': remasteredSounds, '/mots/resource/Jkmres.goo': motsRes,
+                         [backupSounds]: stockSounds };
+    for (const rewrite of [null, asOldHost]) {
+        const g = makeGame({ hostFiles: { ...stock, '/mots/episode/sith5.goo': sith5 }, joinFiles: { ...remastered },
+                             cwd: '/mots', rewrite });
+        g.host.jkMaps.host('sith5', 'goo');
+        await hostReady(g.host);
+        g.join.jkMaps.fetch('sith5', 'goo');
+        assert.equal(await waitState(g.join), 1);
+        assert.deepEqual(Buffer.from(g.join.FS.files.get('/mots/episode/sith5.goo')), Buffer.from(sith5));
+    }
+});
+
+test('a Remastered host sends the original sounds a map carries as references', async () => {
+    const stock = { '/mots/resource/JKMsndLO.goo': stockSounds, '/mots/resource/Jkmres.goo': motsRes };
+    const remastered = { '/mots/resource/JKMsndLO.goo': remasteredSounds, '/mots/resource/Jkmres.goo': motsRes };
+    // How many files the host's INFO says it left out as references.
+    const refsSent = log => {
+        const f = log.find(f => f.to === 'join' && f.bytes[12] === 2);
+        return (JSON.parse(new TextDecoder().decode(f.bytes.subarray(16))).refsBytes - 4) / 40;
+    };
+    const g = makeGame({ hostFiles: { ...remastered, [backupSounds]: stockSounds, '/mots/episode/sith5.goo': sith5 },
+                         joinFiles: { ...stock }, cwd: '/mots' });
+    g.host.jkMaps.host('sith5', 'goo');
+    await hostReady(g.host);
+    g.join.jkMaps.fetch('sith5', 'goo');
+    assert.equal(await waitState(g.join), 1);
+    assert.deepEqual(Buffer.from(g.join.FS.files.get('/mots/episode/sith5.goo')), Buffer.from(sith5));
+    assert.equal(refsSent(g.log), 2);
+
+    // Without the spare copy the original sound\b.wav went in the map's
+    // bytes: only sound\d.wav, the same in both, was a reference.
+    const g2 = makeGame({ hostFiles: { ...remastered, '/mots/episode/sith5.goo': sith5 }, joinFiles: { ...stock },
+                          cwd: '/mots' });
+    g2.host.jkMaps.host('sith5', 'goo');
+    await hostReady(g2.host);
+    g2.join.jkMaps.fetch('sith5', 'goo');
+    assert.equal(await waitState(g2.join), 1);
+    assert.equal(refsSent(g2.log), 1);
+});
+
+test('a spare copy is only looked in by content: the engine never loads it', async () => {
+    const { lib, core } = loadMaps({ FS: makeFS({ '/mots/resource/Jkmres.goo': motsRes, [backupSounds]: remasteredSounds,
+                                                  '/mots/resource/Backup Sounds/notes.goo': stockSounds,
+                                                  '/mots/resource/Old/Deeper/JKMsndLO.goo': stockSounds }, '/mots') });
+    const found = core.retailSources('/mots', 'goo');
+    assert.deepEqual(found.map(s => [s.always, !!s.spare]), [[true, false], [false, true]]);
+    // Its other version of sound\b.wav isn't the joiner's own.
+    const { stream, info } = await sith5Plan(lib);
+    assert.equal((await lib.rebuild(info, stream, found, true)).reason, 'missing-retail');
 });
 
 // ---- Host and joiner tabs.

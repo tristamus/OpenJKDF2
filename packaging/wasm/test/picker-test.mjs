@@ -467,14 +467,15 @@ test('a Steam Jedi Knight folder reads only the game files and characters', asyn
     assert.deepEqual(mods, []);
 });
 
-test('a Steam MotS folder with the Remastered pack leaves its textures, backups and docs unread', async () => {
+test('a Steam MotS folder with the Remastered pack leaves its textures and docs unread, not its original sounds', async () => {
     const { read, players, mods } = await whatIsRead(STEAM_MOTS, { mots: true });
     // Of jkgm/, only the muzzle-flash glows' folder.
     assert.deepEqual(read, [
         'Controls/MS SIDEWINDER GAMEPAD.CTM', 'Episode/JKM.GOO', 'Episode/JKM/cog/s1l1_endlevel.cog', 'Episode/JKM_KFY.GOO',
         'Episode/JKM_MP.GOO', 'Episode/JKM_SABER.GOO', 'Episode/MotS Secret Level/3do/mat/vader_cape.mat',
         'Episode/MotS Secret Level/episode.jk', 'Episode/MotS Secret Level/jkl/S6L1.jkl',
-        'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo', 'Resource/JKMRES.GOO',
+        'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo',
+        'Resource/Backup Sounds/JKMSNDLO.GOO', 'Resource/JKMRES.GOO',
         'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni',
         'jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png', 'jkgm/materials/SABER19/metadata.json',
         'jkgm/materials/SABER19/saber19.mat.saber.albedo.png'].sort());
@@ -504,7 +505,7 @@ test('loose game files, mods and maps are read; screenshots, readmes and copies 
         'mods/readme.md': null,
         'episode/MyLevel.gob': null, 'episode/MyLevel.jpg': null, 'episode/MyEp/episode.jk': null,
         'episode/MyEp/jkl/x.jkl': null, 'episode/MyEp/notes.doc': null, 'episode/MyEp/extra/a.gob': null,
-        'resource/cog/fix.cog': null, 'resource/Backup/Res2.gob': null, 'resource/notes.doc': null,
+        'resource/cog/fix.cog': null, 'resource/Backup/Res2.gob': gob('x', 'Resource/Res2.gob'), 'resource/notes.doc': null,
     });
     const sbx = mods.find(m => m.name === 'SBX'), blade = mods.find(m => m.name === 'Blade');
     assert.ok(sbx && blade, mods.map(m => m.name).join(', '));
@@ -513,6 +514,21 @@ test('loose game files, mods and maps are read; screenshots, readmes and copies 
         'episode/MyLevel.gob', 'episode/MyEp/episode.jk', 'episode/MyEp/jkl/x.jkl', 'resource/cog/fix.cog']).sort());
     // The size shown for a mod is what's read of it.
     assert.equal(sbx.bytes, gob('x', 'SBX/sbx.gob').length + 'SBX/cog/sbx.cog'.length);
+});
+
+// The MotS Remastered pack's installer replaces resource/JKMsndLO.goo and
+// keeps the original in resource/Backup Sounds/. A spare copy like that is
+// read for maps.js to find original files in, unless it's the same size as
+// the one loaded.
+test('a spare copy of one of the game\'s own GOBs is read when it isn\'t the one loaded', async () => {
+    const { read } = await whatIsRead({
+        ...STEAM_MOTS, 'Resource/Old/JKMRES.GOO': gob('x', 'Resource/JKMRES.GOO'), 'Resource/Old/Other.goo': null,
+        'Resource/Old/Deeper/JKMsndLO.goo': null,
+    }, { mots: true });
+    assert.deepEqual(read.filter(p => /^Resource\/[^/]+\/.*\.goo$/i.test(p)), ['Resource/Backup Sounds/JKMSNDLO.GOO']);
+    const { read: jk, mods } = await whatIsRead({ ...STEAM_JK, 'Resource/Backup/RES2.GOB': gob('x', 'the original') });
+    assert.ok(jk.includes('Resource/Backup/RES2.GOB'));
+    assert.deepEqual(mods, []);
 });
 
 test('a folder given with ?path= is read like a mod', async () => {
@@ -706,8 +722,8 @@ for (const [name, folder, mots, saved] of [
         'Episode/JKM_SABER.GOO', 'Episode/JKM/cog/s1l1_endlevel.cog', 'Episode/MotS Secret Level/episode.jk',
         'Episode/MotS Secret Level/jkl/S6L1.jkl', 'Episode/MotS Secret Level/3do/mat/vader_cape.mat',
         'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo',
-        'Player/BahamutZero0o/BahamutZero0o.plr', 'Player/BahamutZero0o/Tristamus.mpc', 'Resource/JKMRES.GOO',
-        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni',
+        'Player/BahamutZero0o/BahamutZero0o.plr', 'Player/BahamutZero0o/Tristamus.mpc',
+        'Resource/Backup Sounds/JKMSNDLO.GOO', 'Resource/JKMRES.GOO', 'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni',
         'jkgm/materials/SABER19/saber19.mat.saber.albedo.png', 'jkgm/materials/SABER19/metadata.json',
         'jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png']],
 ]) {
