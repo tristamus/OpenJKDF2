@@ -960,6 +960,20 @@
       .table-seats.changed { animation: table-flash 1.2s ease-out; }
       @keyframes table-flash { from { background-color: var(--gold); color: #000; } to { background-color: transparent; } }
       .table-lock { width: 10px; height: 12px; flex: none; }
+      /* The relay's games: a tag by the number, and greyed while a pinned
+         server isn't running. */
+      .table-relay {
+        flex: none;
+        padding: 0 4px;
+        border: 1px solid var(--gold);
+        color: var(--gold);
+        font: bold 9px/13px Verdana, Geneva, sans-serif;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .table.off .table-head { background-color: #224444; }
+      .table.off .table-title { color: var(--muted); }
+      .game-list .list-by { color: var(--muted); }
       .table-info { position: relative; margin: 3px 0 0 7px; font-size: 11px; }
       .table-info summary {
         display: inline-block;
@@ -1376,7 +1390,7 @@
       .style-2001 .room-toolbar [data-view] path { fill: var(--teal); }
       .style-2001 .table-lock rect { fill: var(--gold); }
       .style-2001 .table-lock path { stroke: var(--gold); }
-      .style-2001 .table.empty .table-head { background-color: #1b4a66; }
+      .style-2001 .table.empty .table-head, .style-2001 .table.off .table-head { background-color: #1b4a66; }
       .style-2001 .table-title { color: #e6f3fb; }
       .style-2001 .round { border-color: #0b3556; color: var(--navy); }
       .style-2001 .round.host { background: radial-gradient(circle at 35% 30%, #d9f0fb, var(--tab) 45%, var(--teal-dark)); }
@@ -1883,6 +1897,10 @@
       // off the Multiplayer menu has only the lobby's connection.
       var IMPERIAL_HOSTS = ['jediknight.zone', 'beta.jediknight.zone', 'localhost', '127.0.0.1'];
       var IMPERIAL_SERVER = { 'jediknight.zone': 'lobby.jkjunkie.com', 'beta.jediknight.zone': 'lobby.jkjunkie.com' };
+      // While the connection is on, the room windows also list the relay's
+      // games, from the site's Worker (/imperial-games). false leaves them
+      // out and the connection as it is.
+      var IMPERIAL_LOBBY_LIST = true;
       (function() {
         var params = new URLSearchParams(window.location.search);
         if (params.has('netstats')) Module['jkNetMeasure'] = true;
@@ -5567,6 +5585,7 @@
       document.querySelectorAll('[data-play]').forEach(function(b) {
         b.addEventListener('click', function() {
           delete Module.jkJoinRoom;
+          delete Module.jkJoinImperial;
           openPicker(null);
         });
       });
@@ -5688,6 +5707,149 @@
                  games: s.games.filter(function(g) { return g.game === game; }) };
       }
 
+      // ---- The Imperial relay's games. The Imperial Network Protocol
+      // connection (stdComm_Imperial.c, on when Module.jkImperialUrl is set)
+      // has games of its own, which the room windows list next to the
+      // lobby's. The relay has no web page to ask, so the site's Worker asks
+      // it (/imperial-games, imperial.js in jkdf2mp-bb-server) and the page
+      // asks the Worker every IMPERIAL_POLL_MS while it shows. An answer
+      // looks like:
+      //   { state: 'live', server: 'lobby.jkjunkie.com', checked: '2026-10-31T19:00:00.000Z',
+      //     games: [{ key: '13e5dd93743f59055bbf297508845b2b', name: 'Coruscant', game: 'jk1',
+      //               map: 'c3.jkl', episode: 'JK1CTF', mod: '', locked: false, players: 0, max: 31,
+      //               dedicated: true, pinned: true, listed: true, joinable: true, why: '' }] }
+      // state is 'down' when the relay didn't answer the Worker. Pinned
+      // servers (the Worker's IMPERIAL_PINNED) come first, and are there
+      // even while they aren't running (listed false). why says why a game
+      // can't be joined: its host runs the desktop game ('desktop'), it
+      // isn't taking players ('closed'), it isn't running ('not-listed') or
+      // the relay didn't answer ('relay-down'). The relay doesn't say who's
+      // playing, so these games have no names, and their players aren't in
+      // the lobby's counts. The games show only when the Worker asks the
+      // relay the engine connects to (server is Module.jkImperialUrl), and
+      // Join hands the engine the game to select (Module.jkJoinImperial).
+      var IMPERIAL_POLL_MS = 20000;
+      // Who runs a relay's pinned servers, said on their tables.
+      var IMPERIAL_RUN_BY = { 'lobby.jkjunkie.com': 'sithmartyr' };
+      var IMPERIAL_STATE = { 'relay-down': 'Imperial relay not answering', 'not-listed': 'Not running right now',
+                             desktop: 'Desktop OpenJKDF2 only', closed: 'Not taking players' };
+      // state: 'off' (nothing to show), 'connecting', 'live', 'down' (the
+      // relay didn't answer the Worker) or 'error' (the Worker didn't answer).
+      var imperialLive = { state: 'off', server: '', games: [], updated: null };
+
+      // Only what the page shows, in the types it expects, whatever arrives.
+      // Each game gets the fields the lobby's have too (names, net), so the
+      // tables draw them the same way.
+      function cleanImperial(a) {
+        function str(v, max) {
+          return typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').substring(0, max) : '';
+        }
+        function num(v) { return typeof v === 'number' && isFinite(v) && v >= 0 ? Math.min(Math.floor(v), 64) : 0; }
+        function has(o, k) { return typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k); }
+        if (!a || typeof a !== 'object' || (a.state !== 'live' && a.state !== 'down')) return null;
+        var server = str(a.server, 255);
+        var games = (Array.isArray(a.games) ? a.games : []).slice(0, 32).filter(function(g) {
+          return g && typeof g === 'object';
+        }).map(function(g, i) {
+          var key = typeof g.key === 'string' && /^[0-9a-f]{32}$/.test(g.key) ? g.key : '';
+          var listed = !!g.listed && !!key;
+          var joinable = !!g.joinable && listed && !has(IMPERIAL_STATE, g.why);
+          var pinned = !!g.pinned, dedicated = !!g.dedicated;
+          return { uid: 'i' + (key || 'pin' + i), key: key, imperial: true, name: str(g.name, 32),
+                   game: g.game === 'mots' ? 'mots' : 'jk1', map: str(g.map, 64), episode: str(g.episode, 64),
+                   mod: str(g.mod, 64), locked: !!g.locked, players: listed ? num(g.players) : 0,
+                   max: listed ? num(g.max) : 0, names: [], net: NETCODE, dedicated: dedicated, pinned: pinned,
+                   listed: listed, joinable: joinable,
+                   why: joinable ? '' : has(IMPERIAL_STATE, g.why) ? g.why : listed ? 'closed' : 'not-listed',
+                   runBy: pinned && dedicated && has(IMPERIAL_RUN_BY, server) ? IMPERIAL_RUN_BY[server] : '' };
+        });
+        return { state: a.state, server: server, games: games };
+      }
+
+      // The games a room window lists, numbered in this order: the relay's
+      // pinned servers, the lobby's games, then the relay's other games.
+      // uid tells them apart across redraws.
+      function roomGameList(lobbyGames, imperialGames, game) {
+        var mine = imperialGames.filter(function(g) { return g.game === game; });
+        return mine.filter(function(g) { return g.pinned; }).concat(
+          lobbyGames.map(function(g) { return Object.assign({ uid: 'g' + g.id, imperial: false }, g); }),
+          mine.filter(function(g) { return !g.pinned; }));
+      }
+
+      // Why a game of the relay's has no Join, or null when it can be joined.
+      function imperialStop(g) { return g.imperial && !g.joinable ? IMPERIAL_STATE[g.why] || IMPERIAL_STATE.closed : null; }
+
+      // Takes the Worker's latest answer, or null with why there's none.
+      function imperialShow(answer, state) {
+        var a = answer ? cleanImperial(answer) : null;
+        imperialLive.state = a ? a.state : state || 'error';
+        imperialLive.server = a ? a.server : '';
+        imperialLive.games = a ? a.games : [];
+        if (a) imperialLive.updated = new Date();
+        renderRoomCount();
+        if (room.open) renderRoom();
+      }
+
+      // Asks the Worker now and every IMPERIAL_POLL_MS after, while the page
+      // shows. One answer it couldn't get keeps the games it had; two in a
+      // row hide them, and it asks less often until one comes. A 404 (the
+      // Worker's IMPERIAL_LIST is empty) or an answer for another relay than
+      // the engine's stops it.
+      var imperialWatch = null;
+
+      function startImperialWatch() {
+        if (imperialWatch || !IMPERIAL_LOBBY_LIST || !Module.jkImperialUrl || !/^https?:$/.test(location.protocol))
+          return;
+        var w = imperialWatch = { timer: null, busy: false, stopped: false, failures: 0, ask: ask };
+        imperialLive.state = 'connecting';
+        function later(ms) {
+          clearTimeout(w.timer);
+          w.timer = w.stopped ? null : setTimeout(ask, ms);
+        }
+        function ask() {
+          w.timer = null;
+          // A hidden page asks again once it shows (visibilitychange below).
+          if (w.stopped || w.busy || document.hidden) return;
+          w.busy = true;
+          fetch('/imperial-games', { cache: 'no-store', credentials: 'omit' }).then(function(res) {
+            if (res.status === 404) return null;
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          }).then(function(a) {
+            w.busy = false;
+            if (w.stopped) return;
+            if (!a || typeof a !== 'object' || a.server !== Module.jkImperialUrl) {
+              stopImperialWatch();
+              imperialShow(null, 'off');
+              return;
+            }
+            w.failures = 0;
+            imperialShow(a);
+            later(IMPERIAL_POLL_MS);
+          }).catch(function(e) {
+            w.busy = false;
+            if (w.stopped) return;
+            w.failures++;
+            if (w.failures >= 2) imperialShow(null, 'error');
+            later(Math.min(IMPERIAL_POLL_MS * Math.pow(2, w.failures - 1), 5 * 60 * 1000));
+          });
+        }
+        ask();
+      }
+
+      function stopImperialWatch() {
+        var w = imperialWatch;
+        if (!w) return;
+        w.stopped = true;
+        clearTimeout(w.timer);
+        w.timer = null;
+      }
+
+      document.addEventListener('visibilitychange', function() {
+        var w = imperialWatch;
+        if (w && !w.stopped && !document.hidden && !w.timer && !w.busy) w.ask();
+      });
+
       // Takes the lobby's latest status, or null with why there's none:
       // 'connecting' or 'down'.
       function lobbyShow(status, state) {
@@ -5702,10 +5864,12 @@
         var s = lobbyLive.status;
         document.querySelectorAll('[data-room]').forEach(function(b) {
           var r = roomStatus(s, b.dataset.room);
+          var games = roomGameList(r ? r.games : [], imperialLive.games, ROOMS[b.dataset.room].game)
+            .filter(function(g) { return !g.imperial || g.listed; }).length;
           var count = b.querySelector('.count');
           count.textContent = r ? r.online : '–';
           count.classList.toggle('busy', !r);
-          b.querySelector('.game-count').textContent = r ? plural(r.games.length, 'game', 'games') : '';
+          b.querySelector('.game-count').textContent = r || games ? plural(games, 'game', 'games') : '';
         });
         var total = document.getElementById('total-players');
         if (s)
@@ -5745,21 +5909,26 @@
         }
       }
 
+      // g is one of roomGameList's: the lobby's game or the relay's.
       function gameTable(g, i) {
-        var li = el('li', 'table');
+        var stop = imperialStop(g);
+        var li = el('li', 'table' + (g.imperial ? ' imperial' : '') + (g.imperial && !g.listed ? ' off' : ''));
         var no = gameNumber(i);
         var full = isFull(g);
         var other = otherVersion(g);
         var head = el('div', 'table-head');
         var line = el('div', 'table-line');
         line.append(el('b', 'table-no', no));
+        if (g.imperial) line.append(el('span', 'table-relay', 'Imperial'));
         if (g.locked) line.insertAdjacentHTML('beforeend', LOCK_SVG);
-        var seats = el('span', 'table-seats');
-        var shown = el('span', null, g.max ? g.players + '/' + g.max : String(g.players));
-        shown.setAttribute('aria-hidden', 'true');
-        seats.append(shown, el('span', 'sr', g.players + (g.max ? ' of ' + g.max : '') + ' players'));
-        if (lobbyLive.seen[g.id] !== undefined && lobbyLive.seen[g.id] !== g.players) seats.classList.add('changed');
-        line.append(seats);
+        if (!g.imperial || g.listed) {
+          var seats = el('span', 'table-seats');
+          var shown = el('span', null, g.max ? g.players + '/' + g.max : String(g.players));
+          shown.setAttribute('aria-hidden', 'true');
+          seats.append(shown, el('span', 'sr', g.players + (g.max ? ' of ' + g.max : '') + ' players'));
+          if (lobbyLive.seen[g.uid] !== undefined && lobbyLive.seen[g.uid] !== g.players) seats.classList.add('changed');
+          line.append(seats);
+        }
         head.append(line);
         var title = el('div', 'table-line');
         title.append(el('span', 'table-title', g.name || '(no name)'));
@@ -5767,13 +5936,15 @@
         li.append(head);
 
         var info = el('details', 'table-info');
-        info.dataset.key = 'info-' + g.id;
+        info.dataset.key = 'info-' + g.uid;
         var summary = el('summary', null, 'Info');
-        summary.dataset.key = 'sum-' + g.id;
+        summary.dataset.key = 'sum-' + g.uid;
         var dl = el('dl');
         [['Game', g.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight'],
+         ['Relay', g.imperial ? 'Imperial (' + (imperialLive.server || 'Unknown') + ')' : 'OpenJKDF2'],
+         g.imperial ? ['Server', g.dedicated ? 'Dedicated' + (g.runBy ? ', run by ' + g.runBy : '') : 'Hosted by a player'] : null,
          ['Map', g.map || 'Unknown'], ['Episode', g.episode || 'Unknown'],
-         ['Mod', g.mod || 'None'], ['Password', g.locked ? 'Yes' : 'No']].forEach(function(row) {
+         ['Mod', g.mod || 'None'], ['Password', g.locked ? 'Yes' : 'No']].filter(Boolean).forEach(function(row) {
           dl.append(el('dt', null, row[0]), el('dd', null, row[1]));
         });
         info.append(summary, dl);
@@ -5784,32 +5955,42 @@
         seatDots(ring, g.players, g.max);
         var button = el('button', 'round');
         button.type = 'button';
-        if (full || other) {
+        if (stop || full || other) {
           button.disabled = true;
-          button.setAttribute('aria-label', no + (other ? ' runs ' + (other === 'older' ? 'an older' : 'a newer') +
+          button.setAttribute('aria-label', no + (stop ? ': ' + stop :
+                                                  other ? ' runs ' + (other === 'older' ? 'an older' : 'a newer') +
                                                           ' version' : ' is full'));
         } else {
           button.append(el('span', null, 'Join'));
           button.setAttribute('aria-label', 'Join ' + no);
-          button.dataset.join = g.id;
+          if (g.imperial) button.dataset.imperial = g.key;
+          else button.dataset.join = g.id;
           button.dataset.label = no;
-          button.dataset.key = 'join-' + g.id;
+          button.dataset.key = 'join-' + g.uid;
         }
         ring.append(button);
         body.append(ring, playerList(g));
         li.append(body);
 
         var open = g.max - g.players;
-        li.append(el('p', 'table-state' + (full || other ? ' full' : ''),
-                     other ? VERSION_STATE[other] : full ? 'Game Is Full' :
-                     (g.max ? plural(open, 'seat open', 'seats open') : '')));
+        li.append(el('p', 'table-state' + (stop || full || other ? ' full' : ''),
+                     stop || (other ? VERSION_STATE[other] : full ? 'Game Is Full' :
+                     (g.max ? plural(open, 'seat open', 'seats open') : ''))));
         return li;
       }
 
       // Host first, as many names as fit, then how many more. A player whose
-      // name the lobby doesn't have (an older game) still takes a line.
+      // name the lobby doesn't have (an older game) still takes a line. The
+      // relay doesn't say who's in its games, only how many.
       function playerList(g) {
         var ul = el('ul', 'table-players');
+        if (g.imperial) {
+          if (g.listed) ul.append(el('li', null, g.players ? plural(g.players, 'player', 'players') : 'Nobody playing'));
+          if (g.listed && g.players) ul.append(el('li', 'unnamed', 'Names not shared'));
+          if (g.dedicated) ul.append(el('li', 'unnamed', 'Dedicated server'));
+          if (g.runBy) ul.append(el('li', 'unnamed', 'Run by ' + g.runBy));
+          return ul;
+        }
         var names = g.names.slice();
         while (names.length < g.players) names.push(null);
         var shown = names.length > ROOM_MAX_NAMES ? ROOM_MAX_NAMES - 1 : names.length;
@@ -5860,7 +6041,7 @@
         var wrap = el('div', 'list-scroll');
         var table = el('table', 'game-list');
         var head = el('tr');
-        ['Game', 'Name', 'Players', 'Map', 'Mod', "Who's playing", ''].forEach(function(h) {
+        ['Game', 'Name', 'Relay', 'Players', 'Map', 'Mod', "Who's playing", ''].forEach(function(h) {
           head.append(el('th', null, h));
         });
         var thead = el('thead');
@@ -5871,9 +6052,13 @@
           var no = gameNumber(i);
           var name = el('td', null, g.name || '(no name)');
           if (g.locked) name.insertAdjacentHTML('beforeend', ' ' + LOCK_SVG);
+          if (g.runBy) name.append(el('span', 'list-by', ', run by ' + g.runBy));
           var names = g.names.filter(Boolean);
           var action = el('td');
-          if (otherVersion(g)) {
+          var stop = imperialStop(g);
+          if (stop) {
+            action.textContent = stop;
+          } else if (otherVersion(g)) {
             action.textContent = VERSION_STATE[otherVersion(g)];
           } else if (isFull(g)) {
             action.textContent = 'Full';
@@ -5881,15 +6066,18 @@
             var b = el('button', 'zone-button', 'Join');
             b.type = 'button';
             b.setAttribute('aria-label', 'Join ' + no);
-            b.dataset.join = g.id;
+            if (g.imperial) b.dataset.imperial = g.key;
+            else b.dataset.join = g.id;
             b.dataset.label = no;
-            b.dataset.key = 'join-' + g.id;
+            b.dataset.key = 'join-' + g.uid;
             action.append(b);
           }
-          tr.append(el('td', 'num', no), name,
-                    el('td', 'num', g.max ? g.players + '/' + g.max : String(g.players)),
-                    el('td', null, g.map || 'Unknown'), el('td', null, g.mod || 'None'),
-                    el('td', null, names.length ? names.join(', ') : '–'), action);
+          var off = g.imperial && !g.listed;
+          tr.append(el('td', 'num', no), name, el('td', null, g.imperial ? 'Imperial' : 'OpenJKDF2'),
+                    el('td', 'num', off ? '–' : g.max ? g.players + '/' + g.max : String(g.players)),
+                    el('td', null, off ? '–' : g.map || 'Unknown'), el('td', null, off ? '–' : g.mod || 'None'),
+                    el('td', null, names.length ? names.join(', ') : g.imperial && g.players ? 'Names not shared' : '–'),
+                    action);
           tbody.append(tr);
         });
         table.append(thead, tbody);
@@ -5899,6 +6087,8 @@
 
       function renderRoster() {
         var s = roomStatus(lobbyLive.status, lobbyLive.room);
+        var list = roomGameList(s ? s.games : [], imperialLive.games, ROOMS[lobbyLive.room].game);
+        var relay = list.filter(function(g) { return g.imperial && g.listed; });
         var head = el('div', 'roster-head');
         head.append(el('span', null, 'Latency'), el('span', null, 'Name'));
         roster.replaceChildren(head);
@@ -5926,13 +6116,22 @@
           }
           roster.append(sec);
         }
+        // The relay's players are counted on their own: the lobby doesn't
+        // know them, and the relay doesn't say who they are.
+        function relaySection() {
+          if (!relay.length) return;
+          section('Imperial relay', String(relay.reduce(function(n, g) { return n + g.players; }, 0)),
+                  [['Names not shared', null, true]]);
+        }
         if (!s) {
           section('Total players', '–');
+          relaySection();
           return;
         }
         var playing = [];
         var inGames = 0;
-        s.games.forEach(function(g, i) {
+        list.forEach(function(g, i) {
+          if (g.imperial) return;
           inGames += g.players;
           g.names.forEach(function(n) { if (n) playing.push([n, gameNumber(i)]); });
         });
@@ -5943,6 +6142,7 @@
         section('Total players', String(s.online));
         section('Looking', String(inLobby), lobbyRows, 'Nobody');
         section('Playing', String(inGames), playing, 'Nobody');
+        relaySection();
       }
 
       function renderRoomStatus() {
@@ -5958,32 +6158,45 @@
         } else {
           summary.textContent = lobbyLive.state === 'down' ? 'Trying again' : 'Waiting for the lobby';
         }
+        // The relay's games and players, on their own.
+        var game = ROOMS[lobbyLive.room].game;
+        var relay = imperialLive.games.filter(function(g) { return g.game === game && g.listed; });
+        if (imperialLive.state === 'down')
+          summary.textContent += ' · Imperial relay not answering';
+        else if (imperialLive.state === 'live')
+          summary.textContent += ' · Imperial: ' + plural(relay.length, 'game', 'games') + ', ' +
+            plural(relay.reduce(function(n, g) { return n + g.players; }, 0), 'player', 'players');
       }
 
       function renderRoom() {
         var s = roomStatus(lobbyLive.status, lobbyLive.room);
+        var list = roomGameList(s ? s.games : [], imperialLive.games, ROOMS[lobbyLive.room].game);
         document.getElementById('room-title').textContent = ROOMS[lobbyLive.room].title;
         // A redraw keeps what has focus and which Info panels are open.
         var active = document.activeElement;
         var focusKey = active && roomGames.contains(active) ? active.dataset.key : null;
         var openInfo = Array.from(roomGames.querySelectorAll('details[open]')).map(function(d) { return d.dataset.key; });
         roomGames.replaceChildren();
+        // While the lobby isn't answering, the relay's games still show.
         if (!s) {
-          roomGames.append(el('p', 'room-message', lobbyLive.state === 'down' ?
+          roomGames.append(el('p', 'room-message', lobbyLive.state !== 'down' ? 'Connecting to the lobby…' :
+            list.length ? "The lobby isn't answering right now, so only the Imperial relay's games are listed here. " +
+                          'For the lobby\'s, start the game, choose Multiplayer, then Join.' :
             "Live counts unavailable: the lobby isn't answering right now, so the games can't be listed here. " +
-            'You can still start the game, choose Multiplayer, then Join.' : 'Connecting to the lobby…'));
-        } else {
-          if (!s.games.length)
-            roomGames.append(el('p', 'room-message', 'No games right now. Host one and it shows up here for everyone.'));
+            'You can still start the game, choose Multiplayer, then Join.'));
+        } else if (!list.length) {
+          roomGames.append(el('p', 'room-message', 'No games right now. Host one and it shows up here for everyone.'));
+        }
+        if (s || list.length) {
           if (lobbyLive.view === 'list') {
-            if (s.games.length) roomGames.append(gameList(s.games));
+            if (list.length) roomGames.append(gameList(list));
           } else {
             var ul = el('ul', 'tables');
-            s.games.forEach(function(g, i) { ul.append(gameTable(g, i)); });
+            list.forEach(function(g, i) { ul.append(gameTable(g, i)); });
             roomGames.append(ul);
           }
           lobbyLive.seen = {};
-          s.games.forEach(function(g) { lobbyLive.seen[g.id] = g.players; });
+          list.forEach(function(g) { lobbyLive.seen[g.uid] = g.players; });
         }
         lobbyLive.cols = 0;
         fillTables(true);
@@ -6020,11 +6233,13 @@
         roomNoteTimer = setTimeout(function() { roomNote.hidden = true; }, 10000);
       }
 
-      // Quick Join picks the open game with the most players, without a password.
+      // Quick Join picks the lobby's open game with the most players, without
+      // a password. The relay's games are left to their own Join.
       function quickJoinGame() {
         var s = roomStatus(lobbyLive.status, lobbyLive.room);
         var best = null, bestIndex = -1;
-        (s ? s.games : []).forEach(function(g, i) {
+        roomGameList(s ? s.games : [], imperialLive.games, ROOMS[lobbyLive.room].game).forEach(function(g, i) {
+          if (g.imperial) return;
           if (!isFull(g) && !g.locked && !otherVersion(g) && (!best || g.players > best.players)) { best = g; bestIndex = i; }
         });
         return best ? { id: best.id, label: gameNumber(bestIndex) } : null;
@@ -6032,7 +6247,9 @@
 
       // Join and Host start the room's game the way its other rooms do.
       // Joining hands the engine the room to select on its Join screen
-      // (Module.jkJoinRoom).
+      // (Module.jkJoinRoom), or for the relay's games ('join-imperial') the
+      // game to select there once the Multiplayer menu has picked the
+      // relay's connection (Module.jkJoinImperial).
       function roomAction(kind, id, label) {
         // lobbyRoom: Quit comes back to this room window (jkQuitToLobby).
         var want = { game: ROOMS[lobbyLive.room].game, room: ROOMS[lobbyLive.room].name, lobbyRoom: lobbyLive.room };
@@ -6050,6 +6267,8 @@
         // A Join that was closed before picking a folder doesn't carry over.
         if (kind === 'join' && id) Module.jkJoinRoom = Number(id);
         else delete Module.jkJoinRoom;
+        if (kind === 'join-imperial' && /^[0-9a-f]{32}$/.test(id)) Module.jkJoinImperial = id;
+        else delete Module.jkJoinImperial;
         room.close();
         openPicker(want);
       }
@@ -6057,6 +6276,8 @@
       roomGames.addEventListener('click', function(ev) {
         var join = ev.target.closest('[data-join]');
         if (join) return roomAction('join', join.dataset.join, join.dataset.label);
+        var relayJoin = ev.target.closest('[data-imperial]');
+        if (relayJoin) return roomAction('join-imperial', relayJoin.dataset.imperial, relayJoin.dataset.label);
         if (ev.target.closest('[data-act=host]')) roomAction('host');
       });
       room.querySelector('[data-act=host]').addEventListener('click', function() { roomAction('host'); });
@@ -6325,16 +6546,19 @@
       var hideZoneBeforeLobby = hideZone;
       hideZone = function() {
         stopLobbyWatch();
+        stopImperialWatch();
         if (room.open) room.close();
         hideZoneBeforeLobby();
       };
 
       if (document.documentElement.classList.contains('zone-open')) {
         renderRoomCount();
-        if (window.jkLobbyMock)
-          window.jkLobbyMock.attach(lobbyShow);
-        else
+        if (window.jkLobbyMock) {
+          window.jkLobbyMock.attach(lobbyShow, imperialShow);
+        } else {
           startLobbyWatch();
+          startImperialWatch();
+        }
         openRoom(location.hash.substring(1));
       }
       window.addEventListener('hashchange', function() {
