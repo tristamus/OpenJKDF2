@@ -133,6 +133,13 @@ if(TARGET_USE_WSRELAY)
     file(GLOB TARGET_WSRELAY_SRCS ${PROJECT_SOURCE_DIR}/src/Platform/Networking/WSRelay/*.c)
     list(APPEND ENGINE_SOURCE_FILES ${TARGET_WSRELAY_SRCS})
 
+    # The Imperial Network Protocol connection: the desktop's relay client, over WebSockets here.
+    file(GLOB TARGET_IMPERIAL_SRCS ${PROJECT_SOURCE_DIR}/src/Platform/Networking/Imperial/*.c)
+    list(APPEND ENGINE_SOURCE_FILES ${TARGET_IMPERIAL_SRCS})
+    set_source_files_properties(${TARGET_IMPERIAL_SRCS} PROPERTIES
+        COMPILE_DEFINITIONS "JKRELAY_STANDALONE_CLIENT"
+        INCLUDE_DIRECTORIES ${PROJECT_SOURCE_DIR}/src/Platform/Networking/Imperial)
+
     add_definitions(-DPLATFORM_WSRELAY)
 endif()
 
