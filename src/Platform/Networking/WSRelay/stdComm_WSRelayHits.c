@@ -481,7 +481,9 @@ void stdComm_WSRelay_FlushHits()
         hits_msg.netMsg.cogMsgId = STDCOMM_WSRELAY_HITS_MSG;
         hits_msg.netMsg.msg_size = hits_aOutbox[i].len;
         memcpy(hits_msg.pktData, hits_aOutbox[i].body, hits_aOutbox[i].len);
-        sithComm_SendMsgToPlayer(&hits_msg, hits_aOutbox[i].to, 1, 0);
+        // Changed: with a resend id where the transport doesn't resend
+        // (stdComm_WSRelay_HitsResend).
+        sithComm_SendMsgToPlayer(&hits_msg, hits_aOutbox[i].to, 1, stdComm_WSRelay_HitsResend());
     }
     hits_numOutbox = 0;
 }
@@ -1450,8 +1452,17 @@ static void hits_TakeHello(int fromNetId, int slot, WSRelayHitsIn* in)
     int flags = hits_GetU8(in);
     int rules = hits_GetU8(in);
     int reachMs = hits_GetU16(in);
+    if (in->bad || version < 1)
+        return;
+    rules = (rules == STDCOMM_WSRELAY_HITS_HWYS) ? STDCOMM_WSRELAY_HITS_HWYS : STDCOMM_WSRELAY_HITS_CLASSIC;
+
+    // The host's rules are the match's. Fixed: also a dedicated host's, whose
+    // own slot is never in the game, so it isn't a peer (hits_Peer).
+    if (!stdComm_bIsServer && (flags & HITS_HELLO_HOST) && fromNetId == (int)sithNet_serverNetId)
+        stdComm_WSRelay_SetHitRules(rules, reachMs);
+
     WSRelayHitsPeer* p = hits_Peer(slot);
-    if (in->bad || version < 1 || !p)
+    if (!p)
         return;
 
     int bFirst = !p->bHello;
@@ -1459,11 +1470,7 @@ static void hits_TakeHello(int fromNetId, int slot, WSRelayHitsIn* in)
     // The lower of the two: both games have to read what the other sends.
     p->version = version < HITS_VERSION ? version : HITS_VERSION;
     p->bHeardMe = !!(flags & HITS_HELLO_HEARD);
-    p->rules = (rules == STDCOMM_WSRELAY_HITS_HWYS) ? STDCOMM_WSRELAY_HITS_HWYS : STDCOMM_WSRELAY_HITS_CLASSIC;
-
-    // The host's rules are the match's.
-    if (!stdComm_bIsServer && (flags & HITS_HELLO_HOST) && fromNetId == (int)sithNet_serverNetId)
-        stdComm_WSRelay_SetHitRules(p->rules, reachMs);
+    p->rules = rules;
 
     // So that game knows this one heard it.
     if (bFirst || !p->bHeardMe)
