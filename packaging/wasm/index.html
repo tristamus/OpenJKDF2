@@ -1518,31 +1518,31 @@
             <section id="rooms" aria-labelledby="rooms-title">
               <h2 class="ruled" id="rooms-title">Play in the rooms below <small id="total-players" aria-live="polite"></small></h2>
               <p class="note">Standard and Capture the Flag rooms start Jedi Knight, Sith rooms start Mysteries of the
-                Sith, and Play JKDF2 starts either. Open Nar Shaddaa or Sith: Asteroid to see who's playing now.</p>
+                Sith, and Play JKDF2 starts either. Open any room to see who's playing now.</p>
 
               <h3>Standard Rooms</h3>
               <p class="note counted"><span>Players</span><span>Open to everyone with Jedi Knight: Dark Forces II</span></p>
               <ul class="rooms counted">
                 <li><button class="link-button" type="button" data-room="nar-shaddaa" aria-haspopup="dialog"><span class="count busy">&ndash;</span><span><span class="room-name">Nar Shaddaa</span> <span class="tag game-count"></span></span></button></li>
-                <li><button class="link-button" type="button" data-play data-game="jk1"><span class="count"></span><span class="room-name">The Cantina</span></button></li>
-                <li><button class="link-button" type="button" data-play data-game="jk1"><span class="count"></span><span class="room-name">Sulon</span></button></li>
-                <li><button class="link-button" type="button" data-play data-game="jk1"><span class="count"></span><span><span class="room-name">Bespin</span> <span class="tag">(Rookie)</span></span></button></li>
-                <li><button class="link-button" type="button" data-play data-game="jk1"><span class="count"></span><span><span class="room-name">Canyon Oasis</span> <span class="tag">(Rookie)</span></span></button></li>
-                <li><button class="link-button" type="button" data-play data-game="jk1"><span class="count"></span><span><span class="room-name">Dark Palace</span> <span class="tag">(Expert)</span></span></button></li>
+                <li><button class="link-button" type="button" data-opens-room="nar-shaddaa" aria-haspopup="dialog"><span class="count"></span><span class="room-name">The Cantina</span></button></li>
+                <li><button class="link-button" type="button" data-opens-room="nar-shaddaa" aria-haspopup="dialog"><span class="count"></span><span class="room-name">Sulon</span></button></li>
+                <li><button class="link-button" type="button" data-opens-room="nar-shaddaa" aria-haspopup="dialog"><span class="count"></span><span><span class="room-name">Bespin</span> <span class="tag">(Rookie)</span></span></button></li>
+                <li><button class="link-button" type="button" data-opens-room="nar-shaddaa" aria-haspopup="dialog"><span class="count"></span><span><span class="room-name">Canyon Oasis</span> <span class="tag">(Rookie)</span></span></button></li>
+                <li><button class="link-button" type="button" data-opens-room="nar-shaddaa" aria-haspopup="dialog"><span class="count"></span><span><span class="room-name">Dark Palace</span> <span class="tag">(Expert)</span></span></button></li>
               </ul>
 
               <h3>Capture the Flag Rooms</h3>
               <p class="note">For team play</p>
               <ul class="rooms">
-                <li><button class="link-button" type="button" data-play data-game="jk1">CTF Room 1</button></li>
-                <li><button class="link-button" type="button" data-play data-game="jk1">CTF Room 2</button></li>
+                <li><button class="link-button" type="button" data-opens-room="nar-shaddaa" aria-haspopup="dialog">CTF Room 1</button></li>
+                <li><button class="link-button" type="button" data-opens-room="nar-shaddaa" aria-haspopup="dialog">CTF Room 2</button></li>
               </ul>
 
               <h3>Mysteries of the Sith Rooms</h3>
               <p class="note counted"><span>Players</span><span>Pick your Mysteries of the Sith folder for these</span></p>
               <ul class="rooms counted">
                 <li><button class="link-button" type="button" data-room="sith-asteroid" aria-haspopup="dialog"><span class="count busy">&ndash;</span><span><span class="room-name">Sith: Asteroid</span> <span class="tag game-count"></span></span></button></li>
-                <li><button class="link-button" type="button" data-play data-game="mots"><span class="count"></span><span class="room-name">Sith: Altyr 5</span></button></li>
+                <li><button class="link-button" type="button" data-opens-room="sith-asteroid" aria-haspopup="dialog"><span class="count"></span><span class="room-name">Sith: Altyr 5</span></button></li>
               </ul>
             </section>
 
@@ -5551,17 +5551,13 @@
         chooseButton.focus();
       });
 
-      // Play JKDF2 and every room open the folder prompt, a room's asking for
-      // its game's folder. Nar Shaddaa and Sith: Asteroid open their room
-      // window first, whose Join and Host buttons open it.
-      function roomName(b) {
-        var name = b.querySelector('.room-name');
-        return (name || b).textContent.trim();
-      }
+      // Play JKDF2 opens the folder prompt for either game. Every room opens
+      // its room window first, whose Join and Host buttons open the prompt
+      // asking for that room's game's folder.
       document.querySelectorAll('[data-play]').forEach(function(b) {
         b.addEventListener('click', function() {
           delete Module.jkJoinRoom;
-          openPicker(b.dataset.game ? { game: b.dataset.game, room: roomName(b) } : null);
+          openPicker(null);
         });
       });
       picker.querySelector('.close').addEventListener('click', closePicker);
@@ -5597,7 +5593,10 @@
       // those not in a game, and each game with its players' names. Nar
       // Shaddaa shows Jedi Knight's count and Sith: Asteroid Mysteries of the
       // Sith's, and each opens a window listing that game's games, like the
-      // Zone's game room client did.
+      // Zone's game room client did. The lobby keeps one room for each game,
+      // so the other rooms open these two windows (data-opens-room) and show
+      // no count of their own: Jedi Knight's rooms Nar Shaddaa's and Sith:
+      // Altyr 5 Sith: Asteroid's.
       //
       // A status looks like:
       //   { online: 8, lobby: ['DarkJedi_7', 'Dash_R'],
@@ -6060,8 +6059,8 @@
         });
       });
       room.querySelector('.close').addEventListener('click', function() { room.close(); });
-      document.querySelectorAll('[data-room]').forEach(function(b) {
-        b.addEventListener('click', function() { openRoom(b.dataset.room); });
+      document.querySelectorAll('[data-room], [data-opens-room]').forEach(function(b) {
+        b.addEventListener('click', function() { openRoom(b.dataset.room || b.dataset.opensRoom); });
       });
       if (typeof ResizeObserver === 'function') {
         new ResizeObserver(function() { if (room.open) fillTables(); }).observe(roomGames);

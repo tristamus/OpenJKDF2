@@ -61,6 +61,9 @@ jobs:
       # Quit: back to the lobby once the saves are stored, with made-up storage.
       - name: Test Quit
         run: node packaging/wasm/test/quit-test.mjs
+      # The room list: every room opens its game's room window.
+      - name: Test the room list
+        run: node packaging/wasm/test/rooms-test.mjs
       # Keys: every key of a standard keyboard reaches the game, and the
       # default binds, read from the sources.
       - name: Test keys and default binds
