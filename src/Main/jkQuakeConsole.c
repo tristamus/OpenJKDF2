@@ -33,9 +33,6 @@
 #include "Main/sithCvar.h"
 #include "Dw/dwConsoleAssets.h"
 #include "../jk.h"
-#ifdef ARCH_WASM
-#include <SDL3/SDL.h>
-#endif
 
 #ifdef PLATFORM_DROIDWORKS
 #include "Dw/dwGuiScreen.h"
@@ -816,12 +813,14 @@ int jkQuakeConsole_WmHandler(HWND a1, UINT msg, WPARAM wParam, HWND a4, LRESULT 
                 jkQuakeConsole_bShiftHeld = 1;
             }
 #ifdef ARCH_WASM
-            // Added: in the browser, Ctrl+Shift+` opens the console and ` or Esc
-            // closes it. Shift is the default Run key and ` the default Scores
-            // key, so Shift+` and Shift+Esc opened it mid-match by accident, and
-            // the game ignores every bind while it's open.
+            // Added: in the browser, Shift+` (~) opens the console, as on the
+            // desktop, and so does ` on its own outside multiplayer, where it
+            // isn't Scores. Ctrl+Shift+` works too. ` or Esc closes it. Not
+            // Shift+Esc, which is Chrome's task manager. Not while chat is
+            // open, so ~ and ` can be typed there; closing the console would
+            // also turn off the text input chat is using.
             else if (!repeats && (jkQuakeConsole_bOpen ? (wParam == VK_OEM_3 || wParam == VK_ESCAPE)
-                                                       : (wParam == VK_OEM_3 && jkQuakeConsole_bShiftHeld && (SDL_GetModState() & SDL_KMOD_CTRL))))
+                                                       : (wParam == VK_OEM_3 && !jkHud_bChatOpen && (jkQuakeConsole_bShiftHeld || !sithNet_isMulti))))
 #else
             else if ((wParam == VK_OEM_3 || (wParam == VK_ESCAPE && jkQuakeConsole_bShiftHeld)) && !repeats && (!sithNet_isMulti || jkQuakeConsole_bShiftHeld)) // `/~ key
 #endif
