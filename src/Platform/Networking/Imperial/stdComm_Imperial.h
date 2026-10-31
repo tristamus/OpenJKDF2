@@ -41,6 +41,11 @@ int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut);
 int stdComm_Imperial_FetchHostMap(const char* pEpisode);
 // Why the last join failed (1), for the join screen's dialog, or 0 to show the usual text.
 int stdComm_Imperial_JoinErrorText(char16_t* pOut, int maxChars);
+// The landing page's Join picked a game on this connection (Module.jkJoinImperial):
+// the connection screen starts on this connection (1), and the join screen selects
+// that game once it's listed. Forget drops the pick (another connection was chosen).
+int stdComm_Imperial_WantsJoin();
+void stdComm_Imperial_ForgetJoin();
 // The next level a dedicated server named and its episode (1), or 0 if it
 // hasn't named one or this isn't an Imperial Network Protocol game.
 int stdComm_Imperial_GetSessionNextMap(char* pGob, int gobLen, char* pOut, int outLen);

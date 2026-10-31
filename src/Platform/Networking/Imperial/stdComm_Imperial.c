@@ -106,6 +106,20 @@ static uint8_t imperial_aLastGuid[16]; // the game joined last, which rcon is fo
 static int imperial_bLastGuid = 0;
 static char imperial_aLastServer[320]; // its server: the relay server's URL, or a dedicated server's through its gateway
 
+// Added: the game the landing page's Join picked (Module.jkJoinImperial, its
+// session id as 32 hex digits, from the lobby's /imperial-games), to select on
+// the join screen once it's listed, with this connection already picked on the
+// connection screen. Taken once, as the lobby's Module.jkJoinRoom is
+// (stdComm_WSRelay.c); kept here, not in Module.jkImperial, which the engine
+// makes itself (imperial_js_xfer_init) with the map transfer's functions.
+static char imperial_aJoinGuid[33];
+
+EM_JS(void, imperial_js_take_join, (char* pOut, int outLen), {
+    var guid = Module['jkJoinImperial'];
+    delete Module['jkJoinImperial'];
+    stringToUTF8(typeof guid === 'string' && /^[0-9a-f]{32}$/.test(guid) ? guid : "", pOut, outLen);
+});
+
 // Changed: only the page's Module.jkImperialUrl ("" if it didn't set one), not
 // ?imperial= or this page's /imperial, so the page decides where it's on.
 EM_JS(void, imperial_js_server, (char* pOut, int outLen), {
@@ -437,11 +451,20 @@ static int imperial_GetHostMap(const char* pEpisode)
 
 void stdComm_Imperial_Startup()
 {
+    // A pick from before a restart (into a mod) stays until it's used.
+    char join[sizeof(imperial_aJoinGuid)];
+    imperial_js_take_join(join, sizeof(join));
+    if (join[0])
+        stdString_SafeStrCopy(imperial_aJoinGuid, join, sizeof(imperial_aJoinGuid));
+
     // Added: off unless the page turned it on (index.html, ?imperial=): the
     // menu then has only the lobby's connection, so none of this runs.
     imperial_js_server(imperial_server, sizeof(imperial_server));
     if (!imperial_server[0])
+    {
+        imperial_aJoinGuid[0] = 0;
         return;
+    }
     jk_snwprintf(jkGuiMultiplayer_aConnections[STDCOMM_IMPERIAL_CONNECTION].name, 0x80, u"Imperial Network Protocol");
     if (jkGuiMultiplayer_numConnections <= STDCOMM_IMPERIAL_CONNECTION)
         jkGuiMultiplayer_numConnections = STDCOMM_IMPERIAL_CONNECTION + 1;
@@ -530,7 +553,31 @@ int stdComm_Imperial_EnumSessions()
             imperial_js_pending("", NULL, 0);
         }
     }
+
+    // Added: the game the landing page's Join picked: select it, once.
+    for (int i = 0; imperial_aJoinGuid[0] && i < imperial_numListed; i++)
+    {
+        char guid[40];
+        const uint8_t* g = (const uint8_t*)&jkGuiMultiplayer_aEntries[i].guidInstance;
+        for (int k = 0; k < 16; k++)
+            snprintf(guid + 2 * k, 3, "%02x", g[k]);
+        if (strcmp(guid, imperial_aJoinGuid))
+            continue;
+        jkGui_guid_556040 = jkGuiMultiplayer_aEntries[i].guidInstance;
+        imperial_aJoinGuid[0] = 0;
+    }
     return (int)hr;
+}
+
+int stdComm_Imperial_WantsJoin()
+{
+    return imperial_server[0] && imperial_aJoinGuid[0]
+           && jkGuiMultiplayer_numConnections > STDCOMM_IMPERIAL_CONNECTION;
+}
+
+void stdComm_Imperial_ForgetJoin()
+{
+    imperial_aJoinGuid[0] = 0;
 }
 
 static void imperial_ReasonText(int reason, int minutes, char* pOut, int outLen)
