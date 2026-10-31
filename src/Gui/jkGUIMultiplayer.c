@@ -172,9 +172,20 @@ LABEL_1:
                     jkGuiRend_AddStringEntry(&a1, 0, 0);
                     jkGuiRend_SetClickableString(&jkGuiMultiplayer_aElements2[3], &a1);
                     jkGuiMultiplayer_aElements2[3].selectedTextEntry = 0;
+#ifdef PLATFORM_WSRELAY
+                    // Added: the landing page's Join picked an Imperial Network
+                    // Protocol game: start on that connection (stdComm_Imperial.c).
+                    if ( stdComm_Imperial_WantsJoin() )
+                        jkGuiMultiplayer_aElements2[3].selectedTextEntry = STDCOMM_IMPERIAL_CONNECTION;
+#endif
                     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiMultiplayer_menu2, &jkGuiMultiplayer_aElements2[4]);
                     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiMultiplayer_menu2, &jkGuiMultiplayer_aElements2[5]);
                     v3 = jkGuiRend_DisplayAndReturnClicked(&jkGuiMultiplayer_menu2);
+#ifdef PLATFORM_WSRELAY
+                    // Added: another connection chosen instead: the page's pick is dropped.
+                    if ( v3 > 0 && jkGuiMultiplayer_aElements2[3].selectedTextEntry != STDCOMM_IMPERIAL_CONNECTION )
+                        stdComm_Imperial_ForgetJoin();
+#endif
                     if ( v3 > 0 )
                     {
                         // TODO if this is a ptr, fix it
