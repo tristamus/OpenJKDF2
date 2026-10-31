@@ -58,6 +58,9 @@ int sithDSSCog_SendMessage(sithCog *a1, int a2, int a3, int a4, int a5, int a6, 
         int forceLen = stdComm_WSRelay_ForceMoment(sithThing_GetThingByIndex(a4), aForce);
         for (int i = 0; i < forceLen; i++)
             NETMSG_PUSHU8(aForce[i]);
+
+        // Added: ?nettest counts the powers sent.
+        stdComm_WSRelay_TestSkill(sithThing_GetThingByIndex(a4), (int)param0, 1);
     }
 #endif
 
@@ -139,6 +142,10 @@ int sithDSSCog_ProcessMessage(SithMessage *in_netMsg)
     sithCog_SendMessageEx(cog, msgid, senderType, senderIdx, sourceType, sourceIndex, linkId, param0, param1, param2, param3);
 #ifdef PLATFORM_WSRELAY
     stdComm_WSRelay_ForceDone();
+
+    // Added: ?nettest counts the powers played.
+    if ( msgid == SITH_MESSAGE_SKILL && senderType == SENDERTYPE_THING )
+        stdComm_WSRelay_TestSkill(sithThing_GetThingByIndex(senderIdx), (int)param0, 0);
 #endif
     return 1;
 }

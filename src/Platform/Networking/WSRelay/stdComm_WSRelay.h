@@ -333,6 +333,15 @@ void stdComm_WSRelay_TestTick(SithThing* pPlayer, flex_t deltaSecs);
 int stdComm_WSRelay_TestKey(int inputFunc, int* pPresses);
 flex_t stdComm_WSRelay_TestAxis(int inputFunc);
 
+// And what it counts that the hit ledger leaves out, only while it plays: a
+// bolt pShooter fired that reached player pBlocker's ready saber, and whether
+// it turned it away here; a hit on a player by something no player fired; and
+// a targeted Force power in bin played on this game's player, or sent to
+// another (bSent).
+void stdComm_WSRelay_TestBolt(SithThing* pWeapon, SithThing* pShooter, SithThing* pBlocker, int bTurned);
+void stdComm_WSRelay_TestHit(SithThing* pVictim, SithThing* pSource, flex_t damage);
+void stdComm_WSRelay_TestSkill(SithThing* pVictim, int bin, int bSent);
+
 // Whether this game is in a match with other players: its player has joined,
 // which the host checks before taking anything from it.
 int stdComm_WSRelay_InMatch();
