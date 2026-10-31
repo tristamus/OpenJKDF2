@@ -189,18 +189,6 @@ test('~ and ` type into chat instead of opening the console', () => {
     assert.equal(toggles({ key: 'VK_OEM_3', chat: 1, multi: 0 }), false);
 });
 
-test('the console key is the one under Esc on every keyboard layout', () => {
-    // SDL's key code for that key is the character it types (² on French
-    // keyboards, § on Swedish ones), so Window.c also goes by its scancode,
-    // as the Scores bind (DIK_GRAVE) does.
-    const windowC = read('src/Win95/Window.c');
-    const down = /else if \(event\.key\.key == SDLK_GRAVE \|\| event\.key\.scancode == SDL_SCANCODE_GRAVE\)\s*\{\s*Window_msg_main_handler\(g_hWnd, WM_KEYFIRST, VK_OEM_3,/;
-    const up = /else if \(event\.key\.key == SDLK_GRAVE \|\| event\.key\.scancode == SDL_SCANCODE_GRAVE\)[^\n]*\s*\{\s*Window_msg_main_handler\(g_hWnd, WM_KEYUP, VK_OEM_3,/;
-    assert.ok(down.test(windowC), 'key down');
-    assert.ok(up.test(windowC), 'key up');
-    assert.equal(table[KEYS.Backquote[0]], DIK.DIK_GRAVE);
-});
-
 let failed = 0;
 for (const t of tests) {
     try {

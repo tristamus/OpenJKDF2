@@ -1336,10 +1336,7 @@ void Window_SdlUpdate()
                     Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_HOME, event.key.repeat & 0xFFFF);
                     //Window_msg_main_handler(g_hWnd, WM_CHAR, 0x24, 0);
                 }
-                // Added: the scancode too, so the console key is the one under
-                // Esc on every keyboard layout (² on French ones, § on Swedish
-                // ones), the same key Scores is bound to (DIK_GRAVE).
-                else if (event.key.key == SDLK_GRAVE || event.key.scancode == SDL_SCANCODE_GRAVE)
+                else if (event.key.key == SDLK_GRAVE)
                 {
                     Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_OEM_3, event.key.repeat & 0xFFFF);
                 }
@@ -1416,7 +1413,7 @@ void Window_SdlUpdate()
                 {
                     Window_msg_main_handler(g_hWnd, WM_KEYUP, VK_HOME, 0);
                 }
-                else if (event.key.key == SDLK_GRAVE || event.key.scancode == SDL_SCANCODE_GRAVE) // Added: the scancode too, as above
+                else if (event.key.key == SDLK_GRAVE)
                 {
                     Window_msg_main_handler(g_hWnd, WM_KEYUP, VK_OEM_3, 0);
                 }
