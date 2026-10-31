@@ -1126,6 +1126,16 @@ static void imperial_RconServer(char* pOut, size_t outLen)
                                 : imperial_aLastServer[0] ? imperial_aLastServer : imperial_server, outLen);
 }
 
+// Added: rcon and servermaps reach a server on their own, without the
+// connection, so they wait for the page's opt-in too (imperial_js_server).
+static int imperial_RconOff()
+{
+    if ( imperial_server[0] )
+        return 0;
+    sithConsole_PrintString("The Imperial Network Protocol is off on this page.");
+    return 1;
+}
+
 static int imperial_CmdRconPassword(stdDebugConsoleCmd* pCmd, const char* pArgStr)
 {
     char aArg[128];
@@ -1163,6 +1173,8 @@ static int imperial_CmdRcon(stdDebugConsoleCmd* pCmd, const char* pArgStr)
     static char aOutput[IMPERIAL_RCON_OUTPUT_MAX];
     char aCmd[512], aServer[256];
 
+    if ( imperial_RconOff() )
+        return 1;
     imperial_Trim(pArgStr, aCmd, sizeof(aCmd));
     if ( !aCmd[0] )
     {
@@ -1196,6 +1208,8 @@ static int imperial_CmdServerMaps(stdDebugConsoleCmd* pCmd, const char* pArgStr)
 {
     static char aOutput[IMPERIAL_RCON_OUTPUT_MAX];
     char aArgs[64], aCmd[96], aServer[256];
+    if ( imperial_RconOff() )
+        return 1;
     imperial_Trim(pArgStr, aArgs, sizeof(aArgs));
     snprintf(aCmd, sizeof(aCmd), aArgs[0] ? "maplist %s" : "maplist", aArgs);
     imperial_RconServer(aServer, sizeof(aServer));
