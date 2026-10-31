@@ -14,7 +14,9 @@
 // by a reference (offset, size, SHA-256). The joiner fills those parts in
 // from its own retail GOBs and checks the rebuilt GOB against the host's
 // SHA-256 before installing it. A GOB made only of retail files (a renamed
-// original episode) isn't sent.
+// original episode) isn't sent. A joiner whose game has other versions of
+// some of those files, such as from a fan pack, leaves them out of the map
+// and plays it with its own (ownVersions).
 //
 // Downloaded maps are kept in IndexedDB and written into episode/ before the
 // engine starts, so they're there next time and can be hosted.
@@ -29,14 +31,15 @@
 //                    BLOCK_REQ  <id:8> <first u32> <count u32> <partSize u32>
 //                               <accept u8> <pad:3>
 //   host -> joiner   INFO       <JSON: status, name, ext, size, sha256,
-//                                streamSize, refsBytes, z>
+//                                streamSize, refsBytes, z, streamSha256>
 //                    CHUNK      <id:8> <index u32> <data>
 //                    BLOCK      <id:8> <block u32> <zlen u32> <at u32>
 //                               <codec u8> <pad:3> <data>
 // <id> is the first 8 bytes of the file's SHA-256, so chunks of another file
 // are never mixed in. The stream the chunks cut up is the reference table (u32
 // count, then u32 offset, u32 size and a 32-byte SHA-256 per reference),
-// followed by the file's bytes outside the references, in order. Game packets
+// followed by the file's bytes outside the references, in order; a map's
+// host with references says the stream's SHA-256 as streamSha256. Game packets
 // start with a DSS message id below DSS_MAX (66), so their byte 8 is never
 // MAGIC's first byte ('J', 74). Pages from before mods leave the kind byte at
 // 0 and ignore it, so they only ever answer for their map.
@@ -71,6 +74,8 @@
     var MAX_STORED_BYTES = 2048 * 1024 * 1024;
     var MAX_REFS = 65536;
     var REF_BYTES = 40;
+    // The stream is copied whole to be hashed for streamSha256.
+    var MAX_STREAM_HASH_BYTES = 256 * 1024 * 1024;
     // The lobby closes sockets that send more than 64 KiB in one message
     // (jkdf2mp-bb-server cloudflare/src/lobby.js), and data channel messages
     // are best kept small.
@@ -343,16 +348,8 @@
         if (refs.length > MAX_REFS)
             return { ok: false, reason: 'too-many-files' };
 
-        var refsBytes = 4 + refs.length * REF_BYTES;
-        var table = new Uint8Array(refsBytes);
-        var tv = new DataView(table.buffer);
-        tv.setUint32(0, refs.length, true);
-        refs.forEach(function(r, i) {
-            var at = 4 + i * REF_BYTES;
-            tv.setUint32(at, r.offset, true);
-            tv.setUint32(at + 4, r.size, true);
-            fromHex(r.sha, table, at + 8);
-        });
+        var table = refTable(refs);
+        var refsBytes = table.length;
 
         // Entries can share or overlap bytes; the parts that are copies of
         // retail files are the union of the references.
@@ -370,6 +367,20 @@
         if (pos < src.length)
             inline(pos, src.length);
         return { ok: true, stream: pieces(parts), refsBytes: refsBytes, refs: refs.length };
+    }
+
+    // The reference table a stream starts with.
+    function refTable(refs) {
+        var table = new Uint8Array(4 + refs.length * REF_BYTES);
+        var tv = new DataView(table.buffer);
+        tv.setUint32(0, refs.length, true);
+        refs.forEach(function(r, i) {
+            var at = 4 + i * REF_BYTES;
+            tv.setUint32(at, r.offset, true);
+            tv.setUint32(at + 4, r.size, true);
+            fromHex(r.sha, table, at + 8);
+        });
+        return table;
     }
 
     // The reference table at the start of a stream, or null if it doesn't
@@ -392,23 +403,129 @@
     }
 
     // Copies the references' bytes in from the joiner's own retail GOBs, then
-    // checks the whole against the host's SHA-256.
-    async function fillRefs(out, refs, info, retailSources) {
+    // checks the whole against the host's SHA-256. With own set (a map), a
+    // reference the joiner has no exact copy of can be left to its own
+    // version of the file instead (ownVersions).
+    async function fillRefs(out, refs, info, retailSources, own) {
         var index = contentIndex(retailSources);
+        var missing = [];
         for (var r of refs) {
             var hit = await index.find(r.size, r.sha);
-            if (!hit)
-                return { ok: false, reason: 'missing-retail' };
-            out.set(hit.src.read(hit.entry.offset, hit.entry.size), r.offset);
+            if (hit)
+                out.set(hit.src.read(hit.entry.offset, hit.entry.size), r.offset);
+            else
+                missing.push(r);
         }
+        if (missing.length)
+            return own ? ownVersions(out, refs, missing, info, retailSources) : { ok: false, reason: 'missing-retail' };
         if (await sha256(out) !== info.sha256)
             return { ok: false, reason: 'mismatch' };
         return { ok: true, bytes: out };
     }
 
+    // GOB entry names as the engine looks them up (stdGob_FileOpen).
+    function gobName(name) {
+        return name.toLowerCase().replace(/\//g, '\\');
+    }
+
+    // A fan pack such as MotS Remastered replaces some of the game's own
+    // files (the JKMsndLO.goo its 3.0 installer puts in resource/ has other
+    // versions of 1,002 of the original 1,222 sounds), so a map that bundles
+    // a copy of an original file can't be rebuilt byte for byte from that
+    // player's GOBs. It doesn't need to be: each such file is left out of the
+    // map, and the engine opens the player's own version of it from the
+    // game's resource GOBs instead, as it does in the original levels. Only
+    // files the joiner has under the same name in a GOB the engine always
+    // loads (resource/) are left out, and only whole entries; anything else
+    // is still missing-retail. The rest of the GOB is checked against the
+    // SHA-256 of the stream the host sent (streamSha256: the reference table
+    // and the bytes outside it), since the whole file's can't match. Nothing
+    // more is asked of the host, and no original file is sent.
+    async function ownVersions(out, refs, missing, info, retailSources) {
+        var hashed = typeof info.streamSha256 === 'string' && /^[0-9a-f]{64}$/.test(info.streamSha256);
+        if (hashed && await sha256(sentStream(out, refs).bytes()) !== info.streamSha256)
+            return { ok: false, reason: 'mismatch' };
+        var mine = {};
+        retailSources.forEach(function(src) {
+            if (src.always)
+                src.entries.forEach(function(e) { if (e.name) mine[gobName(e.name)] = true; });
+        });
+        var dir = parseGob(memReader(out), out.length);
+        if (!dir)
+            return { ok: false, reason: hashed ? 'not-gob' : 'missing-retail' };
+        var keep = [];
+        for (var e of dir.entries) {
+            var hits = missing.filter(function(m) {
+                return e.size > 0 && e.offset < m.offset + m.size && m.offset < e.offset + e.size;
+            });
+            if (!hits.length) {
+                keep.push(e);
+                continue;
+            }
+            var inside = hits.length === 1 && hits[0].offset <= e.offset &&
+                         e.offset + e.size <= hits[0].offset + hits[0].size;
+            if (!inside || !mine[gobName(e.name)])
+                return { ok: false, reason: 'missing-retail' };
+        }
+        // A host from before this can't vouch for what it sent.
+        if (!hashed)
+            return { ok: false, reason: 'retail-changed' };
+        return { ok: true, bytes: makeGob(out, keep), own: dir.entries.length - keep.length };
+    }
+
+    // What the host sent for a GOB: its reference table, then its bytes
+    // outside the references, in order, as planShareRanges cut it.
+    function sentStream(out, refs) {
+        var parts = [refTable(refs)];
+        var pos = 0;
+        for (var r of refs) {
+            if (r.offset > pos)
+                parts.push(out.subarray(pos, r.offset));
+            pos = Math.max(pos, r.offset + r.size);
+        }
+        if (pos < out.length)
+            parts.push(out.subarray(pos));
+        return pieces(parts);
+    }
+
+    // A GOB of the given entries of another (bytes): its table first, as the
+    // game's own GOBs have it, then each entry's bytes, once for entries
+    // that share them.
+    function makeGob(bytes, entries) {
+        var tableAt = 12;
+        var at = tableAt + 4 + entries.length * GOB_ENTRY;
+        var placed = new Map(); // "offset/size" -> where it goes
+        var spans = [];
+        var where = entries.map(function(e) {
+            var k = e.offset + '/' + e.size;
+            if (!placed.has(k)) {
+                placed.set(k, at);
+                spans.push({ from: e.offset, to: at, size: e.size });
+                at += e.size;
+            }
+            return placed.get(k);
+        });
+        var gob = new Uint8Array(at);
+        var v = new DataView(gob.buffer);
+        gob.set([0x47, 0x4F, 0x42, 0x20]); // "GOB "
+        v.setUint32(4, 20, true);
+        v.setUint32(8, tableAt, true);
+        v.setUint32(tableAt, entries.length, true);
+        entries.forEach(function(e, i) {
+            var t = tableAt + 4 + i * GOB_ENTRY;
+            v.setUint32(t, where[i], true);
+            v.setUint32(t + 4, e.size, true);
+            for (var j = 0; j < e.name.length && j < 128; j++)
+                gob[t + 8 + j] = e.name.charCodeAt(j) & 0xFF;
+        });
+        for (var s of spans)
+            gob.set(bytes.subarray(s.from, s.from + s.size), s.to);
+        return gob;
+    }
+
     // Puts a GOB back together from a stream and the joiner's own retail
     // GOBs, and checks it against the host's SHA-256.
-    async function rebuild(info, stream, retailSources) {
+    async function rebuild(info, stream, retailSources, own) {
         if (stream.length !== info.streamSize || info.refsBytes < 4 || info.refsBytes > stream.length)
             return { ok: false, reason: 'corrupt' };
         var refs = parseRefs(stream, info);
@@ -431,14 +548,14 @@
         if (stream.length - src !== info.size - pos)
             return { ok: false, reason: 'corrupt' };
         out.set(stream.subarray(src), pos);
-        return fillRefs(out, refs, info, retailSources);
+        return fillRefs(out, refs, info, retailSources, own);
     }
 
     // The same as the stream comes in, a piece at a time in any order (put),
     // each straight into place, so the GOB is only in memory once. Pieces
     // before the reference table is whole wait for it. finish() resolves as
     // rebuild() does, once every byte has been put.
-    function rebuilder(info, retailSources) {
+    function rebuilder(info, retailSources, own) {
         var head = new Uint8Array(info.refsBytes);
         var headLeft = info.refsBytes;
         var early = [];
@@ -515,7 +632,7 @@
             finish: function() {
                 if (!gaps || placed !== info.streamSize - info.refsBytes)
                     return Promise.resolve({ ok: false, reason: 'corrupt' });
-                return fillRefs(out, refs, info, retailSources);
+                return fillRefs(out, refs, info, retailSources, own);
             }
         };
     }
@@ -575,7 +692,8 @@
         };
     }
 
-    // The retail GOBs this install has, with their file lists.
+    // The retail GOBs this install has, with their file lists. always: one
+    // in resource/, which the engine loads whatever the level.
     function retailSources(root, ext) {
         var out = [];
         for (var rel of RETAIL_FILES[ext] || []) {
@@ -587,7 +705,8 @@
             var dir = parseGob(read, size);
             // The whole GOB too, for a mod that carries a copy of one.
             if (dir)
-                out.push({ read: read, entries: dir.entries.concat([{ offset: 0, size: size, name: '' }]) });
+                out.push({ read: read, entries: dir.entries.concat([{ offset: 0, size: size, name: '' }]),
+                           always: /^resource\//.test(rel) });
         }
         return out;
     }
@@ -710,15 +829,18 @@
             return data ? bytesOf(data) : data;
         }
 
-        async function put(game, name, ext, sha, bytes) {
+        // extra: more fields for the record, such as own (runJob).
+        async function put(game, name, ext, sha, bytes, extra) {
             var db = await open();
             if (!db)
                 return;
             var k = key(game, name, sha);
             var tx = db.transaction(['meta', 'data'], 'readwrite');
             tx.objectStore('data').put(new Blob([bytes]), k);
-            tx.objectStore('meta').put({ key: k, game: game, name: name, ext: ext, sha256: sha,
-                                         size: bytes.length, used: Date.now() });
+            var meta = { key: k, game: game, name: name, ext: ext, sha256: sha, size: bytes.length, used: Date.now() };
+            for (var f in extra || {})
+                meta[f] = extra[f];
+            tx.objectStore('meta').put(meta);
             await done(tx);
 
             // Keep the store under its cap, dropping the least recently used.
@@ -928,6 +1050,11 @@
         if (reason === 'missing-retail')
             return 'This map uses original ' + (ctx.ext === 'goo' ? 'Mysteries of the Sith' : 'Jedi Knight') +
                    " files that weren't found in the game folder you picked.";
+        if (reason === 'retail-changed')
+            return 'Your game folder has other versions of original ' +
+                   (ctx.ext === 'goo' ? 'Mysteries of the Sith files this map uses (the MotS Remastered pack ' +
+                                        'changes some). ' : 'Jedi Knight files this map uses. ') +
+                   'Ask the host to reload the page, then join again.';
         if (reason in MESSAGES)
             return MESSAGES[reason];
         return "The host's map couldn't be sent (" + reason + ').';
@@ -1029,6 +1156,10 @@
                             info = { status: 'ok', name: name, ext: ext, size: gob.length,
                                      sha256: await sha256(gob), streamSize: plan.stream.length,
                                      refsBytes: plan.refsBytes };
+                            // For a joiner who has other versions of the
+                            // original files left out (ownVersions).
+                            if (plan.refs && plan.stream.length <= MAX_STREAM_HASH_BYTES)
+                                info.streamSha256 = await sha256(plan.stream.bytes());
                             stream = plan.stream;
                             console.log('OpenJKDF2: ready to send map ' + name + '.' + ext + ' to joiners (' +
                                         plan.refs + ' original files left out, ' + plan.stream.length + ' of ' +
@@ -1418,7 +1549,9 @@
         var stored = null;
         try { stored = await store.get(game, j.name, info.sha256); } catch (e) {}
         check(j);
-        if (stored && await sha256(new Uint8Array(stored.data)) === info.sha256) {
+        // A map saved with the player's own versions of original files is
+        // checked against what was saved (own), not the host's file.
+        if (stored && await sha256(new Uint8Array(stored.data)) === (stored.meta.own || info.sha256)) {
             check(j);
             install(root, j.name, j.ext, new Uint8Array(stored.data));
             console.log('OpenJKDF2: installed map ' + j.label + ' saved from an earlier game');
@@ -1428,24 +1561,30 @@
         clearTimeout(checking);
         ui.show(j.label, 'Connecting to the host...', function() { abort('cancelled'); }, KIND_MAP);
         await waitForDirect(j);
-        var bytes = await receive(j, info, retailSources(root, j.ext));
+        var bytes = await receive(j, info, retailSources(root, j.ext), true);
         try {
             install(root, j.name, j.ext, bytes);
         } catch (e) {
             throw fail('install');
         }
-        console.log('OpenJKDF2: installed map ' + j.label + ' from the host');
-        store.put(game, j.name, j.ext, info.sha256, bytes).catch(function(e) {
+        console.log('OpenJKDF2: installed map ' + j.label + ' from the host' +
+                    (j.own ? ", with this player's own versions of " + j.own + ' original files it bundles' : ''));
+        (async function() {
+            var extra = j.own ? { own: await sha256(bytes) } : null;
+            await store.put(game, j.name, j.ext, info.sha256, bytes, extra);
+        })().catch(function(e) {
             console.warn('OpenJKDF2: could not save map ' + j.label + ' for next time: ' + e);
         });
     }
 
     // Gets the host's file, in blocks from a host that sends them (it says z)
-    // or else in chunks, put back together and checked.
-    async function receive(j, info, retailSources) {
+    // or else in chunks, put back together and checked. With own (a map),
+    // original files the joiner only has other versions of are left out of
+    // it, and j.own says how many.
+    async function receive(j, info, retailSources, own) {
         var result;
         if (info.z === BLOCK_BYTES) {
-            var rb = rebuilder(info, retailSources);
+            var rb = rebuilder(info, retailSources, own);
             bulk(true);
             try {
                 await downloadBlocks(j, info, rb.put);
@@ -1455,11 +1594,12 @@
             result = await rb.finish();
         } else {
             var stream = await download(j, info, directUp() ? CHUNK_DIRECT : CHUNK_RELAY);
-            result = await rebuild(info, stream, retailSources);
+            result = await rebuild(info, stream, retailSources, own);
         }
         if (!result.ok)
             throw fail(result.reason);
         check(j);
+        j.own = result.own || 0;
         return result.bytes;
     }
 

@@ -24,12 +24,13 @@ function loadMaps(Module) {
 
 // lanes: the ways each tab says it has to the other (net.mapLanes), such as
 // the map channel and the extra links for transfers; direct alone when not
-// given. rewrite(frame) can change a frame on its way.
-function makeGame({ hostFiles, joinFiles, direct = true, drop = () => false, lanes = null, rewrite = null }) {
+// given. rewrite(frame) can change a frame on its way. cwd: the game folder,
+// /mots for Mysteries of the Sith.
+function makeGame({ hostFiles, joinFiles, direct = true, drop = () => false, lanes = null, rewrite = null, cwd }) {
     const log = [];
     const link = { direct, drop, log, lanes };
-    const host = { FS: makeFS(hostFiles) };
-    const join = { FS: makeFS(joinFiles) };
+    const host = { FS: makeFS(hostFiles, cwd) };
+    const join = { FS: makeFS(joinFiles, cwd) };
     const deliver = (to, from, bytes, via) => {
         let copy = bytes.slice(0);
         if (rewrite)
@@ -183,6 +184,174 @@ test('entries that share bytes with a retail copy still rebuild exactly', async 
     const out = await lib.rebuild(info, stream, sources(lib, [retailRes]));
     assert.ok(out.ok, out.reason);
     assert.deepEqual(Buffer.from(out.bytes), Buffer.from(gob));
+});
+
+
+// ---- A joiner whose game has other versions of original files, as the MotS
+// Remastered pack's JKMsndLO.goo has of most of the original sounds.
+
+const stockB = randomBytes(4000), stockD = randomBytes(2500);
+const changedB = randomBytes(6000);
+const stockSounds = makeGob([{ name: 'sound\\b.wav', bytes: stockB }, { name: 'sound\\d.wav', bytes: stockD }]);
+const remasteredSounds = makeGob([
+    { name: 'sound\\b.wav', bytes: changedB },          // another version
+    { name: 'sound\\d.wav', bytes: stockD },            // the same
+    { name: 'sound\\new.wav', bytes: randomBytes(900) },
+]);
+const motsRes = makeGob([{ name: 'cog\\e.cog', bytes: randomBytes(1500) }]);
+const shipJkl = randomBytes(150000), shipJk = randomBytes(800);
+const sith5 = makeGob([
+    { name: 'episode.jk', bytes: shipJk },
+    { name: 'sound\\b.wav', bytes: stockB },            // copies of original files
+    { name: 'sound\\d.wav', bytes: stockD },
+    { name: 'jkl\\ship.jkl', bytes: shipJkl },
+]);
+
+// Sources as retailSources has them: always for the resource/ GOBs.
+function motsSources(lib, gobs, always = true) {
+    return sources(lib, gobs).map(s => ({ ...s, always }));
+}
+
+function entriesOf(lib, gob) {
+    return lib.parseGob((o, l) => gob.subarray(o, o + l), gob.length).entries
+        .map(e => ({ name: e.name, bytes: Buffer.from(gob.subarray(e.offset, e.offset + e.size)) }));
+}
+
+async function sith5Plan(lib) {
+    const plan = await lib.planShare(sith5, motsSources(lib, [stockSounds, motsRes]));
+    assert.ok(plan.ok);
+    assert.equal(plan.refs, 2);
+    const stream = plan.stream.bytes();
+    const info = { size: sith5.length, sha256: sha(sith5), streamSize: stream.length, refsBytes: plan.refsBytes,
+                   streamSha256: sha(stream) };
+    return { stream, info };
+}
+
+test('a joiner with other versions of original files a map bundles plays it with its own', async () => {
+    const { lib } = loadMaps({ FS: makeFS({}, '/mots') });
+    const { stream, info } = await sith5Plan(lib);
+    const theirs = motsSources(lib, [remasteredSounds, motsRes]);
+
+    const out = await lib.rebuild(info, stream, theirs, true);
+    assert.ok(out.ok, out.reason);
+    assert.equal(out.own, 1);
+    // sound\b.wav is left to the joiner's own; sound\d.wav, the same in both,
+    // is filled in as before.
+    assert.deepEqual(entriesOf(lib, out.bytes), [
+        { name: 'episode.jk', bytes: Buffer.from(shipJk) },
+        { name: 'sound\\d.wav', bytes: Buffer.from(stockD) },
+        { name: 'jkl\\ship.jkl', bytes: Buffer.from(shipJkl) },
+    ]);
+
+    // Blocks put back together the same way give the same GOB.
+    const rb = lib.rebuilder(info, theirs, true);
+    for (let at = stream.length; at > 0; at -= 7000)
+        rb.put(Math.max(0, at - 7000), stream.subarray(Math.max(0, at - 7000), at));
+    const out2 = await rb.finish();
+    assert.ok(out2.ok, out2.reason);
+    assert.deepEqual(Buffer.from(out2.bytes), Buffer.from(out.bytes));
+
+    // A mod's transfer doesn't do this.
+    assert.equal((await lib.rebuild(info, stream, theirs)).reason, 'missing-retail');
+    // A host from before this doesn't say streamSha256.
+    const old = { ...info };
+    delete old.streamSha256;
+    assert.equal((await lib.rebuild(old, stream, theirs, true)).reason, 'retail-changed');
+    // What the host sent is checked.
+    const tampered = stream.slice();
+    tampered[tampered.length - 1] ^= 1;
+    assert.equal((await lib.rebuild(info, tampered, theirs, true)).reason, 'mismatch');
+    const table = stream.slice();
+    table[8] ^= 1; // a reference's SHA-256
+    assert.equal((await lib.rebuild(info, table, theirs, true)).reason, 'mismatch');
+});
+
+test('only a file the joiner has by the same name, in a GOB always loaded, is left to its own', async () => {
+    const { lib } = loadMaps({ FS: makeFS({}, '/mots') });
+    const { stream, info } = await sith5Plan(lib);
+    // Its other version only in an episode GOB, which the engine doesn't load
+    // for this map.
+    assert.equal((await lib.rebuild(info, stream, [...motsSources(lib, [motsRes]),
+        ...motsSources(lib, [remasteredSounds], false)], true)).reason, 'missing-retail');
+    // An original file under a name of the map's own: the engine would find
+    // nothing by that name.
+    const renamed = makeGob([{ name: 'episode.jk', bytes: shipJk }, { name: 'sound\\mine.wav', bytes: stockB },
+                             { name: 'jkl\\ship.jkl', bytes: shipJkl }]);
+    const plan = await lib.planShare(renamed, motsSources(lib, [stockSounds]));
+    const s = plan.stream.bytes();
+    const i = { size: renamed.length, sha256: sha(renamed), streamSize: s.length, refsBytes: plan.refsBytes,
+                streamSha256: sha(s) };
+    assert.equal((await lib.rebuild(i, s, motsSources(lib, [remasteredSounds]), true)).reason, 'missing-retail');
+    // A custom file around an original one can't be put together.
+    const wrapper = Buffer.concat([randomBytes(100), stockB, randomBytes(100)]);
+    const nested = makeGob([
+        { name: 'big', bytes: wrapper },
+        { name: 'sound\\b.wav', bytes: stockB, sameAs: 0, offsetIn: 100 },
+    ], { overlap: true });
+    const p2 = await lib.planShare(nested, motsSources(lib, [stockSounds]));
+    const s2 = p2.stream.bytes();
+    const i2 = { size: nested.length, sha256: sha(nested), streamSize: s2.length, refsBytes: p2.refsBytes,
+                 streamSha256: sha(s2) };
+    assert.equal((await lib.rebuild(i2, s2, motsSources(lib, [remasteredSounds]), true)).reason, 'missing-retail');
+});
+
+test('a MotS joiner with the Remastered sounds gets a map that bundles original sounds', async () => {
+    const stock = { '/mots/resource/JKMsndLO.goo': stockSounds, '/mots/resource/Jkmres.goo': motsRes };
+    const remastered = { '/mots/resource/JKMsndLO.goo': remasteredSounds, '/mots/resource/Jkmres.goo': motsRes };
+    const g = makeGame({
+        hostFiles: { ...stock, '/mots/episode/sith5.goo': sith5 },
+        joinFiles: { ...remastered },
+        cwd: '/mots',
+    });
+    g.host.jkMaps.host('sith5', 'goo');
+    await hostReady(g.host);
+    g.join.jkMaps.fetch('sith5', 'goo');
+    assert.equal(await waitState(g.join), 1);
+    const got = g.join.FS.files.get('/mots/episode/sith5.goo');
+    assert.deepEqual(entriesOf(g.join.jkMaps.lib, got).map(e => e.name), ['episode.jk', 'sound\\d.wav', 'jkl\\ship.jkl']);
+    for (const f of g.log.filter(f => f.to === 'join'))
+        assert.ok(!contains(f.bytes, stockB) && !contains(f.bytes, stockD), 'original bytes sent');
+
+    // A joiner with the original sounds still gets the host's file exactly.
+    const g2 = makeGame({ hostFiles: { ...stock, '/mots/episode/sith5.goo': sith5 }, joinFiles: { ...stock }, cwd: '/mots' });
+    g2.host.jkMaps.host('sith5', 'goo');
+    await hostReady(g2.host);
+    g2.join.jkMaps.fetch('sith5', 'goo');
+    assert.equal(await waitState(g2.join), 1);
+    assert.deepEqual(Buffer.from(g2.join.FS.files.get('/mots/episode/sith5.goo')), Buffer.from(sith5));
+});
+
+test('a host from before this tells a Remastered joiner to have it reload', async () => {
+    const g = makeGame({
+        hostFiles: { '/mots/resource/JKMsndLO.goo': stockSounds, '/mots/episode/sith5.goo': sith5 },
+        joinFiles: { '/mots/resource/JKMsndLO.goo': remasteredSounds },
+        cwd: '/mots',
+        rewrite: f => {
+            if (f.to !== 'join' || new Uint8Array(f.bytes)[12] !== 2)
+                return null;
+            const info = JSON.parse(new TextDecoder().decode(new Uint8Array(f.bytes, 16)));
+            assert.match(info.streamSha256, /^[0-9a-f]{64}$/);
+            delete info.streamSha256;
+            const json = new TextEncoder().encode(JSON.stringify(info));
+            const out = new Uint8Array(16 + json.length);
+            out.set(new Uint8Array(f.bytes, 0, 16));
+            out.set(json, 16);
+            return out.buffer;
+        },
+    });
+    const said = [];
+    const log = console.log;
+    console.log = (...a) => { said.push(a.join(' ')); log(...a); };
+    try {
+        g.host.jkMaps.host('sith5', 'goo');
+        await hostReady(g.host);
+        g.join.jkMaps.fetch('sith5', 'goo');
+        assert.equal(await waitState(g.join), 2);
+    } finally {
+        console.log = log;
+    }
+    assert.ok(said.some(l => /map sith5\.goo not installed: retail-changed/.test(l)), said.join('\n'));
+    assert.ok(!g.join.FS.files.has('/mots/episode/sith5.goo'));
 });
 
 // ---- Host and joiner tabs.
