@@ -149,6 +149,46 @@ test('in fullscreen, Chrome and Edge give Esc, W, T and N to the game', () => {
     assert.ok(html.includes("navigator.keyboard.lock(['Escape', 'KeyW', 'KeyT', 'KeyN'])"));
 });
 
+// The console's rule in the browser, as the source has it: the condition after
+// "#ifdef ARCH_WASM" in jkQuakeConsole_WmHandler, run as JavaScript (it's
+// plain comparisons and && || ! ?:, which mean the same in both).
+function consoleToggles() {
+    const c = read('src/Main/jkQuakeConsole.c');
+    const handler = c.substring(c.indexOf('int jkQuakeConsole_WmHandler('));
+    const block = handler.substring(handler.indexOf('#ifdef ARCH_WASM'), handler.indexOf('#else', handler.indexOf('#ifdef ARCH_WASM')));
+    const code = block.split('\n').filter(l => !l.trim().startsWith('//') && !l.startsWith('#')).join(' ');
+    const at = code.indexOf('else if (') + 'else if '.length;
+    let depth = 0, end = at;
+    for (; end < code.length; end++) {
+        if (code[end] === '(') depth++;
+        else if (code[end] === ')' && --depth === 0) break;
+    }
+    const expr = code.substring(at, end + 1);
+    assert.ok(!/SDL_|[{};]/.test(expr), 'only the key, Shift, chat and multiplayer decide: ' + expr);
+    const VK = { VK_OEM_3: 0xC0, VK_ESCAPE: 0x1B };
+    const f = new Function('VK_OEM_3', 'VK_ESCAPE', 'repeats', 'wParam', 'jkQuakeConsole_bOpen',
+                           'jkQuakeConsole_bShiftHeld', 'jkHud_bChatOpen', 'sithNet_isMulti', 'return !!(' + expr + ');');
+    return ({ key, open = 0, shift = 0, chat = 0, multi = 1, repeats = 0 }) =>
+        f(VK.VK_OEM_3, VK.VK_ESCAPE, repeats, VK[key], open, shift, chat, multi);
+}
+
+test('the console opens with Shift+` (~) in a match, as on the desktop, and ` or Esc closes it', () => {
+    const toggles = consoleToggles();
+    assert.equal(toggles({ key: 'VK_OEM_3', shift: 1 }), true, 'Shift+` opens it');
+    assert.equal(toggles({ key: 'VK_OEM_3' }), false, '` on its own is Scores in a match');
+    assert.equal(toggles({ key: 'VK_OEM_3', multi: 0 }), true, '` on its own opens it outside multiplayer');
+    assert.equal(toggles({ key: 'VK_ESCAPE', shift: 1 }), false, 'not Shift+Esc (Chrome\'s task manager)');
+    assert.equal(toggles({ key: 'VK_OEM_3', shift: 1, repeats: 1 }), false, 'not again as the key repeats');
+    assert.equal(toggles({ key: 'VK_OEM_3', open: 1 }), true, '` closes it');
+    assert.equal(toggles({ key: 'VK_ESCAPE', open: 1 }), true, 'Esc closes it');
+});
+
+test('~ and ` type into chat instead of opening the console', () => {
+    const toggles = consoleToggles();
+    assert.equal(toggles({ key: 'VK_OEM_3', shift: 1, chat: 1 }), false);
+    assert.equal(toggles({ key: 'VK_OEM_3', chat: 1, multi: 0 }), false);
+});
+
 let failed = 0;
 for (const t of tests) {
     try {
