@@ -67,7 +67,7 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 
-test("the real answer: Coruscant, joinable, credited to the relay's operator", () => {
+test("the real answer: Coruscant, joinable, credited to nobody", () => {
     const { p } = page();
     const a = p.cleanImperial(LIVE);
     assert.equal(a.state, 'live');
@@ -75,8 +75,10 @@ test("the real answer: Coruscant, joinable, credited to the relay's operator", (
     assert.deepEqual(a.games, [{
         uid: 'i13e5dd93743f59055bbf297508845b2b', key: '13e5dd93743f59055bbf297508845b2b', imperial: true,
         name: 'Coruscant', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF', mod: '', locked: false, players: 0, max: 31,
-        names: [], net: 0, dedicated: true, pinned: true, listed: true, joinable: true, why: '', runBy: 'sithmartyr' }]);
+        names: [], net: 0, dedicated: true, pinned: true, listed: true, joinable: true, why: '' }]);
     assert.equal(p.imperialStop(a.games[0]), null);
+    // sithmartyr asked for no credit on the card (31 Oct 2026).
+    assert.doesNotMatch(html, /sithmartyr|run by/i);
 });
 
 test('a pinned server that isn\'t running, and the relay down', () => {
@@ -104,7 +106,7 @@ test('why each game has no Join', () => {
     assert.equal(p.imperialStop({ imperial: false, joinable: false }), null);
 });
 
-test('whatever arrives, only clean text and numbers, and no credit for others', () => {
+test('whatever arrives, only clean text and numbers', () => {
     const { p } = page();
     assert.equal(p.cleanImperial(null), null);
     assert.equal(p.cleanImperial({ state: 'maybe', games: [] }), null);
@@ -115,12 +117,9 @@ test('whatever arrives, only clean text and numbers, and no credit for others', 
         ...Array.from({ length: 40 }, () => CORUSCANT)] });
     assert.equal(a.games.length, 32 - 2);
     const [g, upper] = a.games;
-    assert.deepEqual([g.name.length, g.name.startsWith('Coruscant'), g.players, g.max, g.map, g.game, g.runBy],
-                     [32, true, 0, 64, '', 'jk1', '']);
+    assert.deepEqual([g.name.length, g.name.startsWith('Coruscant'), g.players, g.max, g.map, g.game],
+                     [32, true, 0, 64, '', 'jk1']);
     assert.deepEqual([upper.key, upper.listed, upper.joinable], ['', false, false]);
-    // The credit goes only with a relay the page knows, and only on its pinned servers.
-    assert.equal(p.cleanImperial({ ...LIVE, games: [{ ...CORUSCANT, pinned: false }] }).games[0].runBy, '');
-    assert.equal(p.cleanImperial({ ...LIVE, server: '__proto__' }).games[0].runBy, '');
 });
 
 test('a room lists the pinned servers, then the lobby\'s games, then the relay\'s', () => {

@@ -973,7 +973,6 @@
       }
       .table.off .table-head { background-color: #224444; }
       .table.off .table-title { color: var(--muted); }
-      .game-list .list-by { color: var(--muted); }
       .table-info { position: relative; margin: 3px 0 0 7px; font-size: 11px; }
       .table-info summary {
         display: inline-block;
@@ -5729,8 +5728,6 @@
       // relay the engine connects to (server is Module.jkImperialUrl), and
       // Join hands the engine the game to select (Module.jkJoinImperial).
       var IMPERIAL_POLL_MS = 20000;
-      // Who runs a relay's pinned servers, said on their tables.
-      var IMPERIAL_RUN_BY = { 'lobby.jkjunkie.com': 'sithmartyr' };
       var IMPERIAL_STATE = { 'relay-down': 'Imperial relay not answering', 'not-listed': 'Not running right now',
                              desktop: 'Desktop OpenJKDF2 only', closed: 'Not taking players' };
       // state: 'off' (nothing to show), 'connecting', 'live', 'down' (the
@@ -5760,8 +5757,7 @@
                    mod: str(g.mod, 64), locked: !!g.locked, players: listed ? num(g.players) : 0,
                    max: listed ? num(g.max) : 0, names: [], net: NETCODE, dedicated: dedicated, pinned: pinned,
                    listed: listed, joinable: joinable,
-                   why: joinable ? '' : has(IMPERIAL_STATE, g.why) ? g.why : listed ? 'closed' : 'not-listed',
-                   runBy: pinned && dedicated && has(IMPERIAL_RUN_BY, server) ? IMPERIAL_RUN_BY[server] : '' };
+                   why: joinable ? '' : has(IMPERIAL_STATE, g.why) ? g.why : listed ? 'closed' : 'not-listed' };
         });
         return { state: a.state, server: server, games: games };
       }
@@ -5942,7 +5938,7 @@
         var dl = el('dl');
         [['Game', g.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight'],
          ['Relay', g.imperial ? 'Imperial (' + (imperialLive.server || 'Unknown') + ')' : 'OpenJKDF2'],
-         g.imperial ? ['Server', g.dedicated ? 'Dedicated' + (g.runBy ? ', run by ' + g.runBy : '') : 'Hosted by a player'] : null,
+         g.imperial ? ['Server', g.dedicated ? 'Dedicated' : 'Hosted by a player'] : null,
          ['Map', g.map || 'Unknown'], ['Episode', g.episode || 'Unknown'],
          ['Mod', g.mod || 'None'], ['Password', g.locked ? 'Yes' : 'No']].filter(Boolean).forEach(function(row) {
           dl.append(el('dt', null, row[0]), el('dd', null, row[1]));
@@ -5988,7 +5984,6 @@
           if (g.listed) ul.append(el('li', null, g.players ? plural(g.players, 'player', 'players') : 'Nobody playing'));
           if (g.listed && g.players) ul.append(el('li', 'unnamed', 'Names not shared'));
           if (g.dedicated) ul.append(el('li', 'unnamed', 'Dedicated server'));
-          if (g.runBy) ul.append(el('li', 'unnamed', 'Run by ' + g.runBy));
           return ul;
         }
         var names = g.names.slice();
@@ -6052,7 +6047,6 @@
           var no = gameNumber(i);
           var name = el('td', null, g.name || '(no name)');
           if (g.locked) name.insertAdjacentHTML('beforeend', ' ' + LOCK_SVG);
-          if (g.runBy) name.append(el('span', 'list-by', ', run by ' + g.runBy));
           var names = g.names.filter(Boolean);
           var action = el('td');
           var stop = imperialStop(g);
