@@ -1282,8 +1282,10 @@ int jkMain_StartNextLevelInEpisode(int a1, int bIsAPath)
     {
 #if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
         // Added: a dedicated server starts the level over instead of ending the
-        // game, and everyone works the next level out by themselves.
-        if ( jkMain_IsDedicatedHost() )
+        // game, and everyone works the next level out by themselves. Changed:
+        // an Imperial Network Protocol one only; the lobby's dedicated host
+        // still ends the game, so its joiners do too.
+        if ( stdComm_Imperial_InGame() && jkMain_IsDedicatedHost() )
         {
             jkSmack_gameMode = 2;
             if ( jkGuiRend_menuNestDepth )

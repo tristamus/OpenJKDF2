@@ -13,10 +13,10 @@
 // it does too (IMPERIAL_SESSION_OPENJKDF2WIRE); an older one sends JK.EXE's,
 // which this build can't read, so its games can't be joined from here.
 //
-// The server: Module.jkImperialUrl, else ?imperial=<host or URL> on the page,
-// else this page's own host at /imperial (wss:// on an https page). A bare
-// host means wss://<host>/imperial, host:port ws://host:port/
-// (jkrelay_client.c).
+// The server: Module.jkImperialUrl, which the page sets from ?imperial= at
+// its test addresses only (index.html, IMPERIAL_HOSTS). Without it the
+// connection isn't in the Multiplayer menu at all. A bare host means
+// wss://<host>/imperial, host:port ws://host:port/ (jkrelay_client.c).
 //
 // A dedicated server's next level (its rotation, an admin's or a vote's pick)
 // comes in its game's description (stdComm_Imperial_GetSessionNextMap,
@@ -106,14 +106,11 @@ static uint8_t imperial_aLastGuid[16]; // the game joined last, which rcon is fo
 static int imperial_bLastGuid = 0;
 static char imperial_aLastServer[320]; // its server: the relay server's URL, or a dedicated server's through its gateway
 
+// Changed: only the page's Module.jkImperialUrl ("" if it didn't set one), not
+// ?imperial= or this page's /imperial, so the page decides where it's on.
 EM_JS(void, imperial_js_server, (char* pOut, int outLen), {
     var url = Module['jkImperialUrl'];
-    if (!url && typeof location !== 'undefined') {
-        try { url = new URLSearchParams(location.search).get('imperial'); } catch (e) {}
-        if (!url)
-            url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/imperial';
-    }
-    stringToUTF8(url ? url : "", pOut, outLen);
+    stringToUTF8(typeof url === 'string' ? url : "", pOut, outLen);
 });
 
 static const uint8_t* imperial_AppGuid()
@@ -440,6 +437,11 @@ static int imperial_GetHostMap(const char* pEpisode)
 
 void stdComm_Imperial_Startup()
 {
+    // Added: off unless the page turned it on (index.html, ?imperial=): the
+    // menu then has only the lobby's connection, so none of this runs.
+    imperial_js_server(imperial_server, sizeof(imperial_server));
+    if (!imperial_server[0])
+        return;
     jk_snwprintf(jkGuiMultiplayer_aConnections[STDCOMM_IMPERIAL_CONNECTION].name, 0x80, u"Imperial Network Protocol");
     if (jkGuiMultiplayer_numConnections <= STDCOMM_IMPERIAL_CONNECTION)
         jkGuiMultiplayer_numConnections = STDCOMM_IMPERIAL_CONNECTION + 1;

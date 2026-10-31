@@ -204,9 +204,10 @@ LABEL_1:
                     _memset(&v35, 0, sizeof(v35));
                     _memset(&jkGuiMultiplayer_stru_556168, 0, sizeof(jkGuiMultiplayer_stru_556168));
                     memset(&jkGui_guid_556040, 0, sizeof(GUID));
-#ifdef PLATFORM_WSRELAY
+#if defined(PLATFORM_WSRELAY) && defined(QOL_IMPROVEMENTS)
                     // Added: no address box for the Imperial Network Protocol: its server
-                    // comes from the page (stdComm_Imperial.c), not from here.
+                    // comes from the page (stdComm_Imperial.c), not from here. (The box,
+                    // element 11, is there with QOL_IMPROVEMENTS only.)
                     jkGuiMultiplayer_aElements3[11].bIsVisible = !stdComm_Imperial_bActive;
 #endif
                     jkGuiRend_DarrayNewStr(&jkGuiMultiplayer_stru_5564A8, 8, 1);

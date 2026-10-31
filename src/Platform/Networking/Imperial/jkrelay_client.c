@@ -91,7 +91,9 @@ EM_JS(int, jkr_js_open, (const char* url), {
     try { s.ws = new WebSocket(u); } catch (e) { return -1; }
     s.ws.binaryType = 'arraybuffer';
     s.ws.onopen = function() { for (var i = 0; i < s.out.length; i++) s.ws.send(s.out[i]); s.out = []; };
-    s.ws.onmessage = function(ev) { if (ev.data instanceof ArrayBuffer) s.q.push(new Uint8Array(ev.data)); };
+    // Changed: what isn't read yet is capped, as a UDP socket's buffer is (a server
+    // flooding us drops packets instead of filling the tab's memory).
+    s.ws.onmessage = function(ev) { if (ev.data instanceof ArrayBuffer && s.q.length < 4096) s.q.push(new Uint8Array(ev.data)); };
     s.ws.onclose = function() { s.closed = true; };
     s.ws.onerror = function() { s.closed = true; };
     Module.jkrWs.socks[id] = s;
@@ -890,7 +892,10 @@ static void jkr_HandlePacket(const uint8_t* p, int len)
     {
         if (R.resuming && seq == R.resumeSeq)
             jkr_ResumeReply(p, len);
-        else if (seq == R.waitSeq && !R.gotReply)
+        // Fixed: a reply bigger than R.reply (JKR_MAX_PACKET) isn't taken; R.rx
+        // holds 2048 bytes, and copying all of it ran past R.reply over the
+        // session state after it.
+        else if (seq == R.waitSeq && !R.gotReply && len <= (int)sizeof(R.reply))
         {
             memcpy(R.reply, p, (size_t)len);
             R.replyLen = len;

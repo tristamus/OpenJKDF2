@@ -1876,14 +1876,19 @@
       // work as they did before the fast lane, the switch to a link and
       // links between joiners, to compare) for its network code
       // (stdComm_WSRelay.c).
-      // ?imperial=<server> is the Imperial Network Protocol server
-      // (stdComm_Imperial.c reads it itself).
+      // ?imperial=<server> turns on the Imperial Network Protocol connection
+      // (stdComm_Imperial.c) with that server, only at an address in
+      // IMPERIAL_HOSTS: off unless asked for, and never on the site itself.
+      // Without it the Multiplayer menu has only the lobby's connection.
+      var IMPERIAL_HOSTS = ['beta.jediknight.zone', 'localhost', '127.0.0.1'];
       (function() {
         var params = new URLSearchParams(window.location.search);
         if (params.has('netstats')) Module['jkNetMeasure'] = true;
         if (params.has('netsim')) Module['jkNetSim'] = params.get('netsim');
         if (params.has('nettest')) Module['jkNetTest'] = params.get('nettest');
         if (params.has('netold')) Module['jkNetOld'] = true;
+        if (params.get('imperial') && IMPERIAL_HOSTS.indexOf(window.location.hostname) >= 0)
+          Module['jkImperialUrl'] = params.get('imperial');
       })();
       window.onerror = function(event) {
         // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
