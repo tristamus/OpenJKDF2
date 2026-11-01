@@ -115,6 +115,7 @@ extern int jkGuiNetHost_bIsDedicated;
 
 void sithMulti_SetHandleridk(sithMultiHandler_t a1);
 void sithMulti_SendChat(const char *pStr, int arg0, int arg1);
+void sithMulti_SendChatTo(const char *pStr, int arg0, int arg1, int idTo); // Added
 void sithMulti_ProcessScore();
 int sithMulti_ProcessChat(SithMessage *pMsg);
 

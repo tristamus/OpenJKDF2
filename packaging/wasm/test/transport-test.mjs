@@ -598,6 +598,42 @@ test('a fast lane update reaches the engine with its number, and its sender know
     assert.ok(two.js.wsrelay_js_seq_sent_at(3, c.seq + 1) > 0);
 });
 
+test('a backlog of 20,000 messages reaches the engine in order, quickly, and the queue ends empty', async () => {
+    const world = makeWorld();
+    const game = makeGame(world, { id: 2 });
+    await world.run(5);
+    const view = new DataView(game.mem.buffer);
+    const N = 20000;
+    const put = (from, to) => {
+        for (let i = from; i < to; i++) {
+            const d = new ArrayBuffer(16);
+            new DataView(d).setUint32(12, i, true);
+            game.net.queue.push(d);
+        }
+    };
+    put(0, N);
+    const got = [];
+    let half = null;
+    const started = performance.now();
+    for (;;) {
+        const len = game.js.wsrelay_js_recv(2048, 4096, 8000, 8008);
+        if (len < 0) break;
+        if (view.getInt32(8000, true)) continue;  // the lobby's text
+        got.push(view.getUint32(2048 + 12, true));
+        if (got.length === N / 2) {
+            half = game.net.queue.length;
+            put(N, N + 10);  // more come in while it drains: they go behind the backlog
+        }
+    }
+    const ms = performance.now() - started;
+    assert.equal(got.length, N + 10);
+    assert.ok(got.every((n, i) => n === i), 'in order');
+    assert.ok(half <= N / 2, `the taken half is let go: ${half} left in the array`);
+    assert.equal(game.net.queue.length, 0, 'empty at the end');
+    // With shift() this took 200-550 ms in Node 22 on a 2.1 GHz cloud CPU.
+    assert.ok(ms < 150, `took ${ms.toFixed(0)} ms`);
+});
+
 test('through the relay, a player\'s updates go to each player at most every 200 ms, with their time or without', async () => {
     const world = makeWorld();
     world.canLink = () => false;

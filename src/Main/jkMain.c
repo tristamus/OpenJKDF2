@@ -42,6 +42,11 @@
 #include "Win95/Windows.h"
 #include "Win95/Video.h"
 #include "Win95/stdComm.h"
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+#include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_GetSessionNextMap
+static void jkMain_FollowHostMap(void); // Added: a dedicated server's next level
+static char jkMain_aMissingMap[128];  // Added: the server went on to a level we don't have
+#endif
 #include "Win95/stdDisplay.h"
 #include "Win95/Window.h"
 #include "General/util.h"
@@ -572,6 +577,10 @@ void jkMain_GameplayShow(int a1, int a2)
         }
         else
         {
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+            if ( jkSmack_gameMode == 2 )
+                jkMain_FollowHostMap(); // Added: a dedicated server's next level
+#endif
             jkGui_copies_string(jkMain_aLevelJklFname);
             jkGuiTitle_ShowLoading(jkMain_aLevelJklFname, 0);
         }
@@ -618,6 +627,19 @@ void jkMain_GameplayShow(int a1, int a2)
             jkSmack_nextGuiState = JK_GAMEMODE_MAIN;
             v6 = jkStrings_GetUniStringWithFallback("ERR_CANNOT_LOAD_LEVEL");
             v4 = jkStrings_GetUniStringWithFallback("ERROR");
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+            // Added: the dedicated server went on to a level we don't have
+            if ( jkMain_aMissingMap[0] )
+            {
+                static char16_t wMsg[256];
+                char aMsg[256];
+                stdString_snprintf(aMsg, sizeof(aMsg), "The server went on to %s, which you don't have.", jkMain_aMissingMap);
+                stdString_CharToWchar(wMsg, aMsg, 255);
+                wMsg[255] = 0;
+                v6 = wMsg;
+                jkMain_aMissingMap[0] = 0;
+            }
+#endif
             jkGuiDialog_ErrorDialog(v4, v6);
             return;
         }
@@ -1084,12 +1106,128 @@ int jkMain_LoadLevelSingleplayer(char *pGobPath, char *pEpisodeName)
     return result;
 }
 
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+// Added: an Imperial Network Protocol dedicated server's map rotation and admin
+// map changes, from the desktop build: when it ends a level, the server names the
+// next one (and its episode) in its game's description, and its joiners load that
+// one instead of working the next level out themselves. Joiners only; a browser
+// doesn't run dedicated servers.
+
+// The game's host is a dedicated server: its own slot is never in the game.
+static int jkMain_IsDedicatedHost(void)
+{
+    if ( sithNet_isServer )
+        return 0;
+    for (int i = 0; i < jkPlayer_maxPlayers; i++)
+    {
+        if ( jkPlayer_playerInfos[i].playerNetId && jkPlayer_playerInfos[i].playerNetId == sithNet_serverNetId )
+            return !(jkPlayer_playerInfos[i].flags & 1);
+    }
+    return 0;
+}
+
+// In the episode that's loaded.
+static int jkMain_LevelExists(const char* pJkl)
+{
+    char path[160];
+    intptr_t f;
+    if ( !jkRes_episodeGobName[0] )
+        return 0;
+    stdString_snprintf(path, sizeof(path), "jkl\\%s", pJkl);
+    f = pHS->fileOpen(path, "r");
+    if ( !f )
+        return 0;
+    pHS->fileClose(f);
+    return 1;
+}
+
+// Loads another episode (its GOB and episode.jk) for the level pJkl, as joining a
+// game does (jkMain_loadFile2). 0 if it can't be loaded.
+static int jkMain_LoadEpisode(const char* pGob, const char* pJkl)
+{
+    char aGob[64];
+    stdString_SafeStrCopy(aGob, pGob, sizeof(aGob));
+    jkRes_LoadGob(aGob);
+    if ( jkEpisode_mLoad.paEntries )
+    {
+        JK_FREE(jkEpisode_mLoad.paEntries);
+        jkEpisode_mLoad.paEntries = 0;
+        jkMain_pEpisodeEnt = NULL;
+        jkMain_pEpisodeEnt2 = NULL;
+    }
+    if ( !jkEpisode_Load(&jkEpisode_mLoad) )
+        return 0;
+    jkEpisode_idk4(&jkEpisode_mLoad, (char*)pJkl);
+    jkPlayer_bLoadingSomething = 1;
+    return 1;
+}
+
+static int jkMain_SwitchEpisode(const char* pGob, const char* pJkl)
+{
+    char aOld[64];
+    if ( !__strcmpi(pGob, jkRes_episodeGobName) )
+        return 1;
+    stdString_SafeStrCopy(aOld, jkRes_episodeGobName, sizeof(aOld));
+    stdPlatform_Printf("OpenJKDF2: episode %s -> %s\n", aOld, pGob);
+    if ( jkMain_LoadEpisode(pGob, pJkl) )
+        return 1;
+    jkMain_LoadEpisode(aOld, jkMain_aLevelJklFname); // back to the one we had
+    return 0;
+}
+
+// About to load the next level: the one the dedicated server named, if it did.
+static void jkMain_FollowHostMap(void)
+{
+    char aGob[64], aJkl[128];
+    jkMain_aMissingMap[0] = 0;
+    if ( sithNet_isServer || !jkMain_IsDedicatedHost() || !stdComm_Imperial_GetSessionNextMap(aGob, sizeof(aGob), aJkl, sizeof(aJkl)) )
+        return;
+    if ( !__strcmpi(aJkl, jkMain_aLevelJklFname) && (!aGob[0] || !__strcmpi(aGob, jkRes_episodeGobName)) )
+        return;
+    stdPlatform_Printf("OpenJKDF2: the server goes on with %s:%s\n", aGob, aJkl);
+    // An episode we lack, or have another copy of: the server's, if it serves it
+    if ( aGob[0] && __strcmpi(aGob, jkRes_episodeGobName) )
+        stdComm_Imperial_FetchHostMap(aGob);
+    if ( aGob[0] && !jkMain_SwitchEpisode(aGob, aJkl) )
+    {
+        stdString_snprintf(jkMain_aMissingMap, sizeof(jkMain_aMissingMap), "%s (%s)", aJkl, aGob);
+        stdPlatform_Printf("OpenJKDF2: no episode %s here\n", aGob);
+    }
+    else if ( !jkMain_LevelExists(aJkl) )
+        stdString_snprintf(jkMain_aMissingMap, sizeof(jkMain_aMissingMap), "%s (%s)", aJkl, aGob);
+    stdString_SafeStrCopy(jkMain_aLevelJklFname, aJkl, sizeof(jkMain_aLevelJklFname));
+}
+
+// Does the dedicated server go on to a level it named? (Then the episode's own
+// order, which may end there, doesn't matter.)
+static int jkMain_HostNamedNextMap(void)
+{
+    char aGob[64], aJkl[128];
+    return sithNet_isMulti && !sithNet_isServer && jkMain_IsDedicatedHost()
+        && stdComm_Imperial_GetSessionNextMap(aGob, sizeof(aGob), aJkl, sizeof(aJkl));
+}
+#endif
+
 int jkMain_StartNextLevelInEpisode(int a1, int bIsAPath)
 {
     jkEpisodeEntry *v2; // eax
     jkEpisodeEntry *v3; // ecx
     int v4; // eax
     signed int result; // eax
+
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+    // Added: the dedicated server named the next level (jkMain_FollowHostMap loads it),
+    // whatever the episode's own order says (a one-level episode would end the game here).
+    if ( jkMain_HostNamedNextMap() )
+    {
+        jkSmack_gameMode = 2;
+        if ( jkGuiRend_menuNestDepth )
+            jkGuiRend_bStateChangePending = 1;
+        jkSmack_stopTick = 1;
+        jkSmack_nextGuiState = JK_GAMEMODE_GAMEPLAY;
+        return 1;
+    }
+#endif
 
     if ( !jkEpisode_mLoad.numSeq )
     {
@@ -1142,6 +1280,21 @@ int jkMain_StartNextLevelInEpisode(int a1, int bIsAPath)
     }
     if ( sithNet_isMulti && (sithNet_MultiModeFlags & MULTIMODEFLAG_SINGLE_LEVEL) != 0 )
     {
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+        // Added: a dedicated server starts the level over instead of ending the
+        // game, and everyone works the next level out by themselves. Changed:
+        // an Imperial Network Protocol one only; the lobby's dedicated host
+        // still ends the game, so its joiners do too.
+        if ( stdComm_Imperial_InGame() && jkMain_IsDedicatedHost() )
+        {
+            jkSmack_gameMode = 2;
+            if ( jkGuiRend_menuNestDepth )
+                jkGuiRend_bStateChangePending = 1;
+            jkSmack_stopTick = 1;
+            jkSmack_nextGuiState = JK_GAMEMODE_GAMEPLAY; // jkMain_aLevelJklFname is still this level
+            return 1;
+        }
+#endif
         v4 = jkGuiRend_menuNestDepth;
         
         if ( v4 )

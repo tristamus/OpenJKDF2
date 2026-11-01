@@ -3,6 +3,9 @@
 #include "Dss/sithMulti.h"
 #include "General/stdString.h"
 #include "jk.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added
+#endif
 
 
 int stdComm_Startup()
@@ -105,6 +108,9 @@ int stdComm_CreatePlayer(jkMultiEntry *pEntry)
         stdComm_dplayIdSelf = DirectPlay_CreatePlayer(jkPlayer_playerShortName, 0);
         if ( stdComm_dplayIdSelf )
         {
+#ifdef PLATFORM_WSRELAY
+            if ( !stdComm_Imperial_bActive ) // Added: there the host's id is its relay player's
+#endif
             stdComm_dplayIdSelf = 1; // HACK
             stdComm_bIsServer = 1;
             stdComm_dword_8321E0 = 1;

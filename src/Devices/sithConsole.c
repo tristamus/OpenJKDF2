@@ -137,6 +137,20 @@ int sithConsole_ExeCommand(const char *pLine)
     strcpy(pCmdMutable, pLine);
 
     _strtolower(pCmdMutable); // Added: mutable copy of cmd
+#ifdef PLATFORM_WSRELAY
+    // Added: these keep their text as typed (passwords, a command for the
+    // server); everything else is lowercased as before.
+    {
+        static const char* aKeepCase[] = { "rcon", "rcon_password", "rcon_address", NULL };
+        size_t cmdLen = strcspn(pCmdMutable, ", \t\n\r");
+        for (int i = 0; aKeepCase[i]; i++)
+            if (strlen(aKeepCase[i]) == cmdLen && !strncmp(pCmdMutable, aKeepCase[i], cmdLen))
+            {
+                strcpy(pCmdMutable + cmdLen, pLine + cmdLen);
+                break;
+            }
+    }
+#endif
     v1 = _strtok(pCmdMutable, ", \t\n\r"); // Added: mutable copy of cmd
     if ( v1 )
     {
