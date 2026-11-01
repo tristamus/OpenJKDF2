@@ -3983,9 +3983,29 @@
       }
 
       // The files to read: every mod's, and the files of the game folder the
-      // engine opens. The rest of the folder is left unread.
+      // engine opens. The rest of the folder is left unread, but for spare
+      // copies of the game's own GOBs (isSpareRetail).
       function filesToRead(files, ext, modPath) {
-        return files.filter(function(e) { return e.mod !== undefined || isGameFile(e.path.toLowerCase(), ext, modPath); });
+        var sizes = {};
+        for (var e of files) if (e.mod === undefined) sizes[e.path.toLowerCase()] = e.file.size;
+        return files.filter(function(e) {
+          if (e.mod !== undefined) return true;
+          var lower = e.path.toLowerCase();
+          return isGameFile(lower, ext, modPath) || isSpareRetail(lower, ext, e.file.size, sizes);
+        });
+      }
+
+      // A copy of one of the game's own GOBs in a folder in resource/, which
+      // the engine doesn't load, when the one in resource/ isn't the same
+      // size. The MotS Remastered pack's installer replaces JKMsndLO.goo with
+      // its own sounds and keeps the original in resource/Backup Sounds/.
+      // maps.js and mods.js find original files in it (retailSources), so a
+      // map that carries some can be rebuilt, and a host's maps send them as
+      // references. A copy the same size as the one loaded is left unread.
+      function isSpareRetail(lower, ext, size, sizes) {
+        var parts = lower.split('/');
+        return parts.length === 3 && parts[0] === 'resource' && RETAIL_RESOURCE[ext].indexOf(parts[2]) >= 0 &&
+               sizes['resource/' + parts[2]] !== size;
       }
 
       // The ticked graphics packs (chooseMods' options for folderMods marked
