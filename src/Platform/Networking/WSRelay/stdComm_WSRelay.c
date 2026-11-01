@@ -1526,8 +1526,24 @@ EM_JS(double, wsrelay_js_now, (), {
 // whether a game packet came on the fast lane, and its number (net.take).
 EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText, int* pSeq), {
     var net = Module.jkNet;
-    if (!net || !net.queue.length) return -1;
-    var data = net.queue.shift();
+    if (!net) return -1;
+    /* Taken from the front by position, not with shift(): once the array holds
+       more than about 16,000 messages, Chromium copies all of it on each
+       shift(), so draining a backlog that size took seconds. Taken slots are
+       cleared; the array is emptied once all are taken, or trimmed once at
+       least half are. */
+    var queue = net.queue, taken = queue.taken | 0;
+    if (taken >= queue.length) return -1;
+    var data = queue[taken];
+    queue[taken++] = undefined;
+    if (taken === queue.length) {
+        queue.length = 0;
+        taken = 0;
+    } else if (taken >= 1024 && taken * 2 >= queue.length) {
+        queue.splice(0, taken);
+        taken = 0;
+    }
+    queue.taken = taken;
     HEAP32[pSeq >> 2] = 0;
     HEAP32[(pSeq >> 2) + 1] = 0;
     if (typeof data === 'string') {
