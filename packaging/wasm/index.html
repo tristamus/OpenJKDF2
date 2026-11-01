@@ -128,21 +128,6 @@
         margin-right: 20px;
       }
 
-      #output {
-        width: 100%;
-        height: 200px;
-        margin: 0 auto;
-        margin-top: 10px;
-        border-left: 0px;
-        border-right: 0px;
-        padding-left: 0px;
-        padding-right: 0px;
-        display: block;
-        background-color: black;
-        color: white;
-        font-family: 'Lucida Console', Monaco, monospace;
-        outline: none;
-      }
       /* The landing page, after the turn-of-the-century game lobbies: teal page,
          gold menu bar, pale yellow links. It covers the canvas until a folder is
          picked. */
@@ -1443,7 +1428,6 @@
                                                                             document.getElementById('resize').checked)">
   </span>
 </span>
-    <textarea id="output" rows="8"></textarea>
     <div id="zone">
       <div class="zone-page">
         <nav class="topnav" aria-label="Project links">
@@ -1786,27 +1770,25 @@
       var progressElement = document.getElementById('progress');
       var spinnerElement = document.getElementById('spinner');
 
+      var ENGINE_LOG_LINES = 2000;
+      var engineLog = [];
+
       var Module = {
         preRun: [],
         postRun: [],
-        print: (function() {
-          var element = document.getElementById('output');
-          if (element) element.value = ''; // clear browser cache
-          return function(text) {
-            if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
-            // These replacements are necessary if you render to raw HTML
-            //text = text.replace(/&/g, "&amp;");
-            //text = text.replace(/</g, "&lt;");
-            //text = text.replace(/>/g, "&gt;");
-            //text = text.replace('\n', '<br>', 'g');
-            console.log(text);
-            if (/^OpenJKDF2: /.test(text)) netLogLine(text);
-            if (element) {
-              element.value += text + "\n";
-              element.scrollTop = element.scrollHeight; // focus on bottom
-            }
-          };
-        })(),
+        // The engine's stdout. Every line goes to the browser console, and the
+        // last ENGINE_LOG_LINES are kept in engineLog for the saved network log.
+        // Lines used to be added to a text box under the game as well, which
+        // was never cleared: each line made the browser lay out everything
+        // logged so far, so after a while each HUD message (a pickup, a force
+        // power) held the game up for a tenth of a second or more.
+        print: function(text) {
+          if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+          console.log(text);
+          if (/^OpenJKDF2: /.test(text)) netLogLine(text);
+          engineLog.push(text);
+          if (engineLog.length > ENGINE_LOG_LINES * 1.5) engineLog.splice(0, engineLog.length - ENGINE_LOG_LINES);
+        },
         printErr: function(text) {
           if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
           console.error(text);
@@ -6421,7 +6403,9 @@
                 'Page: ' + location.href.split('#')[0],
                 'Browser: ' + navigator.userAgent,
                 'Times are UTC.', ''].concat(net ? net.log : ['(the game never connected to the relay)'])
-               .concat(net && net.session ? ['', 'now: ' + net.health()] : []).join('\r\n') + '\r\n';
+               .concat(net && net.session ? ['', 'now: ' + net.health()] : [])
+               .concat(['', 'The engine\'s last ' + Math.min(engineLog.length, ENGINE_LOG_LINES) + ' lines:'],
+                       engineLog.slice(-ENGINE_LOG_LINES)).join('\r\n') + '\r\n';
       }
       function showNetLog(why) {
         if (!netLogBar) {
