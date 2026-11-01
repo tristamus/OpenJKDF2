@@ -365,6 +365,13 @@ LABEL_29:
 #ifdef QOL_IMPROVEMENTS
         // HACK: Actually do passwords correctly
         int check = __wcscmp((const char16_t*)jkGuiMultiplayer_aEntries[jkGuiMultiplayer_aElements3[3].selectedTextEntry].wPassword, (const char16_t*)jkGuiMultiplayer_stru_556168.field_300);
+#ifdef PLATFORM_WSRELAY
+        // Added: not on the Imperial Network Protocol connection. Its game list
+        // carries no passwords (the entry's is always empty), so every password
+        // typed would fail here; the host checks it when we join (0x88770154).
+        if (stdComm_Imperial_bActive)
+            check = 0;
+#endif
         if (check) {
             v27 = jkStrings_GetUniStringWithFallback("GUINET_WRONGPASSWORD");
             v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
