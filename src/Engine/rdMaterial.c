@@ -17,6 +17,16 @@
 #include <nds.h>
 #endif
 
+// Added: a line per texture freed. A level frees hundreds as it ends, and in the
+// browser they crowded the engine's other lines out of the log the page keeps
+// for bug reports (index.html, engineLog). Define RDMATERIAL_LOG_FREES to see
+// them there.
+#if !defined(__EMSCRIPTEN__) || defined(RDMATERIAL_LOG_FREES)
+#define rdMaterial_LogFree(...) stdPlatform_Printf(__VA_ARGS__)
+#else
+#define rdMaterial_LogFree(...) do {} while (0)
+#endif
+
 // Added: SafeStrCopy variant for destinations that may live in word-addressable-
 // only memory (the world aMaterials array on TWL): stage on the stack, then a
 // word-safe copy of the terminated string.
@@ -692,7 +702,7 @@ void rdMaterial_FreeEntry(rdMaterial* pMaterial)
 
 #if defined(SDL2_RENDER) || defined(TARGET_RETRO_HOMEBREW)
                     if (surface->texture_loaded) {
-                        stdPlatform_Printf("OpenJKDF2: rdMaterial_FreeEntry %s %x\n", pMaterial->mat_fpath, surface->texture_id);
+                        rdMaterial_LogFree("OpenJKDF2: rdMaterial_FreeEntry %s %x\n", pMaterial->mat_fpath, surface->texture_id);
                         std3D_PurgeSurfaceRefs(&pTex->alphaMats[j]);
                         std3D_PurgeSurfaceRefs(&pTex->opaqueMats[j]);
                         pTex->alphaMats[j].texture_id = 0;
@@ -734,7 +744,7 @@ void rdMaterial_FreeEntry(rdMaterial* pMaterial)
 
 #if defined(SDL2_RENDER) || defined(TARGET_RETRO_HOMEBREW)
             if (surface->texture_loaded) {
-                stdPlatform_Printf("OpenJKDF2: rdMaterial_FreeEntry %s %x\n", pMaterial->mat_fpath, surface->texture_id);
+                rdMaterial_LogFree("OpenJKDF2: rdMaterial_FreeEntry %s %x\n", pMaterial->mat_fpath, surface->texture_id);
                 std3D_PurgeSurfaceRefs(&pTex->alphaMats[j]);
                 std3D_PurgeSurfaceRefs(&pTex->opaqueMats[j]);
                 pTex->alphaMats[j].texture_id = 0;
