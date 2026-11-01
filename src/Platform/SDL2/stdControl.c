@@ -772,6 +772,16 @@ void stdControl_SetActivation(int a)
         }
     }
 
+#ifdef ARCH_WASM
+    // Added: the key and joystick menus turn controls on to wait for a key.
+    // In a menu that only asks the browser to lock the mouse, and the menu
+    // frees it again in the same frame (Window_SdlUpdate). Firefox ignores a
+    // release that comes before the lock is granted, then locks the mouse in
+    // the menu anyway: the cursor was gone after binding a key. A level takes
+    // the mouse every frame, so only ask while one is on screen.
+    if (a && !jkGame_isDDraw)
+        return;
+#endif
     SDL_SetWindowRelativeMouseMode(displayWindow, !!a);
 }
 

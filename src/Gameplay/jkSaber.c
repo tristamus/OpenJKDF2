@@ -18,6 +18,9 @@
 #include "General/stdString.h"
 #include "Engine/rdMaterial.h"
 #include "Win95/stdDisplay.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
 
 #include "jk.h"
 
@@ -501,6 +504,12 @@ void  jkSaber_UpdateCollision2(SithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
 
                     jkSaber_SpawnSparks(playerInfo, &local_54, pSectorIter, SPARKTYPE_SABER);
 
+#ifdef PLATFORM_WSRELAY
+                    // Added: the hit ledger. Each game rolls its own block
+                    // chance, so this game and the victim's can disagree.
+                    if ( sithNet_isMulti && resultThing->type == SITH_THING_PLAYER )
+                        stdComm_WSRelay_NoteHit(resultThing, pPlayerThing, pCollideInfo->damage, SITH_DAMAGE_SABER, STDCOMM_WSRELAY_BLOCK);
+#endif
                     sithCog_ThingSendMessage(resultThing, 0, SITH_MESSAGE_BLOCKED);
                     pCollideInfo->damagedThings[pCollideInfo->numDamagedThings++] = searchResult->pThingCollided;
                     break;
@@ -555,6 +564,7 @@ void jkSaber_UpdateCollision(SithThing *player, int joint, int bSecondary)
     rdVector3 lerpPosDelta;
     rdVector3 lerpDirDelta;
     rdMatrix34 *pWhichLastJointMat;
+    rdMatrix34 *pGripMat; // Added
 
     playerInfo = player->playerInfo;
 
@@ -565,10 +575,23 @@ void jkSaber_UpdateCollision(SithThing *player, int joint, int bSecondary)
     }
 
     if ( !rdModel3_GetMeshMatrix(&player->renderData, &matrix, joint, &jointMat) )
-        return;
+    {
+        // Added: a joint the model lacks (jkPlayer_JointMatrix), once the
+        // joint matrices are built
+        rdMatrix34* pJointMat;
+        if ( !rdModel3_GetMeshMatrix(&player->renderData, &matrix, 0, &jointMat) )
+            return;
+        pJointMat = jkPlayer_JointMatrix(player, joint, &tmpMat);
+        if ( !pJointMat )
+            return;
+        rdMatrix_Copy34(&jointMat, pJointMat);
+    }
 
-    // Added: the blade starts where its hilt is drawn (jkPlayer_GetGripOffset)
-    rdVector_ScaleAdd3Acc(&jointMat.scale, &jointMat.lvec, jkPlayer_GetGripOffset(player, joint));
+    // Added: the blade starts where its hilt is drawn, and points the way it
+    // does (jkPlayer_GripMatrix)
+    pGripMat = jkPlayer_GripMatrix(player, joint, &jointMat, &tmpMat);
+    if (pGripMat != &jointMat)
+        rdMatrix_Copy34(&jointMat, pGripMat);
 
     rdVector_Copy3(&player->actorParams.saberBladePos, &jointMat.scale);
     rdVector_ScaleAdd3Acc(&player->actorParams.saberBladePos, &jointMat.lvec, playerInfo->polyline.length);

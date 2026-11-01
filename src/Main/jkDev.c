@@ -395,7 +395,11 @@ LABEL_7:
     char tmp2[256+2];
     stdString_WcharToChar(tmp, str, 255);
     tmp[255] = 0;
+#ifndef __EMSCRIPTEN__
+    // Clears a terminal's line. In the browser stdout is a log, not a
+    // terminal, so it only made each message start with 44 spaces.
     printf("\r                                            \r");
+#endif
     stdString_snprintf(tmp2, sizeof(tmp2), "%s%c", tmp, _strlen(tmp) && tmp[_strlen(tmp)-1] == '\n' ? ' ' : '\n');
     printf("%s", tmp2);
 #ifdef QUAKE_CONSOLE

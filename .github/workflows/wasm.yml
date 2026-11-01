@@ -47,6 +47,10 @@ jobs:
       # The page's mod list and zipped mods, with made-up files.
       - name: Test the mod list
         run: node packaging/wasm/test/picker-test.mjs
+      # unzip.js, the zip methods the browser can't unpack: zips made by
+      # PKZIP, 7-Zip, xz, zstd and others (packaging/wasm/test/fixtures).
+      - name: Test unzipping
+        run: node packaging/wasm/test/unzip-test.mjs
       # Screenshots: storing them, their names and the zip, with made-up pictures.
       - name: Test screenshots
         run: node packaging/wasm/test/screenshots-test.mjs
@@ -57,6 +61,9 @@ jobs:
       # Quit: back to the lobby once the saves are stored, with made-up storage.
       - name: Test Quit
         run: node packaging/wasm/test/quit-test.mjs
+      # The room list: every room opens its game's room window.
+      - name: Test the room list
+        run: node packaging/wasm/test/rooms-test.mjs
       # Keys: every key of a standard keyboard reaches the game, and the
       # default binds, read from the sources.
       - name: Test keys and default binds
@@ -65,12 +72,38 @@ jobs:
       # made-up frames and browsers.
       - name: Test frame times, the slow-frame note and ?bench
         run: node packaging/wasm/test/frames-test.mjs
+      # Network measurements, the hit ledger and ?netsim, with made-up games
+      # and links.
+      - name: Test network measurements
+        run: node packaging/wasm/test/netstats-test.mjs
+      # The network code's own JavaScript (stdComm_WSRelay.c): the fast lane
+      # for positions, the switch to a link and back, links between joiners
+      # and TURN credentials, with made-up browsers, WebRTC and lobby.
+      - name: Test network paths
+        run: node packaging/wasm/test/transport-test.mjs
+      # Hit what you see's check on a hit claim, on its own in C, with
+      # made-up records of where a player was and made-up claims.
+      - name: Test the hit claim check
+        run: |
+          cc -std=c11 -O2 -Wall -Werror -o hitcheck-test packaging/wasm/test/hitcheck-test.c \
+             src/Platform/Networking/WSRelay/stdComm_WSRelayHitCheck.c -lm
+          ./hitcheck-test
+      # Hit what you see's buffer of another player's timed updates, on its
+      # own in C: the delay it draws them at over steady, jittery, lossy and
+      # changing links, where it puts them between and past updates, and
+      # their messages that wait for the moment they're drawn at.
+      - name: Test drawing other players from their timed updates
+        run: |
+          cc -std=c11 -O2 -Wall -Werror -o motion-test packaging/wasm/test/motion-test.c \
+             src/Platform/Networking/WSRelay/stdComm_WSRelayPlayout.c -lm
+          ./motion-test
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build
         run: |
           mkdir -p web
-          cp packaging/wasm/index.html build_emcc/openjkdf2.js build_emcc/openjkdf2.wasm web/
+          cp packaging/wasm/index.html packaging/wasm/move-out.html packaging/wasm/unzip.js build_emcc/openjkdf2.js \
+             build_emcc/openjkdf2.wasm web/
       - uses: actions/upload-artifact@v4
         with:
           name: openjkdf2-wasm

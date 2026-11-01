@@ -12,6 +12,11 @@
 int sithComm_009a1160 = 0;
 int sithComm_version = 6;
 
+// Added: the message from another game being handled (its DSS id), 0 between
+// messages, so the browser build's hit ledger can tell a hit that another
+// game's message decided (stdComm_WSRelay_NoteHit).
+int sithComm_msgInProgress = 0;
+
 // MOTS altered
 int sithComm_Startup()
 {
@@ -287,11 +292,32 @@ LABEL_14:
                 else
                 {
 LABEL_22:
+#ifdef PLATFORM_WSRELAY
+                    // Added: Hit what you see: another player's swing,
+                    // animation and sound messages wait until this game
+                    // draws them at the moment they were sent.
+                    if ( stdComm_WSRelay_HoldForTimeline(&sithComm_netMsgTmp) )
+                        goto LABEL_25;
+#endif
                     if ( v2 < (unsigned int)DSS_MAX )
                     {
                         if ( sithMessage_aTypeFuncs[v2] )
+                        {
+                            sithComm_msgInProgress = v2; // Added
                             sithMessage_aTypeFuncs[v2](&sithComm_netMsgTmp);
+                            sithComm_msgInProgress = 0; // Added
+                        }
                     }
+#ifdef PLATFORM_WSRELAY
+                    // Added: Hit what you see's own messages, which older
+                    // games ignore.
+                    else if ( v2 == STDCOMM_WSRELAY_HITS_MSG )
+                    {
+                        sithComm_msgInProgress = v2;
+                        stdComm_WSRelay_ProcessHits(&sithComm_netMsgTmp);
+                        sithComm_msgInProgress = 0;
+                    }
+#endif
                 }
                 goto LABEL_25;
             }

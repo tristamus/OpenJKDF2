@@ -1,0 +1,1104 @@
+// Tests for packaging/wasm/netstats.js: the network measurements, the hit
+// ledger and ?netsim. In Node: node packaging/wasm/test/netstats-test.mjs
+//
+// Each game loads netstats.js as openjkdf2.js does, with its own Module. The
+// test runs one clock for every game by hand, and passes packets between the
+// games the way stdComm_WSRelay.c's JS does (checked at the end).
+
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+
+const read = path => readFileSync(new URL('../../../' + path, import.meta.url), 'utf8');
+const source = read('packaging/wasm/netstats.js');
+const relayC = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.c');
+const enums = read('src/types_enums.h');
+
+const SABER = 1, SHOT = 2, SPLASH = 3, FORCE = 4;
+const HIT = 1, BLOCK = 2, DEAD = 3, TURNED_DOWN = 4;
+const BY_MESSAGE = 1, BY_CLAIM = 2, DECIDED = 4, MOMENT = 8, PAST_REACH = 16;
+const NOT_THERE = 2, REPEAT = 6;
+
+// One clock for the whole test. Timers run in order as it moves on.
+function makeWorld() {
+    const timers = [];
+    let now = 1000, seq = 0;
+    return {
+        now: () => now,
+        later(fn, ms) {
+            timers.push({ at: now + Math.max(0, ms || 0), fn, seq: seq++ });
+        },
+        run(ms) {
+            const end = now + ms;
+            for (;;) {
+                let next = null;
+                for (const t of timers)
+                    if (!next || t.at < next.at || (t.at === next.at && t.seq < next.seq)) next = t;
+                if (!next || next.at > end) break;
+                timers.splice(timers.indexOf(next), 1);
+                now = Math.max(now, next.at);
+                next.fn();
+            }
+            now = end;
+        },
+    };
+}
+
+// Random numbers that come out the same every run.
+function seeded(seed) {
+    let x = seed >>> 0;
+    return () => {
+        x = (x * 1664525 + 1013904223) >>> 0;
+        return x / 4294967296;
+    };
+}
+
+// A game, as openjkdf2.js loads netstats.js, in a window with ?netstats
+// unless measure is false. Its clock reads skew ms off the world's, as
+// another computer's would.
+function makeGame(world, { id, isHost = false, skew = 0, netsim, measure = true, random = seeded(id) }) {
+    const Module = netsim === undefined ? {} : { jkNetSim: netsim };
+    if (measure) Module.jkNetMeasure = true;
+    new Function('Module', 'setInterval', source)(Module, () => 0);
+    const ns = Module.jkNetStats;
+    ns.lib.clock.now = () => world.now() + skew;
+    ns.lib.clock.later = (fn, ms) => world.later(fn, ms);
+    ns.lib.clock.random = random;
+    return { id, isHost, Module, ns, queue: [], notes: [] };
+}
+
+// The link between two games: oneWay ms each way, on the game's channel and
+// on 'jk-ns', whose messages dropProbe can lose. A game without netstats.js
+// (old) only queues what it gets.
+function link(world, a, b, { oneWay = 20, dropProbe = () => false } = {}) {
+    for (const [self, other] of [[a, b], [b, a]]) {
+        const deliver = bytes => {
+            const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+            world.later(() => {
+                if (!other.ns) return other.queue.push(data);
+                // net.onPeerPacket, then net.takePeerPacket.
+                other.ns.inbound(self.id, data, 'direct', d => {
+                    if (!other.ns.take(self.id, d, 'direct')) other.queue.push(d);
+                });
+            }, oneWay);
+            return 1;
+        };
+        if (!self.ns) {
+            self.send = bytes => deliver(bytes);
+            continue;
+        }
+        self.Module.jkNet = {
+            peers: { [other.id]: { open: true } },
+            sendPacket: (bytes, id) => self.ns.outbound(id, bytes, deliver),
+            nsOpen: () => !!other.ns,
+            nsSend: (id, buf) => {
+                const copy = buf.slice(0);
+                if (!dropProbe(copy)) world.later(() => other.ns.onProbe(self.id, copy), oneWay);
+                return 1;
+            },
+            note: text => self.notes.push(text),
+        };
+        self.send = bytes => self.Module.jkNet.sendPacket(bytes, other.id);
+    }
+}
+
+// Ticks every game as netstats.js's own interval would.
+function ticking(world, games) {
+    const step = () => {
+        games.forEach(g => g.ns && g.ns.lib.tick());
+        world.later(step, 250);
+    };
+    world.later(step, 250);
+}
+
+// A player's position update from one game to another (DSS_THINGPOS, 64
+// bytes after the 12-byte header).
+function position(from, to) {
+    const buf = new ArrayBuffer(76);
+    const view = new DataView(buf);
+    view.setUint32(0, from.id, true);
+    view.setUint32(4, to.id, true);
+    view.setUint16(8, 1, true);
+    view.setUint16(10, 0, true);
+    return new Uint8Array(buf);
+}
+
+// Two games in a match, each having heard from the other.
+function match({ oneWay = 20, hostSim, joinSim, skew = 0, dropProbe, hostMeasures = true, joinMeasures = true } = {}) {
+    const world = makeWorld();
+    const host = makeGame(world, { id: 1, isHost: true, netsim: hostSim, measure: hostMeasures });
+    const join = makeGame(world, { id: 2, skew, netsim: joinSim, measure: joinMeasures });
+    link(world, host, join, { oneWay, dropProbe });
+    for (const g of [host, join]) {
+        g.ns.start(g.isHost);
+        g.ns.live(1, g.id, g.isHost);
+        g.ns.name(g === host ? 2 : 1, '');
+    }
+    host.send(position(host, join));
+    join.send(position(join, host));
+    ticking(world, [host, join]);
+    world.run(100);
+    return { world, host, join };
+}
+
+const rowOf = (game, id) => game.ns.report().rows.find(r => r.id === id);
+const near = (actual, want, within, what) =>
+    assert.ok(actual !== null && Math.abs(actual - want) <= within, `${what}: ${actual}, wanted ${want} ± ${within}`);
+const hitsOf = (game, id, kind) => (rowOf(game, id).hits.find(h => h.kind === kind) || {}).c;
+const takenOf = (game, id, kind) => (rowOf(game, id).taken.find(h => h.kind === kind) || {}).c;
+
+const tests = [];
+const test = (name, fn) => tests.push({ name, fn });
+
+test('?netsim as the page passes it', () => {
+    const { parseSim } = makeGame(makeWorld(), { id: 1 }).ns.lib;
+    assert.deepEqual(parseSim('rtt:150,jitter:20,loss:2'), { rtt: 150, jitter: 20, loss: 2 });
+    assert.deepEqual(parseSim('150'), { rtt: 150, jitter: 0, loss: 0 });
+    assert.deepEqual(parseSim('ping=100;jitter=5'), { rtt: 100, jitter: 5, loss: 0 });
+    assert.deepEqual(parseSim('loss:80,rtt:9000'), { rtt: 2000, jitter: 0, loss: 50 });
+    assert.equal(parseSim(''), null);
+    assert.equal(parseSim(null), null);
+    assert.equal(parseSim(undefined), null);
+    assert.equal(parseSim('rtt:-5,loss:x'), null);
+    const world = makeWorld();
+    assert.deepEqual(makeGame(world, { id: 1, netsim: 'rtt:80' }).ns.sim(), { rtt: 80, jitter: 0, loss: 0 });
+    const game = makeGame(world, { id: 1 });
+    assert.equal(game.ns.sim(), null);
+    // The panel's buttons change it during a game.
+    game.ns.setSim('rtt:150,jitter:20,loss:2');
+    assert.deepEqual(game.ns.sim(), { rtt: 150, jitter: 20, loss: 2 });
+    assert.match(game.ns.text()[0], /Simulating 150 ms more round trip, 20 ms jitter, 2% loss each way\.$/);
+    game.ns.setSim('');
+    assert.equal(game.ns.sim(), null);
+});
+
+test('frames look like messages engines without netstats.js ignore', () => {
+    const { host, join, world } = match();
+    let frame = null;
+    host.Module.jkNet.sendPacket = bytes => {
+        frame = bytes;
+        return 1;
+    };
+    world.run(1500);
+    assert.ok(frame, 'the host pinged');
+    const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+    const dssMax = Number(/DSS_MAX\s*=\s*(\d+)/.exec(enums)[1]);
+    assert.ok(view.getUint16(8, true) >= dssMax, 'message id past DSS_MAX (sithMessage_ProcessMessages skips it)');
+    assert.equal(view.getUint16(10, true), 0, 'no resend id, so no engine acknowledges or resends it');
+    assert.equal(view.getUint32(0, true), 1, 'from the host');
+    assert.equal(view.getUint32(4, true), 2, 'to the joiner');
+    assert.ok(join.ns.lib.isFrame(frame.buffer.slice(frame.byteOffset)));
+    assert.ok(!join.ns.lib.isFrame(position(host, join).buffer));
+    assert.ok(join.ns.lib.isPosition(position(host, join).buffer));
+});
+
+test('pings measure the round trip on the game\'s channel and on its own', () => {
+    const { world, host, join } = match({ oneWay: 20 });
+    world.run(10000);
+    for (const [g, other] of [[host, join], [join, host]]) {
+        const row = rowOf(g, other.id);
+        near(row.ping, 40, 0.5, 'ping');
+        near(row.netPing, 40, 0.5, 'link ping');
+        near(row.jitter, 0, 0.5, 'jitter');
+        assert.equal(row.loss.share, 0);
+        assert.ok(row.loss.of >= 10, 'pings counted for loss: ' + row.loss.of);
+        assert.equal(row.path, 'direct');
+    }
+    // Pings never reach the engine.
+    assert.equal(host.queue.length, 1);
+    assert.equal(join.queue.length, 1);
+});
+
+test('?netsim in one window adds its round trip to both sides\' pings', () => {
+    const { world, host, join } = match({ oneWay: 20, hostSim: 'rtt:100' });
+    world.run(10000);
+    near(rowOf(host, 2).ping, 140, 1, 'host\'s ping');
+    near(rowOf(join, 1).ping, 140, 1, 'joiner\'s ping');
+    near(rowOf(join, 1).netPing, 140, 1, 'joiner\'s link ping');
+});
+
+test('jitter, and loss on the channel that never resends', () => {
+    const lose = seeded(11);
+    const { world, join } = match({ oneWay: 20, joinSim: 'jitter:30', dropProbe: () => lose() < 0.25 });
+    world.run(30000);
+    const row = rowOf(join, 1);
+    assert.ok(row.jitter > 3 && row.jitter < 40, 'jitter ' + row.jitter);
+    // A lost ping or a lost answer both lose that ping: 1 - 0.75 * 0.75.
+    assert.ok(row.loss.share > 0.3 && row.loss.share < 0.6, 'loss ' + row.loss.share);
+    assert.ok(rowOf(join, 1).ping >= 40, 'the game\'s channel resends, so it never loses one');
+});
+
+test('a game without netstats.js is pinged less once it never answers', () => {
+    const world = makeWorld();
+    const host = makeGame(world, { id: 1, isHost: true });
+    const old = { id: 2, queue: [] };
+    link(world, host, old);
+    host.ns.start(true);
+    host.ns.live(1, 1, true);
+    host.ns.name(2, '');
+    old.send(position(old, host));
+    ticking(world, [host]);
+    world.run(30000);
+    const pings = old.queue.filter(d => host.ns.lib.isFrame(d)).length;
+    assert.ok(pings >= 5 && pings <= 8, 'pings sent to the old game: ' + pings);
+    assert.equal(rowOf(host, 2).ping, null);
+});
+
+test('pings and receipts only once this game\'s player is in the match, to players in it', () => {
+    const world = makeWorld();
+    const host = makeGame(world, { id: 1, isHost: true });
+    const join = makeGame(world, { id: 2 });
+    link(world, host, join);
+    host.ns.start(true);
+    join.ns.start(false);
+    host.ns.live(1, 1, true);
+    host.send(position(host, join));
+    join.send(position(join, host));
+    ticking(world, [host, join]);
+    const sent = game => {
+        const types = {};
+        const was = game.Module.jkNet.sendPacket;
+        game.Module.jkNet.sendPacket = (bytes, id) => {
+            if (game.ns.lib.isFrame(bytes.buffer)) types[bytes[12]] = (types[bytes[12]] || 0) + 1;
+            return was(bytes, id);
+        };
+        return types;
+    };
+    const fromHost = sent(host), fromJoin = sent(join);
+    // The host's engine hasn't said the joiner is in the match yet.
+    world.run(5000);
+    assert.deepEqual(fromHost, {}, 'the host pinged a player not in the match');
+    host.ns.name(2, 'Kyle');
+    world.run(5000);
+    assert.ok(fromHost[host.ns.lib.T_PING] > 0);
+    // A joiner answers (its pongs never reach an engine), but neither pings
+    // nor sends receipts before the host has let it in: the host drops a
+    // player who sends it anything before then (sithMessage_ProcessMessages).
+    join.ns.name(1, 'Jerec');
+    join.ns.hit(1, false, SABER, HIT, 10, false);
+    world.run(5000);
+    assert.equal(fromJoin[join.ns.lib.T_PING], undefined, 'the joiner pinged before it was in');
+    assert.equal(fromJoin[join.ns.lib.T_RECEIPT], undefined, 'or sent a receipt');
+    assert.ok(fromJoin[join.ns.lib.T_PONG] > 0);
+    join.ns.live(1, 2, false);
+    join.ns.hit(1, false, SABER, HIT, 10, false);
+    world.run(2000);
+    assert.ok(fromJoin[join.ns.lib.T_PING] > 0);
+    assert.equal(fromJoin[join.ns.lib.T_RECEIPT], 1);
+});
+
+test('a window without ?netstats only answers pings and sends receipts', () => {
+    const { world, host, join } = match({ hostMeasures: false });
+    let pings = 0;
+    const send = host.Module.jkNet.sendPacket, probe = host.Module.jkNet.nsSend;
+    host.Module.jkNet.sendPacket = (bytes, id) => {
+        if (host.ns.lib.isFrame(bytes.buffer.slice(bytes.byteOffset)) && new DataView(bytes.buffer, bytes.byteOffset).getUint8(12) === host.ns.lib.T_PING) pings++;
+        return send(bytes, id);
+    };
+    host.Module.jkNet.nsSend = (id, buf) => {
+        if (new DataView(buf).getUint8(12) === host.ns.lib.T_PING) pings++;
+        return probe(id, buf);
+    };
+    world.run(10000);
+    assert.equal(pings, 0);
+    assert.equal(rowOf(host, 2).ping, null);
+    // The joiner, with ?netstats, still gets its answers and receipts.
+    near(rowOf(join, 1).ping, 40, 0.5, 'joiner\'s ping');
+    join.ns.hit(1, true, SABER, HIT, 10, false, 4);
+    host.ns.hit(2, false, SABER, HIT, 10, false, 4);
+    world.run(1000);
+    assert.equal(hitsOf(join, 1, 'saber').counted, 1);
+});
+
+test('position updates: how many, how even, the late ones and the longest gap', () => {
+    const { world, host, join } = match();
+    world.run(10000);
+    const start = world.now();
+    for (let t = 0; t < 5000; t += 50) {
+        if (t > 2000 && t < 2300) continue;
+        world.later(() => host.send(position(host, join)), t);
+    }
+    world.run(5000);
+    const u = rowOf(join, 1).updates;
+    assert.ok(u.rate > 18 && u.rate < 21, 'rate ' + u.rate);
+    assert.equal(u.late, 1);
+    near(u.longest, 300, 1, 'longest gap');
+    assert.ok(world.now() - start === 5000);
+});
+
+test('a hit shown here and counted in the victim\'s game agrees', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    join.ns.hit(1, true, SABER, HIT, 10, false);
+    world.run(15);
+    host.ns.hit(2, false, SABER, HIT, 10, false);
+    world.run(1000);
+    const c = hitsOf(join, 1, 'saber');
+    assert.equal(c.counted, 1);
+    assert.equal(c.missedHit + c.blockedThere + c.notShown, 0);
+    const t = takenOf(host, 2, 'saber');
+    assert.deepEqual([t.hit, t.block, t.dead, t.byMessage, t.turnedDown, t.claims], [1, 0, 0, 0, 0, 0]);
+    assert.match(join.ns.text().join('\n'), /your saber: 1 hit shown: 1 counted \| agree 100% of 1/);
+    assert.match(host.ns.text().join('\n'), /their hits on you: saber 1 counted/);
+});
+
+test('blocked there, missed there, landed without showing here, already dead there', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    // Blocked in the victim's game: each game rolls its own block chance.
+    join.ns.hit(1, true, SABER, HIT, 10, false);
+    host.ns.hit(2, false, SABER, BLOCK, 10, false);
+    world.run(500);
+    // The victim's game never saw it.
+    join.ns.hit(1, true, SABER, HIT, 10, false);
+    world.run(3000);
+    // It saw one this game didn't.
+    host.ns.hit(2, false, SABER, HIT, 10, false);
+    world.run(3000);
+    // The victim had already died in its own game.
+    join.ns.hit(1, true, SABER, HIT, 10, false);
+    host.ns.hit(2, false, SABER, DEAD, 10, false);
+    world.run(500);
+    // A block shown here that the victim's game counted as a hit.
+    join.ns.hit(1, true, SABER, BLOCK, 10, false);
+    host.ns.hit(2, false, SABER, HIT, 10, false);
+    world.run(500);
+    const c = hitsOf(join, 1, 'saber');
+    assert.equal(c.blockedThere, 1);
+    assert.equal(c.missedHit, 1);
+    assert.equal(c.notShown, 1);
+    assert.equal(c.deadThere, 1);
+    assert.equal(c.hitThere, 1);
+    assert.equal(c.counted, 0);
+    const text = join.ns.text().join('\n');
+    assert.match(text, /3 hits shown: 0 counted, 1 blocked there, 1 missed there, 1 already dead there/);
+    assert.match(text, /1 block shown: 0 blocked there, 1 counted there/);
+    assert.match(text, /1 landed there without showing here/);
+    assert.match(text, /agree 0% of 5/);
+});
+
+test('swings and shots are matched by their number, however close together', () => {
+    const { world, host, join } = match({ oneWay: 60 });
+    world.run(3000);
+    // Quick slashes 250 ms apart. Swing 7 shows as a block here and missed
+    // there; 8 and 9 come out the other way round there; the victim's game
+    // saw 10 hit, which never showed here.
+    join.ns.hit(1, true, SABER, BLOCK, 40, false, 7);
+    world.run(250);
+    join.ns.hit(1, true, SABER, HIT, 40, false, 8);
+    world.run(60);
+    host.ns.hit(2, false, SABER, BLOCK, 40, false, 8);
+    world.run(190);
+    join.ns.hit(1, true, SABER, BLOCK, 40, false, 9);
+    world.run(60);
+    host.ns.hit(2, false, SABER, HIT, 40, false, 9);
+    world.run(190);
+    host.ns.hit(2, false, SABER, HIT, 40, false, 10);
+    // Two bolts in flight: the second lands there first.
+    join.ns.hit(1, true, SHOT, HIT, 30, false, 0x20005);
+    join.ns.hit(1, true, SHOT, HIT, 30, false, 0x20006);
+    world.run(40);
+    host.ns.hit(2, false, SHOT, HIT, 30, false, 0x20006);
+    host.ns.hit(2, false, SHOT, BLOCK, 30, false, 0x20005);
+    world.run(4000);
+    const c = hitsOf(join, 1, 'saber');
+    assert.equal(c.missedBlock, 1, 'swing 7');
+    assert.equal(c.blockedThere, 1, 'swing 8');
+    assert.equal(c.hitThere, 1, 'swing 9');
+    assert.equal(c.notShown, 1, 'swing 10');
+    assert.equal(c.counted + c.missedHit + c.blockAgreed + c.blockNotShown, 0);
+    // Each one's lag is from its own swing: how much later the victim's game
+    // decided it.
+    assert.deepEqual(c.lags.map(Math.round), [60, 60]);
+    const shots = hitsOf(join, 1, 'shot');
+    assert.equal(shots.counted, 1);
+    assert.equal(shots.blockedThere, 1);
+    assert.deepEqual(shots.lags.map(Math.round), [40, 40]);
+});
+
+test('hits without a number are matched by time, apart from numbered ones', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    // Splash damage has no number. A numbered saber swing in between doesn't
+    // take its receipt.
+    join.ns.hit(1, true, SABER, HIT, 10, false, 3);
+    join.ns.hit(1, true, SABER, HIT, 10, false, 0);
+    world.run(20);
+    host.ns.hit(2, false, SABER, HIT, 10, false, 0);
+    world.run(4000);
+    const c = hitsOf(join, 1, 'saber');
+    assert.equal(c.counted, 1);
+    assert.equal(c.missedHit, 1);
+    assert.equal(c.notShown, 0);
+    // An older game's receipt has no number either (16 bytes after the
+    // header, not 20): it matches a hit shown without one.
+    const p = join.ns.lib.players()[1];
+    join.ns.hit(1, true, SHOT, HIT, 10, false, 0);
+    const buf = new ArrayBuffer(32);
+    const view = new DataView(buf);
+    view.setUint32(0, 1, true);
+    view.setUint32(4, 2, true);
+    new Uint8Array(buf).set([0x4A, 0x4E, 0, 0], 8);
+    view.setUint8(12, join.ns.lib.T_RECEIPT);
+    view.setUint8(13, 1);
+    view.setUint8(16, SHOT);
+    view.setUint8(17, HIT);
+    view.setFloat64(24, 0, true);
+    assert.ok(join.ns.take(1, buf, 'direct'));
+    assert.equal(hitsOf(join, 1, 'shot').counted, 1);
+    assert.ok(p.shown.length === 0 && p.receipts.length === 0);
+});
+
+test('a receipt that arrives before the hit shows here still matches', () => {
+    const { world, host, join } = match({ oneWay: 5 });
+    world.run(3000);
+    host.ns.hit(2, false, SHOT, HIT, 30, false);
+    world.run(200);
+    join.ns.hit(1, true, SHOT, HIT, 30, false);
+    world.run(3000);
+    const c = hitsOf(join, 1, 'shot');
+    assert.equal(c.counted, 1);
+    assert.equal(c.notShown + c.missedHit, 0);
+});
+
+test('targeted Force powers are counted apart', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    host.ns.hit(2, false, FORCE, HIT, 5, true);
+    host.ns.hit(2, false, FORCE, HIT, 5, true);
+    world.run(3000);
+    assert.equal(hitsOf(join, 1, 'Force').byMessage, 2);
+    assert.equal(hitsOf(join, 1, 'Force').notShown, 0);
+    assert.equal(takenOf(host, 2, 'Force').byMessage, 2);
+    assert.match(join.ns.text().join('\n'), /your Force: 2 targeted/);
+});
+
+test('Hit what you see: targeted Force powers checked where the attacker\'s game showed the player', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    // The joiner's Force powers on the host, which its game checked at the
+    // moment each named: two played, one of them past the reach, and one
+    // was turned down. The damage a played one does isn't counted again.
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.01);
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT | PAST_REACH, 0, 0, 0.03);
+    host.ns.hit(2, false, FORCE, TURNED_DOWN, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, NOT_THERE, 0.5);
+    world.run(3000);
+    const t = takenOf(host, 2, 'Force');
+    assert.deepEqual([t.byMessage, t.turnedDown, t.claims, t.moments, t.pastReach], [2, 1, 3, 3, 1]);
+    assert.match(host.ns.text().join('\n'),
+                 /their hits on you: Force 1 turned down \(not there 1\), 2 targeted \(3 claimed, 3 at a moment, 1 of them past the reach, off by counted median/);
+    const c = hitsOf(join, 1, 'Force');
+    assert.deepEqual([c.byMessage, c.byMessageTurnedDown, c.claims, c.moments, c.pastReach], [2, 1, 3, 3, 1]);
+    assert.equal(c.turnedDown + c.notShown + c.missedHit, 0);
+    assert.match(join.ns.text().join('\n'),
+                 /your Force: 2 targeted, 1 turned down there \(not there 1\) \| 3 claimed \(3 at a moment, 1 of them past the reach\), off by counted median/);
+});
+
+test('Hit what you see: claims counted and turned down, with why and how far off', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    // The joiner's shots hit the host on its screen, and it claimed each.
+    join.ns.hit(1, true, SHOT, HIT, 30, 0, 0x20007);
+    join.ns.hit(1, true, SHOT, HIT, 30, 0, 0x20008);
+    join.ns.hit(1, true, SPLASH, HIT, 20, 0, 0);
+    world.run(20);
+    // The host's game counted one, turned one down, and counted the blast.
+    host.ns.hit(2, false, SHOT, HIT, 30, BY_CLAIM, 0x20007, 0, 0.05);
+    host.ns.hit(2, false, SHOT, TURNED_DOWN, 30, BY_CLAIM, 0x20008, NOT_THERE, 0.62);
+    host.ns.hit(2, false, SPLASH, HIT, 20, BY_CLAIM, 0, 0, 0.11);
+    world.run(1000);
+    const c = hitsOf(join, 1, 'shot');
+    assert.equal(c.counted, 1);
+    assert.equal(c.turnedDown, 1);
+    assert.equal(c.claims, 2);
+    assert.deepEqual(c.why, { 'not there': 1 });
+    near(c.distances[0], 0.05, 1e-6, 'counted distance');
+    near(c.turnedDownDistances[0], 0.62, 1e-6, 'turned down distance');
+    assert.equal(c.missedHit + c.notShown, 0);
+    assert.equal(hitsOf(join, 1, 'splash').counted, 1);
+    const text = join.ns.text().join('\n');
+    assert.match(text, /your shot: 2 hits shown: 1 counted, 1 turned down there \(not there 1\) \| agree 50% of 2 \| 2 claimed, off by counted median 0\.05, 90% 0\.05, most 0\.05; turned down median 0\.62, 90% 0\.62, most 0\.62/);
+    const t = takenOf(host, 2, 'shot');
+    assert.deepEqual([t.hit, t.turnedDown, t.claims], [1, 1, 2]);
+    assert.match(host.ns.text().join('\n'), /their hits on you: shot 1 counted, 1 turned down \(not there 1\) \(2 claimed, off by counted median 0\.05/);
+});
+
+test('Hit what you see: claims that named the moment the target was drawn at are counted apart', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 21);
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 22);
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 23);
+    world.run(20);
+    host.ns.hit(2, false, SABER, HIT, 40, BY_CLAIM | MOMENT, 21, 0, 0.01);
+    host.ns.hit(2, false, SABER, TURNED_DOWN, 40, BY_CLAIM | MOMENT, 22, NOT_THERE, 0.31);
+    host.ns.hit(2, false, SABER, HIT, 40, BY_CLAIM, 23, 0, 0.12);
+    world.run(1000);
+    const c = hitsOf(join, 1, 'saber');
+    assert.deepEqual([c.claims, c.moments, c.pastReach, c.counted, c.turnedDown], [3, 2, 0, 2, 1]);
+    assert.match(join.ns.text().join('\n'), /your saber: 3 hits shown: 2 counted, 1 turned down there \(not there 1\) \| agree 66\.7% of 3 \| 3 claimed \(2 at a moment\), off by/);
+    const t = takenOf(host, 2, 'saber');
+    assert.deepEqual([t.claims, t.moments], [3, 2]);
+    assert.match(host.ns.text().join('\n'), /their hits on you: saber 2 counted, 1 turned down \(not there 1\) \(3 claimed, 2 at a moment, off by/);
+
+    // A moment further back than the reach, checked as a claim without one.
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 24);
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 25);
+    world.run(20);
+    host.ns.hit(2, false, SABER, HIT, 40, BY_CLAIM | MOMENT | PAST_REACH, 24, 0, 0.02);
+    host.ns.hit(2, false, SABER, TURNED_DOWN, 40, BY_CLAIM | MOMENT | PAST_REACH, 25, NOT_THERE, 0.4);
+    world.run(1000);
+    assert.deepEqual([c.claims, c.moments, c.pastReach, c.counted, c.turnedDown], [5, 4, 2, 3, 2]);
+    assert.match(join.ns.text().join('\n'), /\| 5 claimed \(4 at a moment, 2 of them past the reach\), off by/);
+    assert.deepEqual([t.claims, t.moments, t.pastReach], [5, 4, 2]);
+    assert.match(host.ns.text().join('\n'), /\(5 claimed, 4 at a moment, 2 of them past the reach, off by/);
+});
+
+test('the engine asks for another game\'s clock: pinged every second for 10 s, then every 5 s, without ?netstats', () => {
+    const { world, host, join } = match({ hostMeasures: false, joinMeasures: false, skew: 5000, oneWay: 30 });
+    const pings = (game, id) => game.ns.lib.players()[id].game.pings.length;
+    world.run(3000);
+    assert.equal(pings(host, 2), 0, 'nobody measures, so nobody pings');
+    assert.ok(Number.isNaN(host.ns.clockOffset(2)), 'not asked for yet');
+    host.ns.sync(2, true);
+    world.run(10000);
+    assert.ok(pings(host, 2) >= 10 && pings(host, 2) <= 11, 'every second at first: ' + pings(host, 2));
+    // The joiner's clock reads 5 s ahead of the host's; each trip is 30 ms.
+    near(host.ns.clockOffset(2), 5000, 1, 'their clock less ours');
+    const first = pings(host, 2);
+    world.run(20000);
+    assert.ok(pings(host, 2) - first >= 4 && pings(host, 2) - first <= 5, 'then every 5 s: ' + (pings(host, 2) - first));
+    assert.equal(pings(join, 1), 0, 'the joiner didn\'t ask, so it only answers');
+    assert.ok(Number.isNaN(join.ns.clockOffset(1)));
+    host.ns.sync(2, false);
+    assert.ok(Number.isNaN(host.ns.clockOffset(2)), 'no longer asked for');
+    const last = pings(host, 2);
+    world.run(10000);
+    assert.equal(pings(host, 2), last, 'and no longer pinged');
+});
+
+test('how this game draws a player from their timed updates: behind, carried on, held still, jumps', () => {
+    const { world, host, join } = match({ oneWay: 20 });
+    world.run(10000);
+    assert.equal(rowOf(join, 1).motion, null, 'not drawn from a buffer');
+    assert.ok(!join.ns.text().some(line => /drawn from their timed updates/.test(line)));
+    // The engine's numbers each second.
+    for (let i = 0; i < 10; i++) {
+        join.ns.motion(1, { buffer: 20 + i, steps: 150, carried: 3, held: i === 9 ? 3 : 0, jumps: i === 4 ? 1 : 0,
+                            warps: i === 5 ? 1 : 0, restarts: 1 });
+        world.run(1000);
+    }
+    const m = rowOf(join, 1).motion;
+    near(m.buffer, 24.5, 1e-9, 'the buffer\'s median');
+    near(m.behind, 44.5, 0.5, 'the buffer and half the ping');
+    near(m.carried, 30 / 1500, 1e-9, 'carried on');
+    near(m.held, 3 / 1500, 1e-9, 'held still');
+    assert.deepEqual([m.jumps, m.warps, m.restarts, m.steps], [1, 1, 1, 1500]);
+    assert.ok(join.ns.text().includes('  drawn from their timed updates: 45 ms behind (buffer 25 ms), carried on 2%, held still 0.2%, 1 jump, 1 warp'),
+              join.ns.text().join('\n'));
+    assert.ok(join.notes.some(n => /^netstats: player 1 direct ping \d+ ms jitter \d+ ms .* drawn \d+ ms behind, buffer \d+ ms, carried [\d.]+%, held [\d.]+%, jumps \d+/.test(n)),
+              join.notes.join('\n'));
+    // Only the last minute's buffers count.
+    for (let i = 0; i < 60; i++) join.ns.motion(1, { buffer: 80, steps: 150, carried: 0, held: 0, jumps: 0, warps: 0, restarts: 1 });
+    near(rowOf(join, 1).motion.buffer, 80, 1e-9, 'the last minute');
+    // Not for this game's own player, or before it's in the match.
+    join.ns.motion(2, { buffer: 5, steps: 150 });
+    assert.equal(rowOf(join, 1).motion.steps, 10500);
+    join.ns.reset();
+    assert.equal(rowOf(join, 1).motion, null, 'reset');
+});
+
+test('position updates with their time are positions too', () => {
+    const { host, join } = match();
+    for (const body of [52, 64, 60, 72]) {
+        const buf = new ArrayBuffer(12 + body);
+        const view = new DataView(buf);
+        view.setUint16(8, 1, true);
+        assert.ok(join.ns.lib.isPosition(buf), body + ' bytes');
+    }
+    for (const body of [56, 68, 76]) {
+        const buf = new ArrayBuffer(12 + body);
+        new DataView(buf).setUint16(8, 1, true);
+        assert.ok(!join.ns.lib.isPosition(buf), body + ' bytes');
+    }
+    assert.ok(host);
+});
+
+test('Hit what you see: a block this game decided is final, and a claim for a hit counted already takes nothing', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    join.ns.hit(1, true, SABER, BLOCK, 40, DECIDED, 11);
+    // A hit the host's game decided itself, as the Classic rules have it, then
+    // the joiner's claim for the same swing.
+    join.ns.hit(1, true, SABER, HIT, 40, 0, 12);
+    host.ns.hit(2, false, SABER, HIT, 40, 0, 12);
+    host.ns.hit(2, false, SABER, TURNED_DOWN, 40, BY_CLAIM, 12, REPEAT, -1);
+    world.run(4000);
+    const c = hitsOf(join, 1, 'saber');
+    assert.equal(c.blockDecided, 1);
+    assert.equal(c.counted, 1);
+    assert.equal(c.repeats, 1);
+    assert.equal(c.turnedDown + c.missedHit + c.missedBlock + c.notShown, 0);
+    const text = join.ns.text().join('\n');
+    assert.match(text, /your saber: 1 hit shown: 1 counted; 1 block shown: 1 decided here; 1 claimed after counting there \| agree 100% of 2/);
+    // The victim's game counted the swing once.
+    const t = takenOf(host, 2, 'saber');
+    assert.deepEqual([t.hit, t.turnedDown], [1, 1]);
+    assert.deepEqual(t.why, { 'already counted': 1 });
+});
+
+test('an older game\'s receipt without a reason or distance still counts', () => {
+    const { world, join } = match();
+    world.run(3000);
+    join.ns.hit(1, true, SHOT, HIT, 10, 0, 0x30001);
+    const buf = new ArrayBuffer(36);
+    const view = new DataView(buf);
+    view.setUint32(0, 1, true);
+    view.setUint32(4, 2, true);
+    new Uint8Array(buf).set([0x4A, 0x4E, 0, 0], 8);
+    view.setUint8(12, join.ns.lib.T_RECEIPT);
+    view.setUint8(13, 1);
+    view.setUint8(16, SHOT);
+    view.setUint8(17, HIT);
+    view.setFloat64(24, 0, true);
+    view.setUint32(32, 0x30001, true);
+    assert.ok(join.ns.take(1, buf, 'direct'));
+    const c = hitsOf(join, 1, 'shot');
+    assert.equal(c.counted, 1);
+    assert.equal(c.claims, 0);
+});
+
+test('how much later the victim\'s game decided, though the clocks differ', () => {
+    const { world, host, join } = match({ oneWay: 30, skew: 123456 });
+    world.run(10000);
+    for (let i = 0; i < 5; i++) {
+        join.ns.hit(1, true, SABER, HIT, 10, false);
+        world.run(30);
+        host.ns.hit(2, false, SABER, HIT, 10, false);
+        world.run(1000);
+    }
+    near(rowOf(join, 1).hits[0].lag, 30, 1, 'decided after');
+    assert.equal(hitsOf(join, 1, 'saber').counted, 5);
+});
+
+test('the simulator keeps each reliable path in order and makes lost packets late', () => {
+    const world = makeWorld();
+    const game = makeGame(world, { id: 2, netsim: 'rtt:100,jitter:40,loss:10', random: seeded(7) });
+    game.ns.start(false);
+    const sent = [], got = [];
+    for (let i = 0; i < 400; i++) {
+        world.later(() => {
+            sent.push({ i, t: world.now() });
+            game.ns.outbound(1, i, b => got.push({ i: b, t: world.now() }));
+        }, i * 5);
+    }
+    world.run(10000);
+    assert.equal(got.length, 400);
+    assert.deepEqual(got.map(x => x.i), sent.map(x => x.i), 'in order');
+    const waits = got.map((x, k) => x.t - sent[k].t);
+    assert.ok(Math.min(...waits) >= 50, 'never sooner than half the round trip: ' + Math.min(...waits));
+    // A lost one comes about a round trip later, as resent, and holds up the
+    // ones behind it.
+    assert.ok(Math.max(...waits) >= 50 + 160, 'a lost one is late: ' + Math.max(...waits));
+});
+
+test('the simulator loses messages on the channel that never resends', () => {
+    const world = makeWorld();
+    const game = makeGame(world, { id: 2, netsim: 'loss:50', random: seeded(3) });
+    let seen = 0;
+    game.Module.jkNet = { nsSend: () => (seen++, 1) };
+    game.ns.start(false);
+    game.ns.live(1, 2, false);
+    // Pings from the other game: half are lost on their way in.
+    for (let i = 0; i < 200; i++) {
+        const buf = new ArrayBuffer(28);
+        const view = new DataView(buf);
+        view.setUint32(0, 1, true);
+        view.setUint32(4, 2, true);
+        new Uint8Array(buf).set([0x4A, 0x4E, 0, 0], 8);
+        view.setUint8(12, game.ns.lib.T_PING);
+        view.setUint8(13, 1);
+        view.setUint32(16, i, true);
+        game.ns.onProbe(1, buf);
+    }
+    world.run(1000);
+    // Answers that got in, less those lost on their way out.
+    assert.ok(seen > 25 && seen < 80, 'answers that went out: ' + seen);
+});
+
+test('packets still waiting when a game ends never arrive', () => {
+    const world = makeWorld();
+    const game = makeGame(world, { id: 2, netsim: 'rtt:400' });
+    game.ns.start(false);
+    let out = 0, inn = 0;
+    game.ns.outbound(1, new Uint8Array(8), () => out++);
+    game.ns.inbound(1, new ArrayBuffer(8), 'direct', () => inn++);
+    world.run(100);
+    game.ns.end();
+    world.run(1000);
+    assert.equal(out + inn, 0);
+    game.ns.start(false);
+    game.ns.outbound(1, new Uint8Array(8), () => out++);
+    world.run(1000);
+    assert.equal(out, 1);
+});
+
+test('the counts stay up when a game ends, and Reset clears them', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    join.ns.hit(1, true, SABER, HIT, 10, false);
+    host.ns.hit(2, false, SABER, HIT, 10, false);
+    world.run(1000);
+    join.ns.end();
+    assert.equal(hitsOf(join, 1, 'saber').counted, 1);
+    assert.match(join.ns.text()[0], /You are player 2 \(not in a match\)\. No simulated lag\./);
+    join.ns.reset();
+    assert.equal(rowOf(join, 1).hits.length, 0);
+    assert.equal(rowOf(join, 1).ping, null);
+});
+
+test('?nettest=attack:all\'s steps keep their counts apart, each with its lag', () => {
+    const { world, host, join } = match();
+    world.run(3000);
+    join.ns.nextStep('bryar', '');
+    // Two shots shown, one counted there.
+    join.ns.hit(1, true, SHOT, HIT, 30, false, 101);
+    host.ns.hit(2, false, SHOT, HIT, 30, false, 101);
+    join.ns.hit(1, true, SHOT, HIT, 30, false, 102);
+    world.run(3000);
+    join.ns.nextStep('bryar', 'rtt:100,jitter:20,loss:2');
+    assert.deepEqual(join.ns.sim(), { rtt: 100, jitter: 20, loss: 2 });
+    assert.equal(rowOf(join, 1).hits.length, 0);
+    assert.match(join.ns.text().join('\n'), /\n  bryar  no lag: shot 50% of 2\n  now: bryar, \+100 ms$/);
+    join.ns.hit(1, true, SHOT, HIT, 30, false, 103);
+    host.ns.hit(2, false, SHOT, HIT, 30, false, 103);
+    world.run(3000);
+    join.ns.nextStep('rail alt', '');
+    world.run(3000);
+    // Three Force powers the host's game checked: two played there.
+    join.ns.nextStep('grip', '');
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.01);
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.02);
+    host.ns.hit(2, false, FORCE, TURNED_DOWN, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, NOT_THERE, 0.5);
+    world.run(3000);
+    join.ns.nextStep('', '');
+    assert.equal(join.ns.sim(), null);
+    const r = join.ns.report();
+    assert.equal(r.step, null);
+    assert.deepEqual(r.steps.map(x => [x.name, x.sim && x.sim.rtt]),
+                     [['bryar', null], ['bryar', 100], ['rail alt', null], ['grip', null]]);
+    const c = r.steps[0].rows[0].hits[0].c;
+    assert.equal(c.counted, 1);
+    assert.equal(c.missedHit, 1);
+    assert.equal(c.lags, undefined);
+    near(r.steps[1].rows[0].ping, 140, 40, 'the second step\'s ping');
+    assert.match(join.ns.text().join('\n'),
+                 /\nSteps, how often both games agreed:\n  bryar     no lag: shot 50% of 2 · \+100 ms: shot 100% of 1\n  rail alt  no lag: no hits\n  grip      no lag: Force 66\.7% of 3\n  done$/);
+});
+
+test('this game\'s frames a second, from when its frames ended', () => {
+    const { world, join } = match();
+    world.run(10000);
+    assert.equal(join.ns.report().me.fps, null);
+    // Window.c's ring of frame end times, on this game's clock: 30 a second
+    // for the last 6 s.
+    const frames = { size: 2048, count: 0, ends: new Float64Array(2048) };
+    for (let at = world.now() - 6000; at <= world.now(); at += 1000 / 30)
+        frames.ends[frames.count++ % frames.size] = at;
+    join.Module.jkFrames = frames;
+    near(join.ns.report().me.fps, 30, 0.5, 'frames a second');
+    assert.match(join.ns.text()[0], /^You are player 2\. 30 frames a second\. No simulated lag\.$/);
+    frames.count = 0;
+    frames.ends[frames.count++] = world.now() - 1000;
+    near(join.ns.report().me.fps, 0.2, 0.01, 'one frame in 5 s');
+    assert.match(join.ns.text()[0], /^You are player 2\. 0 frames a second\./);
+    for (let i = 0; i < 4; i++) frames.ends[frames.count++] = world.now() - 900 + i * 100;
+    assert.match(join.ns.text()[0], /^You are player 2\. 1 frame a second\./);
+});
+
+test('names and the log line', () => {
+    const { world, host, join } = match({ hostSim: 'rtt:50,jitter:10,loss:1' });
+    host.ns.name(2, 'Kyle');
+    join.ns.name(1, 'Jerec');
+    world.run(12000);
+    const text = host.ns.text();
+    assert.match(text[0], /^You are player 1, the host\. Simulating 50 ms more round trip, 10 ms jitter, 1% loss each way\.$/);
+    assert.match(text[2], /^player 2 Kyle: direct, ping \d+ ms \(jitter \d+ ms\), loss [\d.]+% of \d+, link ping \d+ ms$/);
+    assert.match(join.ns.text()[2], /^player 1 Jerec \(host\): direct/);
+    assert.ok(host.notes.some(n => /^netstats: player 2 direct ping \d+ ms jitter \d+ ms loss/.test(n)), host.notes.join('\n'));
+});
+
+// Window.c's ring of frame end times, fps a second from now on.
+function framing(world, game, fps) {
+    const frames = { size: 4096, count: 0, ends: new Float64Array(4096) };
+    game.Module.jkFrames = frames;
+    const step = () => {
+        for (let i = 0; i < fps / 10; i++) frames.ends[frames.count++ % frames.size] = world.now();
+        world.later(step, 100);
+    };
+    step();
+}
+
+// Each game sends the other its position every 100 ms, as a player in a
+// match does about 50 times a second.
+function moving(world, a, b) {
+    const step = () => {
+        a.send(position(a, b));
+        b.send(position(b, a));
+        world.later(step, 100);
+    };
+    step();
+}
+
+test('counting in steps: the middle, the tail and how many reached each value', () => {
+    const h = new (makeGame(makeWorld(), { id: 1 }).ns.lib.Hist)(5, 100);
+    assert.equal(h.at(0.5), null);
+    for (const v of [12, 14, 31, 47, 52, 99, 250, -3, NaN, 'x']) h.add(v);
+    assert.equal(h.n, 7, 'numbers only, none below 0');
+    assert.equal(h.at(0.5), 47.5);
+    assert.equal(h.at(0.1), 12.5);
+    assert.equal(h.at(1), 250, 'past the top: the most');
+    assert.equal(h.most, 250);
+    assert.deepEqual([h.from(0), h.from(30), h.from(50), h.from(100)], [7, 5, 3, 1]);
+});
+
+test('the match summary: the match, each other player and the hits each way, without names, once', () => {
+    const { world, host, join } = match({ hostMeasures: false, joinMeasures: false });
+    // As the engine does: its facts, then the players' names.
+    for (const g of [host, join]) {
+        g.ns.facts(1, 300, false, '1234abcd');
+        g.ns.name(1, 'Jerec');
+        g.ns.name(2, 'Kyle');
+        g.ns.hello(g === host ? 2 : 1, 2);
+    }
+    framing(world, join, 50);
+    moving(world, host, join);
+    world.run(3000);
+    // The joiner's swings hit the host on its screen. The host's game counted
+    // three claims, at moments 120, 180 and 350 ms back, the last past the
+    // reach, and turned one down.
+    for (const [n, outcome, flags, why, age] of [[21, HIT, BY_CLAIM | MOMENT, 0, 120], [22, HIT, BY_CLAIM | MOMENT, 0, 180],
+                                                 [23, HIT, BY_CLAIM | MOMENT | PAST_REACH, 0, 350],
+                                                 [24, TURNED_DOWN, BY_CLAIM | MOMENT, NOT_THERE, 90]]) {
+        join.ns.hit(1, true, SABER, HIT, 40, 0, n);
+        world.run(20);
+        host.ns.hit(2, false, SABER, outcome, 40, flags, n, why, 0.02, age);
+        world.run(500);
+    }
+    // And a Grip that played there.
+    host.ns.hit(2, false, FORCE, HIT, 0, BY_MESSAGE | BY_CLAIM | MOMENT, 0, 0, 0.01, 140);
+    // How the joiner drew the host, each second.
+    for (let i = 0; i < 30; i++) {
+        join.ns.motion(1, { buffer: 40, steps: 150, carried: 3, held: 0, jumps: i === 4 ? 1 : 0, warps: 0, restarts: 1 });
+        world.run(1000);
+    }
+    const s = join.ns.summary();
+    assert.deepEqual([s.v, s.game, s.build, s.rules, s.reach, s.host, s.players], [1, 'jk', '1234abcd', 'hwys', 300, false, 2]);
+    near(s.secs, 35, 1, 'time in the match');
+    assert.deepEqual(s.fps, { median: 50, low: 50 });
+    assert.equal(s.others.length, 1);
+    const o = s.others[0];
+    assert.deepEqual([o.hello, o.link], [2, 'direct']);
+    near(o.secs, 35, 1, 'time with the host');
+    assert.equal(o.ping, undefined, 'nobody pinged');
+    assert.deepEqual(o.drawn, { behind: null, buffer: 40, buffer90: 40, carried: 0.02, held: 0, jumps: 1, warps: 0 });
+    assert.deepEqual(o.mine.saber, { shown: 4, counted: 3, turnedDown: 1, claims: 4, moments: 4, pastReach: 1,
+                                     why: { 'not there': 1 } });
+    assert.deepEqual(o.mine.Force, { targeted: 1, claims: 1, moments: 1 });
+    assert.equal(o.theirs, undefined, 'the host made no hits');
+    assert.ok(!/Jerec|Kyle/.test(JSON.stringify(s)), 'no names');
+    assert.equal(join.ns.summary(), null, 'once');
+
+    // The host's: the claims on its player, and how far back they reached.
+    const t = host.ns.summary().others[0].theirs;
+    assert.deepEqual(t.saber, { counted: 3, turnedDown: 1, claims: 4, moments: 4, pastReach: 1, why: { 'not there': 1 },
+                                ages: { n: 4, median: 123, p90: 350, p99: 350, most: 350,
+                                        from: { 150: 2, 200: 1, 250: 1, 300: 1, 400: 0, 500: 0 } } });
+    assert.deepEqual(t.Force, { targeted: 1, claims: 1, moments: 1,
+                                ages: { n: 1, median: 140, p90: 140, p99: 140, most: 140,
+                                        from: { 150: 0, 200: 0, 250: 0, 300: 0, 400: 0, 500: 0 } } });
+    assert.equal(host.ns.summary(), null);
+});
+
+test('the match summary: none for a short match or one alone, and it says when the match was a test', () => {
+    const short = match();
+    short.world.run(20000);
+    assert.equal(short.join.ns.summary(), null, 'under 30 s');
+    short.world.run(15000);
+    assert.ok(short.join.ns.summary(), 'over 30 s');
+
+    // Hosting alone.
+    const world = makeWorld();
+    const alone = makeGame(world, { id: 1, isHost: true });
+    alone.ns.start(true);
+    alone.ns.live(1, 1, true);
+    ticking(world, [alone]);
+    world.run(60000);
+    assert.equal(alone.ns.summary(), null, 'nobody else');
+
+    // Not in the match: the clock stops.
+    const { world: w2, host, join } = match({ joinSim: 'rtt:100' });
+    moving(w2, host, join);
+    join.Module.jkNetTest = 'attack:all';
+    w2.run(20000);
+    join.ns.live(0, 2, false);
+    w2.run(60000);
+    assert.equal(join.ns.summary(), null, 'only 20 s in it');
+    join.ns.live(1, 2, false);
+    w2.run(15000);
+    const s = join.ns.summary();
+    near(s.secs, 35, 1, 'in the match');
+    assert.deepEqual([s.sim, s.test, s.netstats, s.host, s.rules, s.game], [true, true, true, false, 'classic', 'jk']);
+    assert.ok(s.others[0].ping > 0, 'with ?netstats, pings');
+    // A new game starts over.
+    join.ns.start(false);
+    join.ns.live(1, 2, false);
+    w2.run(40000);
+    assert.equal(join.ns.summary(), null, 'nobody heard from in the new one');
+});
+
+test('the match summary: blocks counted or missed there, and time together only while the engine names the player', () => {
+    const { world, host, join } = match({ hostMeasures: false, joinMeasures: false });
+    // Each game's engine names the players in the match every 2 s, after
+    // its facts, and each sends its position every 100 ms, until the joiner
+    // leaves.
+    let joined = true;
+    const engine = g => {
+        if (g === join && !joined) return;
+        g.ns.facts(0, 300, false, '1234abcd');
+        if (g === join || joined) g.ns.name(g === host ? 2 : 1, '');
+        world.later(() => engine(g), 2000);
+    };
+    const moves = () => {
+        if (!joined) return;
+        host.send(position(host, join));
+        join.send(position(join, host));
+        world.later(moves, 100);
+    };
+    engine(host);
+    engine(join);
+    moves();
+    world.run(3000);
+    // Classic: blocks shown here, one the host's game counted as a hit, one
+    // it never saw and one it blocked too.
+    join.ns.hit(1, true, SABER, BLOCK, 10, false);
+    host.ns.hit(2, false, SABER, HIT, 10, false);
+    world.run(500);
+    join.ns.hit(1, true, SABER, BLOCK, 10, false);
+    world.run(3000);
+    join.ns.hit(1, true, SABER, BLOCK, 10, false);
+    host.ns.hit(2, false, SABER, BLOCK, 10, false);
+    world.run(30000);
+    const s = join.ns.summary();
+    assert.equal(s.rules, 'classic');
+    assert.deepEqual(s.others[0].mine.saber, { blocks: 3, blocksCounted: 1, blocksMissed: 1 });
+    // The joiner leaves, 37 s in. The host's engine stops naming it, and its
+    // time with the host stops within a roll call, not GONE_MS after it was
+    // last heard from.
+    joined = false;
+    world.run(20000);
+    const h = host.ns.summary();
+    near(h.secs, 57, 1, 'the host in the match');
+    near(h.others[0].secs, 37, 2, 'with the joiner');
+    assert.deepEqual(h.others[0].theirs.saber, { counted: 1, blocked: 1 });
+});
+
+test('the match summary of a big match stays under what sendBeacon sends', () => {
+    const fit = makeGame(makeWorld(), { id: 1 }).ns.lib.fit;
+    const why = { 'dead': 9, 'not there': 99, 'too late': 9, 'already counted': 9 };
+    const kinds = side => Object.fromEntries(['saber', 'shot', 'splash', 'Force', 'other'].map(k => [k,
+        side === 'mine' ? { shown: 9999, counted: 9999, blocked: 99, missed: 99, dead: 99, turnedDown: 999, landed: 99, blocks: 999,
+                            blocksCounted: 99, blocksMissed: 99, claims: 9999, moments: 9999, pastReach: 999, targeted: 99, targetedTurnedDown: 9, why: { ...why } }
+                        : { counted: 9999, blocked: 99, dead: 99, turnedDown: 999, targeted: 99, claims: 9999, moments: 9999,
+                            pastReach: 999, why: { ...why },
+                            ages: { n: 9999, median: 123, p90: 260, p99: 330, most: 1999,
+                                    from: { 150: 999, 200: 999, 250: 999, 300: 999, 400: 99, 500: 9 } } }]));
+    const others = n => Array.from({ length: n }, (_, i) => ({
+        secs: 100 + i, hello: 2, link: 'direct', ping: 48, rtt: 41,
+        drawn: { behind: 72, buffer: 48, buffer90: 55, carried: 0.012, held: 0, jumps: 1, warps: 0 },
+        mine: kinds('mine'), theirs: kinds('theirs') }));
+    const small = { v: 1, game: 'jk', others: others(3) };
+    assert.deepEqual(fit(structuredClone(small)), small, 'a small one stays as it is');
+    const big = fit({ v: 1, game: 'jk', others: others(31) });
+    const size = JSON.stringify(big).length;
+    assert.ok(size <= 60000, size + ' bytes');
+    assert.ok(!/"why"/.test(JSON.stringify(big)), 'without the reasons');
+    assert.equal(big.others.length + big.dropped, 31);
+    assert.ok(big.dropped > 0 && big.dropped < 31);
+    assert.deepEqual(big.others.map(o => o.secs), big.others.map(o => o.secs).sort((a, b) => b - a), 'the longest together first');
+    assert.equal(big.others[0].secs, 130);
+});
+
+test('stdComm_WSRelay.c passes packets to netstats.js as this test does (transport-test.mjs runs its code)', () => {
+    for (const line of [
+        "Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takePeerPacket(id, d); });",
+        "Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takeFastPacket(id, d); }, true);",
+        "if (Module.jkNetStats && Module.jkNetStats.take(from, data, via, seq !== undefined)) return;",
+        "return Module.jkNetStats.outbound(id, bytes, function(b) { return net.sendNow(b, id, fast ? seq : undefined); }, fast);",
+        "Module.jkNetStats.inbound(from, ev.data, 'relay', function(d) { if (net.ws === ws) net.take(from, d, 'relay'); });",
+        "ns.onmessage = function(ev) { if (net.peers[id] === p) Module.jkNetStats.onProbe(id, ev.data); };",
+        "{ negotiated: true, id: 2, ordered: false, maxRetransmits: 0 }",
+        "{ negotiated: true, id: 3, ordered: false, maxRetransmits: 0 }",
+        "if (Module.jkNetStats) Module.jkNetStats.start(isHost);",
+        "if (Module.jkNetStats) Module.jkNetStats.live(live, id, isHost);",
+        "if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance, ageMs);",
+        "if (Module.jkNetStats && Module.jkNetStats.facts) Module.jkNetStats.facts(rules, reachMs, !!mots, UTF8ToString(pBuild));",
+        "if (Module.jkNetStats && Module.jkNetStats.hello) Module.jkNetStats.hello(id, version);",
+        "var s = stats && stats.summary ? stats.summary() : null;",
+        "Module.jkNetStats.motion(otherId, { buffer: bufferMs, steps: steps, carried: carried, held: held, jumps: jumps, warps: warps, restarts: restarts });",
+    ])
+        assert.ok(relayC.includes(line), 'stdComm_WSRelay.c has: ' + line);
+    // The kinds, outcomes, flags and reasons the engine sends are the ones
+    // netstats.js reads.
+    const header = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.h');
+    for (const [name, n] of [['SABER', 1], ['SHOT', 2], ['SPLASH', 3], ['FORCE', 4], ['OTHER', 5]])
+        assert.match(header, new RegExp('#define STDCOMM_WSRELAY_KIND_' + name + ' \\(' + n + '\\)'));
+    for (const [name, n] of [['HIT', 1], ['BLOCK', 2], ['DEAD', 3], ['TURNED_DOWN', 4]])
+        assert.match(header, new RegExp('#define STDCOMM_WSRELAY_' + name + ' \\(' + n + '\\)'));
+    assert.match(source, /var KINDS = \['', 'saber', 'shot', 'splash', 'Force', 'other'\];/);
+    assert.match(source, /var O_HIT = 1, O_BLOCK = 2, O_DEAD = 3, O_TURNED_DOWN = 4;/);
+    for (const [name, n] of [['BY_MESSAGE', 1], ['BY_CLAIM', 2], ['DECIDED', 4], ['MOMENT', 8], ['PAST_REACH', 16]]) {
+        assert.match(relayC, new RegExp('#define WSRELAY_HITFLAG_' + name + ' \\(' + n + '\\)'));
+        assert.match(source, new RegExp('var F_' + name + ' = ' + n + ';'));
+    }
+    const check = read('src/Platform/Networking/WSRelay/stdComm_WSRelayHitCheck.h');
+    const why = JSON.parse(/var WHY = (\[[^\]]*\]);/.exec(source)[1].replace(/'/g, '"'));
+    for (const [name, words] of [['DEAD', 'dead'], ['NOT_THERE', 'not there'], ['LATE', 'too late'], ['UNKNOWN', 'unknown attack'],
+                                 ['OUT_OF_REACH', 'out of reach'], ['REPEAT', 'already counted'], ['BAD', 'bad numbers']]) {
+        const n = Number(new RegExp('#define WSRELAYHIT_' + name + ' \\((\\d+)\\)').exec(check)[1]);
+        assert.equal(why[n], words, name);
+    }
+    assert.equal(why[Number(/#define STDCOMM_WSRELAY_HITS_NOT_PLAYING \((\d+)\)/.exec(header)[1])], 'not playing by claims');
+    assert.match(source, /var WHY_REPEAT = 6;/);
+    assert.match(check, /#define WSRELAYHIT_REPEAT \(6\)/);
+    // Each swing's number goes out with the message that turns the blade on,
+    // after the original's fields, and comes back in from it.
+    const jkDSS = read('src/Dss/jkDSS.c');
+    assert.ok(jkDSS.includes('NETMSG_PUSHU32(stdComm_WSRelay_GetSwing(pPlayerThing));'));
+    assert.ok(jkDSS.includes('uint32_t swing = NETMSG_IN_LEFT(msg) >= 4 ? NETMSG_POPU32() : 0;'));
+    assert.ok(jkDSS.includes('stdComm_WSRelay_SetSwing(pThing, swing);'));
+    assert.ok(read('src/Cog/jkCog.c').includes('stdComm_WSRelay_NewSwing(v2);'));
+    // A bolt a ready saber turned away is a block, by whoever fired it: the
+    // saber makes the bolt the blocker's, so the shooter is found first.
+    const weaponC = read('src/World/sithWeapon.c');
+    const shooter = weaponC.indexOf('SithThing* pShooter = sithThing_GetThingParent(pWeapon);');
+    const blocked = weaponC.indexOf('&& sithActor_thing_anim_blocked(pWeapon, pThing, pCollision) )');
+    const noted = weaponC.indexOf('stdComm_WSRelay_NoteHitBy(pThing, pShooter, pWeapon, pWeapon->weaponParams.damage, pWeapon->weaponParams.damageType, STDCOMM_WSRELAY_BLOCK);');
+    assert.ok(shooter >= 0 && blocked > shooter && noted > blocked);
+    assert.ok(read('src/World/sithActor.c').includes('a1->pParent = thing2;'));
+    // ?nettest=attack:all's steps.
+    assert.ok(read('src/Platform/Networking/WSRelay/stdComm_WSRelayTest.c').includes(
+        "Module['jkNetStats'].nextStep(UTF8ToString(pName), UTF8ToString(pSim));"));
+});
+
+let failed = 0;
+for (const t of tests) {
+    try {
+        await t.fn();
+        console.log('ok   ' + t.name);
+    } catch (e) {
+        failed++;
+        console.log('FAIL ' + t.name + '\n' + (e.stack || e));
+    }
+}
+console.log(failed ? `${failed} of ${tests.length} failed` : `all ${tests.length} passed`);
+process.exit(failed ? 1 : 0);

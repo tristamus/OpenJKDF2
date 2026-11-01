@@ -24,7 +24,8 @@ typedef struct rdKeyframe rdKeyframe;
 void sithKeyRetarget_Reset();
 
 // Loads a key from pPath (3do\key\<pName>), or builds it instead if the
-// current mod's recipe lists it. Returns 0 on failure.
+// current mod's recipe lists it, then adds any markers the mod's
+// misc\keymarkers.dat gives it. Returns 0 on failure.
 int sithKeyRetarget_LoadEntry(const char* pName, char* pPath, rdKeyframe* pKeyframe);
 #else
 #define sithKeyRetarget_LoadEntry(pName, pPath, pKeyframe) rdKeyframe_LoadEntry(pPath, pKeyframe)

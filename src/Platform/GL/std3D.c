@@ -2320,42 +2320,26 @@ void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo
     }
     
     rdTri* tris = GL_tmpTris;
-    glEnableVertexAttribArray(pStage->attribute_coord3d);
-    glEnableVertexAttribArray(pStage->attribute_v_color);
-    glEnableVertexAttribArray(pStage->attribute_v_uv);
-
     glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
     glBufferData(GL_ARRAY_BUFFER, GL_tmpVerticesAmt * sizeof(D3DVERTEX), GL_tmpVertices, GL_STREAM_DRAW);
-    glVertexAttribPointer(
-        programMenu_attribute_coord3d, // attribute
-        3,                 // number of elements per vertex, here (x,y,z)
-        GL_FLOAT,          // the type of each element
-        GL_FALSE,          // normalize fixed-point data?
-        sizeof(D3DVERTEX),                 // data stride
-        (GLvoid*)offsetof(D3DVERTEX, x)                  // offset of first element
-    );
-    
-    glVertexAttribPointer(
-        programMenu_attribute_v_color, // attribute
-        4,                 // number of elements per vertex, here (R,G,B,A)
-        GL_UNSIGNED_BYTE,  // the type of each element
-        GL_TRUE,          // normalize fixed-point data?
-        sizeof(D3DVERTEX),                 // no extra data between each position
-        (GLvoid*)offsetof(D3DVERTEX, color) // offset of first element
-    );
 
-    glVertexAttribPointer(
-        programMenu_attribute_v_uv,    // attribute
-        2,                 // number of elements per vertex, here (U,V)
-        GL_FLOAT,          // the type of each element
-        GL_FALSE,          // take our values as-is
-        sizeof(D3DVERTEX),                 // no extra data between each position
-        (GLvoid*)offsetof(D3DVERTEX, tu)                  // offset of first element
-    );
-
-    glEnableVertexAttribArray(pStage->attribute_coord3d);
-    glEnableVertexAttribArray(pStage->attribute_v_color);
-    glEnableVertexAttribArray(pStage->attribute_v_uv);
+    // Fixed: point this stage's own attributes at the data. These used the menu
+    // program's locations, which only worked while they happened to match, and the
+    // blur and SSAO shaders don't read the colour, so its location can be -1, which
+    // GL rejects. Fix ported from OpenJKDF2-MotS-Fixes by Andrei Kiralv/Darkahn and
+    // Coda Lilitari.
+    if (pStage->attribute_coord3d >= 0) {
+        glVertexAttribPointer(pStage->attribute_coord3d, 3, GL_FLOAT, GL_FALSE, sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, x));
+        glEnableVertexAttribArray(pStage->attribute_coord3d);
+    }
+    if (pStage->attribute_v_color >= 0) {
+        glVertexAttribPointer(pStage->attribute_v_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, color));
+        glEnableVertexAttribArray(pStage->attribute_v_color);
+    }
+    if (pStage->attribute_v_uv >= 0) {
+        glVertexAttribPointer(pStage->attribute_v_uv, 2, GL_FLOAT, GL_FALSE, sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, tu));
+        glEnableVertexAttribArray(pStage->attribute_v_uv);
+    }
     
     rdDDrawSurface* last_tex = (rdDDrawSurface*)(intptr_t)-1;
     int last_tex_idx = 0;
@@ -2374,9 +2358,9 @@ void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo
     // which in a browser is a round trip to its GPU process every frame.
     glDrawElements(GL_TRIANGLES, (GLsizei)(GL_tmpTrisAmt * 3), GL_UNSIGNED_SHORT, 0);
 
-    glDisableVertexAttribArray(pStage->attribute_v_uv);
-    glDisableVertexAttribArray(pStage->attribute_v_color);
-    glDisableVertexAttribArray(pStage->attribute_coord3d);
+    if (pStage->attribute_v_uv >= 0) glDisableVertexAttribArray(pStage->attribute_v_uv);
+    if (pStage->attribute_v_color >= 0) glDisableVertexAttribArray(pStage->attribute_v_color);
+    if (pStage->attribute_coord3d >= 0) glDisableVertexAttribArray(pStage->attribute_coord3d);
     
     //free(data_elements);
         
@@ -3077,12 +3061,22 @@ int std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is_alph
     if (!vbuf || !texture) return 1;
     if (texture->texture_loaded) return 1;
 
-    if (std3D_loadedTexturesAmt >= STD3D_MAX_TEXTURES) {
+    // Added: when the list is full, reuse a slot std3D_PurgeTextureEntry emptied. A material freed
+    // on its own (the character screen's model, each time you change skin) leaves a hole, and the
+    // count only goes back to 0 when a level loads, so going through a few hundred skins filled it.
+    size_t slot = std3D_loadedTexturesAmt;
+    if (slot >= STD3D_MAX_TEXTURES) {
+        for (slot = 0; slot < STD3D_MAX_TEXTURES; slot++) {
+            if (!std3D_aLoadedSurfaces[slot] && !std3D_aLoadedTextures[slot]) break;
+        }
+    }
+
+    if (slot >= STD3D_MAX_TEXTURES) {
         stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
         return 1;
     }
     //printf("Add to texture cache\n");
-    
+
     GLuint image_texture;
     glGenTextures(1, &image_texture);
     uint8_t* image_8bpp = (uint8_t*)vbuf->sdlSurface->pixels;
@@ -3236,8 +3230,9 @@ int std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is_alph
     }
 
     
-    std3D_aLoadedSurfaces[std3D_loadedTexturesAmt] = texture;
-    std3D_aLoadedTextures[std3D_loadedTexturesAmt++] = image_texture;
+    std3D_aLoadedSurfaces[slot] = texture;
+    std3D_aLoadedTextures[slot] = image_texture;
+    if (slot == std3D_loadedTexturesAmt) std3D_loadedTexturesAmt++;
     /*ext->surfacebuf = image_data;
     ext->surfacetex = image_texture;
     ext->surfacepaltex = pal_texture;*/
@@ -3685,8 +3680,8 @@ void std3D_ScreenshotWindow(const char* pFpath)
 #endif
 
 #ifdef ARCH_WASM
-// Added: screenshots in the browser build, which has no PNG writer
-// (TARGET_CAN_JKGM is off there). Reads back the frame std3D_DrawMenu just
+// Added: screenshots in the browser build, where a PNG written to the in-memory
+// file system would never reach the player. Reads back the frame std3D_DrawMenu just
 // drew into the window, HUD included, as RGBA rows from the bottom up, for the
 // page to encode (jkGame_UpdateScreenshots). The caller frees it.
 uint8_t* std3D_ReadWindowRGBA(int* pW, int* pH)

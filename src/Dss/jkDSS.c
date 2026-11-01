@@ -24,6 +24,10 @@
 #include "Main/jkSmack.h"
 #include "jk.h"
 
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
+
 const char* jkDSS_aKyTeamModels[5] = {
     "ky.3do",
     "kyX0.3do",
@@ -32,7 +36,18 @@ const char* jkDSS_aKyTeamModels[5] = {
     "kyT0.3do",
 };
 
-const char* jkDSS_aMotsKyTeamModels[5*4] = {
+// MOTS added: one row per personality, as in JKM.EXE. Personality 0 (no class) and
+// 1 (Jedi) share the Jedi row; 2-4 are the Bounty Hunter, Scout and Soldier.
+// Fixed: the decompiled table dropped the first Jedi row, so every class got the
+// next class's skin and the Soldier read past the end. Fix ported from
+// OpenJKDF2-MotS-Fixes by Andrei Kiralv/Darkahn and Coda Lilitari.
+const char* jkDSS_aMotsKyTeamModels[5*5] = {
+    "ky.3do",
+    "kyX0.3do",
+    "kyU0.3do",
+    "kyV0.3do",
+    "kyT0.3do",
+
     "ky.3do",
     "kyX0.3do",
     "kyU0.3do",
@@ -54,9 +69,18 @@ const char* jkDSS_aMotsKyTeamModels[5*4] = {
     "kym13.3do",
     "kym13r.3do",
     "kym13y.3do",
+    "kym13b.3do", // Fixed: team 3 is blue and team 4 green, as in JKM.EXE
     "kym13g.3do",
-    "kym13b.3do",
 };
+
+// Added: JKM.EXE accepts personalities up to 7, which reads past its five rows,
+// and these values arrive in network messages
+static const char* jkDSS_GetMotsTeamModel(int personality, int teamNum)
+{
+    if (personality < 0 || personality >= 5 || teamNum < 0 || teamNum >= 5)
+        return NULL;
+    return jkDSS_aMotsKyTeamModels[(personality * 5) + teamNum];
+}
 
 
 // MOTS added
@@ -353,12 +377,8 @@ int jkDSS_ProcessSetSaberInfoMots(SithMessage *msg)
         }
         if ( (sithNet_MultiModeFlags & MULTIMODEFLAG_100) != 0 )
         {
-            if (personality < 0 || personality > 7) {
-                stdString_SafeStrCopy(model_3do_fname, "kk.3do", 0x20);
-            }
-            else {
-                stdString_SafeStrCopy(model_3do_fname, jkDSS_aMotsKyTeamModels[(personality * 5) + v11->teamNum], 0x20);
-            }
+            const char* pTeamModel = jkDSS_GetMotsTeamModel(personality, v11->teamNum);
+            stdString_SafeStrCopy(model_3do_fname, pTeamModel ? pTeamModel : "kk.3do", 0x20);
             stdString_SafeStrCopy(v14, "ky.snd", 0x20);
         }
     }
@@ -455,6 +475,9 @@ int jkDSS_ProcessSetSaberInfo(SithMessage *msg)
             return 1;
         if ( (sithNet_MultiModeFlags & MULTIMODEFLAG_100) != 0 )
         {
+            // Added: bounds check, the team number can come from the network
+            if ( (uint32_t)v11->teamNum >= 5 )
+                return 0;
             stdString_SafeStrCopy(model_3do_fname, jkDSS_aKyTeamModels[v11->teamNum], 32);
             stdString_SafeStrCopy(v14, "ky.snd", 32);
         }
@@ -491,6 +514,17 @@ void jkDSS_SendJKEnableSaber(SithThing *pPlayerThing)
     NETMSG_PUSHF32(pPlayerInfo->saberCollideInfo.damage);
     NETMSG_PUSHF32(pPlayerInfo->saberCollideInfo.bladeLength);
     NETMSG_PUSHF32(pPlayerInfo->saberCollideInfo.stunDelay);
+#ifdef PLATFORM_WSRELAY
+    // Added: the swing's number, after what the original sends, for the hit
+    // ledger (stdComm_WSRelay_NewSwing).
+    NETMSG_PUSHU32(stdComm_WSRelay_GetSwing(pPlayerThing));
+
+    // Added: Hit what you see: and its time, so other games turn the blade
+    // on when they draw the player there (stdComm_WSRelay_HoldForTimeline).
+    uint32_t t32;
+    if ( stdComm_WSRelay_TimelineTime(pPlayerThing, &t32) )
+        NETMSG_PUSHU32(t32);
+#endif
 
     NETMSG_END(DSS_JKENABLESABER);
 
@@ -515,6 +549,16 @@ int jkDSS_ProcessJKEnableSaber(SithMessage *msg)
     flex32_t arg3 = NETMSG_POPF32();
 
     jkSaber_Enable(pThing, arg1, arg2, arg3);
+#ifdef PLATFORM_WSRELAY
+    // Added: the swing's number, which a message from an older build doesn't
+    // have (0).
+    uint32_t swing = NETMSG_IN_LEFT(msg) >= 4 ? NETMSG_POPU32() : 0;
+    stdComm_WSRelay_SetSwing(pThing, swing);
+
+    // Added: Hit what you see: what this game knows of the swing, to check
+    // the claims for what it hits.
+    stdComm_WSRelay_NoteSwing(pThing, swing, arg1, arg2);
+#endif
     return 1;
 }
 
@@ -1160,12 +1204,8 @@ int jkDSS_ProcessSetTeam(SithMessage *pMsg)
     {
         // MOTS added: personality
         if (Main_bMotsCompat) {
-            if (personality < 8) {
-                v5 = sithModel_Load(jkDSS_aMotsKyTeamModels[teamNum + (personality * 5)], 1);
-            }
-            else {
-                v5 = NULL;
-            }
+            const char* pTeamModel = jkDSS_GetMotsTeamModel(personality, teamNum);
+            v5 = pTeamModel ? sithModel_Load(pTeamModel, 1) : NULL;
             
             if ( v5 )
             {

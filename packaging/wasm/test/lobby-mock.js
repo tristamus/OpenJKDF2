@@ -3,14 +3,52 @@
 // lobby. Load it before the
 // page's own scripts (a <script src> in <head>) and the page shows these
 // instead of watching the lobby, with a bar to switch between them and to
-// make players come and go. The names are made up.
+// make players come and go. Each scenario has the Imperial relay's games
+// too, as the site's Worker would answer for them (/imperial-games), in
+// place of asking it. The names are made up, except Coruscant, the relay's
+// own server.
 
 window.jkLobbyMock = (function() {
+    // n of these from the one at from on, for games too big to name everyone
+    // by hand.
+    var CROWD = ['MaraJade', 'Jerec', 'Sariss', 'Yun', 'Gorc', 'Boc', 'Maw', 'RahnJedi', 'Katarn99', 'NightSister',
+                 'ForceGrip', 'Rodian_Ace', 'Gran_Pilot', 'SaberStorm', 'Ewok_Assassin', 'Qu_Rahn', 'DarkJedi_7',
+                 'Tusken_Raider', 'Corran_H', 'Saber_Kyp', 'Dash_R', 'Vima_D', 'Rax_J', 'Talon_K', 'Kyle_K',
+                 'Greedo_Shot', 'BountyHntr', 'Mon_Calamari', 'GammoreanG', 'TrandoshanX', 'Sith_Lurker', 'Duros_Dan'];
+    function crowd(n, from) { return CROWD.concat(CROWD).slice(from, from + n); }
+
+    // The Imperial relay's games, as the Worker answers for them: its own
+    // server first (pinned), with this many players, then games hosted on
+    // it by players.
+    function relay(players, hosted) {
+        var coruscant = players === null ?
+            { key: '', name: 'Coruscant', game: 'jk1', map: '', episode: '', mod: '', locked: false, players: 0, max: 0,
+              dedicated: true, pinned: true, listed: false, joinable: false, why: 'not-listed' } :
+            { key: '13e5dd93743f59055bbf297508845b2b', name: 'Coruscant', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF',
+              mod: '', locked: false, players: players, max: 31, dedicated: true, pinned: true, listed: true,
+              joinable: true, why: '' };
+        return { state: 'live', server: 'lobby.jkjunkie.com', checked: '2026-10-31T19:00:00.000Z',
+                 games: [coruscant].concat(hosted || []) };
+    }
+    var RELAY_HOSTED = [
+        { key: '5a1f0c9e2b7d4e8f9a3c6b0d1e2f3a4b', name: 'Kessel Run FFA', game: 'jk1', map: '01narshadda.jkl',
+          episode: 'JK1MP.gob', mod: '', locked: false, players: 2, max: 8, dedicated: false, pinned: false,
+          listed: true, joinable: true, why: '' },
+        { key: '6b2e1d0f3c8e5f9a0b4d7c1e2f3a4b5c', name: 'Old school duels', game: 'jk1', map: '01narshadda.jkl',
+          episode: 'JK1MP.gob', mod: '', locked: false, players: 1, max: 4, dedicated: false, pinned: false,
+          listed: true, joinable: false, why: 'desktop' },
+        { key: '7c3f2e1a4d9f6a0b1c5e8d2f3a4b5c6d', name: 'Asteroid run', game: 'mots', map: 'jkm_mp.jkl',
+          episode: 'JKM_MP.goo', mod: '', locked: false, players: 2, max: 4, dedicated: false, pinned: false,
+          listed: true, joinable: true, why: '' }
+    ];
+
     // Each scenario's players not in a game, by the game they run, and
-    // its games. The status the page gets is made from these.
+    // its games. The status the page gets is made from these. imperial is
+    // the relay's games.
     var SCENARIOS = {
         busy: {
             label: 'Busy night',
+            imperial: relay(3, RELAY_HOSTED),
             status: {
                 lobby: { jk1: ['DarkJedi_7', 'Tusken_Raider', 'Qu_Rahn'], mots: ['Corran_H', 'Saber_Kyp'] },
                 games: [
@@ -32,8 +70,30 @@ window.jkLobbyMock = (function() {
                 ]
             }
         },
+        big: {
+            label: 'Big games',
+            imperial: relay(12),
+            status: {
+                lobby: { jk1: ['Jawa_Juice'], mots: ['KelDor_K'] },
+                games: [
+                    { id: 71, name: 'Deathmatch night', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 3, max: 16, names: crowd(3, 0) },
+                    { id: 72, name: 'Full house', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 16, max: 16, names: crowd(16, 3) },
+                    { id: 73, name: 'Team sabers', game: 'mots', map: 'jkm_mp.jkl', episode: 'JKM_MP.goo',
+                      mod: '', locked: false, players: 9, max: 24, names: crowd(9, 19) },
+                    { id: 74, name: 'CTF all night', game: 'jk1', map: 'ctf1.jkl', episode: 'JK1CTF.gob',
+                      mod: '', locked: false, players: 11, max: 32, names: crowd(11, 28) },
+                    { id: 75, name: 'Big CTF', game: 'jk1', map: 'ctf1.jkl', episode: 'JK1CTF.gob',
+                      mod: '', locked: false, players: 29, max: 32, names: crowd(29, 7) },
+                    { id: 76, name: 'Everyone on', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 32, max: 32, names: crowd(32, 13) }
+                ]
+            }
+        },
         quiet: {
             label: 'Quiet',
+            imperial: relay(0),
             status: {
                 lobby: { jk1: ['MaraJade'], mots: ['Dash_R'] },
                 games: [
@@ -42,13 +102,44 @@ window.jkLobbyMock = (function() {
                 ]
             }
         },
-        empty: { label: 'Nobody on', status: { lobby: { jk1: [], mots: [] }, games: [] } },
-        down: { label: 'Lobby not answering', status: null }
+        // A game whose host's build speaks a newer netcode (net) than the
+        // page's (NETCODE in index.html), as one hosted after an update would
+        // look to a page opened before it.
+        versions: {
+            label: 'Another version',
+            imperial: relay(0),
+            status: {
+                lobby: { jk1: ['MaraJade'], mots: [] },
+                games: [
+                    { id: 31, name: 'No mods dueling', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 2, max: 4, names: ['Kyle_K', 'Jerec'] },
+                    { id: 32, name: 'After the update', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 1, max: 4, names: ['Rahn_J'], net: 1 }
+                ]
+            }
+        },
+        empty: { label: 'Nobody on', imperial: relay(null), status: { lobby: { jk1: [], mots: [] }, games: [] } },
+        down: { label: 'Lobby not answering', imperial: relay(1), status: null },
+        relayDown: {
+            label: 'Imperial relay not answering',
+            imperial: { state: 'down', server: 'lobby.jkjunkie.com', checked: '2026-10-31T19:00:00.000Z',
+                        games: [{ key: '', name: 'Coruscant', game: 'jk1', map: '', episode: '', mod: '',
+                                  locked: false, players: 0, max: 0, dedicated: true, pinned: true, listed: false,
+                                  joinable: false, why: 'relay-down' }] },
+            status: {
+                lobby: { jk1: ['MaraJade'], mots: ['Dash_R'] },
+                games: [
+                    { id: 12, name: 'Anyone up for a duel?', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                      mod: '', locked: false, players: 1, max: 4, names: ['Kyle_K'] }
+                ]
+            }
+        }
     };
     var NEWCOMERS = ['Greedo_Shot', 'BountyHntr', 'Mon_Calamari', 'GammoreanG', 'TrandoshanX', 'Sith_Lurker',
                      'Duros_Dan', 'Ithorian', 'Jawa_Juice', 'KelDor_K', 'Twilek_T', 'Wookiee_W'];
 
     var show = null;
+    var showImperial = null;
     var current = 'busy';
     var live = null;      // the status as players come and go
     var moving = null;    // the timer making them
@@ -128,6 +219,7 @@ window.jkLobbyMock = (function() {
         var wasMoving = !!moving;
         live = copy(SCENARIOS[name].status);
         show(toStatus(live), 'down');
+        if (showImperial) showImperial(copy(SCENARIOS[name].imperial), 'off');
         controls.forEach(function(c) { c.select.value = name; c.check.disabled = !live; });
         setMoving(wasMoving && !!live);
     }
@@ -176,8 +268,9 @@ window.jkLobbyMock = (function() {
     }
 
     return {
-        attach: function(showStatus) {
+        attach: function(showStatus, showRelay) {
             show = showStatus;
+            showImperial = showRelay || null;
             addStyles();
             var bar = document.createElement('div');
             bar.id = 'mock-bar';
@@ -219,6 +312,10 @@ window.jkLobbyMock = (function() {
             if (kind === 'host')
                 return 'Mock-up: on the live page, Host asks for ' + folder + '. Once the game starts, ' +
                        'choose Multiplayer, then Host.';
+            if (kind === 'join-imperial')
+                return 'Mock-up: on the live page, this asks for ' + folder + ', and the game starts with the ' +
+                       "Imperial relay's connection picked on its Multiplayer menu and " + label +
+                       ' already selected on its Join screen.';
             if (!label)
                 return 'Mock-up: on the live page, Quick Join asks for ' + folder + ', then opens the Join screen. ' +
                        "There's no open game without a password to pick here.";

@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { makeGob, makeZip, makeIDB } from './helpers.mjs';
+import { makeGob, makeZip, makeIDB, zipEntries } from './helpers.mjs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 function cut(from, to) {
@@ -18,12 +18,12 @@ function cut(from, to) {
 }
 const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, filesToSave,
         gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge,
-        REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey } = new Function(
+        REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows, ZIP_METHODS } = new Function(
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
     '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, ' +
     'filesToSave, gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, ' +
-    'keptMerge, REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey };')();
+    'keptMerge, REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows, ZIP_METHODS };')();
 const { checkGraphicsPack } = new Function(
     cut('      async function gobTable', '      async function modContents') + '\nreturn { checkGraphicsPack };')();
 
@@ -106,6 +106,131 @@ test('zips that are not mods stay closed', async () => {
     const after = await openZips(before, false);
     assert.deepEqual(after.map(e => e.path), before.map(e => e.path));
     assert.deepEqual(list(after), []);
+});
+
+// unzip.js as a browser runs it for the page, in a worker: in a scope of its
+// own, with messages that move their buffers across. Here it's the same
+// thread, a turn later.
+const unzipSrc = readFileSync(new URL('../unzip.js', import.meta.url), 'utf8');
+const JkUnzip = new Function(unzipSrc + '\nreturn JkUnzip;')();
+const workers = [];
+class FakeWorker {
+    constructor(url) {
+        assert.equal(url, 'unzip.js');
+        workers.push(this);
+        class WorkerGlobalScope {}
+        this.scope = new WorkerGlobalScope();
+        this.scope.postMessage = (data, transfer) => {
+            const moved = structuredClone(data, { transfer });
+            setTimeout(() => this.terminated || this.onmessage({ data: moved }));
+        };
+        new Function('self', 'WorkerGlobalScope', unzipSrc)(this.scope, WorkerGlobalScope);
+    }
+    postMessage(data, transfer) {
+        assert.ok(!this.terminated);
+        const moved = structuredClone(data, { transfer });
+        assert.equal(data.data.byteLength, 0, 'the page hands its copy over');
+        setTimeout(() => this.scope.onmessage({ data: moved }));
+    }
+    terminate() {
+        this.terminated = true;
+    }
+}
+globalThis.Worker = FakeWorker;
+
+// One entry of each method from the zips unzip-test.mjs uses (made by
+// PKZIP, 7-Zip and the rest), with what it unpacks to.
+const packed = {};
+for (const z of ['pkzip-multi.zip', '7zip.zip', 'python.zip']) {
+    const buf = readFileSync(new URL('fixtures/zips/' + z, import.meta.url));
+    for (const en of zipEntries(buf))
+        if (en.size > 1 && !packed[en.method])
+            packed[en.method] = { ...en, bytes: Buffer.from(JkUnzip.unzip(en.method, en.flags, en.data, en.size, en.crc)) };
+}
+const packedAs = (name, m) => ({ name, method: m, flags: packed[m].flags, data: packed[m].data, bytes: packed[m].bytes });
+
+test('the page takes the methods unzip.js has', () => {
+    assert.deepEqual(ZIP_METHODS, JkUnzip.methods);
+    assert.deepEqual(Object.keys(packed).map(Number).sort((a, b) => a - b), JkUnzip.methods);
+});
+
+test('zipped mods packed with every method open, unpacked in a worker but for stored and deflated', async () => {
+    workers.length = 0;
+    const zips = {};
+    for (const m of ZIP_METHODS)
+        zips['mod/M' + m + '.zip'] = makeZip([packedAs('m' + m + '.gob', m)]);
+    const files = await openZips(pick(zips), false);
+    for (const m of ZIP_METHODS) {
+        const e = files.find(e => e.path === 'mod/M' + m + '.zip/m' + m + '.gob');
+        assert.ok(e, 'method ' + m);
+        assert.ok(Buffer.from(await e.file.arrayBuffer()).equals(packed[m].bytes), 'method ' + m);
+    }
+    assert.deepEqual(list(files).sort(), ZIP_METHODS.map(m => 'M' + m + ' (mod/M' + m + '.zip)').sort());
+    assert.equal(workers.length, 1, 'one worker for them all');
+    assert.ok(workers[0].terminated, 'and it goes once they are open');
+});
+
+test('a ZIP64 zip opens', async () => {
+    const sbx = gob('3do\\bow0.3do', 'sbx bow');
+    const files = await openZips(pick({
+        'mod/SBX.zip': makeZip([{ name: 'SBX/sbx.gob', bytes: sbx }, { name: 'SBX/cog/s.cog', bytes: Buffer.from('S'), store: true },
+                                packedAs('SBX/mat/s.mat', 14)], { zip64: true }),
+    }), false);
+    const opened = (p) => files.find(e => e.path === p).file.arrayBuffer().then(b => Buffer.from(b));
+    assert.ok((await opened('mod/SBX.zip/sbx.gob')).equals(Buffer.from(sbx)));
+    assert.equal((await opened('mod/SBX.zip/cog/s.cog')).toString(), 'S');
+    assert.ok((await opened('mod/SBX.zip/mat/s.mat')).equals(packed[14].bytes));
+    assert.deepEqual(list(files), ['SBX (mod/SBX.zip)']);
+});
+
+test('zips with a method unzip.js lacks, a password or an entry that comes out wrong stay closed', async () => {
+    const warn = console.warn;
+    const warned = [];
+    console.warn = (text) => warned.push(text);
+    try {
+        const wrong = { ...packedAs('w.gob', 12), bytes: Buffer.concat([packed[12].bytes.subarray(1), Buffer.from('x')]) };
+        const before = pick({
+            'mod/AES.zip': makeZip([{ name: 'a.gob', method: 99, data: Buffer.alloc(40), bytes: Buffer.alloc(20) }]),
+            'mod/Locked.zip': makeZip([{ name: 'l.gob', bytes: gob('x', 'y'), flags: 1 }]),
+            'mod/Wrong.zip': makeZip([wrong]),
+            'mod/Cut.zip': makeZip([{ ...packedAs('c.gob', 14), data: packed[14].data.subarray(0, 40) }]),
+        });
+        const after = await openZips(before, false);
+        assert.deepEqual(after.map(e => e.path), before.map(e => e.path));
+        assert.deepEqual(list(after), []);
+        assert.equal(warned.length, 2, warned.join('\n'));
+        assert.match(warned[0], /mod\/Wrong\.zip: Error: CRC mismatch/);
+        assert.match(warned[1], /mod\/Cut\.zip: Error: corrupt data/);
+    } finally {
+        console.warn = warn;
+    }
+});
+
+test('deflated zips open in the worker where the browser has no DecompressionStream', async () => {
+    const ds = globalThis.DecompressionStream;
+    delete globalThis.DecompressionStream;
+    workers.length = 0;
+    try {
+        const files = await openZips(pick({ 'mod/D.zip': makeZip([{ name: 'd.gob', bytes: gob('cog\\d.cog', 'deflated') }]) }), false);
+        assert.ok(Buffer.from(await files.find(e => e.path === 'mod/D.zip/d.gob').file.arrayBuffer()).equals(Buffer.from(gob('cog\\d.cog', 'deflated'))));
+        assert.equal(workers.length, 1);
+    } finally {
+        globalThis.DecompressionStream = ds;
+    }
+});
+
+test('without workers, only stored and deflated zips open', async () => {
+    delete globalThis.Worker;
+    try {
+        const files = await openZips(pick({
+            'mod/D.zip': makeZip([{ name: 'd.gob', bytes: gob('cog\\d.cog', 'deflated') }]),
+            'mod/L.zip': makeZip([packedAs('l.gob', 14)]),
+        }), false);
+        assert.deepEqual(list(files), ['D (mod/D.zip)']);
+        assert.ok(files.some(e => e.path === 'mod/L.zip'));
+    } finally {
+        globalThis.Worker = FakeWorker;
+    }
 });
 
 // Laid out like a Steam Mysteries of the Sith folder with the MotS
@@ -330,7 +455,9 @@ const STEAM_MOTS = Object.fromEntries([
     'Player/steam_autocloud.vdf', 'Resource/Backup Sounds/JKMSNDLO.GOO', 'Resource/JKMRES.GOO', 'Resource/JKMsndLO.goo',
     'Resource/JK_.CD', 'Resource/VIDEO/CUTSCENES.ZIP', 'Resource/VIDEO/S1L1OCS.SAN', 'Resource/ui/BM/bkmain.bm',
     'Resource/ui/credits.uni', 'doc/config.md', 'jkgm/materials/SABER19/saber19.mat.saber.albedo.png',
-    'jkgm/materials/MOTSGFXEXT1/metadata.json', 'jkgm/shaders/menu.frag', 'jkmcutscenes/JKM4B.GOO',
+    'jkgm/materials/SABER19/metadata.json', 'jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png',
+    'jkgm/materials/MOTSGFXEXT1/metadata.json', 'jkgm/materials/motsnup/jkmnup.bar.png', 'jkgm/shaders/menu.frag',
+    'jkmcutscenes/JKM4B.GOO',
 ].map(p => [p, null]));
 
 test('a Steam Jedi Knight folder reads only the game files and characters', async () => {
@@ -340,14 +467,18 @@ test('a Steam Jedi Knight folder reads only the game files and characters', asyn
     assert.deepEqual(mods, []);
 });
 
-test('a Steam MotS folder with the Remastered pack leaves its textures, backups and docs unread', async () => {
+test('a Steam MotS folder with the Remastered pack leaves its textures and docs unread, not its original sounds', async () => {
     const { read, players, mods } = await whatIsRead(STEAM_MOTS, { mots: true });
+    // Of jkgm/, only the muzzle-flash glows' folder.
     assert.deepEqual(read, [
         'Controls/MS SIDEWINDER GAMEPAD.CTM', 'Episode/JKM.GOO', 'Episode/JKM/cog/s1l1_endlevel.cog', 'Episode/JKM_KFY.GOO',
         'Episode/JKM_MP.GOO', 'Episode/JKM_SABER.GOO', 'Episode/MotS Secret Level/3do/mat/vader_cape.mat',
         'Episode/MotS Secret Level/episode.jk', 'Episode/MotS Secret Level/jkl/S6L1.jkl',
-        'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo', 'Resource/JKMRES.GOO',
-        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni'].sort());
+        'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo',
+        'Resource/Backup Sounds/JKMSNDLO.GOO', 'Resource/JKMRES.GOO',
+        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni',
+        'jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png', 'jkgm/materials/SABER19/metadata.json',
+        'jkgm/materials/SABER19/saber19.mat.saber.albedo.png'].sort());
     assert.deepEqual(players, ['BahamutZero0o/BahamutZero0o.plr', 'BahamutZero0o/Tristamus.mpc']);
     assert.deepEqual(mods, []);
 });
@@ -374,7 +505,7 @@ test('loose game files, mods and maps are read; screenshots, readmes and copies 
         'mods/readme.md': null,
         'episode/MyLevel.gob': null, 'episode/MyLevel.jpg': null, 'episode/MyEp/episode.jk': null,
         'episode/MyEp/jkl/x.jkl': null, 'episode/MyEp/notes.doc': null, 'episode/MyEp/extra/a.gob': null,
-        'resource/cog/fix.cog': null, 'resource/Backup/Res2.gob': null, 'resource/notes.doc': null,
+        'resource/cog/fix.cog': null, 'resource/Backup/Res2.gob': gob('x', 'Resource/Res2.gob'), 'resource/notes.doc': null,
     });
     const sbx = mods.find(m => m.name === 'SBX'), blade = mods.find(m => m.name === 'Blade');
     assert.ok(sbx && blade, mods.map(m => m.name).join(', '));
@@ -383,6 +514,21 @@ test('loose game files, mods and maps are read; screenshots, readmes and copies 
         'episode/MyLevel.gob', 'episode/MyEp/episode.jk', 'episode/MyEp/jkl/x.jkl', 'resource/cog/fix.cog']).sort());
     // The size shown for a mod is what's read of it.
     assert.equal(sbx.bytes, gob('x', 'SBX/sbx.gob').length + 'SBX/cog/sbx.cog'.length);
+});
+
+// The MotS Remastered pack's installer replaces resource/JKMsndLO.goo and
+// keeps the original in resource/Backup Sounds/. A spare copy like that is
+// read for maps.js to find original files in, unless it's the same size as
+// the one loaded.
+test('a spare copy of one of the game\'s own GOBs is read when it isn\'t the one loaded', async () => {
+    const { read } = await whatIsRead({
+        ...STEAM_MOTS, 'Resource/Old/JKMRES.GOO': gob('x', 'Resource/JKMRES.GOO'), 'Resource/Old/Other.goo': null,
+        'Resource/Old/Deeper/JKMsndLO.goo': null,
+    }, { mots: true });
+    assert.deepEqual(read.filter(p => /^Resource\/[^/]+\/.*\.goo$/i.test(p)), ['Resource/Backup Sounds/JKMSNDLO.GOO']);
+    const { read: jk, mods } = await whatIsRead({ ...STEAM_JK, 'Resource/Backup/RES2.GOB': gob('x', 'the original') });
+    assert.ok(jk.includes('Resource/Backup/RES2.GOB'));
+    assert.deepEqual(mods, []);
 });
 
 test('a folder given with ?path= is read like a mod', async () => {
@@ -396,6 +542,69 @@ test("the other game's GOBs aren't read", async () => {
     assert.ok(!mots.read.includes('Episode/stray.gob'));
     const jk = await whatIsRead({ ...STEAM_JK, 'Episode/stray.goo': null });
     assert.ok(!jk.read.includes('Episode/stray.goo'));
+});
+
+test("Jedi Knight doesn't read the muzzle-flash glows, and MotS only their folder's metadata and pictures", async () => {
+    const glows = { 'jkgm/materials/saber19/metadata.json': null, 'jkgm/materials/saber19/a.png': null,
+                    'jkgm/materials/saber19/notes.doc': null, 'jkgm/materials/saber19/old/metadata.json': null,
+                    'jkgm/metadata.json': null };
+    const jk = await whatIsRead({ ...STEAM_JK, ...glows });
+    assert.deepEqual(jk.read, STEAM_JK_READ.slice().sort());
+    const mots = await whatIsRead({ ...STEAM_MOTS, ...glows }, { mots: true });
+    assert.deepEqual(mots.read.filter(p => /^jkgm\/materials\/saber19\//.test(p)),
+                     ['jkgm/materials/saber19/a.png', 'jkgm/materials/saber19/metadata.json']);
+});
+
+// ---- The muzzle-flash glows, as keepFlashGlows has them: the files read,
+// with their paths in the tab.
+const json = (o) => new TextEncoder().encode(JSON.stringify(o));
+const unjson = (b) => JSON.parse(new TextDecoder().decode(b));
+const GLOW_META = {
+    name: 'SABER19', description: 'Saber and Muzzle Flash Mod',
+    materials: [
+        { name: 'jknup.bry_e11.cel1', albedo_map: 'jknup.repeat_flsh.cel0.albedo.png', albedo_factor: [0, 0, 0, 0],
+          emissive_map: 'jknup.bry_e11.cel1.emissive.png', emissive_factor: [34.4, 0.6, 0.9],
+          replaces: [{ cel: 1, name: 'mat/bry_e11.mat' }], replaces_signatures: ['06169e27edb6c713f8b71967f63f7411'] },
+        { name: 'jknup.3rdflsh_blue.cel1', albedo_map: 'jknup.repeat_flsh.cel0.albedo.png',
+          emissive_map: 'jknup.3rdflsh_red.cel2.emissive.png', replaces: [{ cel: 1, name: 'mat/3rdflsh_blue.mat' }] },
+        { name: 'jknup.sabergreen0', albedo_map: 'jknup.sabergreen0.albedo.png',
+          emissive_map: 'jknup.sabergreen0.emissive.png', replaces: [{ cel: 0, name: 'mat/sabergreen0.mat' }] },
+        { name: 'mixed', albedo_map: 'mixed.png', replaces: [{ cel: 0, name: 'mat/bry_e11.mat' }, { cel: 0, name: 'mat/other.mat' }] },
+        { name: 'none', albedo_map: 'none.png', replaces: [] },
+        'not an entry',
+    ],
+};
+function glowFiles(meta, pictures, dir = '/mots/jkgm/materials/SABER19/') {
+    return [{ path: '/mots/episode/JKM_MP.GOO', data: 'goo' }]
+        .concat(meta === undefined ? [] : [{ path: dir + 'metadata.json', data: meta }])
+        .concat(pictures.map(n => ({ path: dir + n, data: 'png ' + n.toLowerCase() })));
+}
+
+test('the glows keep only the muzzle flashes, with the pictures they name', () => {
+    const out = keepFlashGlows(glowFiles(json(GLOW_META), [
+        'jknup.repeat_flsh.cel0.albedo.png', 'jknup.bry_e11.cel1.emissive.png', 'JKNUP.3RDFLSH_RED.CEL2.EMISSIVE.PNG',
+        'jknup.sabergreen0.albedo.png', 'jknup.sabergreen0.emissive.png', 'mixed.png', 'unused.png']), '/mots/');
+    const byPath = Object.fromEntries(out.map(e => [e.path, e.data]));
+    // The folder keeps its own spelling; the pictures take the metadata's,
+    // since the tab's files are case-sensitive.
+    assert.deepEqual(Object.keys(byPath).sort(), ['/mots/episode/JKM_MP.GOO', '/mots/jkgm/materials/SABER19/jknup.3rdflsh_red.cel2.emissive.png',
+        '/mots/jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png', '/mots/jkgm/materials/SABER19/jknup.repeat_flsh.cel0.albedo.png',
+        '/mots/jkgm/materials/SABER19/metadata.json']);
+    assert.equal(byPath['/mots/jkgm/materials/SABER19/jknup.3rdflsh_red.cel2.emissive.png'], 'png jknup.3rdflsh_red.cel2.emissive.png');
+    assert.equal(byPath['/mots/episode/JKM_MP.GOO'], 'goo');
+    const meta = unjson(byPath['/mots/jkgm/materials/SABER19/metadata.json']);
+    assert.deepEqual(meta.materials.map(m => m.name), ['jknup.bry_e11.cel1', 'jknup.3rdflsh_blue.cel1']);
+    assert.deepEqual(meta.materials[0], GLOW_META.materials[0]);
+    assert.equal(meta.name, 'SABER19');
+});
+
+test("without metadata the engine can read, the glows are left out", () => {
+    const only = ['/mots/episode/JKM_MP.GOO'];
+    for (const meta of [undefined, json({}), json({ materials: 'x' }), new TextEncoder().encode('{"materials": ['),
+                        json({ materials: [GLOW_META.materials[2]] })])
+        assert.deepEqual(keepFlashGlows(glowFiles(meta, ['jknup.bry_e11.cel1.emissive.png']), '/mots/').map(e => e.path), only);
+    const none = glowFiles(undefined, []);
+    assert.equal(keepFlashGlows(none, '/mots/'), none);
 });
 
 // ---- jk_.cd, wherever it is in the folder. A player's CD install
@@ -513,8 +722,10 @@ for (const [name, folder, mots, saved] of [
         'Episode/JKM_SABER.GOO', 'Episode/JKM/cog/s1l1_endlevel.cog', 'Episode/MotS Secret Level/episode.jk',
         'Episode/MotS Secret Level/jkl/S6L1.jkl', 'Episode/MotS Secret Level/3do/mat/vader_cape.mat',
         'Episode/MotS Secret Level/misc/pup/mjdarkjedi.pup', 'Mods/JKMRemasteredAssets.goo',
-        'Player/BahamutZero0o/BahamutZero0o.plr', 'Player/BahamutZero0o/Tristamus.mpc', 'Resource/JKMRES.GOO',
-        'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni']],
+        'Player/BahamutZero0o/BahamutZero0o.plr', 'Player/BahamutZero0o/Tristamus.mpc',
+        'Resource/Backup Sounds/JKMSNDLO.GOO', 'Resource/JKMRES.GOO', 'Resource/JKMsndLO.goo', 'Resource/JK_.CD', 'Resource/ui/BM/bkmain.bm', 'Resource/ui/credits.uni',
+        'jkgm/materials/SABER19/saber19.mat.saber.albedo.png', 'jkgm/materials/SABER19/metadata.json',
+        'jkgm/materials/SABER19/jknup.bry_e11.cel1.emissive.png']],
 ]) {
     test('saving ' + name + ' keeps what is read, and starts the same from the browser', async () => {
         const fileList = folderFiles(folder, mots);
@@ -718,11 +929,15 @@ function asPicked(name, listed) {
 test("a kept folder brings what a picked one does, without opening the folders the game never reads", async () => {
     const dir = folderHandle('Star Wars Jedi Knight Mysteries of the Sith', STEAM_MOTS, { mots: true });
     const listed = await listFolder(dir);
-    const want = Object.keys(STEAM_MOTS).filter(p => !isSkipped(p.toLowerCase()) && !/^jkgm\//.test(p));
+    // Of jkgm/, only the muzzle-flash glows' folder is listed.
+    const want = Object.keys(STEAM_MOTS).filter(p => !isSkipped(p.toLowerCase()) &&
+                                                     (!/^jkgm\//.test(p) || /^jkgm\/materials\/SABER19\//.test(p)));
     assert.deepEqual(listed.map(e => e.path).sort(), want.sort());
-    for (const skipped of ['jkgm/', 'MUSIC/', 'Resource/VIDEO/', 'jkmcutscenes/'])
+    for (const skipped of ['jkgm/shaders/', 'jkgm/materials/MOTSGFXEXT1/', 'jkgm/materials/motsnup/', 'MUSIC/',
+                           'Resource/VIDEO/', 'jkmcutscenes/'])
         assert.ok(!dir.log.listed.includes(skipped), skipped + ' was listed');
-    assert.ok(!dir.log.opened.some(p => /^jkgm|^MUSIC|VIDEO|\.exe$|\.ico$/i.test(p)), dir.log.opened.join(', '));
+    assert.ok(!dir.log.opened.some(p => /^jkgm\/(?!materials\/SABER19\/)|^MUSIC|VIDEO|\.exe$|\.ico$/i.test(p)),
+              dir.log.opened.join(', '));
     // Each folder's files by name, then its folders.
     assert.deepEqual(listed.slice(0, 4).map(e => e.path), ['32390_install.vdf', 'JediKnightM.RPT', 'JKMRemastered.bat',
                                                            'MysteriesOfTheSith.sdb']);
@@ -813,6 +1028,184 @@ test('kept folders are kept per game, and forgotten', async () => {
     assert.deepEqual(all.map(f => f.game + ' ' + f.kind + ' ' + f.time).sort(), ['jk1 extra 5', 'mots game 0']);
     await store.remove('jk1');
     assert.deepEqual((await store.all()).map(f => f.game), ['mots']);
+});
+
+// ---- Several ticked mods put together in one folder (setFiles), their
+// ui/jkstrings.uni with them.
+const { findClashes, setFiles, readStrings, readList, LIST_FILES } = new Function(
+    cut('      // ---- Which files each mod changes', '      function wrongGameText') +
+    '\nreturn { findClashes, setFiles, readStrings, readList, LIST_FILES };')();
+
+// A string table as the game's are laid out, in Latin-1.
+const uni = (lines) => Buffer.from('# made up\r\nMSGS ' + lines.length + '\r\n\r\n' +
+    lines.map(([k, v]) => `   "${k}"   0 "${v}"`).join('\r\n') + '\r\n\r\nEND\r\n', 'latin1');
+const stringsGob = (lines) => gob('ui\\jkstrings.uni', uni(lines));
+// The game's own, a skin pack's (the game's lines as they are, one changed,
+// and its skins), SBX's (labels changed, its actions added) and an add-on
+// to SBX (SBX's and one more action), as Continuum, SBX-JK and SBX Dual
+// Sabers were on 25 Oct 2026.
+const GAME_STRINGS = [['SELECT5', 'Bowcaster'], ['ACTIVATE14', 'Bacta Tank'], ['FIRE1', 'Fire'], ['KY', 'Katarn']];
+const SKIN_STRINGS = [['SELECT5', 'Bowcaster'], ['ACTIVATE14', 'Bacta Tank'], ['FIRE1', 'Fire'], ['KY', 'Kyle Katarn'],
+                      ['PADME', 'Padmé']];
+const SBX_STRINGS = [['SELECT5', 'Sith Lightsaber'], ['ACTIVATE14', 'Force Saber Throw'], ['FIRE1', 'Fire'], ['KY', 'Kyle'],
+                     ['ACTIVATE17', 'Evasion/Kick'], ['ACTIVATE19', 'Lightsaber Stance']];
+const ADDON_STRINGS = [...SBX_STRINGS, ['ACTIVATE20', 'Dual Sabers']];
+
+// The set made from a folder with every mod in it ticked, highest first.
+async function putTogether(extra) {
+    const folder = { ...Object.fromEntries(install.map(p => [p, null])), ...extra };
+    const files = Object.entries(folder).map(([path, bytes]) => ({
+        path, file: new Blob([bytes || (/\.gob$/i.test(path) ? gob('x', path) : Buffer.from(path))]) }));
+    // In the order onFolderPicked takes them.
+    const mods = detectMods(files, false);
+    const found = await findClashes(mods, files, '.gob');
+    placeModFiles(files, mods);
+    for (const e of files)
+        e.data = new Uint8Array(await e.file.arrayBuffer());
+    const set = await setFiles(mods.map((m, i) => ({ index: i, name: m.name, path: m.path })), files, found.contents, '.gob');
+    return { mods: mods.map(m => m.name), clashes: found.clashes, set };
+}
+const setStrings = (set) => set.filter(e => e.rel.toLowerCase() === 'ui/jkstrings.uni');
+
+test("the ticked mods' jkstrings.uni are put together, so a skin pack above SBX doesn't hide its actions", async () => {
+    const { mods, clashes, set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/continuum.gob': stringsGob(SKIN_STRINGS),
+        'resource/SBX Dual Sabers.gob': stringsGob(ADDON_STRINGS),
+        'resource/SBX-JK v31.gob': stringsGob(SBX_STRINGS),
+    });
+    assert.deepEqual(mods, ['continuum', 'SBX Dual Sabers', 'SBX-JK v31']);
+    assert.ok(clashes['0,1'].includes('ui/jkstrings.uni'));
+    assert.deepEqual(set.filter(e => e.rel.endsWith('.gob')).map(e => e.rel),
+                     ['001-continuum.gob', '002-SBX Dual Sabers.gob', '003-SBX-JK v31.gob']);
+    const loose = setStrings(set);
+    assert.equal(loose.length, 1);
+    assert.equal(loose[0].mod, 0);
+    assert.deepEqual(loose[0].mods, [0, 1, 2]);
+    const table = readStrings(loose[0].data);
+    assert.deepEqual(Object.fromEntries(table.texts), {
+        // The skin pack has the game's lines as they are, so SBX's changes
+        // stand; its own change wins, since it's higher.
+        SELECT5: 'Sith Lightsaber', ACTIVATE14: 'Force Saber Throw', FIRE1: 'Fire', KY: 'Kyle Katarn',
+        PADME: 'Padmé', ACTIVATE17: 'Evasion/Kick', ACTIVATE19: 'Lightsaber Stance', ACTIVATE20: 'Dual Sabers',
+    });
+    // The count is right, so the engine reads every line and finds END.
+    const text = Buffer.from(loose[0].data).toString('latin1');
+    assert.match(text, /^# [^\r\n]*\r\nMSGS 8\r\n/);
+    assert.match(text, /\r\nEND\r\n$/);
+    // Each line is the mod's own, byte for byte.
+    assert.ok(Buffer.from(loose[0].data).includes(Buffer.from('   "PADME"   0 "Padmé"', 'latin1')));
+});
+
+test('with one ticked mod that has jkstrings.uni, or copies of one, it is left as it is', async () => {
+    const one = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/Maps.gob': gob('jkl\\a.jkl', 'a'),
+        'resource/SBX-JK v31.gob': stringsGob(SBX_STRINGS),
+    });
+    assert.deepEqual(setStrings(one.set), []);
+    const copies = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/A.gob': makeGob([{ name: 'ui\\jkstrings.uni', bytes: uni(SBX_STRINGS) }, { name: 'cog\\a.cog', bytes: Buffer.from('a') }]),
+        'resource/B.gob': makeGob([{ name: 'ui\\jkstrings.uni', bytes: uni(SBX_STRINGS) }, { name: 'cog\\b.cog', bytes: Buffer.from('b') }]),
+    });
+    assert.deepEqual(setStrings(copies.set), []);
+});
+
+test("a mod's loose jkstrings.uni is its copy, and the set's takes its place", async () => {
+    const { mods, set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'Skins/ui/jkstrings.uni': uni(SKIN_STRINGS),
+        'Skins/3do/padme.3do': Buffer.from('3do'),
+        'resource/SBX-JK v31.gob': stringsGob(SBX_STRINGS),
+    });
+    assert.deepEqual(mods, ['Skins', 'SBX-JK v31']);
+    const loose = setStrings(set);
+    assert.deepEqual(loose.map(e => e.rel), ['ui/jkstrings.uni']);
+    assert.equal(readStrings(loose[0].data).texts.get('ACTIVATE17'), 'Evasion/Kick');
+    assert.equal(readStrings(loose[0].data).texts.get('PADME'), 'Padmé');
+});
+
+test('two mods that differ only in jkstrings.uni still make a set, which has both', async () => {
+    const { mods, set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'Skins/ui/jkstrings.uni': uni(SKIN_STRINGS),
+        'Names/ui/jkstrings.uni': uni(SBX_STRINGS),
+    });
+    assert.deepEqual(mods, ['Names', 'Skins']);
+    // Names's copy alone would leave Skins out of the set (onFolderPicked
+    // starts with the only mod that adds anything); the one put together is
+    // from both.
+    const loose = setStrings(set);
+    assert.deepEqual(set.map(e => e.rel), ['ui/jkstrings.uni']);
+    assert.deepEqual(loose[0].mods, [0, 1]);
+    assert.equal(readStrings(loose[0].data).texts.get('PADME'), 'Padmé');
+    assert.equal(readStrings(loose[0].data).texts.get('KY'), 'Kyle');
+});
+
+// Skin lists as the game's are laid out: SBX's and a skin pack's, which
+// share a skin (boc.3do) and the game's Katarn, as SBX-JK and Continuum did.
+const models = (title, rows) => Buffer.from('# ' + title + '\r\n# =====\r\n\r\nnumModels: ' + rows.length + '\r\n\r\n#\tModel name\r\n' +
+    rows.map(([m, snd, name], i) => `${i}:\t${m}\t\t${snd}\t\t#"${name}"`).join('\r\n') + '\r\n\r\n', 'latin1');
+const SKIN_MODELS = [['ky.3do', 'ky.snd', 'Katarn'], ['boc.3do', 'kyboc.snd', 'Boc'], ['robocop.3do', 'kytrooper.snd', 'RoboCop']];
+const SBX_MODELS = [['adigallia.3do', 'kyfemale.snd', 'Adi'], ['Boc.3do', 'kybocsbx.snd', 'Boc'], ['ky.3do', 'ky.snd', 'Kyle'],
+                    ['yoda.3do', 'yoda.snd', 'Yoda']];
+const setFile = (set, path) => set.filter(e => e.rel.toLowerCase() === path);
+
+test("the ticked mods' skin lists are put together, so a skin pack above SBX doesn't hide SBX's skins", async () => {
+    const { mods, clashes, set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/continuum.gob': makeGob([{ name: 'misc\\models.dat', bytes: models('Continuum', SKIN_MODELS) },
+                                           { name: 'misc\\sabers.dat', bytes: Buffer.from('numSabers: 1\r\n0:\tsabB2.BM\tsaberblue1.mat\tsaberblue0.mat\r\n') }]),
+        'resource/SBX-JK v31.gob': makeGob([{ name: 'misc\\models.dat', bytes: models('SBX', SBX_MODELS) },
+                                           { name: 'misc\\sabers.dat', bytes: Buffer.from('numSabers: 1\r\n0:\tsabB2.BM\t\tsaberblue1.mat\t\tsaberblue0.mat\r\n') }]),
+    });
+    assert.deepEqual(mods, ['continuum', 'SBX-JK v31']);
+    assert.ok(clashes['0,1'].includes('misc/models.dat'));
+    const loose = setFile(set, 'misc/models.dat');
+    assert.equal(loose.length, 1);
+    assert.equal(loose[0].mod, 0);
+    assert.deepEqual(loose[0].mods, [0, 1]);
+    const text = Buffer.from(loose[0].data).toString('latin1');
+    // The higher mod's skins in its order, then the lower one's it lacks,
+    // numbered from 0, with the count the engine allocates for. A skin is
+    // the same skin with another sound class (Boc).
+    assert.deepEqual(readList(loose[0].data, LIST_FILES[0]).map(e => e.num + ' ' + e.key),
+                     ['0 ky.3do', '1 boc.3do', '2 robocop.3do', '3 adigallia.3do', '4 yoda.3do']);
+    assert.match(text, /\r\n1:\tboc\.3do\t\tkyboc\.snd\t\t#"Boc"\r\n/);
+    assert.match(text, /\r\nnumModels: 5\r\n/);
+    // Each entry keeps its name.
+    assert.match(text, /\r\n3:\tadigallia\.3do\t\tkyfemale\.snd\t\t#"Adi"\r\n/);
+    assert.match(text, /\r\n0:\tky\.3do\t\tky\.snd\t\t#"Katarn"\r\n/);
+    // The blade lists have the same blade, spaced differently: the higher
+    // mod's alone.
+    const blades = setFile(set, 'misc/sabers.dat');
+    assert.equal(blades.length, 1);
+    assert.deepEqual(readList(blades[0].data, LIST_FILES[1]).map(e => e.key), ['sabb2.bm saberblue1.mat saberblue0.mat']);
+});
+
+test('with one ticked mod that has a skin list, it is left as it is', async () => {
+    const { set } = await putTogether({
+        'resource/Res1hi.gob': stringsGob(GAME_STRINGS),
+        'resource/Maps.gob': gob('jkl\\a.jkl', 'a'),
+        'resource/SBX-JK v31.gob': makeGob([{ name: 'misc\\models.dat', bytes: models('SBX', SBX_MODELS) }]),
+    });
+    assert.deepEqual(setFile(set, 'misc/models.dat'), []);
+});
+
+test('a skin list is read as the engine reads it', () => {
+    const list = readList(Buffer.from('# c\r\n\r\nnummodels: 3\r\n# 0: not.3do x.snd\r\n2:\tb.3do\tb.snd\t#"B"\r\n0: a.3do a.snd\r\n1: only.3do\r\n', 'latin1'), LIST_FILES[0]);
+    assert.deepEqual(list.map(e => e.num + ' ' + e.key), ['0 a.3do', '2 b.3do']);
+    assert.equal(list[1].rest, 'b.3do\tb.snd\t#"B"');
+    assert.equal(readList(Buffer.from('0: a.3do a.snd\r\n'), LIST_FILES[0]), null);
+});
+
+test('a string table is read as the engine reads it', () => {
+    const table = readStrings(Buffer.from('# c\r\n\r\nMSGS 3\r\n  # c\r\n"A" 0 "one"\r\n"A" 0 "again"\r\n\r\n"B"\t5\t"two"\r\n"C" 0 "past the count"\r\nEND\r\n', 'latin1'));
+    assert.deepEqual(table.keys, ['A', 'B']);
+    assert.equal(table.texts.get('A'), 'one');
+    assert.equal(table.texts.get('B'), 'two');
+    assert.equal(readStrings(Buffer.from('"A" 0 "no count"\r\n')), null);
 });
 
 let failed = 0;

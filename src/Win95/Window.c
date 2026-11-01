@@ -24,6 +24,10 @@
 #include <emscripten.h>
 #endif
 
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#endif
+
 #ifdef SDL2_RENDER
 
 #include <fcntl.h> 
@@ -383,6 +387,8 @@ SDL_GLContext glWindowContext;
 
 int Window_lastXRel = 0;
 int Window_lastYRel = 0;
+static float Window_xRelLeftOver = 0.0f; // Added
+static float Window_yRelLeftOver = 0.0f; // Added
 int Window_lastSampleTime = 0;
 int Window_lastSampleMs = 0;
 int Window_bMouseLeft = 0;
@@ -551,6 +557,103 @@ static int Window_WasmLockJustTaken()
     return bLocked && SDL_GetTicks() - Window_wasmLockedAtMs < WINDOW_WASM_LOCK_SETTLE_MS;
 }
 
+// Added: Chromium (Chrome, Edge, Opera, Brave) on Windows and Linux keeps the
+// hidden cursor away from the page's edges by moving it back to the middle, unless
+// the lock has raw mouse input (index.html asks for it, and Windows has it). That
+// move can come through as one jump of about a third of the page against the way
+// the mouse is going, which snaps the view round 90 degrees or more (seen in Opera
+// on Linux). A hand can't turn that far back between two readings, so a jump of
+// a fifth of the page or more against the way the mouse went just before is
+// held back. A jump the same way as the mouse is kept, as it can be a real flick.
+// Only between readings at most 40 ms apart: when the game runs slower, one reading
+// holds a whole frame of movement, and a real quick turn the other way can be
+// that big.
+// The reading after a held jump settles it. After the cursor's trip back the mouse
+// goes on the way it was going, and the jump is left out. A real quick turn the
+// other way goes on the way of the jump, and the jump is kept, one reading late.
+// It used to be left out straight away, and so were the next readings of a real
+// turn for 40 ms: with Windows' pointer acceleration (raw mouse input unticked)
+// a quick flick back passes a fifth of the page in one reading, and lost most of
+// itself.
+EM_JS(int, Window_wasmMouseMayJump, (), {
+  var raw = Module.jkRawMouse;
+  return raw && raw.warps && !raw.active && document.pointerLockElement === Module.canvas ? 1 : 0;
+});
+
+#define WINDOW_WASM_JUMP_FRACTION (0.2)
+#define WINDOW_WASM_JUMP_RECENT_MS (40)
+#define WINDOW_WASM_JUMP_SETTLE_MS (100)
+static int Window_wasmLastXRel = 0;
+static int Window_wasmLastYRel = 0;
+static Uint64 Window_wasmLastRelMs = 0;
+static int Window_wasmHeldXRel = 0;
+static int Window_wasmHeldYRel = 0;
+static int Window_wasmHeldAxes = 0; // 1: X jumped, 2: Y jumped, 0: nothing held
+static Uint64 Window_wasmHeldMs = 0;
+
+static int Window_WasmIsBackJump(int rel, int lastRel, int size)
+{
+    int limit = (int)(size * WINDOW_WASM_JUMP_FRACTION);
+
+    if (size <= 0 || lastRel <= -limit || lastRel >= limit)
+        return 0;
+    return (rel >= limit && lastRel < 0) || (rel <= -limit && lastRel > 0);
+}
+
+static int Window_WasmGoesOn(int rel, int heldRel)
+{
+    return (heldRel > 0 && rel > 0) || (heldRel < 0 && rel < 0);
+}
+
+// Takes the cursor's jumps out of a reading, and puts back a held one that this
+// reading shows was real.
+static void Window_WasmFilterMouseJumps(int* pXRel, int* pYRel, Uint64 timestampNs)
+{
+    Uint64 ms = timestampNs / 1000000;
+    int xrel = *pXRel;
+    int yrel = *pYRel;
+    int axes = 0;
+
+    if (Window_wasmHeldAxes)
+    {
+        if (ms - Window_wasmHeldMs < WINDOW_WASM_JUMP_SETTLE_MS
+            && (!(Window_wasmHeldAxes & 1) || Window_WasmGoesOn(xrel, Window_wasmHeldXRel))
+            && (!(Window_wasmHeldAxes & 2) || Window_WasmGoesOn(yrel, Window_wasmHeldYRel)))
+        {
+            stdPlatform_Printf("Mouse: kept a quick turn of %d,%d\n", Window_wasmHeldXRel, Window_wasmHeldYRel);
+            *pXRel += Window_wasmHeldXRel;
+            *pYRel += Window_wasmHeldYRel;
+            Window_wasmLastXRel = Window_wasmHeldXRel;
+            Window_wasmLastYRel = Window_wasmHeldYRel;
+            Window_wasmLastRelMs = Window_wasmHeldMs;
+        }
+        else
+        {
+            stdPlatform_Printf("Mouse: left out a jump of %d,%d\n", Window_wasmHeldXRel, Window_wasmHeldYRel);
+        }
+        Window_wasmHeldAxes = 0;
+    }
+
+    if (Window_wasmLastRelMs && ms - Window_wasmLastRelMs < WINDOW_WASM_JUMP_RECENT_MS && Window_wasmMouseMayJump())
+    {
+        axes = (Window_WasmIsBackJump(xrel, Window_wasmLastXRel, Window_screenXSize) ? 1 : 0)
+             | (Window_WasmIsBackJump(yrel, Window_wasmLastYRel, Window_screenYSize) ? 2 : 0);
+    }
+    if (axes)
+    {
+        Window_wasmHeldXRel = xrel;
+        Window_wasmHeldYRel = yrel;
+        Window_wasmHeldAxes = axes;
+        Window_wasmHeldMs = ms;
+        *pXRel -= xrel;
+        *pYRel -= yrel;
+        return;
+    }
+    Window_wasmLastXRel = xrel;
+    Window_wasmLastYRel = yrel;
+    Window_wasmLastRelMs = ms;
+}
+
 // Every frame the game wants the mouse locked.
 static void Window_WasmKeepPointerLock()
 {
@@ -561,9 +664,19 @@ static void Window_WasmKeepPointerLock()
         // windows. Treat it as the Esc the game never got, so one press opens
         // the menu (or closes chat) as players expect, and the menu frees the
         // mouse instead of the view turning with the cursor.
-        stdPlatform_Printf("Browser released the mouse, sending Esc\n");
-        Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, 0);
-        Window_msg_main_handler(g_hWnd, WM_CHAR, VK_ESCAPE, 0);
+#ifdef PLATFORM_WSRELAY
+        // Added: but not under ?nettest's scripted player, which plays
+        // without the mouse: the menu would only hide its match from the
+        // test's screenshots.
+        if (stdComm_WSRelay_bTestInput)
+            stdPlatform_Printf("Browser released the mouse; the scripted player plays on\n");
+        else
+#endif
+        {
+            stdPlatform_Printf("Browser released the mouse, sending Esc\n");
+            Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, 0);
+            Window_msg_main_handler(g_hWnd, WM_CHAR, VK_ESCAPE, 0);
+        }
         Window_bWasmSentEsc = 1;
     }
     else if (bLocked) {
@@ -573,18 +686,35 @@ static void Window_WasmKeepPointerLock()
         // Not locked yet: back from a menu, or just gone fullscreen
         Window_wasmLockPointerNow();
     }
-    if (!bLocked)
+    if (!bLocked) {
         Window_bWasmMoveLocked = 0; // Added
+        Window_wasmLastRelMs = 0; // Added
+        Window_wasmHeldAxes = 0; // Added
+    }
 
     Window_bWasmHadPointerLock = bLocked;
 }
 
+// Added: Firefox can grant a lock after the game has already let go of the
+// mouse (it ignores a release that comes before the lock is granted), and SDL,
+// thinking it's free, never lets go again. The cursor stays hidden in the menu.
+EM_JS(int, Window_wasmFreeStrayPointerLock, (), {
+  if (document.pointerLockElement !== Module.canvas) return 0;
+  document.exitPointerLock();
+  return 1;
+});
+
 // Every frame the game frees the mouse itself.
 static void Window_WasmPointerLockReleased()
 {
+    if (Window_wasmFreeStrayPointerLock())
+        stdPlatform_Printf("Mouse: the browser locked it after the game let go, freeing it\n");
+
     Window_bWasmHadPointerLock = 0;
     Window_bWasmSentEsc = 0;
     Window_bWasmMoveLocked = 0; // Added
+    Window_wasmLastRelMs = 0; // Added
+    Window_wasmHeldAxes = 0; // Added
 }
 #endif
 
@@ -662,13 +792,28 @@ void Window_HandleMouseMove(SDL_MouseMotionEvent *event)
     // milliseconds to keep Window_lastSampleTime's units (set from SDL_GetTicks()).
     Window_lastSampleMs = (int)(event->timestamp / 1000000) - Window_lastSampleTime;
     //Window_lastSampleTime = event->timestamp;
+
+    // Added: SDL3 gives movement in fractions of a pixel. In the browser it scales
+    // the page's movement to the canvas, which comes to a fraction whenever the
+    // canvas's size in the page isn't a whole number of pixels (display scaling,
+    // browser zoom), and browsers can give fractions themselves. Each movement was
+    // cut to whole pixels and the rest lost, so a slow, small movement turned the
+    // view less than it should, or not at all. The rest is kept for the next one.
+    Window_xRelLeftOver += event->xrel;
+    Window_yRelLeftOver += event->yrel;
+    int xrel = (int)Window_xRelLeftOver;
+    int yrel = (int)Window_yRelLeftOver;
+    Window_xRelLeftOver -= xrel;
+    Window_yRelLeftOver -= yrel;
+
 #ifdef ARCH_WASM
-    if (!Window_WasmLockJustTaken()) // Added
+    if (Window_WasmLockJustTaken()) // Added
+        xrel = yrel = 0;
+    else
+        Window_WasmFilterMouseJumps(&xrel, &yrel, event->timestamp); // Added
 #endif
-    {
-        Window_lastXRel += (int)event->xrel;
-        Window_lastYRel += (int)event->yrel;
-    }
+    Window_lastXRel += xrel;
+    Window_lastYRel += yrel;
 
     Window_msg_main_handler(g_hWnd, WM_MOUSEMOVE, 0, pos);
 }
@@ -1873,6 +2018,16 @@ int Window_Main_Linux(int argc, char** argv)
     // Init SDL
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     SDL_SetHint(SDL_HINT_APP_NAME, "OpenJKDF2");
+
+#ifdef ARCH_WASM
+    // Added: while a mouse button is down SDL counts the mouse as captured and
+    // stops keeping its pointer inside the window. With the mouse locked, that
+    // pointer then wanders off with every turn made while firing, and the next
+    // click finds it outside: SDL says the mouse left the window, and the game
+    // lets go of the mouse lock and takes it again, a moment without mouse look.
+    // A page can't capture the mouse outside its window anyway.
+    SDL_SetHint(SDL_HINT_MOUSE_AUTO_CAPTURE, "0");
+#endif
 
 #if defined(TARGET_ANDROID)
     //SDL_SetHint(SDL_HINT_JOYSTICK_DEBUG, "1");

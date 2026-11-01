@@ -57,6 +57,25 @@ void sithMulti_SendChat(const char *pStr, int arg0, int arg1)
     sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, -1, 1, 1);
 }
 
+// Added: chat for one player alone (a dedicated server's "!callvote"/"!vote").
+void sithMulti_SendChatTo(const char *pStr, int arg0, int arg1, int idTo)
+{
+    uint32_t pStr_len = strlen(pStr) + 1;
+    if ( pStr_len >= 0x80 )
+        pStr_len = 128;
+
+    NETMSG_START;
+
+    NETMSG_PUSHS32(arg0);
+    NETMSG_PUSHS32(arg1);
+    NETMSG_PUSHS32(pStr_len);
+    NETMSG_PUSHSTR(pStr, pStr_len);
+
+    NETMSG_END(DSS_CHAT);
+
+    sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, idTo, 1, 1);
+}
+
 // MOTS altered
 int sithMulti_ProcessChat(SithMessage *pMsg)
 {
@@ -1297,6 +1316,7 @@ void sithMulti_Update(int msecDeltaTime)
         else if ( sithMulti_quitGameState == 2 )
         {
             sithMulti_quitGameState = 0;
+            stdPlatform_Printf("OpenJKDF2: leaving the game (kicked, or the host left)\n"); // Added
             sithMain_set_sithmode_5();
         }
     }

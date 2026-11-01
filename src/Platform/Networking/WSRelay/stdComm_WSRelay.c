@@ -16,22 +16,52 @@
 // another client, which is what GNSServer::Receive does. Through the relay,
 // packets go straight to the player named in idTo (the host for 0 or 1).
 //
+// A link goes straight between the two computers where it can, or through a
+// TURN server where they can't reach each other directly, if the relay hands
+// out credentials for one: a game in a room asks (turn) and gets them in an
+// ice line with how long they last. A client asks as soon as it has its seat,
+// and its first offer to the host waits for them, 2 s at most.
+//
+// A client and its host keep what they send each other in order across the
+// move to their link, where both say they can ({"x": {"sw": 1}}): until the
+// link is up, each sends through the relay; then it sends a switch through
+// the relay, after everything it sent that way, and the rest over the link,
+// and each holds what comes over the link until the other's switch is in. A
+// link that drops is closed at once, so nothing on it arrives after what then
+// goes through the relay, and the client offers a new one after 1, 3, 9 and
+// 27 s, then every minute, as it does when one isn't up 15 s after its offer.
+// With an older game at the other end, the link works as it did before.
+//
+// Clients link to each other too, where the lobby passes link setup between
+// them (it says "lobby links"), so a packet between two of them needn't go
+// through the host. A client that hears from another says hello to it through
+// the host, and once both have, the one with the lower id offers a link. Each
+// pair uses one path at a time, so its messages stay in the order they were
+// sent: until their link is up, packets between them go through the host as
+// before; then each switches as above, with its switch going through the host.
+// A link that drops is closed at once and tried again after 5, 15 and 45 s.
+// Two clients on a link learn each other's IP address, as a host and a client
+// do.
+//
 // Text frames are relay control lines, binary frames are game packets:
 //   us -> relay   list <game> | host <entry> | update <entry> | join <room>
 //                 welcome <id> <entry> | leave | signal <id> <data> | ping
 //                 hello <game> <name> | rejoin <room> <id> <key>
-//                 rehost <room> <key> <entry>
+//                 rehost <room> <key> <entry> | turn
 //   relay -> us   list (<room> <players> <entry>)* | hosted <room>
 //                 peer-joined <id> | peer-left <id> | welcome <id> <entry>
-//                 host-left | error <code> | signal <id> <data> | ice <data>
+//                 host-left | error <code> | signal <id> <data>
+//                 ice <data> [<seconds>] | lobby <what>*
 //                 seat <room> <id> <key> | rejoined <room> <id> | rehosted <room>
 //                 peer-lost <id> | peer-back <id> | host-lost | host-back
 // list asks for the games this game can join: those hosted by the same game
 // (jk1 or mots), and any whose host hasn't said which it runs. <entry> is a
 // hex-encoded jkMultiEntry. <data> is base64 JSON: an SDP offer or answer
 // ({"d": ...}) or an ICE candidate ({"c": ...}) for signal, and the
-// RTCPeerConnection iceServers list for ice. The JS below handles signal and
-// ice itself; the engine never sees them.
+// RTCPeerConnection iceServers list for ice, with how many seconds its TURN
+// credentials last when it has them. lobby says what the relay can do beyond
+// that: links (signal between clients) and turn (TURN credentials). The JS
+// below handles signal, ice and lobby itself; the engine never sees them.
 //
 // Game packets don't need the relay once the data channel is open, so losing
 // the socket mid-game doesn't end the match. The relay holds a seat whose
@@ -56,17 +86,52 @@
 // (packaging/wasm/mods.js). A joiner on another mod, or none, gets the
 // host's the same way, then the engine restarts into it and the player joins
 // again with that game already selected.
+//
+// packaging/wasm/netstats.js, also bundled in, sees every game packet on its
+// way in and out: it measures each link (pings, position update gaps), keeps
+// the hit ledger (stdComm_WSRelay_NoteHit), and with ?netsim makes this
+// window's packets wait as if its connection were slower. Its pings go over
+// a third data channel that never resends, which both ends only open once
+// each has said in its offer or answer ({"x": {"ns": 1}}) that it has the
+// file. When this game leaves a match, or its tab closes in one, the JS posts
+// netstats.js's summary of the match to the lobby's address (/summary): counts
+// only, with no names (net.sendSummary).
+//
+// A player's own position updates take a fast lane where both ends have one:
+// a fourth data channel ('jk-pos') that never waits for or resends a lost
+// message, opened once each end has said so ({"x": {"pos": 1}}). A player
+// sends its position about 50 times a second and each one replaces the last,
+// so on the reliable channel one lost packet held up every update behind it
+// until it was resent. Each update on the fast lane starts with a sequence
+// number, counted for each sender and receiver, and one older than an update
+// already taken from that sender is dropped, so a late one never moves a
+// player back. The host passes a joiner's on over its fast lane to the other
+// joiners with the joiner's number, or over the reliable channel without it
+// to a joiner that has no fast lane. Everything else stays on the reliable
+// channel, for the reason above.
+//
+// A joiner downloading a map or mod from the host opens a few more links to
+// it while the download runs, each its own RTCPeerConnection, since a data
+// channel carries only so much at a time (net.mapBulk).
+//
+// ?netold leaves out the fast lane, the switch, links between clients, TURN
+// and transfer links, so its links work as they did before them, to compare.
 
 #include "stdComm_WSRelay.h"
+#include "Platform/Networking/Imperial/stdComm_Imperial.h"
 
 #include "Win95/stdComm.h"
 #include "Dss/sithMulti.h"
+#include "Devices/sithComm.h"
+#include "World/sithThing.h"
 #include "Main/Main.h"
 #include "General/stdString.h"
 #include "stdPlatform.h"
+#include "version.h"
 #include "jk.h"
 
 #include <emscripten.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -102,12 +167,17 @@ extern int Main_bVerboseNetworking;
 // Asyncify has it unwound.
 EM_JS_DEPS(stdComm_WSRelay, "$UTF8ToString,$stringToUTF8,$lengthBytesUTF8");
 
-EM_JS(void, wsrelay_js_connect, (), {
+EM_JS(void, wsrelay_js_connect, (int netcode), {
     var net = Module.jkNet;
     if (!net) {
-        net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null,
-                               stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0 },
-                               log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {} };
+        net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null, netcode: netcode,
+                               stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0,
+                                        fastSent: 0, fastRecv: 0, fastOld: 0, fastBacklog: 0 },
+                               log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
+                               seqTo: {}, seqSent: {}, seqFrom: {}, links: {}, lobbyCan: [], pending: {},
+                               bulk: {}, bulkUse: {},
+                               turn: null, turnEnds: 0, iceUntil: 0, iceAsked: false, iceAskedAt: 0, iceWaiters: [],
+                               session: false, sessionNo: 0, hostTries: 0, hostRetry: null };
 
         /* The network log the page saves ("Save network log" in index.html):
            what happened to the relay and each data channel, the engine's own
@@ -133,26 +203,69 @@ EM_JS(void, wsrelay_js_connect, (), {
             var line = 'link check: relay ' + ['connecting', 'open', 'closed'][net.state];
             ids.forEach(function(id) {
                 var p = net.peers[id], heard = net.lastFrom[id];
-                line += '; player ' + id + ' ' + (p ? (p.open ? 'direct' : 'relay') + ' (' + p.pc.connectionState +
-                    ', channel ' + p.dc.readyState + ', ' + p.dc.bufferedAmount + ' bytes waiting)' : 'relay') +
+                line += '; player ' + id + ' ' + (p ? (p.open ? 'direct' : p.joiner ? 'through the host' : 'relay') + ' (' + p.pc.connectionState +
+                    ', channel ' + p.dc.readyState + ', ' + p.dc.bufferedAmount + ' bytes waiting' +
+                    (p.pos ? ', fast lane ' + p.pos.readyState : '') +
+                    (net.bulkCount(id) ? ', ' + net.bulkCount(id) + ' transfer links' : '') + ')' : 'relay') +
                     ', heard ' + (heard ? ((now - heard) / 1000).toFixed(1) + ' s ago' : 'never');
             });
-            line += '; sent ' + (s.dcSent - was.dcSent) + ' direct, ' + (s.wsSent - was.wsSent) + ' relay (' +
+            line += '; sent ' + (s.dcSent - was.dcSent) + ' direct, ' + (s.fastSent - was.fastSent) + ' fast (' +
+                    (s.fastBacklog - was.fastBacklog) + ' dropped behind a backlog), ' + (s.wsSent - was.wsSent) + ' relay (' +
                     (s.wsSkipped - was.wsSkipped) + ' positions skipped); got ' +
-                    (s.dcRecv - was.dcRecv) + ' direct, ' + (s.wsRecv - was.wsRecv) + ' relay';
-            net.healthStats = { dcSent: s.dcSent, dcRecv: s.dcRecv, wsSent: s.wsSent, wsRecv: s.wsRecv, wsSkipped: s.wsSkipped };
+                    (s.dcRecv - was.dcRecv) + ' direct, ' + (s.fastRecv - was.fastRecv) + ' fast (' +
+                    (s.fastOld - was.fastOld) + ' too old), ' + (s.wsRecv - was.wsRecv) + ' relay';
+            net.healthStats = Object.assign({}, s);
             return line;
         };
         setInterval(function() { if (net.session) net.note(net.health()); }, 10000);
 
-        /* A tab closed in a game gives up its seat at once (a socket that
-           just closes keeps it for a while) and closes its data channels, so
-           the others don't wait on it. */
+        /* A tab closed in a game sends its match summary, gives up its seat
+           at once (a socket that just closes keeps it for a while) and closes
+           its data channels, so the others don't wait on it. */
         if (typeof window !== 'undefined') window.addEventListener('pagehide', function() {
             if (!net.session) return;
+            net.sendSummary();
             if (net.state === 1) try { net.ws.send('leave'); } catch (e) {}
             net.closeAll();
         });
+
+        /* Where the match summary goes: /summary on the lobby's address. */
+        net.summaryUrl = function() {
+            var url = Module['jkSummaryUrl'] || Module['jkRelayUrl'];
+            if (!url && typeof location !== 'undefined')
+                url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
+            try {
+                var u = new URL(url);
+                if (!Module['jkSummaryUrl']) {
+                    u.protocol = u.protocol === 'wss:' ? 'https:' : u.protocol === 'ws:' ? 'http:' : u.protocol;
+                    u.pathname = u.pathname.substring(0, u.pathname.lastIndexOf('/') + 1) + 'summary';
+                }
+                u.search = "";
+                u.hash = "";
+                return u.href;
+            } catch (e) {
+                return null;
+            }
+        };
+
+        /* netstats.js's summary of the match this game is leaving (once a
+           match, and none for one too short to say anything), with
+           sendBeacon, which still goes out as the tab closes. The lobby keeps
+           it for reading back later; nothing here waits for an answer. */
+        net.sendSummary = function() {
+            var stats = Module.jkNetStats;
+            var s = stats && stats.summary ? stats.summary() : null;
+            if (!s) return false;
+            var url = net.summaryUrl(), body = JSON.stringify(s), sent = false;
+            if (url && typeof navigator !== 'undefined' && navigator.sendBeacon) {
+                try { sent = navigator.sendBeacon(url, body); } catch (e) {}
+            }
+            if (!sent && url && typeof fetch !== 'undefined') {
+                try { fetch(url, { method: 'POST', body: body, keepalive: true }).catch(function() {}); sent = true; } catch (e) {}
+            }
+            net.note('match summary ' + (sent ? 'sent' : 'not sent') + ' (' + body.length + ' bytes)');
+            return sent;
+        };
 
         net.rtcEnabled = function() {
             return Module['jkUseWebRTC'] !== false && typeof RTCPeerConnection !== 'undefined';
@@ -165,21 +278,58 @@ EM_JS(void, wsrelay_js_connect, (), {
         net.peer = function(id) {
             var p = net.peers[id];
             if (p) return p;
-            var pc = new RTCPeerConnection({ iceServers: net.ice || Module['jkIceServers'] || [] });
+            var pc;
+            try {
+                pc = new RTCPeerConnection({ iceServers: net.iceServers() });
+            } catch (e) {
+                // A server list the browser won't take: without TURN, then.
+                net.event('WebRTC refused the TURN servers (' + e + '), linking without them');
+                net.turn = null;
+                pc = new RTCPeerConnection({ iceServers: net.ice || Module['jkIceServers'] || [] });
+            }
             var dc = pc.createDataChannel('jk', { negotiated: true, id: 0 });
             dc.binaryType = 'arraybuffer';
             // Map downloads get their own channel, so one never holds up game
             // packets.
             var mc = pc.createDataChannel('jk-map', { negotiated: true, id: 1 });
             mc.binaryType = 'arraybuffer';
-            p = net.peers[id] = { pc: pc, dc: dc, mc: mc, open: false };
+            // joiner: a link between two joiners (net.linkOffer), not one with
+            // the host. sw: both ends switch to it (see the top of the file),
+            // which a link with the host does once the other end says it can
+            // (net.extraChannels).
+            var joiner = !net.isHost && id !== 1;
+            p = net.peers[id] = { pc: pc, dc: dc, mc: mc, open: false, joiner: joiner, sw: joiner };
             var update = function() {
                 if (net.peers[id] !== p) return;
                 var was = p.open;
                 var cs = pc.connectionState;
+                var why = cs + ', channel ' + dc.readyState;
                 p.open = dc.readyState === 'open' && cs !== 'disconnected' && cs !== 'failed' && cs !== 'closed';
-                if (p.open && !was) net.event('direct WebRTC link to player ' + id + ' is up');
-                if (!p.open && was) net.event('direct link to player ' + id + ' is down (' + cs + ', channel ' + dc.readyState + '), using the relay');
+                if (p.joiner) {
+                    if (p.open && !was) net.linkUp(id, p);
+                    else if (!p.open && (was || cs === 'failed' || cs === 'closed')) net.linkDown(id, p, why);
+                    return;
+                }
+                var gone = cs === 'failed' || cs === 'closed' || dc.readyState === 'closed';
+                if (p.open && !was) {
+                    net.event('direct WebRTC link to player ' + id + ' is up');
+                    p.wasUp = true;
+                    if (id === 1) net.hostTries = 0;
+                    if (p.sw) net.relaySwitch(id, p);
+                } else if (!p.open && (p.sw ? was || gone : gone && !p.wasUp)) {
+                    // Where both ends switch, a link that drops is closed at
+                    // once, so nothing on it comes in after what then goes
+                    // through the relay. One that never came up carried
+                    // nothing. The joiner offers again (net.hostLinkDown).
+                    if (net.isHost) {
+                        net.closePeer(id);
+                        net.event('direct link to player ' + id + ' is down (' + why + '), using the relay until it offers a new one');
+                    } else {
+                        net.hostLinkDown(p, why);
+                    }
+                } else if (!p.open && was) {
+                    net.event('direct link to player ' + id + ' is down (' + why + '), using the relay');
+                }
             };
             dc.onopen = update;
             dc.onclose = update;
@@ -190,42 +340,125 @@ EM_JS(void, wsrelay_js_connect, (), {
             return p;
         };
 
+        /* What this game adds to its offer or answer: that it has netstats.js,
+           so the other end may open the measurements' channel with it, that
+           it has the fast lane, that it switches to a link and back (see
+           the top of the file), and that it takes transfer links
+           (net.mapBulk). */
+        net.extras = function() {
+            var x = {};
+            if (Module.jkNetStats) x.ns = 1;
+            if (!Module['jkNetOld']) x.pos = x.sw = x.bulk = 1;
+            return x;
+        };
+
+        /* The fast lane for position updates, once both ends have said they
+           have it: unordered, and nothing lost is resent (RFC 8831 names game
+           positions as what such a channel is for). */
+        net.posChannel = function(id, p) {
+            if (p.pos || Module['jkNetOld']) return;
+            var pos = p.pos = p.pc.createDataChannel('jk-pos', { negotiated: true, id: 3, ordered: false, maxRetransmits: 0 });
+            pos.binaryType = 'arraybuffer';
+            pos.onmessage = function(ev) { if (net.peers[id] === p) net.onFastPacket(id, ev.data); };
+        };
+
+        net.posOpen = function(id) {
+            var p = net.peers[id];
+            return !!(p && p.open && p.pos && p.pos.readyState === 'open');
+        };
+
+        /* The measurements' channel, which never waits for or resends a lost
+           message, once both ends have said they have netstats.js. */
+        net.nsChannel = function(id, p) {
+            if (p.ns || !Module.jkNetStats) return;
+            var ns = p.ns = p.pc.createDataChannel('jk-ns', { negotiated: true, id: 2, ordered: false, maxRetransmits: 0 });
+            ns.binaryType = 'arraybuffer';
+            ns.onmessage = function(ev) { if (net.peers[id] === p) Module.jkNetStats.onProbe(id, ev.data); };
+        };
+
+        /* The channels the other end said it has, from its offer or answer,
+           and whether both switch. */
+        net.extraChannels = function(id, p, x) {
+            if (x && x.ns) net.nsChannel(id, p);
+            if (x && x.pos) net.posChannel(id, p);
+            if (x && x.sw && !Module['jkNetOld']) p.sw = true;
+            if (x && x.bulk && !Module['jkNetOld']) p.bulkOk = true;
+        };
+
+        net.nsOpen = function(id) {
+            var p = net.peers[id];
+            return !!(p && p.open && p.ns && p.ns.readyState === 'open');
+        };
+
+        net.nsSend = function(id, buf) {
+            if (!net.nsOpen(id)) return 0;
+            try {
+                net.peers[id].ns.send(buf);
+                return 1;
+            } catch (e) {
+                return 0;
+            }
+        };
+
         net.closePeer = function(id) {
             var p = net.peers[id];
             if (!p) return;
             delete net.peers[id];
             p.open = false;
+            // What came over it and waits for its switch still does (net.hold).
+            if (p.held && p.held.length && !p.gotSwitch) {
+                if (net.pending[id]) net.release(id, net.pending[id]);
+                net.pending[id] = p;
+            }
             try { p.dc.close(); } catch (e) {}
             try { p.mc.close(); } catch (e) {}
+            if (p.ns) try { p.ns.close(); } catch (e) {}
+            if (p.pos) try { p.pos.close(); } catch (e) {}
             try { p.pc.close(); } catch (e) {}
+            net.closeBulk(id);
         };
 
         net.closeAll = function() {
             for (var id in net.peers) net.closePeer(id);
+            for (var id in net.bulk) net.closeBulk(id);
         };
 
         net.offer = function(id) {
             var p = net.peer(id);
+            var x = net.extras();
+            // A link that switches has a key, which its switch carries.
+            if (x.sw) x.k = p.key = 1 + Math.floor(Math.random() * 4294967295);
             p.pc.createOffer()
                 .then(function(o) { return p.pc.setLocalDescription(o); })
-                .then(function() { if (net.peers[id] === p) net.signal(id, { d: p.pc.localDescription.toJSON() }); })
+                .then(function() { if (net.peers[id] === p) net.signal(id, { d: p.pc.localDescription.toJSON(), x: x }); })
                 .catch(function(e) { console.warn('OpenJKDF2: WebRTC offer to player ' + id + ' failed, using the relay: ' + e); });
         };
 
         net.onSignal = function(from, obj) {
             if (!net.rtcEnabled()) return;
+            if (obj.b !== undefined) {
+                net.onBulkSignal(from, obj);
+                return;
+            }
             var p;
             if (obj.d && obj.d.type === 'offer') {
-                if (!net.isHost) return;
+                // A host answers its joiners, a joiner another joiner with a
+                // lower id.
+                var key = obj.x && obj.x.k;
+                if (!net.isHost && !(net.linksOn() && from > 1 && from < net.myId() && key)) return;
                 net.closePeer(from);
                 p = net.peer(from);
+                p.key = key || 0;
+                net.extraChannels(from, p, obj.x);
+                net.askIce();
                 p.pc.setRemoteDescription(obj.d)
                     .then(function() { return p.pc.createAnswer(); })
                     .then(function(a) { return p.pc.setLocalDescription(a); })
-                    .then(function() { if (net.peers[from] === p) net.signal(from, { d: p.pc.localDescription.toJSON() }); })
+                    .then(function() { if (net.peers[from] === p) net.signal(from, { d: p.pc.localDescription.toJSON(), x: net.extras() }); })
                     .catch(function(e) { console.warn('OpenJKDF2: WebRTC answer to player ' + from + ' failed, using the relay: ' + e); });
             } else if (obj.d) {
                 p = net.peers[from];
+                if (p) net.extraChannels(from, p, obj.x);
                 if (p) p.pc.setRemoteDescription(obj.d).catch(function(e) { console.warn('OpenJKDF2: WebRTC answer from player ' + from + ' rejected: ' + e); });
             } else if (obj.c) {
                 p = net.peers[from];
@@ -235,25 +468,364 @@ EM_JS(void, wsrelay_js_connect, (), {
 
         /* Packets from a data channel. The host knows who is on the other end,
            so it stamps idFrom itself and forwards anything meant for another
-           client. */
+           client. netstats.js holds each one while ?netsim says to, and takes
+           its own frames out. */
         net.onPeerPacket = function(id, data) {
             if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
             net.stats.dcRecv++;
             net.lastFrom[id] = performance.now();
+            if (Module.jkNetStats) Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takePeerPacket(id, d); });
+            else net.takePeerPacket(id, data);
+        };
+
+        /* seq: the packet came on the fast lane with this number, and the
+           host passes it on over the fast lane where it can. netstats.js
+           counts it under the player who sent it, not the host that passed it
+           on. released: it waited for the link's switch (net.hold). */
+        net.takePeerPacket = function(id, data, seq, released) {
+            var p = net.peers[id];
+            // Over a link whose switch hasn't come yet. Fast lane updates
+            // don't wait: they're numbered, and come in any order anyway.
+            if (!released && seq === undefined && p && p.sw && !p.gotSwitch) {
+                if (net.isSwitch(data, p)) {
+                    net.release(id, p);
+                    return;
+                }
+                if (net.otherWayUp(p)) {
+                    net.hold(id, p, data);
+                    return;
+                }
+                // Nothing can come the other way now.
+                p.gotSwitch = true;
+            }
+            var dv = new DataView(data);
             if (net.isHost) {
-                var dv = new DataView(data);
                 dv.setUint32(0, id, true);
                 var to = dv.getUint32(4, true);
                 if (to > 1) {
-                    net.sendPacket(new Uint8Array(data), to);
+                    net.sendPacket(new Uint8Array(data), to, seq);
                     return;
                 }
+            } else if (id !== 1) {
+                // From another joiner, over a link of our own.
+                dv.setUint32(0, id, true);
             }
+            net.take(dv.getUint32(0, true), data, 'direct', seq);
+        };
+
+        /* A game packet from player `from` that's due: for this file, for
+           netstats.js, or for the engine. seq: it came on the fast lane with
+           this number, which the engine gets with it (wsrelay_js_recv): a
+           claim under Hit what you see names the update its attacker had on
+           screen (stdComm_WSRelayHits.c). */
+        net.take = function(from, data, via, seq) {
+            if (net.isLinkFrame(data)) {
+                net.onLinkFrame(from, data);
+                return;
+            }
+            if (from > 1 && !net.isHost) net.heardFrom(from);
+            if (Module.jkNetStats && Module.jkNetStats.take(from, data, via, seq !== undefined)) return;
+            if (seq !== undefined) data.jkSeq = seq;
             net.queue.push(data);
         };
 
-        net.sendPacket = function(bytes, id) {
+        /* Position updates on the fast lane: a sequence number, then the
+           packet as the reliable channel has it. They can come in any order,
+           so one older than the last taken from its sender is dropped; the
+           next is never more than a tick away. */
+        net.onFastPacket = function(id, data) {
+            if (!(data instanceof ArrayBuffer) || data.byteLength < 12) return;
+            net.stats.fastRecv++;
+            net.lastFrom[id] = performance.now();
+            if (Module.jkNetStats) Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takeFastPacket(id, d); }, true);
+            else net.takeFastPacket(id, data);
+        };
+
+        net.takeFastPacket = function(id, data) {
+            var seq = new DataView(data).getUint32(0, true);
+            var packet = data.slice(4);
+            var dv = new DataView(packet);
+            // Only the host passes on other players' packets.
+            if (id !== 1) dv.setUint32(0, id, true);
+            if (!net.freshPos(dv.getUint32(0, true), dv.getUint32(4, true), seq)) {
+                net.stats.fastOld++;
+                return;
+            }
+            net.takePeerPacket(id, packet, seq);
+        };
+
+        /* Whether a fast lane update from player `from` to player `to` is
+           newer than the last one taken. A number far behind, or one after a
+           second of nothing, means the sender started over (it left and came
+           back, or its game restarted). */
+        net.freshPos = function(from, to, seq) {
+            var key = from + ' ' + to, last = net.seqFrom[key], now = performance.now();
+            if (last && now - last.at < 1000) {
+                var ahead = (seq - last.seq) | 0;
+                if (ahead <= 0 && ahead > -1000) return false;
+            }
+            net.seqFrom[key] = { seq: seq, at: now };
+            return true;
+        };
+
+        /* The next number for this player's position updates to player `to`,
+           from a random start, so a receiver can tell a sender that started
+           over. When each of the last 256 went, so a claim that names one can
+           be checked from then (net.seqSentAt). */
+        net.nextSeq = function(to) {
+            var s = net.seqTo[to];
+            if (s === undefined) s = Math.floor(Math.random() * 4294967296);
+            s = net.seqTo[to] = (s + 1) >>> 0;
+            var sent = net.seqSent[to] || (net.seqSent[to] = { seqs: new Uint32Array(256), at: new Float64Array(256) });
+            sent.seqs[s & 255] = s;
+            sent.at[s & 255] = performance.now();
+            return s;
+        };
+
+        net.seqSentAt = function(to, seq) {
+            var sent = net.seqSent[to];
+            return sent && sent.seqs[seq & 255] === seq && sent.at[seq & 255] ? sent.at[seq & 255] : -1;
+        };
+
+        /* The link a packet for player `to` goes over: a host's go straight
+           to that player, a joiner's to the host, which passes them on, or
+           over a link of its own to that player once it has switched to it. */
+        net.route = function(to) {
+            if (net.isHost) return to;
+            var p = net.peers[to];
+            return to > 1 && p && p.joiner && p.open && p.switched ? to : 1;
+        };
+
+        /* Direct links between joiners (see the top of the file). */
+        var LINK_HELLO = 1, LINK_SWITCH = 2;
+
+        net.myId = function() {
+            return net.isHost ? 1 : net.seat ? net.seat.id : 0;
+        };
+
+        net.linksOn = function() {
+            return !!net.session && !net.isHost && net.myId() > 1 && net.rtcEnabled() && !Module['jkNetOld'] &&
+                   net.lobbyCan.indexOf('links') >= 0;
+        };
+
+        /* A frame of this file's own, which goes between joiners through the
+           host: like a game packet with message id 0x4C4A ('J' 'L'), past
+           DSS_MAX, without a resend id, so engines without this ignore it.
+           Then the type, a version, two zero bytes and the link's key. */
+        net.linkFrame = function(type, to, key) {
+            var bytes = new Uint8Array(20), dv = new DataView(bytes.buffer);
+            dv.setUint32(0, net.myId(), true);
+            dv.setUint32(4, to, true);
+            bytes.set([0x4A, 0x4C, 0, 0], 8);
+            dv.setUint8(12, type);
+            dv.setUint8(13, 1);
+            dv.setUint32(16, key || 0, true);
+            return bytes;
+        };
+
+        net.isLinkFrame = function(data) {
+            if (data.byteLength < 20) return false;
+            var b = new Uint8Array(data, 8, 4);
+            return b[0] === 0x4A && b[1] === 0x4C && b[2] === 0 && b[3] === 0;
+        };
+
+        /* Another joiner's packet came: says hello to it the first time. */
+        net.heardFrom = function(from) {
+            var l = net.links[from], now = performance.now();
+            if (l) {
+                l.heardAt = now;
+                return;
+            }
+            if (from === net.myId() || !net.linksOn()) return;
+            net.links[from] = { tries: 0, retryAt: 0, heardAt: now };
+            net.sendPacket(net.linkFrame(LINK_HELLO, from), 1);
+        };
+
+        net.onLinkFrame = function(from, data) {
+            var dv = new DataView(data);
+            if (dv.getUint8(13) !== 1) return;
+            var type = dv.getUint8(12), key = dv.getUint32(16, true);
+            if (type === LINK_HELLO && from > 1) {
+                // Both have said hello: the lower id offers.
+                net.heardFrom(from);
+                if (net.links[from] && net.myId() < from) net.linkOffer(from);
+            } else if (type === LINK_SWITCH && key) {
+                // For the link that's up, or one that closed while it waited.
+                var p = net.peers[from];
+                if (!(p && p.sw && p.key === key)) p = net.pending[from];
+                if (p && p.sw && p.key === key) net.release(from, p);
+            }
+        };
+
+        /* A link's own switch, sent over the link because it couldn't go the
+           other way. */
+        net.isSwitch = function(data, p) {
+            if (!net.isLinkFrame(data)) return false;
+            var dv = new DataView(data);
+            return dv.getUint8(12) === LINK_SWITCH && dv.getUint8(13) === 1 && dv.getUint32(4, true) === net.myId() &&
+                   !!p.key && dv.getUint32(16, true) === p.key;
+        };
+
+        /* Whether packets from the player on link p can still come the way
+           they came before it: through the host for a link between joiners,
+           through the relay for a link with the host. */
+        net.otherWayUp = function(p) {
+            var host = net.peers[1];
+            return net.state === 1 || (p.joiner && !!host && host.open);
+        };
+
+        net.linkOffer = function(id) {
+            var l = net.links[id], now = performance.now();
+            if (!l || net.peers[id] || now < l.retryAt || l.tries >= 4 || now - l.heardAt > 5000 || !net.linksOn()) return;
+            l.tries++;
+            net.askIce();
+            net.offer(id);
             var p = net.peers[id];
+            setTimeout(function() {
+                if (net.peers[id] === p && !p.open) net.linkDown(id, p, 'not up after 15 s');
+            }, 15000);
+        };
+
+        net.linkUp = function(id, p) {
+            net.event('direct WebRTC link to player ' + id + ' (a joiner) is up');
+            // It counts as the first try, so one that drops is tried again
+            // after 5 s, 15 s and 45 s, as a new one is (net.linkDown).
+            if (net.links[id]) net.links[id].tries = 1;
+            // Everything sent to them so far went through the host. The switch
+            // goes the same way, after it, and the rest over the link. With
+            // no way through the host, nothing is on the way there.
+            var frame = net.linkFrame(LINK_SWITCH, id, p.key);
+            if (!net.sendPacket(frame, 1)) try { p.dc.send(frame); } catch (e) {}
+            p.switched = true;
+        };
+
+        /* The same for a link with the host: what went before it went
+           through the relay, so the switch does too (on the same netsim line
+           as the packets before it), or over the link if the relay is down. */
+        net.relaySwitch = function(id, p) {
+            var frame = net.linkFrame(LINK_SWITCH, id, p.key);
+            var send = function(b) {
+                if (net.state === 1) {
+                    net.ws.send(b);
+                    return 1;
+                }
+                try {
+                    p.dc.send(b);
+                    return 1;
+                } catch (e) {
+                    return 0;
+                }
+            };
+            if (Module.jkNetStats) Module.jkNetStats.outbound(id, frame, send);
+            else send(frame);
+            p.switched = true;
+        };
+
+        /* A joiner's link with its host: offered once it has TURN credentials
+           (net.withIce), and again after 1 s, 3 s, 9 s, 27 s and then every
+           minute if it isn't up 15 s after an offer, or drops where both ends
+           switch. Meanwhile its packets go through the relay. */
+        var HOST_RETRY_MS = [1000, 3000, 9000, 27000, 60000];
+        net.hostOffer = function() {
+            var no = net.sessionNo;
+            net.withIce(function() {
+                if (!net.session || net.sessionNo !== no || net.isHost || net.peers[1] || !net.rtcEnabled()) return;
+                net.offer(1);
+                var p = net.peers[1];
+                setTimeout(function() {
+                    if (net.peers[1] === p && !p.open && !p.wasUp) net.hostLinkDown(p, 'not up after 15 s');
+                }, 15000);
+            });
+        };
+
+        net.hostLinkDown = function(p, why) {
+            if (net.peers[1] !== p) return;
+            net.closePeer(1);
+            var wait = HOST_RETRY_MS[Math.min(net.hostTries, HOST_RETRY_MS.length - 1)];
+            net.hostTries++;
+            net.event('direct link to the host is down (' + why + '), using the relay; offering a new one in ' + wait / 1000 + ' s');
+            var no = net.sessionNo;
+            clearTimeout(net.hostRetry);
+            net.hostRetry = setTimeout(function() {
+                net.hostRetry = null;
+                if (net.sessionNo === no) net.hostOffer();
+            }, wait);
+        };
+
+        /* A link that drops is closed at once, so nothing sent over it comes
+           in after what goes through the host instead, and the joiner with
+           the lower id tries again after 5 s, 15 s and 45 s. */
+        net.linkDown = function(id, p, why) {
+            if (net.peers[id] !== p) return;
+            net.closePeer(id);
+            net.event('direct link to player ' + id + ' (a joiner) is down (' + why + '), going through the host');
+            var l = net.links[id];
+            if (!l || net.myId() > id) return;
+            var wait = 5000 * Math.pow(3, Math.max(0, l.tries - 1));
+            l.retryAt = performance.now() + wait;
+            setTimeout(function() { net.linkOffer(id); }, wait + 10);
+        };
+
+        /* What comes over a link before the other end's switch: what it sent
+           the other way before the link came up may still be on the way, so
+           these wait, in order, until the switch arrives (3 s at most). */
+        net.hold = function(id, p, data) {
+            p.held = p.held || [];
+            p.held.push(data);
+            var no = net.sessionNo;
+            if (!p.holdTimer) p.holdTimer = setTimeout(function() {
+                if (p.gotSwitch || net.sessionNo !== no) return;
+                net.event('no switch from player ' + id + ' after 3 s, taking what came over the link');
+                net.release(id, p);
+            }, 3000);
+        };
+
+        net.release = function(id, p) {
+            if (p.gotSwitch) return;
+            p.gotSwitch = true;
+            clearTimeout(p.holdTimer);
+            if (net.pending[id] === p) delete net.pending[id];
+            var held = p.held || [];
+            p.held = [];
+            held.forEach(function(d) { net.takePeerPacket(id, d, undefined, true); });
+        };
+
+        /* Once the relay is gone, nothing more comes through it. */
+        net.releaseRelayHolds = function() {
+            var waiting = Object.keys(net.peers).map(function(id) { return [id, net.peers[id]]; })
+                .concat(Object.keys(net.pending).map(function(id) { return [id, net.pending[id]]; }));
+            waiting.forEach(function(w) {
+                if (w[1].sw && !w[1].gotSwitch && !net.otherWayUp(w[1])) net.release(parseInt(w[0], 10), w[1]);
+            });
+        };
+
+        /* seq: one of this player's own position updates, or one the host
+           passes on, with its number: it goes on the fast lane if that's
+           open, and the reliable channel or the relay without it if not. */
+        net.sendPacket = function(bytes, id, seq) {
+            var fast = seq !== undefined && net.posOpen(id);
+            if (Module.jkNetStats) return Module.jkNetStats.outbound(id, bytes, function(b) { return net.sendNow(b, id, fast ? seq : undefined); }, fast);
+            return net.sendNow(bytes, id, fast ? seq : undefined);
+        };
+
+        net.sendNow = function(bytes, id, seq) {
+            var p = net.peers[id];
+            if (seq !== undefined && net.posOpen(id)) {
+                // Behind a backlog (a slow or stalled link) it would be out of
+                // date by the time it got there; the next one will do.
+                if (p.pos.bufferedAmount > 4096) {
+                    net.stats.fastBacklog++;
+                    return 1;
+                }
+                try {
+                    var framed = new Uint8Array(4 + bytes.byteLength);
+                    new DataView(framed.buffer).setUint32(0, seq, true);
+                    framed.set(bytes, 4);
+                    p.pos.send(framed);
+                    net.stats.fastSent++;
+                    return 1;
+                } catch (e) {}
+            }
             if (p && p.open) {
                 try {
                     p.dc.send(bytes);
@@ -279,10 +851,11 @@ EM_JS(void, wsrelay_js_connect, (), {
            next one is never more than a tick away and replaces it. Only
            those: DSS_THINGPOS (1) sent without resends (msgId 0), 52 or 64
            bytes long, which only a player's is (sithDSSThing_Pos adds the
-           head pitch for players). Direct links get them all. */
+           head pitch for players), or 60 or 72 with its time
+           (stdComm_WSRelayMotion.c). Direct links get them all. */
         net.skipRelayedPos = function(bytes) {
-            var n = bytes.byteLength;
-            if (n !== 8 + 4 + 52 && n !== 8 + 4 + 64) return false;
+            var n = bytes.byteLength, body = n - 8 - 4;
+            if (body !== 52 && body !== 64 && body !== 60 && body !== 72) return false;
             var dv = new DataView(bytes.buffer, bytes.byteOffset, n);
             if (dv.getUint16(8, true) !== 1 || dv.getUint16(10, true) !== 0) return false;
             var key = dv.getUint32(4, true) + ' ' + dv.getInt32(12, true);
@@ -297,6 +870,17 @@ EM_JS(void, wsrelay_js_connect, (), {
            went, or null. */
         net.mapSend = function(id, bytes, via) {
             var p = net.peers[id];
+            var n = net.bulkNumber(via);
+            if (n) {
+                var l = (net.bulk[id] || {})[n];
+                if (!l || !net.bulkOpen(l)) return null;
+                try {
+                    l.mc.send(bytes);
+                    return via;
+                } catch (e) {
+                    return null;
+                }
+            }
             if (via !== 'relay' && net.mapDirect(id)) {
                 try {
                     p.mc.send(bytes);
@@ -313,14 +897,228 @@ EM_JS(void, wsrelay_js_connect, (), {
             return !!(p && p.open && p.mc.readyState === 'open');
         };
 
+        /* Transfer links: more links to the host while a map or mod download
+           runs. A data channel carries only so much at a time however fast
+           the connection (in Chrome about 2 MB/s at a 50 ms round trip,
+           packaging/wasm/test/transfer-bench.mjs), and each RTCPeerConnection
+           has its own, so maps.js asks for these while it downloads
+           (net.mapBulk) and spreads the download over them and the map
+           channel (net.mapLanes), each lane named 'direct' and its number.
+           Each is a connection of its own with only a map channel, whose
+           signals carry its number ({"b": n}). A joiner offers them only to
+           a host that said it takes them ({"x": {"bulk": 1}}): one from
+           before them would take the offer for the main link. They close
+           20 s after the last download, or with the main link. */
+        var BULK_LINKS = 3, BULK_IDLE_MS = 20000, BULK_UP_MS = 15000, BULK_RETRY_MS = 30000, BULK_HOST_MAX = 12;
+
+        net.bulkNumber = function(via) {
+            var m = /^direct([1-9])$/.exec(via || '');
+            return m && +m[1] <= BULK_LINKS ? +m[1] : 0;
+        };
+
+        net.bulkOpen = function(l) {
+            var cs = l.pc.connectionState;
+            return l.mc.readyState === 'open' && cs !== 'disconnected' && cs !== 'failed' && cs !== 'closed';
+        };
+
+        net.bulkCount = function(id) {
+            var n = 0;
+            if (id === undefined) {
+                for (var k in net.bulk) n += net.bulkCount(k);
+                return n;
+            }
+            for (var k in net.bulk[id] || {}) n++;
+            return n;
+        };
+
+        /* A new transfer link with player id, number n, in place of any
+           before it. */
+        net.bulkLink = function(id, n) {
+            var pc;
+            try {
+                pc = new RTCPeerConnection({ iceServers: net.iceServers() });
+            } catch (e) {
+                pc = new RTCPeerConnection({ iceServers: net.ice || Module['jkIceServers'] || [] });
+            }
+            var mc = pc.createDataChannel('jk-map', { negotiated: true, id: 1 });
+            mc.binaryType = 'arraybuffer';
+            net.closeBulkLink(id, n);
+            var links = net.bulk[id] = net.bulk[id] || {};
+            var l = links[n] = { pc: pc, mc: mc, at: performance.now() };
+            var mine = function() { return !!net.bulk[id] && net.bulk[id][n] === l; };
+            var via = 'direct' + n;
+            mc.onmessage = function(ev) { if (mine() && Module.jkMaps) Module.jkMaps.onFrame(id, ev.data, via); };
+            mc.onopen = function() { if (mine()) net.note('transfer link ' + n + ' to player ' + id + ' is up'); };
+            pc.onicecandidate = function(ev) { if (ev.candidate && mine()) net.signal(id, { b: n, c: ev.candidate.toJSON() }); };
+            var update = function() {
+                var cs = pc.connectionState;
+                if (cs === 'failed' || cs === 'closed' || mc.readyState === 'closed') net.closeBulkLink(id, n, l);
+            };
+            pc.onconnectionstatechange = update;
+            mc.onclose = update;
+            return l;
+        };
+
+        /* Closes link n with player id, if it's still l when l is given. */
+        net.closeBulkLink = function(id, n, l) {
+            var links = net.bulk[id];
+            if (!links || !links[n] || (l && links[n] !== l)) return;
+            l = links[n];
+            delete links[n];
+            try { l.mc.close(); } catch (e) {}
+            try { l.pc.close(); } catch (e) {}
+        };
+
+        net.closeBulk = function(id) {
+            for (var n in net.bulk[id] || {}) net.closeBulkLink(id, n);
+            delete net.bulk[id];
+        };
+
+        /* maps.js downloading from player id (on) or done (off). While any
+           download runs the joiner keeps up to BULK_LINKS links to it. */
+        net.mapBulk = function(id, on) {
+            var w = net.bulkUse[id] = net.bulkUse[id] || { n: 0, idle: null, tried: {} };
+            clearTimeout(w.idle);
+            w.idle = null;
+            if (on) {
+                w.n++;
+                net.bulkOffer(id);
+                return;
+            }
+            if (w.n > 0) w.n--;
+            if (!w.n) w.idle = setTimeout(function() {
+                w.idle = null;
+                if (!w.n) net.closeBulk(id);
+            }, BULK_IDLE_MS);
+        };
+
+        /* Offers the links a download could use and doesn't have: once the
+           main link is up, again for one that isn't up after BULK_UP_MS, and
+           at most every BULK_RETRY_MS for each. */
+        net.bulkOffer = function(id) {
+            var w = net.bulkUse[id], p = net.peers[id];
+            if (!w || !w.n || !p || !p.bulkOk || net.isHost || !net.mapDirect(id) || Module['jkNetOld'] || net.state !== 1) return;
+            var now = performance.now();
+            var links = net.bulk[id] || {};
+            for (var n = 1; n <= BULK_LINKS; n++) {
+                var l = links[n];
+                if (l && (net.bulkOpen(l) || now - l.at < BULK_UP_MS)) continue;
+                if (w.tried[n] !== undefined && now - w.tried[n] < BULK_RETRY_MS) continue;
+                w.tried[n] = now;
+                (function(n) {
+                    var l = net.bulkLink(id, n);
+                    l.pc.createOffer()
+                        .then(function(o) { return l.pc.setLocalDescription(o); })
+                        .then(function() { if ((net.bulk[id] || {})[n] === l) net.signal(id, { b: n, d: l.pc.localDescription.toJSON() }); })
+                        .catch(function(e) { net.closeBulkLink(id, n, l); });
+                })(n);
+            }
+        };
+
+        /* The ways to player id a download can use now: the map channel and
+           the transfer links that are up, or none for the relay. */
+        net.mapLanes = function(id) {
+            net.bulkOffer(id);
+            var lanes = net.mapDirect(id) ? ['direct'] : [];
+            var links = net.bulk[id] || {};
+            for (var n = 1; n <= BULK_LINKS; n++) {
+                if (links[n] && net.bulkOpen(links[n])) lanes.push('direct' + n);
+            }
+            return lanes;
+        };
+
+        /* A transfer link's offer, answer or ICE candidate. The host answers
+           its joiners' offers, BULK_HOST_MAX links at most at once. */
+        net.onBulkSignal = function(from, obj) {
+            var n = obj.b;
+            if (typeof n !== 'number' || n !== (n | 0) || n < 1 || n > BULK_LINKS || Module['jkNetOld']) return;
+            var l = (net.bulk[from] || {})[n];
+            if (obj.d && obj.d.type === 'offer') {
+                if (!net.isHost || from < 2 || !net.peers[from]) return;
+                if (!l && net.bulkCount() >= BULK_HOST_MAX) return;
+                l = net.bulkLink(from, n);
+                l.pc.setRemoteDescription(obj.d)
+                    .then(function() { return l.pc.createAnswer(); })
+                    .then(function(a) { return l.pc.setLocalDescription(a); })
+                    .then(function() { if ((net.bulk[from] || {})[n] === l) net.signal(from, { b: n, d: l.pc.localDescription.toJSON() }); })
+                    .catch(function(e) { net.closeBulkLink(from, n, l); });
+            } else if (obj.d && l) {
+                l.pc.setRemoteDescription(obj.d).catch(function(e) { net.closeBulkLink(from, n, l); });
+            } else if (obj.c && l) {
+                l.pc.addIceCandidate(obj.c).catch(function() {});
+            }
+        };
+
+        /* TURN. A lobby that says "turn" hands out short-lived credentials
+           for a TURN server to a game in a room that asks ('turn'), in an
+           ice line with how many seconds they last. A link set up without
+           them can't go through TURN, so a joiner asks as soon as it has its
+           seat, and its first link with the host waits for them (2 s at
+           most); a host asks when someone joins. A game asks again for links
+           it sets up once half their time is up. */
+        net.askIce = function() {
+            var now = performance.now();
+            if (Module['jkNetOld'] || net.lobbyCan.indexOf('turn') < 0 || now < net.iceUntil || net.state !== 1) return false;
+            if (!net.iceAskedAt || now - net.iceAskedAt > 10000) {
+                net.iceAskedAt = now;
+                net.iceAsked = true;
+                net.ws.send('turn');
+            }
+            return true;
+        };
+
+        net.withIce = function(fn) {
+            if (!net.askIce()) {
+                fn();
+                return;
+            }
+            var done = false;
+            var go = function() {
+                if (done) return;
+                done = true;
+                fn();
+            };
+            net.iceWaiters.push(go);
+            setTimeout(go, 2000);
+        };
+
+        net.onIce = function(data, seconds) {
+            var servers = null;
+            try { servers = JSON.parse(atob(data)); } catch (e) {}
+            var now = performance.now();
+            if (servers && seconds > 0) {
+                net.turn = servers;
+                net.turnEnds = now + seconds * 1000;
+                net.iceUntil = now + seconds * 500;
+            } else if (servers) {
+                // What every game gets on connect, or the lobby's answer when
+                // it couldn't get credentials, which it isn't asked for again
+                // for a minute.
+                net.ice = servers;
+                if (net.iceAsked) net.iceUntil = now + 60000;
+            }
+            net.iceAsked = false;
+            var waiters = net.iceWaiters;
+            net.iceWaiters = [];
+            waiters.forEach(function(go) { go(); });
+        };
+
+        /* The servers a new link uses: TURN credentials while they work. */
+        net.iceServers = function() {
+            return (performance.now() < net.turnEnds && net.turn) || net.ice || Module['jkIceServers'] || [];
+        };
+
         /* Returns true for the lines JS handles itself. */
         net.onText = function(text) {
             var sp = text.indexOf(' ');
             var op = sp < 0 ? text : text.substring(0, sp);
             if (op === 'ice') {
-                try { net.ice = JSON.parse(atob(text.substring(sp + 1))); } catch (e) {}
+                var ice = text.split(' ');
+                net.onIce(ice[1], parseInt(ice[2], 10));
                 return true;
             }
+            /* The host's credentials for the link the new player offers. */
+            if (op === 'peer-joined') net.askIce();
             if (op === 'signal') {
                 var parts = text.split(' ');
                 var obj = null;
@@ -328,10 +1126,17 @@ EM_JS(void, wsrelay_js_connect, (), {
                 if (obj) net.onSignal(parseInt(parts[1], 10), obj);
                 return true;
             }
+            /* What the lobby can do beyond the basics: links (passing link
+               setup between joiners). */
+            if (op === 'lobby') {
+                net.lobbyCan = text.split(' ').slice(1);
+                return true;
+            }
             /* The seat to take back if the socket drops in a game. */
             if (op === 'seat') {
                 var seat = text.split(' ');
                 net.seat = { room: parseInt(seat[1], 10), id: parseInt(seat[2], 10), key: seat[3] || "" };
+                if (net.seat.id > 1) net.askIce();
                 return true;
             }
             /* A player whose data channel is still up is still playing: the
@@ -401,7 +1206,11 @@ EM_JS(void, wsrelay_js_connect, (), {
             var url = Module['jkRelayUrl'];
             if (!url && typeof location !== 'undefined')
                 url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
+            /* The netcode this build speaks (STDCOMM_WSRELAY_NETCODE): the
+               lobby only lists and joins games whose host speaks the same. */
+            if (url) url += (url.indexOf('?') < 0 ? '?' : '&') + 'net=' + net.netcode;
             if (!keepQueue) net.queue = [];
+            net.lobbyCan = [];
             net.state = 0;
             var ws;
             try {
@@ -436,6 +1245,7 @@ EM_JS(void, wsrelay_js_connect, (), {
                 if (keepalive) clearInterval(keepalive);
                 if (net.ws !== ws) return;
                 net.state = 2;
+                net.releaseRelayHolds();
                 if (net.session) {
                     net.event('lost the relay (code ' + ev.code + (ev.reason ? ', ' + ev.reason : "") +
                               '), trying again in ' + Math.round(net.rejoinMs / 1000) + ' s');
@@ -457,7 +1267,12 @@ EM_JS(void, wsrelay_js_connect, (), {
                     return;
                 } else {
                     net.stats.wsRecv++;
-                    if (ev.data.byteLength >= 8) net.lastFrom[new DataView(ev.data).getUint32(0, true)] = performance.now();
+                    if (ev.data.byteLength < 8) return;
+                    var from = new DataView(ev.data).getUint32(0, true);
+                    net.lastFrom[from] = performance.now();
+                    if (Module.jkNetStats) Module.jkNetStats.inbound(from, ev.data, 'relay', function(d) { if (net.ws === ws) net.take(from, d, 'relay'); });
+                    else net.take(from, ev.data, 'relay');
+                    return;
                 }
                 net.queue.push(ev.data);
             };
@@ -488,12 +1303,13 @@ EM_JS(int, wsrelay_js_send_text, (const char* pText), {
     return 1;
 });
 
-// Sends a game packet over the data channel to player routeId if it's open,
-// else through the relay.
-EM_JS(int, wsrelay_js_send_packet, (const void* pData, int len, int routeId), {
+// Sends a game packet for player idTo over the link it takes (net.route): a
+// data channel if it's open, else the relay. ownPos marks this player's own
+// position updates, which take the fast lane where there is one.
+EM_JS(int, wsrelay_js_send_packet, (const void* pData, int len, int idTo, int ownPos), {
     var net = Module.jkNet;
     if (!net) return 0;
-    return net.sendPacket(HEAPU8.slice(pData, pData + len), routeId);
+    return net.sendPacket(HEAPU8.slice(pData, pData + len), net.route(idTo), ownPos ? net.nextSeq(idTo) : undefined);
 });
 
 // Starts a session's WebRTC side: a client offers a data channel to the host,
@@ -503,20 +1319,41 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     if (!net) return;
     net.closeAll();
     net.session = true;
+    net.sessionNo++;
     net.isHost = !!isHost;
     net.lastFrom = {};
     net.relayPosAt = {};
+    net.seqTo = {};
+    net.seqSent = {};
+    net.seqFrom = {};
+    net.links = {};
+    net.pending = {};
+    net.hostTries = 0;
+    clearTimeout(net.hostRetry);
+    net.hostRetry = null;
     net.healthStats = null;
+    if (Module.jkNetStats) Module.jkNetStats.start(isHost);
     net.note((isHost ? 'hosting' : 'joined') + ' room ' + (net.seat ? net.seat.room + ' as player ' + net.seat.id : '(no seat from the relay)'));
-    if (!isHost && net.rtcEnabled()) net.offer(1);
+    if (!isHost && net.rtcEnabled()) net.hostOffer();
 });
 
 EM_JS(void, wsrelay_js_rtc_end, (), {
     var net = Module.jkNet;
     if (!net) return;
+    // While its links are still up, which the summary names.
+    if (net.session) net.sendSummary();
     net.closeAll();
+    if (net.session && Module.jkNetStats) {
+        net.note('netstats at the end: ' + Module.jkNetStats.text().join(' / '));
+        Module.jkNetStats.end();
+    }
     if (net.session) net.note('left the game');
     net.session = false;
+    net.sessionNo++;
+    net.links = {};
+    net.pending = {};
+    clearTimeout(net.hostRetry);
+    net.hostRetry = null;
     net.isHost = false;
     net.seat = null;
     net.rejoinMs = 1000;
@@ -616,16 +1453,107 @@ EM_JS(void, wsrelay_js_mod_describe, (const char* pTail, char* pOut, int maxLen)
     stringToUTF8(Module.jkMods ? Module.jkMods.describe(UTF8ToString(pTail)) : "", pOut, maxLen);
 });
 
-// Pops one queued message into pOut. Returns its length, or -1 if the queue is
-// empty. Text is NUL-terminated (maxLen includes the terminator).
-EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText), {
+// The measurements (packaging/wasm/netstats.js): whether this game is in a
+// match now, and as which player.
+EM_JS(void, wsrelay_js_net_live, (int live, int id, int isHost), {
+    if (Module.jkNetStats) Module.jkNetStats.live(live, id, isHost);
+});
+
+// A player's name, for the network panel.
+EM_JS(void, wsrelay_js_net_name, (int id, const char16_t* pName), {
+    if (!Module.jkNetStats) return;
+    var chars = [];
+    for (var i = 0; i < 32; i++) {
+        var ch = HEAPU16[(pName >> 1) + i];
+        if (!ch) break;
+        chars.push(ch);
+    }
+    Module.jkNetStats.name(id, String.fromCharCode.apply(null, chars));
+});
+
+// The match's rules and reach, whether this game runs MotS, and its build,
+// for the match summary.
+EM_JS(void, wsrelay_js_net_facts, (int rules, int reachMs, int mots, const char* pBuild), {
+    if (Module.jkNetStats && Module.jkNetStats.facts) Module.jkNetStats.facts(rules, reachMs, !!mots, UTF8ToString(pBuild));
+});
+
+// The hello version this game and player id agreed on, 0 for none
+// (stdComm_WSRelay_HelloWith), for the match summary.
+EM_JS(void, wsrelay_js_net_hello, (int id, int version), {
+    if (Module.jkNetStats && Module.jkNetStats.hello) Module.jkNetStats.hello(id, version);
+});
+
+// A hit between this game's player and player otherId (stdComm_WSRelay_NoteHit),
+// with WSRELAY_HITFLAG_*, and for a claim this game turned down, why
+// (reason) and how close its player came (distance, -1 if not checked). For
+// a claim that named a moment, how far back that was when this game checked
+// it (ageMs, -1 otherwise).
+EM_JS(void, wsrelay_js_net_hit, (int otherId, int mine, int kind, int outcome, float damage, int flags, uint32_t attack, int reason, float distance, float ageMs), {
+    if (Module.jkNetStats) Module.jkNetStats.hit(otherId, !!mine, kind, outcome, damage, flags, attack >>> 0, reason, distance, ageMs);
+});
+
+// How player otherId was drawn from their buffer over the last second
+// (stdComm_WSRelay_NoteMotion).
+EM_JS(void, wsrelay_js_net_motion, (int otherId, double bufferMs, int steps, int carried, int held, int jumps, int warps, int restarts), {
+    if (Module.jkNetStats && Module.jkNetStats.motion)
+        Module.jkNetStats.motion(otherId, { buffer: bufferMs, steps: steps, carried: carried, held: held, jumps: jumps, warps: warps, restarts: restarts });
+});
+
+// Whether this game needs player otherId's clock (stdComm_WSRelay_SyncClock),
+// and their clock less this one's, NaN if unknown.
+EM_JS(void, wsrelay_js_net_sync, (int otherId, int on), {
+    if (Module.jkNetStats && Module.jkNetStats.sync) Module.jkNetStats.sync(otherId, !!on);
+});
+
+EM_JS(double, wsrelay_js_net_clock, (int otherId), {
+    return Module.jkNetStats && Module.jkNetStats.clockOffset ? Module.jkNetStats.clockOffset(otherId) : NaN;
+});
+
+// When this game sent player `to` its position update numbered seq
+// (net.nextSeq), or -1 if it no longer knows.
+EM_JS(double, wsrelay_js_seq_sent_at, (int to, uint32_t seq), {
     var net = Module.jkNet;
-    if (!net || !net.queue.length) return -1;
-    var data = net.queue.shift();
+    return net ? net.seqSentAt(to, seq >>> 0) : -1;
+});
+
+// The clock net.nextSeq notes those times by.
+EM_JS(double, wsrelay_js_now, (), {
+    return performance.now();
+});
+
+// Pops one queued message into pOut. Returns its length, or -1 if the queue is
+// empty. Text is NUL-terminated (maxLen includes the terminator). pSeq gets
+// whether a game packet came on the fast lane, and its number (net.take).
+EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText, int* pSeq), {
+    var net = Module.jkNet;
+    if (!net) return -1;
+    /* Taken from the front by position, not with shift(): once the array holds
+       more than about 16,000 messages, Chromium copies all of it on each
+       shift(), so draining a backlog that size took seconds. Taken slots are
+       cleared; the array is emptied once all are taken, or trimmed once at
+       least half are. */
+    var queue = net.queue, taken = queue.taken | 0;
+    if (taken >= queue.length) return -1;
+    var data = queue[taken];
+    queue[taken++] = undefined;
+    if (taken === queue.length) {
+        queue.length = 0;
+        taken = 0;
+    } else if (taken >= 1024 && taken * 2 >= queue.length) {
+        queue.splice(0, taken);
+        taken = 0;
+    }
+    queue.taken = taken;
+    HEAP32[pSeq >> 2] = 0;
+    HEAP32[(pSeq >> 2) + 1] = 0;
     if (typeof data === 'string') {
         stringToUTF8(data, pOut, maxLen);
         HEAP32[pIsText >> 2] = 1;
         return Math.min(lengthBytesUTF8(data), maxLen - 1);
+    }
+    if (data.jkSeq !== undefined) {
+        HEAP32[pSeq >> 2] = 1;
+        HEAP32[(pSeq >> 2) + 1] = data.jkSeq | 0;
     }
     var bytes = new Uint8Array(data);
     var len = Math.min(bytes.length, maxLen);
@@ -635,6 +1563,8 @@ EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText), {
 });
 
 static uint8_t wsrelay_recvBuf[WSRELAY_MAX_RECV];
+// Whether the packet in wsrelay_recvBuf came on the fast lane, and its number.
+static int32_t wsrelay_aRecvSeq[2];
 static uint8_t wsrelay_sendBuf[WSRELAY_MAX_PACKET];
 static char wsrelay_textBuf[1024];
 
@@ -645,6 +1575,8 @@ static int wsrelay_bJoined = 0;       // the host welcomed us into its room
 static int wsrelay_bHostLeft = 0;      // the relay says the host left
 static int wsrelay_bSeatLost = 0;      // the relay wouldn't give our seat back
 static uint32_t wsrelay_msecRelayLost = 0; // when the relay went in a game, 0 while it's up
+// Why the relay turned our join down: 1 for no room or anything else, 2
+// full, 3 and 4 its host speaks a newer or an older netcode.
 static int wsrelay_joinError = 0;
 static int wsrelay_room = -1;
 static uint32_t wsrelay_id = 0xFFFFFFFF;
@@ -652,10 +1584,27 @@ static uint32_t wsrelay_id = 0xFFFFFFFF;
 static int wsrelay_aDisconnected[64];
 static int wsrelay_numDisconnected = 0;
 
+// What netstats.js was last told about the match (wsrelay_WatchMatch).
+static int wsrelay_bNetLive = 0;
+static uint32_t wsrelay_msecNamesSent = 0;
+
+// Saber swings (stdComm_WSRelay_NewSwing): the one each player's blade was
+// last turned on for, by player slot, and the last number this game gave.
+static uint32_t wsrelay_aSwing[JKPLAYER_NUM_INFOS];
+static uint32_t wsrelay_lastSwing = 0;
+// When this game's own player last swung, on the motion clock.
+static double wsrelay_ownSwingAt = 0.0;
+int stdComm_WSRelay_fireGuid = 0;
+
 // A host's players the relay says left while their data channel is still up.
 // They count as gone once it goes down (or sithMulti times them out).
 static int wsrelay_aLeftPending[64];
 static int wsrelay_numLeftPending = 0;
+
+// A host's players it welcomed who don't have a player slot yet, while they
+// load the level. Their slots are spoken for (wsrelay_HasFreeSlot).
+static int wsrelay_aWelcomed[64];
+static int wsrelay_numWelcomed = 0;
 
 static jkMultiEntry wsrelay_storedEntry;      // the game we host
 static jkMultiEntry wsrelay_storedEntryEnum;  // the game we joined
@@ -676,6 +1625,23 @@ static char wsrelay_aListTails[WSRELAY_MAX_LISTED][WSRELAY_MAX_TAIL_HEX + 1];
 static int wsrelay_numShown = 0;
 static int wsrelay_aShownRooms[WSRELAY_MAX_LISTED];
 static char wsrelay_aShownTails[WSRELAY_MAX_LISTED][WSRELAY_MAX_TAIL_HEX + 1];
+
+// The hit rules each listed game's host plays by, as its entry says
+// (wsrelay_EntryHits): rules | reach ms << 8, or -1 if it doesn't say.
+static int wsrelay_aListHits[WSRELAY_MAX_LISTED];
+static int wsrelay_aShownHits[WSRELAY_MAX_LISTED];
+
+// The hit rules an entry says its host plays by, or -1 for an older host's,
+// which plays by Classic.
+static int wsrelay_EntryHits(const jkMultiEntry* pEntry, int* pReachMs)
+{
+    if (pEntry->guidInstance.c != STDCOMM_WSRELAY_HITS_ENTRY_MAGIC)
+        return -1;
+    int rules = (pEntry->guidInstance.d & 0xFF) == STDCOMM_WSRELAY_HITS_HWYS ? STDCOMM_WSRELAY_HITS_HWYS : STDCOMM_WSRELAY_HITS_CLASSIC;
+    if (pReachMs)
+        *pReachMs = stdComm_WSRelay_ClampReach((int)(pEntry->guidInstance.d >> 8));
+    return rules;
+}
 
 static void wsrelay_ToHex(const void* pData, int len, char* pOut)
 {
@@ -740,11 +1706,17 @@ static int wsrelay_SendText(const char* pText)
     return wsrelay_js_send_text(pText);
 }
 
-// Only a host sends entries, each followed by its mod tail.
+// Only a host sends entries, each followed by its mod tail. Each says what
+// hit rules the host plays by (STDCOMM_WSRELAY_HITS_ENTRY_MAGIC).
 static void wsrelay_SendEntry(const char* pOp, int id, const jkMultiEntry* pEntry)
 {
     char hex[sizeof(jkMultiEntry)*2 + 1];
-    wsrelay_ToHex(pEntry, sizeof(jkMultiEntry), hex);
+    jkMultiEntry entry = *pEntry;
+    int reachMs = 0;
+    int rules = stdComm_WSRelay_GetHitRules(&reachMs);
+    entry.guidInstance.c = STDCOMM_WSRELAY_HITS_ENTRY_MAGIC;
+    entry.guidInstance.d = (uint32_t)rules | ((uint32_t)reachMs << 8);
+    wsrelay_ToHex(&entry, sizeof(jkMultiEntry), hex);
     if (id >= 0)
         snprintf(wsrelay_textBuf, sizeof(wsrelay_textBuf), "%s %d %s%s", pOp, id, hex, wsrelay_hostTail);
     else
@@ -766,6 +1738,12 @@ static void wsrelay_ResetSession()
     wsrelay_id = 0xFFFFFFFF;
     wsrelay_numDisconnected = 0;
     wsrelay_numLeftPending = 0;
+    wsrelay_numWelcomed = 0;
+    wsrelay_bNetLive = 0;
+    wsrelay_msecNamesSent = 0;
+    memset(wsrelay_aSwing, 0, sizeof(wsrelay_aSwing));
+    stdComm_WSRelay_ResetHits();
+    stdComm_WSRelay_ResetMotion();
     wsrelay_js_rtc_end();
     wsrelay_js_map_unhost();
     wsrelay_js_mod_unhost();
@@ -788,6 +1766,51 @@ static int wsrelay_RealConnectedPlayers()
     return amt;
 }
 
+static void wsrelay_Unwelcome(int id)
+{
+    for (int i = 0; i < wsrelay_numWelcomed; )
+    {
+        if (wsrelay_aWelcomed[i] == id)
+            wsrelay_aWelcomed[i] = wsrelay_aWelcomed[--wsrelay_numWelcomed];
+        else
+            i++;
+    }
+}
+
+// Whether a player welcomed now would get a slot. sithMulti only answers
+// "Too many players" once a joiner has loaded the level, so without this the
+// player past the last free slot loaded it all for "That game is full", and
+// two players joining for the last slot both did, for one of them.
+static int wsrelay_HasFreeSlot()
+{
+    // Players welcomed earlier who now have their slot aren't waiting for one.
+    for (int i = 0; i < wsrelay_numWelcomed; )
+    {
+        int bSeated = 0;
+        for (int j = 0; j < jkPlayer_maxPlayers; j++)
+        {
+            if ((jkPlayer_playerInfos[j].flags & 2) && jkPlayer_playerInfos[j].playerNetId == (uint32_t)wsrelay_aWelcomed[i])
+            {
+                bSeated = 1;
+                break;
+            }
+        }
+        if (bSeated)
+            wsrelay_aWelcomed[i] = wsrelay_aWelcomed[--wsrelay_numWelcomed];
+        else
+            i++;
+    }
+
+    // The slots sithMulti gives joiners.
+    int numFree = 0;
+    for (int j = 0; j < jkPlayer_maxPlayers; j++)
+    {
+        if ((jkPlayer_playerInfos[j].flags & 2) && !jkPlayer_playerInfos[j].playerNetId)
+            numFree++;
+    }
+    return numFree > wsrelay_numWelcomed;
+}
+
 static void wsrelay_UpdateLobby()
 {
     if (!wsrelay_bHosting) return;
@@ -808,7 +1831,26 @@ static void wsrelay_WelcomePeer(int id)
     entry.numPlayers = wsrelay_RealConnectedPlayers();
     entry.maxPlayers = wsrelay_storedEntry.maxPlayers;
 
-    jkPlayer_maxPlayers = wsrelay_storedEntry.maxPlayers; // Hack?
+    // Hack? Holds joins to the session's limit. Added: only ever lower it.
+    // The level's player starts are the most it can take (sithPlayer_PlacePlayers),
+    // and slots past them can still be marked as having a start from a bigger
+    // level earlier, with no player thing behind them.
+    if (wsrelay_storedEntry.maxPlayers > 0 && jkPlayer_maxPlayers > (uint32_t)wsrelay_storedEntry.maxPlayers)
+        jkPlayer_maxPlayers = wsrelay_storedEntry.maxPlayers;
+
+    // Added: with no slot left, a player count at the limit, which the
+    // joiner takes as full before loading anything (stdComm_Open). Whoever
+    // had this id before is gone, waiting or not.
+    wsrelay_Unwelcome(id);
+    if (!wsrelay_HasFreeSlot())
+    {
+        stdPlatform_Printf("OpenJKDF2: No player slot left for client id %x; it's told the game is full.\n", id);
+        entry.numPlayers = entry.maxPlayers;
+    }
+    else if (wsrelay_numWelcomed < 64)
+    {
+        wsrelay_aWelcomed[wsrelay_numWelcomed++] = id;
+    }
 
     wsrelay_SendEntry("welcome", id, &entry);
 }
@@ -824,6 +1866,7 @@ static void wsrelay_PeerLeft(int id)
         else
             i++;
     }
+    wsrelay_Unwelcome(id);
 
     // Only report players who finished joining, like GNSServer.
     for (int i = 0; i < jkPlayer_maxPlayers; i++)
@@ -893,6 +1936,10 @@ static void wsrelay_HandleList(char* pArgs)
         int room = atoi(pTok);
         wsrelay_aListRooms[n] = room;
         pEntry->numPlayers = atoi(pPlayers);
+
+        int reachMs = 0;
+        int rules = wsrelay_EntryHits(pEntry, &reachMs);
+        wsrelay_aListHits[n] = rules < 0 ? -1 : (rules | (reachMs << 8));
 
         // The join screen keeps its selection by guidInstance, so each room
         // needs its own.
@@ -1006,6 +2053,11 @@ static void wsrelay_HandleText(char* pText)
             wsrelay_storedEntryEnum.field_E0 = 10;
             strcpy(wsrelay_storedTailEnum, tail);
 
+            // The host's hit rules (its hello says so again in the match).
+            int reachMs = STDCOMM_WSRELAY_REACH_DEFAULT;
+            int rules = wsrelay_EntryHits(&entry, &reachMs);
+            stdComm_WSRelay_SetHitRules(rules < 0 ? STDCOMM_WSRELAY_HITS_CLASSIC : rules, reachMs);
+
             // Hack?
             sithMulti_multiModeFlags = wsrelay_storedEntryEnum.multiModeFlags;
             sithNet_MultiModeFlags = wsrelay_storedEntryEnum.multiModeFlags;
@@ -1025,9 +2077,17 @@ static void wsrelay_HandleText(char* pText)
     else if (!strcmp(pOp, "error"))
     {
         char* pCode = strtok_r(NULL, " ", &pSave);
-        stdPlatform_Printf("OpenJKDF2: Relay error: %s\n", pCode ? pCode : "?");
+        char* pDetail = strtok_r(NULL, " ", &pSave);
+        stdPlatform_Printf("OpenJKDF2: Relay error: %s%s%s\n", pCode ? pCode : "?", pDetail ? " " : "", pDetail ? pDetail : "");
         if (wsrelay_bJoining)
-            wsrelay_joinError = (pCode && !strcmp(pCode, "full")) ? 2 : 1;
+        {
+            if (pCode && !strcmp(pCode, "full"))
+                wsrelay_joinError = 2;
+            else if (pCode && !strcmp(pCode, "version"))
+                wsrelay_joinError = (pDetail && !strcmp(pDetail, "older")) ? 4 : 3;
+            else
+                wsrelay_joinError = 1;
+        }
         if (wsrelay_bHostPending)
             wsrelay_bHostPending = 0;
         // Our seat wasn't held (or not by this relay), so it can't reach
@@ -1042,8 +2102,9 @@ static void wsrelay_HandleText(char* pText)
 static void wsrelay_PumpControl()
 {
     int isText = 0;
+    int32_t aSeq[2];
     int len;
-    while ((len = wsrelay_js_recv(wsrelay_recvBuf, sizeof(wsrelay_recvBuf), &isText)) >= 0)
+    while ((len = wsrelay_js_recv(wsrelay_recvBuf, sizeof(wsrelay_recvBuf), &isText, aSeq)) >= 0)
     {
         if (isText)
             wsrelay_HandleText((char*)wsrelay_recvBuf);
@@ -1118,7 +2179,7 @@ static int wsrelay_EnsureOpen(int timeoutMs)
     if (wsrelay_js_state() == WSRELAY_STATE_OPEN)
         return 1;
 
-    wsrelay_js_connect();
+    wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
     uint32_t until = stdPlatform_GetTimeMsec() + timeoutMs;
     while (stdPlatform_GetTimeMsec() < until)
     {
@@ -1151,6 +2212,7 @@ void stdComm_WSRelay_Startup()
 {
     jkGuiMultiplayer_numConnections = 1;
     jk_snwprintf(jkGuiMultiplayer_aConnections[0].name, 0x80, u"OpenJKDF2 Relay");
+    stdComm_Imperial_Startup(); // Added: the Imperial Network Protocol, the second connection
     stdComm_dword_8321E0 = 0;
 
     memset(jkGuiMultiplayer_aEntries, 0, sizeof(jkMultiEntry) * 32);
@@ -1166,7 +2228,7 @@ void stdComm_WSRelay_Startup()
     // Counted in the landing page's live counts from the start, not only once
     // the player opens the Join screen.
     wsrelay_js_presence(jkPlayer_playerShortName, &Main_bMotsCompat);
-    wsrelay_js_connect();
+    wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
 }
 
 void stdComm_WSRelay_Shutdown()
@@ -1217,8 +2279,288 @@ static const char* wsrelay_HostGoneReason()
     return NULL;
 }
 
+int stdComm_WSRelay_RecvSeq(uint32_t* pSeq)
+{
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection's
+        return stdComm_Imperial_RecvSeq(pSeq);
+    *pSeq = (uint32_t)wsrelay_aRecvSeq[1];
+    return wsrelay_aRecvSeq[0];
+}
+
+double stdComm_WSRelay_SeqSentAt(int toId, uint32_t seq)
+{
+    if (stdComm_Imperial_bActive) // Added: as above
+        return stdComm_Imperial_SeqSentAt(toId, seq);
+    return wsrelay_js_seq_sent_at(toId, seq);
+}
+
+// Added: the lobby's links resend and keep order; the Imperial Network
+// Protocol's desktops are on UDP.
+int stdComm_WSRelay_HitsResend()
+{
+    return stdComm_Imperial_bActive;
+}
+
+double stdComm_WSRelay_Now()
+{
+    return wsrelay_js_now();
+}
+
+void stdComm_WSRelay_SyncClock(int netId, int bOn)
+{
+    // Added: netstats.js pings over the lobby's links; the Imperial Network
+    // Protocol connection measures its players' clocks itself.
+    if (netId && stdComm_Imperial_bActive)
+        stdComm_Imperial_SyncClock(netId, bOn);
+    else if (netId)
+        wsrelay_js_net_sync(netId, bOn);
+}
+
+double stdComm_WSRelay_ClockOffset(int netId)
+{
+    if (stdComm_Imperial_bActive) // Added: as above
+        return netId ? stdComm_Imperial_ClockOffset(netId) : NAN;
+    return netId ? wsrelay_js_net_clock(netId) : NAN;
+}
+
+int stdComm_WSRelay_InMatch()
+{
+    // Added: or in an Imperial Network Protocol game (stdComm_Imperial.c)
+    if ((!wsrelay_bHosting && !wsrelay_bJoined && !stdComm_Imperial_InGame()) || !sithNet_isMulti || !sithWorld_g_pCurrentWorld || !sithPlayer_g_pLocalPlayerThing)
+        return 0;
+
+    // A joiner is in once the host has welcomed it into the level
+    // (sithMulti_ProcessWelcome clears this). Before that, the host would
+    // drop it for sending anything (sithMessage_ProcessMessages).
+    return stdComm_bIsServer || !(g_submodeFlags & 8);
+}
+
+// Tells netstats.js when this game is in a match, which is when it pings the
+// other players and keeps the hit ledger, and who they are. And for its match
+// summary, the rules, and which hello version this game agreed with each.
+static void wsrelay_WatchMatch()
+{
+    int live = stdComm_WSRelay_InMatch();
+    if (live != wsrelay_bNetLive)
+    {
+        wsrelay_bNetLive = live;
+        wsrelay_js_net_live(live, stdComm_bIsServer ? 1 : (int)wsrelay_id, stdComm_bIsServer);
+    }
+    if (!live)
+        return;
+
+    // Players come and go, and can change their names.
+    uint32_t now = stdPlatform_GetTimeMsec();
+    if (wsrelay_msecNamesSent && now - wsrelay_msecNamesSent < 2000)
+        return;
+    wsrelay_msecNamesSent = now ? now : 1;
+    int reachMs = 0;
+    int rules = stdComm_WSRelay_GetHitRules(&reachMs);
+    // First: it starts a roll call, and the players named after it are the
+    // ones still in the match.
+    wsrelay_js_net_facts(rules, reachMs, Main_bMotsCompat, openjkdf2_aReleaseCommitShort);
+    for (int i = 0; i < jkPlayer_maxPlayers; i++)
+    {
+        if ((jkPlayer_playerInfos[i].flags & 1) && jkPlayer_playerInfos[i].playerNetId)
+        {
+            wsrelay_js_net_name(jkPlayer_playerInfos[i].playerNetId, jkPlayer_playerInfos[i].player_name);
+            wsrelay_js_net_hello(jkPlayer_playerInfos[i].playerNetId, stdComm_WSRelay_HelloWith(i));
+        }
+    }
+}
+
+static int wsrelay_PlayerSlot(SithThing* pPlayer)
+{
+    if (!pPlayer || pPlayer->type != SITH_THING_PLAYER || !pPlayer->actorParams.pPlayer)
+        return -1;
+    intptr_t slot = pPlayer->actorParams.pPlayer - jkPlayer_playerInfos;
+    return (slot >= 0 && slot < JKPLAYER_NUM_INFOS) ? (int)slot : -1;
+}
+
+void stdComm_WSRelay_NewSwing(SithThing* pPlayer)
+{
+    int slot = wsrelay_PlayerSlot(pPlayer);
+    if (slot < 0)
+        return;
+    // Never 0, which stands for a swing without a number.
+    if (!++wsrelay_lastSwing)
+        wsrelay_lastSwing = 1;
+    wsrelay_aSwing[slot] = wsrelay_lastSwing;
+    if (pPlayer == sithPlayer_g_pLocalPlayerThing)
+        wsrelay_ownSwingAt = stdComm_WSRelay_MotionNow();
+}
+
+double stdComm_WSRelay_OwnSwingAt()
+{
+    return wsrelay_ownSwingAt;
+}
+
+void stdComm_WSRelay_SetSwing(SithThing* pPlayer, uint32_t swing)
+{
+    int slot = wsrelay_PlayerSlot(pPlayer);
+    if (slot >= 0)
+        wsrelay_aSwing[slot] = swing;
+}
+
+uint32_t stdComm_WSRelay_GetSwing(SithThing* pPlayer)
+{
+    int slot = wsrelay_PlayerSlot(pPlayer);
+    return slot >= 0 ? wsrelay_aSwing[slot] : 0;
+}
+
+// What the hit ledger hears about a hit (wsrelay_js_net_hit): it was decided
+// by a message from the attacker's game (targeted Force), it was a claim
+// (stdComm_WSRelayHits.c), and this game's block against a player it claims
+// hits on, which is final.
+#define WSRELAY_HITFLAG_BY_MESSAGE (1)
+#define WSRELAY_HITFLAG_BY_CLAIM (2)
+#define WSRELAY_HITFLAG_DECIDED (4)
+// A claim that named the moment the target was drawn at, and one whose
+// moment was further back than the reach (STDCOMM_WSRELAY_MOMENT_*).
+#define WSRELAY_HITFLAG_MOMENT (8)
+#define WSRELAY_HITFLAG_PAST_REACH (16)
+
+static int wsrelay_MomentFlags(int moment)
+{
+    if (moment == STDCOMM_WSRELAY_MOMENT_PAST_REACH)
+        return WSRELAY_HITFLAG_MOMENT | WSRELAY_HITFLAG_PAST_REACH;
+    return moment == STDCOMM_WSRELAY_MOMENT_AT ? WSRELAY_HITFLAG_MOMENT : 0;
+}
+
+int stdComm_WSRelay_HitKind(SithThing* pSource, int damageType)
+{
+    if (damageType & SITH_DAMAGE_SABER)
+        return STDCOMM_WSRELAY_KIND_SABER;
+    if (pSource->type == SITH_THING_EXPLOSION)
+        return STDCOMM_WSRELAY_KIND_SPLASH;
+    if (damageType & SITH_DAMAGE_FORCE)
+        return STDCOMM_WSRELAY_KIND_FORCE;
+    if (pSource->type == SITH_THING_WEAPON)
+        return STDCOMM_WSRELAY_KIND_SHOT;
+    return STDCOMM_WSRELAY_KIND_OTHER;
+}
+
+void stdComm_WSRelay_NoteHit(SithThing* pVictim, SithThing* pSource, flex_t damage, int damageType, int outcome)
+{
+    // Whoever fired the shot, set off the explosion or swung the saber.
+    if (pSource)
+        stdComm_WSRelay_NoteHitBy(pVictim, sithThing_GetThingParent(pSource), pSource, damage, damageType, outcome);
+}
+
+void stdComm_WSRelay_NoteHitBy(SithThing* pVictim, SithThing* pAttacker, SithThing* pSource, flex_t damage, int damageType, int outcome)
+{
+    SithThing* pLocal = sithPlayer_g_pLocalPlayerThing;
+    if (!wsrelay_bNetLive || !pLocal || !pVictim || !pSource || pVictim->type != SITH_THING_PLAYER)
+        return;
+    if (!pAttacker || pAttacker == pVictim || pAttacker->type != SITH_THING_PLAYER)
+        return;
+
+    // Only this game's own player's hits on others, which it shows, and hits
+    // on its player, which it decides.
+    int mine = (pAttacker == pLocal);
+    if (!mine && pVictim != pLocal)
+        return;
+
+    SithThing* pOther = mine ? pVictim : pAttacker;
+    int otherId = pOther->actorParams.pPlayer ? (int)pOther->actorParams.pPlayer->playerNetId : 0;
+    if (!otherId)
+        return;
+
+    // A targeted Force power this game checked is in the ledger already
+    // (stdComm_WSRelay_ForceTakes), not the damage it does.
+    if (!mine && stdComm_WSRelay_ApplyingForce())
+        return;
+
+    int flags = 0;
+    int claimKind = 0;
+    uint32_t claimAttack = 0;
+    float distance = -1.0f;
+    int claimMoment = STDCOMM_WSRELAY_MOMENT_NONE;
+    float claimAgeMs = -1.0f;
+    int bApplying = stdComm_WSRelay_ApplyingClaim(&claimKind, &claimAttack, &distance, &claimMoment, &claimAgeMs);
+    if (!mine && !bApplying && stdComm_WSRelay_DecidedElsewhere(pSource, damageType))
+    {
+        // Hit what you see: the attacker's game decides this one, and its
+        // claim gets the receipt. What happens here only shows.
+        return;
+    }
+    if (mine && outcome == STDCOMM_WSRELAY_BLOCK && stdComm_WSRelay_ClaimsTo(pVictim))
+    {
+        // And this game's blocks against a player it claims hits on are
+        // final: no receipt comes for them.
+        flags |= WSRELAY_HITFLAG_DECIDED;
+    }
+
+    // A player who's dead in this game shows nothing. The victim's game says
+    // so, for hits its player took after dying there.
+    if (pVictim->flags & (SITH_TF_DISABLED|SITH_TF_DEAD|SITH_TF_DESTROYED))
+    {
+        if (mine)
+            return;
+        outcome = STDCOMM_WSRELAY_DEAD;
+    }
+
+    int kind = stdComm_WSRelay_HitKind(pSource, damageType);
+
+    // Targeted Force powers (SkillTarget) reach the victim's game as a cog
+    // message, and the host can damage anyone with DSS_DAMAGE. The message
+    // decided those, not this game's simulation.
+    if (sithComm_msgInProgress == DSS_SENDTRIGGER || sithComm_msgInProgress == DSS_DAMAGE)
+        flags |= WSRELAY_HITFLAG_BY_MESSAGE;
+
+    // The attack, by a number both games know: the saber swing, or the shot's
+    // id, a thrown saber's too (MotS's Saber Throw), and that shot's for the
+    // blast where it hits, which does saber damage too: as its claim names it
+    // (hits_Classify). 0 for the rest, which the ledger matches by time
+    // instead.
+    uint32_t attack = 0;
+    if (pSource->type == SITH_THING_WEAPON && (kind == STDCOMM_WSRELAY_KIND_SHOT || kind == STDCOMM_WSRELAY_KIND_SABER))
+        attack = (uint32_t)(stdComm_WSRelay_fireGuid ? stdComm_WSRelay_fireGuid : pSource->guid);
+    else if (pSource->type == SITH_THING_EXPLOSION && kind == STDCOMM_WSRELAY_KIND_SABER)
+        attack = (uint32_t)stdComm_WSRelay_BlastShot(pSource);
+    else if (kind == STDCOMM_WSRELAY_KIND_SABER)
+        attack = stdComm_WSRelay_GetSwing(pAttacker);
+
+    // A claim's damage, which hit this game's player by the attacker's
+    // account: the claim says what it was.
+    if (bApplying)
+    {
+        kind = claimKind;
+        attack = claimAttack;
+        flags = WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(claimMoment);
+    }
+
+    wsrelay_js_net_hit(otherId, mine, kind, outcome, (float)damage, flags, attack, 0, distance, bApplying ? claimAgeMs : -1.0f);
+}
+
+void stdComm_WSRelay_NoteTurnedDown(int otherId, int kind, int outcome, flex_t damage, uint32_t attack, int reason, float distance, int moment, float ageMs)
+{
+    if (!wsrelay_bNetLive || !otherId)
+        return;
+    wsrelay_js_net_hit(otherId, 0, kind, outcome, (float)damage, WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), attack, reason, distance, ageMs);
+}
+
+void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float distance, int moment, float ageMs)
+{
+    if (!wsrelay_bNetLive || !otherId)
+        return;
+    wsrelay_js_net_hit(otherId, 0, STDCOMM_WSRELAY_KIND_FORCE, outcome, 0.0f,
+                       WSRELAY_HITFLAG_BY_MESSAGE | WSRELAY_HITFLAG_BY_CLAIM | wsrelay_MomentFlags(moment), 0, reason, distance, ageMs);
+}
+
+void stdComm_WSRelay_NoteMotion(int otherId, double bufferMs, uint32_t steps, uint32_t carried, uint32_t held,
+                                uint32_t jumps, uint32_t warps, uint32_t restarts)
+{
+    if (!wsrelay_bNetLive || !otherId)
+        return;
+    wsrelay_js_net_motion(otherId, bufferMs, (int)steps, (int)carried, (int)held, (int)jumps, (int)warps, (int)restarts);
+}
+
 int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_Receive(pIdOut, pMsgIdOut, pLenOut);
+
     int maxLen = *pLenOut;
     *pIdOut = 0;
     *pLenOut = 0;
@@ -1226,6 +2568,7 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
     Hack_ResetClients();
 
     wsrelay_WatchRelay();
+    wsrelay_WatchMatch();
     if (stdComm_bIsServer)
         wsrelay_CheckLeftPending();
 
@@ -1251,7 +2594,7 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
         }
 
         int isText = 0;
-        int len = wsrelay_js_recv(wsrelay_recvBuf, sizeof(wsrelay_recvBuf), &isText);
+        int len = wsrelay_js_recv(wsrelay_recvBuf, sizeof(wsrelay_recvBuf), &isText, wsrelay_aRecvSeq);
         if (len < 0)
             break;
 
@@ -1291,8 +2634,27 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
     return -1;
 }
 
+// This player's own position update, which sithMulti_CheckPlayers sends to
+// each player about 50 times a second: DSS_THINGPOS for its own thing without
+// a resend id, 52 or 64 bytes (sithDSSThing_Pos adds the head pitch for
+// players), or 60 or 72 with its time (stdComm_WSRelayMotion.c). Positions of
+// other things, and those a cog sends with a resend id (a teleport), stay on
+// the reliable channel.
+static int wsrelay_IsOwnPosition(const void* pData, uint32_t size)
+{
+    const uint8_t* p = (const uint8_t*)pData;
+    if (size != 4 + 52 && size != 4 + 64 && size != 4 + 60 && size != 4 + 72)
+        return 0;
+    if (*(const uint16_t*)&p[0] != DSS_THINGPOS || *(const uint16_t*)&p[2] != 0)
+        return 0;
+    return sithPlayer_g_pLocalPlayerThing && *(const int32_t*)&p[4] == sithPlayer_g_pLocalPlayerThing->guid;
+}
+
 BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_Send(idFrom, idTo, lpData, dwDataSize);
+
     Hack_ResetClients();
 
     if (!wsrelay_bHosting && !wsrelay_bJoined)
@@ -1312,8 +2674,8 @@ BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)
 
     wsrelay_verbosePrintf("Sent %x bytes to %x (%s, %x)\n", dwDataSize+8, idTo, sithDSS_IdToStr(*(uint32_t*)lpData & 0xFF), *(uint32_t*)lpData);
 
-    // Clients only have a data channel to the host, which forwards for them.
-    int ret = wsrelay_js_send_packet(wsrelay_sendBuf, dwDataSize+8, stdComm_bIsServer ? idTo : 1);
+    // A joiner's packets go to the host, which forwards them (net.route).
+    int ret = wsrelay_js_send_packet(wsrelay_sendBuf, dwDataSize+8, idTo, wsrelay_IsOwnPosition(lpData, dwDataSize));
 
     // A host reports success even with nobody to send to, like GNSServer::Send.
     if (stdComm_bIsServer)
@@ -1323,12 +2685,24 @@ BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)
 
 int stdComm_OpenConnection(void* a)
 {
+    // Added: the second connection is the Imperial Network Protocol's
+    stdComm_Imperial_bActive = ((intptr_t)a == STDCOMM_IMPERIAL_CONNECTION);
+    if (stdComm_Imperial_bActive)
+        return stdComm_Imperial_OpenConnection();
+
     stdComm_dword_8321DC = 1;
     return 0;
 }
 
 void stdComm_CloseConnection()
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_CloseConnection();
+        stdComm_Imperial_bActive = 0;
+        return;
+    }
+
     if ( stdComm_dword_8321DC )
     {
         if ( stdComm_dword_8321E0 )
@@ -1344,6 +2718,9 @@ void stdComm_CloseConnection()
 
 int stdComm_Open(int idx, char16_t* pwPassword)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_Open(idx, pwPassword);
+
     DirectPlay_EnumSessions2();
 
     stdComm_dword_8321E8 = 0;
@@ -1378,7 +2755,19 @@ int stdComm_Open(int idx, char16_t* pwPassword)
         int err = wsrelay_joinError;
         wsrelay_SendText("leave");
         wsrelay_ResetSession();
+        if (err == 3 || err == 4)
+            return (err == 3) ? STDCOMM_WSRELAY_NEWER : STDCOMM_WSRELAY_OLDER;
         return (err == 2) ? 0x8877014A : 0x80004005; // GUINET_GAMEFULL / GUINET_NOGAMECONNECT
+    }
+
+    // Added: the host has no player slot for us (wsrelay_WelcomePeer). Told
+    // now, before the level loads, and not by sithMulti after it.
+    if (wsrelay_storedEntryEnum.maxPlayers > 0 && wsrelay_storedEntryEnum.numPlayers >= wsrelay_storedEntryEnum.maxPlayers)
+    {
+        stdPlatform_Printf("OpenJKDF2: Room %d is full.\n", wsrelay_aShownRooms[idx]);
+        wsrelay_SendText("leave");
+        wsrelay_ResetSession();
+        return 0x8877014A; // GUINET_GAMEFULL
     }
 
     wsrelay_room = wsrelay_aShownRooms[idx];
@@ -1425,6 +2814,12 @@ int stdComm_Open(int idx, char16_t* pwPassword)
 
 void stdComm_Close()
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_Close();
+        return;
+    }
+
     if (wsrelay_bHosting || wsrelay_bHostPending || wsrelay_bJoined || wsrelay_bJoining)
         wsrelay_SendText("leave");
     wsrelay_ResetSession();
@@ -1437,12 +2832,26 @@ int DirectPlay_SendLobbyMessage(void* pPkt, uint32_t pktLen)
 
 void DirectPlay_SetSessionDesc(const char* a1, DWORD maxPlayers)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_SetSessionDesc(a1, maxPlayers);
+        return;
+    }
+
     _strncpy(wsrelay_storedEntry.mapJklFname, jkMain_aLevelJklFname, 0x20);
+    // Added: jkMain passes the smaller of the host's limit and the level's
+    // player starts, which is what JK.EXE's DirectPlay session showed and held
+    // joins to. The lobby used to get the host's own number, so a 16-start map
+    // hosted for 32 read "3/32" and turned the 17th player away.
+    if (maxPlayers > 0 && maxPlayers <= JKPLAYER_NUM_INFOS)
+        wsrelay_storedEntry.maxPlayers = maxPlayers;
     wsrelay_UpdateLobby();
 }
 
 BOOL DirectPlay_SetSessionFlagidk(int a1)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_SetSessionFlagidk(a1);
     return 1;
 }
 
@@ -1460,6 +2869,8 @@ int DirectPlay_EarlyInit(char16_t* pwIdk, char16_t* pwPlayerName)
 
 DPID DirectPlay_CreatePlayer(char16_t* pwIdk, int idk2)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_CreatePlayer(pwIdk);
     return 1;
 }
 
@@ -1469,6 +2880,9 @@ void DirectPlay_Close()
 
 int DirectPlay_OpenHost(jkMultiEntry* pEntry)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_OpenHost(pEntry);
+
     wsrelay_storedEntry = *pEntry;
 
     jkPlayer_maxPlayers = pEntry->maxPlayers; // Hack?
@@ -1476,6 +2890,11 @@ int DirectPlay_OpenHost(jkMultiEntry* pEntry)
     stdComm_bIsServer = 1;
 
     wsrelay_ResetSession();
+
+    // The host's choice of hit rules, which its entry lists and every game in
+    // its match plays by.
+    stdComm_WSRelay_SetHitRules(stdComm_WSRelay_bClassicHits ? STDCOMM_WSRELAY_HITS_CLASSIC : STDCOMM_WSRELAY_HITS_HWYS,
+                                stdComm_WSRelay_hitReachMs);
 
     // Without a relay the game still runs, just with nobody able to join,
     // which is what hosting did before this backend existed.
@@ -1516,6 +2935,9 @@ int DirectPlay_OpenHost(jkMultiEntry* pEntry)
 
 int DirectPlay_GetSession_passwordidk(jkMultiEntry* pEntry)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_GetSession_passwordidk(pEntry);
+
     wsrelay_storedEntry = *pEntry;
 
     jkPlayer_maxPlayers = pEntry->maxPlayers; // Hack?
@@ -1530,6 +2952,9 @@ int DirectPlay_EnumSessions2()
 
 int stdComm_EnumSessions(int a, void* b)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_EnumSessions();
+
     Hack_ResetClients();
 
     // Ask again soon instead of every 5 seconds, like the GNS enum thread.
@@ -1538,7 +2963,7 @@ int stdComm_EnumSessions(int a, void* b)
     if (wsrelay_js_state() != WSRELAY_STATE_OPEN)
     {
         // Don't block the menu on a connect; the next poll picks it up.
-        wsrelay_js_connect();
+        wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
     }
     else
     {
@@ -1559,6 +2984,7 @@ int stdComm_EnumSessions(int a, void* b)
         jkGuiMultiplayer_aEntries[i] = wsrelay_aListEntries[i];
         wsrelay_aShownRooms[i] = wsrelay_aListRooms[i];
         strcpy(wsrelay_aShownTails[i], wsrelay_aListTails[i]);
+        wsrelay_aShownHits[i] = wsrelay_aListHits[i];
 
         // Back from restarting into this game's mod: select it again. The join
         // screen keeps whichever entry has this guid selected.
@@ -1576,11 +3002,18 @@ int stdComm_EnumSessions(int a, void* b)
 
 void DirectPlay_EnumPlayers(int a)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_EnumPlayers();
+        return;
+    }
     Hack_ResetClients();
 }
 
 int DirectPlay_StartSession(void* a, void* b)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        stdComm_Imperial_EnumPlayers();
     return 1;
 }
 
@@ -1590,11 +3023,45 @@ void DirectPlay_Destroy()
 
 int DirectPlay_IdkSessionDesc(jkMultiEntry* pEntry)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_IdkSessionDesc(pEntry);
     return 1;
+}
+
+void stdComm_WSRelay_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars)
+{
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_DescribeHits(idx, bShort, pOut, maxChars);
+        return;
+    }
+
+    char text[64];
+    text[0] = 0;
+    if (idx >= 0 && idx < wsrelay_numShown)
+    {
+        // An older host's entry doesn't say: it plays by Classic.
+        int hits = wsrelay_aShownHits[idx];
+        if (hits >= 0 && (hits & 0xFF) == STDCOMM_WSRELAY_HITS_HWYS)
+            snprintf(text, sizeof(text), bShort ? "Hit what you see" : "Hit rules: Hit what you see (%d ms)", hits >> 8);
+        else
+            snprintf(text, sizeof(text), bShort ? "Classic hits" : "Hit rules: Classic");
+    }
+
+    int i = 0;
+    for (; text[i] && i < maxChars - 1; i++)
+        pOut[i] = (char16_t)(uint8_t)text[i];
+    pOut[i] = 0;
 }
 
 void stdComm_WSRelay_DescribeMod(int idx, char16_t* pOut, int maxChars)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_DescribeMod(idx, pOut, maxChars);
+        return;
+    }
+
     char text[128];
     text[0] = 0;
     if (idx >= 0 && idx < wsrelay_numShown)

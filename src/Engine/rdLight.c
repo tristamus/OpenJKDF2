@@ -201,7 +201,9 @@ flex_t rdLight_CalcVertexIntensities(rdLight **apLights, rdVector3 *aLightPos,
     vertexNormals = aVertexNormal;
     for (int vertIdx = 0; vertIdx < numVertices; vertIdx++)
     {
-        *outLights = *aVertexColors;
+        // Fixed: start each vertex from its own light, as JKM.EXE does (0x450814).
+        // Fix ported from OpenJKDF2-MotS-Fixes by Andrei Kiralv/Darkahn and Coda Lilitari.
+        *outLights = *aVertexColors++;
 
         meshLightIter = apLights;
         aVertexNormal = aLightPos;
@@ -273,9 +275,8 @@ void rdLight_CalcVertexIntensitiesRGB(rdLight **apLights, rdVector3 *aLightPos,
 
     for (int j = 0; j < numVertices; j++)
     {
-        // The original's MotS path starts every vertex from the first vertex's color;
-        // do the same so a mesh doesn't change brightness when a colored light reaches it
-        flex_t red = bMotsLighting ? aVertexColors[0] : aVertexColors[j];
+        // Each vertex starts from its own light, as rdLight_CalcVertexIntensities does
+        flex_t red = aVertexColors[j];
         flex_t green = red;
         flex_t blue = red;
 

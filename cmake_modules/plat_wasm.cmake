@@ -8,7 +8,11 @@ macro(plat_initialize)
     include(cmake_modules/plat_feat_full_sdl2.cmake)
     set(TARGET_USE_PHYSFS FALSE)
     set(OPENJKDF2_NO_ASAN TRUE)
-    set(TARGET_CAN_JKGM FALSE)
+    # jkgm (JkGfxMod-style material replacements) is on so the MotS
+    # Remastered pack's muzzle-flash glows can replace its placeholder flash
+    # textures, as they do on desktop. The page shell only hands the engine
+    # those few glow files from the player's jkgm folder, not the whole pack.
+    set(TARGET_CAN_JKGM TRUE)
     set(TARGET_USE_CURL FALSE)
     set(TARGET_BUILD_TESTS FALSE)
     set(TARGET_FIND_OPENAL FALSE)
@@ -32,9 +36,10 @@ macro(plat_initialize)
     #set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling --preload-file ${PROJECT_SOURCE_DIR}/wasm_out@/ ")
     # FS is exported so the page shell (packaging/wasm/index.html) can write the
     # player's own game files into MEMFS before main() runs. maps.js (map
-    # downloads for joiners) and mods.js (the host's mod, built on maps.js, so
-    # it comes second) are bundled in, so they always match the engine.
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ")
+    # downloads for joiners), mods.js (the host's mod, built on maps.js, so
+    # it comes second) and netstats.js (network measurements and ?netsim) are
+    # bundled in, so they always match the engine.
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js ")
     set(CMAKE_EXECUTABLE_SUFFIX .js)
 
     # Added: jk.c's _wcslen(const char16_t*) is a plain `for(len=0;str[len];len++)` loop,
@@ -54,8 +59,11 @@ endmacro()
 
 macro(plat_link_and_package)
     target_link_libraries(${BIN_NAME} PRIVATE -lm -lSDL3 -lGL -lGLEW -lopenal -lidbfs.js)
-    set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js)
+    set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js)
     target_link_libraries(sith_engine PRIVATE nlohmann_json::nlohmann_json)
+    if(TARGET_CAN_JKGM)
+        target_link_libraries(sith_engine PRIVATE PNG::PNG ZLIB::ZLIB)
+    endif()
 
     # Game files normally come from the player's own install, picked in the
     # page shell at runtime. Baking wasm_out/ into a .data package is kept for

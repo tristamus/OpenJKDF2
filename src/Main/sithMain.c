@@ -321,6 +321,10 @@ int sithUpdate()
             sithControl_ReadControls();
             if ( g_sithMode != 2 )
             {
+#ifdef QOL_IMPROVEMENTS
+                // Added: the steps below turn the player for this long, not for the frame's time
+                sithControl_turnSecs = wholeFramesToApply * DELTA_PHYSTICK_FPS;
+#endif
                 sithControl_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
             }
             sithControl_FinishRead();
@@ -340,6 +344,13 @@ int sithUpdate()
 
             //printf("%f %u %f %f\n",framesToApply, wholeFramesToApply, rolloverCombine, sithTime_physicsRolloverFrames);
 
+#ifdef PLATFORM_WSRELAY
+            // Added: Hit what you see: the time each step stands for
+            // (stdComm_WSRelayMotion.c).
+            if ( sithNet_isMulti )
+                stdComm_WSRelay_MotionFrame(wholeFramesToApply);
+#endif
+
             for (int i = 0; i < wholeFramesToApply; i++)
             {
                 sithSoundMixer_Update(sithTime_g_frameTimeFlex);
@@ -357,6 +368,12 @@ int sithUpdate()
                 //{
                 //    sithControl_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
                 //}
+#ifdef PLATFORM_WSRELAY
+                // Added: Hit what you see: other players drawn from their
+                // timed updates, where they were at this step's moment.
+                if ( sithNet_isMulti )
+                    stdComm_WSRelay_MotionStep();
+#endif
                 sithThing_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
                 sithThing_MotsTick(0x1F, 0, 0);
 
@@ -392,6 +409,9 @@ int sithUpdate()
 #ifdef FIXED_TIMESTEP_PHYS
                 sithControl_ReadControls();
 #endif
+#ifdef QOL_IMPROVEMENTS
+                sithControl_turnSecs = sithTime_g_frameTimeFlex; // Added
+#endif
                 sithControl_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
 #ifdef FIXED_TIMESTEP_PHYS
                 sithControl_FinishRead();
@@ -408,6 +428,12 @@ int sithUpdate()
         
         sithConsole_Flush();
         sithMulti_Update(sithTime_g_frameTime);
+#ifdef PLATFORM_WSRELAY
+        // Added: Hit what you see: where this game's player ended the frame,
+        // and the claims for what its attacks hit in it.
+        if ( sithNet_isMulti )
+            stdComm_WSRelay_HitsFrame();
+#endif
         sithGamesave_Process();
 
         sithMain_tickEndMs = stdPlatform_GetTimeMsec();

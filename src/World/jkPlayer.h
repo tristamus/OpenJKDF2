@@ -74,6 +74,7 @@ enum JKFLAG
     JKFLAG_40 = 0x40,
     JKFLAG_SABERFORCEON = 0x80,
     JKFLAG_100 = 0x100,
+    JKFLAG_REVERSEGRIP = 0x200, // Added: with two sabers, each held blade-down (SBX dual sabers add-on)
 };
 
 void jkPlayer_StartupVars();
@@ -101,6 +102,9 @@ MATH_FUNC void jkPlayer_renderSaberWeaponMesh(SithThing *a1);
 MATH_FUNC void jkPlayer_renderSaberTwinkle(SithThing *player);
 int jkPlayer_HasSecondHilt(SithThing* thing); // Added
 flex_t jkPlayer_GetGripOffset(SithThing* thing, int joint); // Added
+int jkPlayer_HasReverseGrip(SithThing* thing); // Added
+rdMatrix34* jkPlayer_GripMatrix(SithThing* thing, int joint, rdMatrix34* pJointMat, rdMatrix34* pOut); // Added
+rdMatrix34* jkPlayer_JointMatrix(SithThing* thing, int joint, rdMatrix34* pOut); // Added
 void jkPlayer_SetWaggle(SithThing *player, rdVector3 *waggleVec, flex_t waggleMag);
 int jkPlayer_VerifyWcharName(char16_t *name);
 int jkPlayer_VerifyCharName(char *name);

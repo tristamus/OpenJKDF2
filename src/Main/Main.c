@@ -282,7 +282,7 @@ int Main_Startup(const char *cmdline)
 
     stdInitServices(&hs);
     jkGuiNetHost_maxRank = 4;
-    jkGuiNetHost_maxPlayers = 4;
+    jkGuiNetHost_maxPlayers = MAXPLAYERS_DEFAULT;
     Video_modeStruct.geoMode = 4;
     pHS = &hs;
     jkPlayer_setFullSubtitles = 1; // Added: Set subtitles as default for opening cutscene

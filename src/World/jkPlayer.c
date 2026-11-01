@@ -793,6 +793,11 @@ int jkPlayer_ReadConf(char16_t *name)
         jkPlayer_gamma = stdJSON_GetFloat(ext_fpath, "gamma", jkPlayer_gamma);
 
         jkPlayer_bEnableJkgm = stdJSON_GetBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
+#ifdef ARCH_WASM
+        // Added: the browser has no box to turn it back on (jkGuiDisplay_Startup),
+        // so a character brought over from a desktop install can't turn it off.
+        jkPlayer_bEnableJkgm = 1;
+#endif
         jkPlayer_bEnableTexturePrecache = stdJSON_GetBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
         jkPlayer_bKeepCorpses = stdJSON_GetBool(ext_fpath, "bKeepCorpses", jkPlayer_bKeepCorpses);
 #ifndef TARGET_RETRO_HOMEBREW
@@ -1018,6 +1023,9 @@ void jkPlayer_DrawPov()
 
         rdCamera_SetAmbientLight(&sithCamera_g_pCurCamera->rdCamera, ambLight);
         rdColormap_SetCurrent(sithCamera_g_pCurCamera->sector->colormap);
+#ifdef JKM_LIGHTING
+        rdSetVertexColorMode(0); // MOTS added: JKM.EXE draws the first-person model in mono (0x405c15)
+#endif
 
         rdMatrix_Copy34(&orient, &sithCamera_g_pCurCamera->orient);
         rdVector_Copy3(&trans, &playerThings[playerThingIdx].actorThing->actorParams.eyeOffset);
@@ -1107,6 +1115,34 @@ int jkPlayer_HasSecondHilt(SithThing* thing)
     return (l >= 5 && !__strcmpi(pName + (l - 5), "lhand"));
 }
 
+// Added: where a hand's fist runs along the hand's own forward axis, low
+// and high. 0 when the hand has no mesh to go by.
+static int jkPlayer_GetFistSpan(SithThing* thing, int joint, flex_t* pLow, flex_t* pHigh)
+{
+    rdModel3* pModel = thing->renderData.model3;
+    rdMesh* pHand;
+    uint32_t meshIdx;
+
+    if (!pModel || joint < 0 || joint >= (int)pModel->numHNodes || !pModel->numGeos)
+        return 0;
+    meshIdx = pModel->aHierarchyNodes[joint].meshIdx;
+    if (meshIdx >= pModel->aGeos[0].numMeshes)
+        return 0;
+    pHand = &pModel->aGeos[0].aMeshes[meshIdx];
+    if (pHand->numVertices <= 0 || !pHand->aVertices)
+        return 0;
+
+    *pLow = *pHigh = pHand->aVertices[0].y;
+    for (int i = 1; i < pHand->numVertices; i++)
+    {
+        if (pHand->aVertices[i].y < *pLow)
+            *pLow = pHand->aVertices[i].y;
+        if (pHand->aVertices[i].y > *pHigh)
+            *pHigh = pHand->aVertices[i].y;
+    }
+    return 1;
+}
+
 // Added: with a hilt in each hand, how far along its blade a hilt is slid
 // so the hand holds it by the middle. A hilt's blade starts at the hand's
 // origin, and the hilt runs down from there; SBX's hand meshes put the
@@ -1114,32 +1150,15 @@ int jkPlayer_HasSecondHilt(SithThing* thing)
 // one) at the very top, around the emitter. 0 when there's no fist to go by.
 flex_t jkPlayer_GetGripOffset(SithThing* thing, int joint)
 {
-    rdModel3* pModel = thing->renderData.model3;
     rdModel3* pHilt;
-    rdMesh* pHand;
-    uint32_t meshIdx;
     flex_t handLow, handHigh, hiltLow = 0.0, offset;
 
     if (!thing->playerInfo || !jkPlayer_HasSecondHilt(thing))
         return 0.0;
     pHilt = thing->playerInfo->rd_thing.model3;
-    if (!pHilt || !pHilt->numGeos || joint < 0 || joint >= (int)pModel->numHNodes || !pModel->numGeos)
-        return 0.0;
-    meshIdx = pModel->aHierarchyNodes[joint].meshIdx;
-    if (meshIdx >= pModel->aGeos[0].numMeshes)
-        return 0.0;
-    pHand = &pModel->aGeos[0].aMeshes[meshIdx];
-    if (pHand->numVertices <= 0 || !pHand->aVertices)
+    if (!pHilt || !pHilt->numGeos || !jkPlayer_GetFistSpan(thing, joint, &handLow, &handHigh))
         return 0.0;
 
-    handLow = handHigh = pHand->aVertices[0].y;
-    for (int i = 1; i < pHand->numVertices; i++)
-    {
-        if (pHand->aVertices[i].y < handLow)
-            handLow = pHand->aVertices[i].y;
-        if (pHand->aVertices[i].y > handHigh)
-            handHigh = pHand->aVertices[i].y;
-    }
     for (uint32_t m = 0; m < pHilt->aGeos[0].numMeshes; m++)
     {
         rdMesh* pMesh = &pHilt->aGeos[0].aMeshes[m];
@@ -1161,15 +1180,83 @@ flex_t jkPlayer_GetGripOffset(SithThing* thing, int joint)
     return offset;
 }
 
-// Added: a joint's matrix, with its hilt slid to the middle of the hand
-static rdMatrix34* jkPlayer_GripMatrix(SithThing* thing, int joint, rdMatrix34* pJointMat, rdMatrix34* pOut)
+// Added: two sabers held blade-down, as Starkiller and Ahsoka hold theirs
+// (SBX dual sabers add-on's reverse grip stance)
+int jkPlayer_HasReverseGrip(SithThing* thing)
+{
+    return (thing->jkFlags & (JKFLAG_DUALSABERS | JKFLAG_REVERSEGRIP)) == (JKFLAG_DUALSABERS | JKFLAG_REVERSEGRIP);
+}
+
+// Added: a joint's matrix, with its hilt slid to the middle of the hand. In
+// the reverse grip the hilt is also turned end over end about the middle of
+// the fist (half a turn about the hand's up axis), so the blade leaves the
+// little-finger side of the fist instead of the thumb side.
+rdMatrix34* jkPlayer_GripMatrix(SithThing* thing, int joint, rdMatrix34* pJointMat, rdMatrix34* pOut)
 {
     flex_t offset = jkPlayer_GetGripOffset(thing, joint);
+    flex_t handLow, handHigh;
 
+    if (jkPlayer_HasReverseGrip(thing))
+    {
+        if (!jkPlayer_GetFistSpan(thing, joint, &handLow, &handHigh))
+            handLow = handHigh = 0.0;
+        rdMatrix_Copy34(pOut, pJointMat);
+        rdVector_ScaleAdd3Acc(&pOut->scale, &pOut->lvec, (handLow + handHigh) - offset);
+        rdVector_Neg3Acc(&pOut->rvec);
+        rdVector_Neg3Acc(&pOut->lvec);
+        return pOut;
+    }
     if (offset == 0.0)
         return pJointMat;
     rdMatrix_Copy34(pOut, pJointMat);
     rdVector_ScaleAdd3Acc(&pOut->scale, &pOut->lvec, offset);
+    return pOut;
+}
+
+// Added: the matrix of one of a thing's joints, or NULL. A puppet can name a
+// node the thing's model doesn't have: SBX's player model has two nodes
+// more than the original game's, and SBX's puppets put the staff's far
+// blade on one (19, a dummy turned about on the right hand), which a skin
+// made on the original skeleton (ex. Continuum's) leaves out. Then the node
+// is taken from the model the thing's template has, and set on its parent
+// here, found by name, the way rdThing_AccumulateMatrices sets a node on
+// its parent. The joint matrices must be built.
+rdMatrix34* jkPlayer_JointMatrix(SithThing* thing, int joint, rdMatrix34* pOut)
+{
+    rdModel3* pModel = thing->renderData.model3;
+    rdModel3* pBase = NULL;
+    rdHierarchyNode* pNode;
+    rdMatrix34 local;
+    rdVector3 negPivot;
+    int parent = -1;
+
+    if (!pModel || joint < 0 || !thing->renderData.paJointMatrices)
+        return NULL;
+    if (joint < (int)pModel->numHNodes)
+        return &thing->renderData.paJointMatrices[joint];
+    if (thing->pTemplate && thing->pTemplate->renderData.type == RD_THING_MODEL3)
+        pBase = thing->pTemplate->renderData.model3;
+    if (!pBase || pBase == pModel || joint >= (int)pBase->numHNodes)
+        return NULL;
+    pNode = &pBase->aHierarchyNodes[joint];
+    if (!pNode->parent)
+        return NULL;
+    for (int i = 0; i < (int)pModel->numHNodes; i++)
+    {
+        if (!__strcmpi(pModel->aHierarchyNodes[i].name, pNode->parent->name))
+        {
+            parent = i;
+            break;
+        }
+    }
+    if (parent < 0)
+        return NULL;
+
+    rdMatrix_BuildTranslate34(&local, &pNode->pivot);
+    rdMatrix_PostMultiply34(&local, &pNode->posRotMatrix);
+    rdVector_Neg3(&negPivot, &pModel->aHierarchyNodes[parent].pivot);
+    rdMatrix_PostTranslate34(&local, &negPivot);
+    rdMatrix_Multiply34(pOut, &thing->renderData.paJointMatrices[parent], &local);
     return pOut;
 }
 
@@ -1215,17 +1302,22 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
         }
     }
 
-    rdMatrix34* primaryMat = &thing->renderData.paJointMatrices[primary_mesh];
-    rdMatrix34* secondaryMat = &thing->renderData.paJointMatrices[secondary_mesh];
+    // Added: a joint the model lacks is worked out (jkPlayer_JointMatrix)
+    rdMatrix34 primaryJoint, secondaryJoint;
+    rdMatrix34* primaryMat = jkPlayer_JointMatrix(thing, primary_mesh, &primaryJoint);
+    rdMatrix34* secondaryMat = jkPlayer_JointMatrix(thing, secondary_mesh, &secondaryJoint);
+    if (!primaryMat)
+        return;
 
     // Added: with two sabers, a second hilt in the left hand, and each hand
     // holds its hilt by the middle
     rdMatrix34 primaryGrip, secondaryGrip;
     int bSecondHilt = jkPlayer_HasSecondHilt(thing);
-    if (bSecondHilt)
+    if (bSecondHilt || jkPlayer_HasReverseGrip(thing))
     {
         primaryMat = jkPlayer_GripMatrix(thing, primary_mesh, primaryMat, &primaryGrip);
-        secondaryMat = jkPlayer_GripMatrix(thing, secondary_mesh, secondaryMat, &secondaryGrip);
+        if (secondaryMat)
+            secondaryMat = jkPlayer_GripMatrix(thing, secondary_mesh, secondaryMat, &secondaryGrip);
     }
 
     if (thing->jkFlags & JKFLAG_PERSUASION)
@@ -1260,7 +1352,7 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
             {
                 jkSaber_PolylineRand(&playerInfo->polylineThing);
                 rdThing_Draw(&playerInfo->polylineThing, primaryMat);
-                if ( thing->jkFlags & JKFLAG_DUALSABERS)
+                if ( (thing->jkFlags & JKFLAG_DUALSABERS) && secondaryMat) // Added: secondaryMat
                     rdThing_Draw(&playerInfo->polylineThing, secondaryMat);
             }
         }
@@ -1282,7 +1374,7 @@ void jkPlayer_renderSaberWeaponMesh(SithThing *thing)
         {
             jkSaber_PolylineRand(&playerInfo->polylineThing);
             rdThing_Draw(&playerInfo->polylineThing, primaryMat);
-            if (thing->jkFlags & JKFLAG_DUALSABERS)
+            if ((thing->jkFlags & JKFLAG_DUALSABERS) && secondaryMat) // Added: secondaryMat
                 rdThing_Draw(&playerInfo->polylineThing, secondaryMat);
         }
     }

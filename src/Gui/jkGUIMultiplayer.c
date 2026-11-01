@@ -1,4 +1,7 @@
 #include "jkGUIMultiplayer.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_JoinErrorText
+#endif
 
 #include "General/stdBitmap.h"
 #include "General/stdFont.h"
@@ -169,9 +172,20 @@ LABEL_1:
                     jkGuiRend_AddStringEntry(&a1, 0, 0);
                     jkGuiRend_SetClickableString(&jkGuiMultiplayer_aElements2[3], &a1);
                     jkGuiMultiplayer_aElements2[3].selectedTextEntry = 0;
+#ifdef PLATFORM_WSRELAY
+                    // Added: the landing page's Join picked an Imperial Network
+                    // Protocol game: start on that connection (stdComm_Imperial.c).
+                    if ( stdComm_Imperial_WantsJoin() )
+                        jkGuiMultiplayer_aElements2[3].selectedTextEntry = STDCOMM_IMPERIAL_CONNECTION;
+#endif
                     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiMultiplayer_menu2, &jkGuiMultiplayer_aElements2[4]);
                     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiMultiplayer_menu2, &jkGuiMultiplayer_aElements2[5]);
                     v3 = jkGuiRend_DisplayAndReturnClicked(&jkGuiMultiplayer_menu2);
+#ifdef PLATFORM_WSRELAY
+                    // Added: another connection chosen instead: the page's pick is dropped.
+                    if ( v3 > 0 && jkGuiMultiplayer_aElements2[3].selectedTextEntry != STDCOMM_IMPERIAL_CONNECTION )
+                        stdComm_Imperial_ForgetJoin();
+#endif
                     if ( v3 > 0 )
                     {
                         // TODO if this is a ptr, fix it
@@ -201,6 +215,12 @@ LABEL_1:
                     _memset(&v35, 0, sizeof(v35));
                     _memset(&jkGuiMultiplayer_stru_556168, 0, sizeof(jkGuiMultiplayer_stru_556168));
                     memset(&jkGui_guid_556040, 0, sizeof(GUID));
+#if defined(PLATFORM_WSRELAY) && defined(QOL_IMPROVEMENTS)
+                    // Added: no address box for the Imperial Network Protocol: its server
+                    // comes from the page (stdComm_Imperial.c), not from here. (The box,
+                    // element 11, is there with QOL_IMPROVEMENTS only.)
+                    jkGuiMultiplayer_aElements3[11].bIsVisible = !stdComm_Imperial_bActive;
+#endif
                     jkGuiRend_DarrayNewStr(&jkGuiMultiplayer_stru_5564A8, 8, 1);
                     jkGuiRend_DarrayReallocStr(&jkGuiMultiplayer_stru_5564A8, 0, 0);
                     jkGuiRend_SetClickableString(&jkGuiMultiplayer_aElements3[3], &jkGuiMultiplayer_stru_5564A8);
@@ -345,6 +365,13 @@ LABEL_29:
 #ifdef QOL_IMPROVEMENTS
         // HACK: Actually do passwords correctly
         int check = __wcscmp((const char16_t*)jkGuiMultiplayer_aEntries[jkGuiMultiplayer_aElements3[3].selectedTextEntry].wPassword, (const char16_t*)jkGuiMultiplayer_stru_556168.field_300);
+#ifdef PLATFORM_WSRELAY
+        // Added: not on the Imperial Network Protocol connection. Its game list
+        // carries no passwords (the entry's is always empty), so every password
+        // typed would fail here; the host checks it when we join (0x88770154).
+        if (stdComm_Imperial_bActive)
+            check = 0;
+#endif
         if (check) {
             v27 = jkStrings_GetUniStringWithFallback("GUINET_WRONGPASSWORD");
             v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
@@ -369,6 +396,17 @@ LABEL_29:
         {
             if ( v10 == 0x8877014A )
             {
+#ifdef PLATFORM_WSRELAY
+                // Added: it filled up after it was picked, and nothing has
+                // loaded. Show it as full on the Join screen, as the list
+                // would a moment later, rather than as an error.
+                if ( v7 < dplay_dword_55D618 )
+                {
+                    jkGuiMultiplayer_aEntries[v7].numPlayers = jkGuiMultiplayer_aEntries[v7].maxPlayers;
+                    jkGuiMultiplayer_sub_413E50(v7);
+                }
+                goto LABEL_28;
+#endif
                 v27 = jkStrings_GetUniStringWithFallback("GUINET_GAMEFULL");
                 v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
             }
@@ -377,10 +415,27 @@ LABEL_29:
                 v27 = jkStrings_GetUniStringWithFallback("GUINET_WRONGPASSWORD");
                 v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
             }
+#ifdef PLATFORM_WSRELAY
+            // Added: the lobby turned it down, because the game's host runs a
+            // build that speaks another netcode. Says whose page to reload.
+            else if ( v10 == STDCOMM_WSRELAY_NEWER || v10 == STDCOMM_WSRELAY_OLDER )
+            {
+                v27 = v10 == STDCOMM_WSRELAY_NEWER
+                      ? u"That game runs a newer version. Reload this page, then join again."
+                      : u"That game runs an older version. Its host needs to reload the page.";
+                v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
+            }
+#endif
             else
             {
                 v27 = jkStrings_GetUniStringWithFallback("GUINET_NOGAMECONNECT");
                 v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
+#ifdef PLATFORM_WSRELAY
+                // Added: why, when the Imperial Network Protocol connection knows
+                static char16_t wReason[160];
+                if ( stdComm_Imperial_JoinErrorText(wReason, 160) )
+                    v27 = wReason;
+#endif
             }
             jkGuiDialog_ErrorDialog(v11, v27);
             goto LABEL_28;
@@ -538,6 +593,55 @@ void jkGuiMultiplayer_sub_4140B0(jkGuiMenu *pMenu)
     }
 }
 
+#ifdef PLATFORM_WSRELAY
+static void jkGuiMultiplayer_Append(char16_t* pOut, int maxChars, const char16_t* pText)
+{
+    int n = _wcslen(pOut);
+    while (*pText && n < maxChars - 1)
+        pOut[n++] = *pText++;
+    pOut[n] = 0;
+}
+
+// Added: the otherwise unused third line says what the listed game's mod
+// means for joining it, and which hit rules its host plays by. The rules go
+// short when both don't fit, and first, with the mod's words cut short, when
+// even that doesn't.
+static void jkGuiMultiplayer_DescribeGame(int idx)
+{
+    jkGuiElement* pElement = &jkGuiMultiplayer_aElements3[8];
+    char16_t* pLine = (char16_t*)jkGuiMultiplayer_stru_556168.field_200;
+    const int maxChars = sizeof(jkGuiMultiplayer_stru_556168.field_200) / sizeof(char16_t);
+    stdFont* pFont = jkGui_stdFonts[pElement->textType];
+    char16_t mod[128];
+    char16_t hits[64];
+
+    stdComm_WSRelay_DescribeMod(idx, mod, 128);
+    for (int bShort = 0; bShort < 2; bShort++)
+    {
+        stdComm_WSRelay_DescribeHits(idx, bShort, hits, 64);
+        pLine[0] = 0;
+        jkGuiMultiplayer_Append(pLine, maxChars, mod);
+        if (mod[0] && hits[0])
+            jkGuiMultiplayer_Append(pLine, maxChars, u"; ");
+        jkGuiMultiplayer_Append(pLine, maxChars, hits);
+        if (!pFont || stdFont_sub_4355F0(pFont, pLine) <= pElement->rect.width)
+            return;
+    }
+
+    for (int keep = (int)_wcslen(mod) - 1; keep > 0; keep--)
+    {
+        mod[keep] = 0;
+        pLine[0] = 0;
+        jkGuiMultiplayer_Append(pLine, maxChars, hits);
+        jkGuiMultiplayer_Append(pLine, maxChars, u"; ");
+        jkGuiMultiplayer_Append(pLine, maxChars, mod);
+        jkGuiMultiplayer_Append(pLine, maxChars, u"...");
+        if (stdFont_sub_4355F0(pFont, pLine) <= pElement->rect.width)
+            return;
+    }
+}
+#endif
+
 void jkGuiMultiplayer_sub_413E50(int idx)
 {
     char16_t *v1; // eax
@@ -596,14 +700,25 @@ void jkGuiMultiplayer_sub_413E50(int idx)
             jk_snwprintf(jkGuiMultiplayer_stru_556168.field_100, 0x80u, v5);
             jkGuiRend_SetVisibleAndDraw(&jkGuiMultiplayer_aElements3[9], &jkGuiMultiplayer_menu3, 0);
         }
+#ifdef PLATFORM_WSRELAY
+        // Added: like a closed game, a full one says so and has no Ok.
+        // Joining it loaded the whole level only for the host to answer
+        // "That game is full". The relay counts every seat in the room,
+        // the host's included.
+        else if ( jkGuiMultiplayer_aEntries[idx].maxPlayers > 0
+                  && jkGuiMultiplayer_aEntries[idx].numPlayers >= jkGuiMultiplayer_aEntries[idx].maxPlayers )
+        {
+            __wcscat(jkGuiMultiplayer_stru_556168.field_100, u" / ");
+            __wcscat(jkGuiMultiplayer_stru_556168.field_100, jkStrings_GetUniStringWithFallback("GUINET_GAMEFULL"));
+            jkGuiRend_SetVisibleAndDraw(&jkGuiMultiplayer_aElements3[9], &jkGuiMultiplayer_menu3, 0);
+        }
+#endif
         else
         {
             jkGuiRend_SetVisibleAndDraw(&jkGuiMultiplayer_aElements3[9], &jkGuiMultiplayer_menu3, 1);
         }
 #ifdef PLATFORM_WSRELAY
-        // Added: the game's mod, on the otherwise unused third line.
-        stdComm_WSRelay_DescribeMod(idx, (char16_t*)jkGuiMultiplayer_stru_556168.field_200,
-                                    sizeof(jkGuiMultiplayer_stru_556168.field_200) / sizeof(char16_t));
+        jkGuiMultiplayer_DescribeGame(idx);
 #endif
     }
     else
