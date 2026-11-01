@@ -1,4 +1,7 @@
 #include "jkGUIMultiplayer.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_JoinErrorText
+#endif
 
 #include "General/stdBitmap.h"
 #include "General/stdFont.h"
@@ -169,9 +172,20 @@ LABEL_1:
                     jkGuiRend_AddStringEntry(&a1, 0, 0);
                     jkGuiRend_SetClickableString(&jkGuiMultiplayer_aElements2[3], &a1);
                     jkGuiMultiplayer_aElements2[3].selectedTextEntry = 0;
+#ifdef PLATFORM_WSRELAY
+                    // Added: the landing page's Join picked an Imperial Network
+                    // Protocol game: start on that connection (stdComm_Imperial.c).
+                    if ( stdComm_Imperial_WantsJoin() )
+                        jkGuiMultiplayer_aElements2[3].selectedTextEntry = STDCOMM_IMPERIAL_CONNECTION;
+#endif
                     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiMultiplayer_menu2, &jkGuiMultiplayer_aElements2[4]);
                     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiMultiplayer_menu2, &jkGuiMultiplayer_aElements2[5]);
                     v3 = jkGuiRend_DisplayAndReturnClicked(&jkGuiMultiplayer_menu2);
+#ifdef PLATFORM_WSRELAY
+                    // Added: another connection chosen instead: the page's pick is dropped.
+                    if ( v3 > 0 && jkGuiMultiplayer_aElements2[3].selectedTextEntry != STDCOMM_IMPERIAL_CONNECTION )
+                        stdComm_Imperial_ForgetJoin();
+#endif
                     if ( v3 > 0 )
                     {
                         // TODO if this is a ptr, fix it
@@ -201,6 +215,12 @@ LABEL_1:
                     _memset(&v35, 0, sizeof(v35));
                     _memset(&jkGuiMultiplayer_stru_556168, 0, sizeof(jkGuiMultiplayer_stru_556168));
                     memset(&jkGui_guid_556040, 0, sizeof(GUID));
+#if defined(PLATFORM_WSRELAY) && defined(QOL_IMPROVEMENTS)
+                    // Added: no address box for the Imperial Network Protocol: its server
+                    // comes from the page (stdComm_Imperial.c), not from here. (The box,
+                    // element 11, is there with QOL_IMPROVEMENTS only.)
+                    jkGuiMultiplayer_aElements3[11].bIsVisible = !stdComm_Imperial_bActive;
+#endif
                     jkGuiRend_DarrayNewStr(&jkGuiMultiplayer_stru_5564A8, 8, 1);
                     jkGuiRend_DarrayReallocStr(&jkGuiMultiplayer_stru_5564A8, 0, 0);
                     jkGuiRend_SetClickableString(&jkGuiMultiplayer_aElements3[3], &jkGuiMultiplayer_stru_5564A8);
@@ -345,6 +365,13 @@ LABEL_29:
 #ifdef QOL_IMPROVEMENTS
         // HACK: Actually do passwords correctly
         int check = __wcscmp((const char16_t*)jkGuiMultiplayer_aEntries[jkGuiMultiplayer_aElements3[3].selectedTextEntry].wPassword, (const char16_t*)jkGuiMultiplayer_stru_556168.field_300);
+#ifdef PLATFORM_WSRELAY
+        // Added: not on the Imperial Network Protocol connection. Its game list
+        // carries no passwords (the entry's is always empty), so every password
+        // typed would fail here; the host checks it when we join (0x88770154).
+        if (stdComm_Imperial_bActive)
+            check = 0;
+#endif
         if (check) {
             v27 = jkStrings_GetUniStringWithFallback("GUINET_WRONGPASSWORD");
             v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
@@ -403,6 +430,12 @@ LABEL_29:
             {
                 v27 = jkStrings_GetUniStringWithFallback("GUINET_NOGAMECONNECT");
                 v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
+#ifdef PLATFORM_WSRELAY
+                // Added: why, when the Imperial Network Protocol connection knows
+                static char16_t wReason[160];
+                if ( stdComm_Imperial_JoinErrorText(wReason, 160) )
+                    v27 = wReason;
+#endif
             }
             jkGuiDialog_ErrorDialog(v11, v27);
             goto LABEL_28;

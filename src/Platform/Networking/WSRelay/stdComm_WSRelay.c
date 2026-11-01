@@ -118,6 +118,7 @@
 // and transfer links, so its links work as they did before them, to compare.
 
 #include "stdComm_WSRelay.h"
+#include "Platform/Networking/Imperial/stdComm_Imperial.h"
 
 #include "Win95/stdComm.h"
 #include "Dss/sithMulti.h"
@@ -1525,8 +1526,24 @@ EM_JS(double, wsrelay_js_now, (), {
 // whether a game packet came on the fast lane, and its number (net.take).
 EM_JS(int, wsrelay_js_recv, (void* pOut, int maxLen, int* pIsText, int* pSeq), {
     var net = Module.jkNet;
-    if (!net || !net.queue.length) return -1;
-    var data = net.queue.shift();
+    if (!net) return -1;
+    /* Taken from the front by position, not with shift(): once the array holds
+       more than about 16,000 messages, Chromium copies all of it on each
+       shift(), so draining a backlog that size took seconds. Taken slots are
+       cleared; the array is emptied once all are taken, or trimmed once at
+       least half are. */
+    var queue = net.queue, taken = queue.taken | 0;
+    if (taken >= queue.length) return -1;
+    var data = queue[taken];
+    queue[taken++] = undefined;
+    if (taken === queue.length) {
+        queue.length = 0;
+        taken = 0;
+    } else if (taken >= 1024 && taken * 2 >= queue.length) {
+        queue.splice(0, taken);
+        taken = 0;
+    }
+    queue.taken = taken;
     HEAP32[pSeq >> 2] = 0;
     HEAP32[(pSeq >> 2) + 1] = 0;
     if (typeof data === 'string') {
@@ -2195,6 +2212,7 @@ void stdComm_WSRelay_Startup()
 {
     jkGuiMultiplayer_numConnections = 1;
     jk_snwprintf(jkGuiMultiplayer_aConnections[0].name, 0x80, u"OpenJKDF2 Relay");
+    stdComm_Imperial_Startup(); // Added: the Imperial Network Protocol, the second connection
     stdComm_dword_8321E0 = 0;
 
     memset(jkGuiMultiplayer_aEntries, 0, sizeof(jkMultiEntry) * 32);
@@ -2263,13 +2281,24 @@ static const char* wsrelay_HostGoneReason()
 
 int stdComm_WSRelay_RecvSeq(uint32_t* pSeq)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection's
+        return stdComm_Imperial_RecvSeq(pSeq);
     *pSeq = (uint32_t)wsrelay_aRecvSeq[1];
     return wsrelay_aRecvSeq[0];
 }
 
 double stdComm_WSRelay_SeqSentAt(int toId, uint32_t seq)
 {
+    if (stdComm_Imperial_bActive) // Added: as above
+        return stdComm_Imperial_SeqSentAt(toId, seq);
     return wsrelay_js_seq_sent_at(toId, seq);
+}
+
+// Added: the lobby's links resend and keep order; the Imperial Network
+// Protocol's desktops are on UDP.
+int stdComm_WSRelay_HitsResend()
+{
+    return stdComm_Imperial_bActive;
 }
 
 double stdComm_WSRelay_Now()
@@ -2279,18 +2308,25 @@ double stdComm_WSRelay_Now()
 
 void stdComm_WSRelay_SyncClock(int netId, int bOn)
 {
-    if (netId)
+    // Added: netstats.js pings over the lobby's links; the Imperial Network
+    // Protocol connection measures its players' clocks itself.
+    if (netId && stdComm_Imperial_bActive)
+        stdComm_Imperial_SyncClock(netId, bOn);
+    else if (netId)
         wsrelay_js_net_sync(netId, bOn);
 }
 
 double stdComm_WSRelay_ClockOffset(int netId)
 {
+    if (stdComm_Imperial_bActive) // Added: as above
+        return netId ? stdComm_Imperial_ClockOffset(netId) : NAN;
     return netId ? wsrelay_js_net_clock(netId) : NAN;
 }
 
 int stdComm_WSRelay_InMatch()
 {
-    if ((!wsrelay_bHosting && !wsrelay_bJoined) || !sithNet_isMulti || !sithWorld_g_pCurrentWorld || !sithPlayer_g_pLocalPlayerThing)
+    // Added: or in an Imperial Network Protocol game (stdComm_Imperial.c)
+    if ((!wsrelay_bHosting && !wsrelay_bJoined && !stdComm_Imperial_InGame()) || !sithNet_isMulti || !sithWorld_g_pCurrentWorld || !sithPlayer_g_pLocalPlayerThing)
         return 0;
 
     // A joiner is in once the host has welcomed it into the level
@@ -2522,6 +2558,9 @@ void stdComm_WSRelay_NoteMotion(int otherId, double bufferMs, uint32_t steps, ui
 
 int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_Receive(pIdOut, pMsgIdOut, pLenOut);
+
     int maxLen = *pLenOut;
     *pIdOut = 0;
     *pLenOut = 0;
@@ -2613,6 +2652,9 @@ static int wsrelay_IsOwnPosition(const void* pData, uint32_t size)
 
 BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_Send(idFrom, idTo, lpData, dwDataSize);
+
     Hack_ResetClients();
 
     if (!wsrelay_bHosting && !wsrelay_bJoined)
@@ -2643,12 +2685,24 @@ BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)
 
 int stdComm_OpenConnection(void* a)
 {
+    // Added: the second connection is the Imperial Network Protocol's
+    stdComm_Imperial_bActive = ((intptr_t)a == STDCOMM_IMPERIAL_CONNECTION);
+    if (stdComm_Imperial_bActive)
+        return stdComm_Imperial_OpenConnection();
+
     stdComm_dword_8321DC = 1;
     return 0;
 }
 
 void stdComm_CloseConnection()
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_CloseConnection();
+        stdComm_Imperial_bActive = 0;
+        return;
+    }
+
     if ( stdComm_dword_8321DC )
     {
         if ( stdComm_dword_8321E0 )
@@ -2664,6 +2718,9 @@ void stdComm_CloseConnection()
 
 int stdComm_Open(int idx, char16_t* pwPassword)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_Open(idx, pwPassword);
+
     DirectPlay_EnumSessions2();
 
     stdComm_dword_8321E8 = 0;
@@ -2757,6 +2814,12 @@ int stdComm_Open(int idx, char16_t* pwPassword)
 
 void stdComm_Close()
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_Close();
+        return;
+    }
+
     if (wsrelay_bHosting || wsrelay_bHostPending || wsrelay_bJoined || wsrelay_bJoining)
         wsrelay_SendText("leave");
     wsrelay_ResetSession();
@@ -2769,6 +2832,12 @@ int DirectPlay_SendLobbyMessage(void* pPkt, uint32_t pktLen)
 
 void DirectPlay_SetSessionDesc(const char* a1, DWORD maxPlayers)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_SetSessionDesc(a1, maxPlayers);
+        return;
+    }
+
     _strncpy(wsrelay_storedEntry.mapJklFname, jkMain_aLevelJklFname, 0x20);
     // Added: jkMain passes the smaller of the host's limit and the level's
     // player starts, which is what JK.EXE's DirectPlay session showed and held
@@ -2781,6 +2850,8 @@ void DirectPlay_SetSessionDesc(const char* a1, DWORD maxPlayers)
 
 BOOL DirectPlay_SetSessionFlagidk(int a1)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_SetSessionFlagidk(a1);
     return 1;
 }
 
@@ -2798,6 +2869,8 @@ int DirectPlay_EarlyInit(char16_t* pwIdk, char16_t* pwPlayerName)
 
 DPID DirectPlay_CreatePlayer(char16_t* pwIdk, int idk2)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_CreatePlayer(pwIdk);
     return 1;
 }
 
@@ -2807,6 +2880,9 @@ void DirectPlay_Close()
 
 int DirectPlay_OpenHost(jkMultiEntry* pEntry)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_OpenHost(pEntry);
+
     wsrelay_storedEntry = *pEntry;
 
     jkPlayer_maxPlayers = pEntry->maxPlayers; // Hack?
@@ -2859,6 +2935,9 @@ int DirectPlay_OpenHost(jkMultiEntry* pEntry)
 
 int DirectPlay_GetSession_passwordidk(jkMultiEntry* pEntry)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_GetSession_passwordidk(pEntry);
+
     wsrelay_storedEntry = *pEntry;
 
     jkPlayer_maxPlayers = pEntry->maxPlayers; // Hack?
@@ -2873,6 +2952,9 @@ int DirectPlay_EnumSessions2()
 
 int stdComm_EnumSessions(int a, void* b)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_EnumSessions();
+
     Hack_ResetClients();
 
     // Ask again soon instead of every 5 seconds, like the GNS enum thread.
@@ -2920,11 +3002,18 @@ int stdComm_EnumSessions(int a, void* b)
 
 void DirectPlay_EnumPlayers(int a)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_EnumPlayers();
+        return;
+    }
     Hack_ResetClients();
 }
 
 int DirectPlay_StartSession(void* a, void* b)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        stdComm_Imperial_EnumPlayers();
     return 1;
 }
 
@@ -2934,11 +3023,19 @@ void DirectPlay_Destroy()
 
 int DirectPlay_IdkSessionDesc(jkMultiEntry* pEntry)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return stdComm_Imperial_IdkSessionDesc(pEntry);
     return 1;
 }
 
 void stdComm_WSRelay_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_DescribeHits(idx, bShort, pOut, maxChars);
+        return;
+    }
+
     char text[64];
     text[0] = 0;
     if (idx >= 0 && idx < wsrelay_numShown)
@@ -2959,6 +3056,12 @@ void stdComm_WSRelay_DescribeHits(int idx, int bShort, char16_t* pOut, int maxCh
 
 void stdComm_WSRelay_DescribeMod(int idx, char16_t* pOut, int maxChars)
 {
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+    {
+        stdComm_Imperial_DescribeMod(idx, pOut, maxChars);
+        return;
+    }
+
     char text[128];
     text[0] = 0;
     if (idx >= 0 && idx < wsrelay_numShown)

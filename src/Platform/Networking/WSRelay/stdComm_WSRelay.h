@@ -87,6 +87,11 @@ int stdComm_WSRelay_RecvSeq(uint32_t* pSeq);
 double stdComm_WSRelay_SeqSentAt(int toId, uint32_t seq);
 double stdComm_WSRelay_Now();
 
+// Whether the rules' messages need sithComm's resends (1): the links under
+// the lobby's games resend and keep order themselves, but the Imperial
+// Network Protocol's (UDP between desktops) don't.
+int stdComm_WSRelay_HitsResend();
+
 // The hit ledger: a claim from player otherId this game turned down, or
 // found its player dead for (outcome STDCOMM_WSRELAY_DEAD), and why
 // (stdComm_WSRelayHitCheck.h's WSRELAYHIT_*, or

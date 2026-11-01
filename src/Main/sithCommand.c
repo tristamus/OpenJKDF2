@@ -21,6 +21,9 @@
 #include "Main/jkQuakeConsole.h"
 #include "General/stdJSON.h"
 #include "jk.h"
+#ifdef PLATFORM_WSRELAY
+#include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_RegisterCommands
+#endif
 
 typedef struct sithCommandBind sithCommandBind;
 typedef struct sithCommandBind
@@ -54,6 +57,9 @@ void sithCommand_Startup()
     sithConsole_RegisterCommand(sithCommand_Kick, "boot", 0); // MOTS added
     sithConsole_RegisterCommand(sithCommand_Tick, "tick", 0);
     sithConsole_RegisterCommand(sithCommand_Session, "session", 0);
+#ifdef PLATFORM_WSRELAY
+    stdComm_Imperial_RegisterCommands(); // Added: callvote, vote, servermaps, rcon
+#endif
 
     if ( (g_debugmodeFlags & DEBUGFLAG_IN_EDITOR) != 0 )
     {
