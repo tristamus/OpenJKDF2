@@ -7,6 +7,7 @@
 #include "Devices/sithSoundMixer.h"
 #include "Win95/stdSound.h"
 #include "World/sithWorld.h"
+#include "World/sithSoundClassSwim.h" // Added
 
 static const char* sithSoundClass_aKeys[SITH_SC_MAX] = {
     "--reserved--",
@@ -278,6 +279,41 @@ sithSoundClass* sithSoundClass_Load(char *pName)
     return v4;
 }
 
+#ifdef QOL_IMPROVEMENTS
+// Added: a class that plays stroke2.wav on both swim strokes (Bossk, Tusken,
+// C3PO, Greedo, Sariss, Jan Ors) gets Kyle's stroke1.wav on the left one, so
+// its strokes alternate a long and a short splash like Kyle's instead of the
+// same short one every 0.53 s (sithSoundClassSwim.h).
+static int sithSoundClass_NumEntries(const sithSoundClassEntry *pEntry)
+{
+    int num = 0;
+    for ( ; pEntry; pEntry = pEntry->pNextMode )
+        num++;
+    return num;
+}
+
+static void sithSoundClass_FixSwimStrokes(sithSoundClass *pClass)
+{
+    sithSoundClassEntry *pLeft = pClass->entries[SITH_SC_LSWIMSURFACE];
+    sithSoundClassEntry *pRight = pClass->entries[SITH_SC_RSWIMSURFACE];
+    sithSound *pStroke1;
+
+    if ( !pLeft || !pRight || !pLeft->sound || !pRight->sound )
+        return;
+    if ( !sithSoundClassSwim_NeedsLeftStroke(pLeft->sound->sound_fname, sithSoundClass_NumEntries(pLeft),
+                                             pRight->sound->sound_fname, sithSoundClass_NumEntries(pRight)) )
+        return;
+
+    // Without the file (a conversion that has no stroke1.wav), as it was.
+    pStroke1 = sithSound_Load((char *)SITHSOUNDCLASSSWIM_LEFT, 0);
+    if ( !pStroke1 )
+        return;
+    pLeft->sound = pStroke1;
+    if ( (pLeft->playflags & 0x4000) != 0 )
+        sithSound_LoadFileData(pStroke1);
+}
+#endif
+
 int sithSoundClass_LoadEntry(sithSoundClass *pClass, char *pPath)
 {
     uint32_t soundIdx; // ebp
@@ -359,6 +395,10 @@ int sithSoundClass_LoadEntry(sithSoundClass *pClass, char *pPath)
         }
     }
     stdConffile_Close();
+
+#ifdef QOL_IMPROVEMENTS
+    sithSoundClass_FixSwimStrokes(pClass); // Added
+#endif
 
     return 1;
 }

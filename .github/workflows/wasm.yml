@@ -97,6 +97,13 @@ jobs:
           cc -std=c11 -O2 -Wall -Werror -o motion-test packaging/wasm/test/motion-test.c \
              src/Platform/Networking/WSRelay/stdComm_WSRelayPlayout.c -lm
           ./motion-test
+      # Which sound classes' left swim stroke gets Kyle's stroke1.wav, on its
+      # own in C, with every retail player sound class's stroke lines.
+      - name: Test the swim stroke rule
+        run: |
+          cc -std=c11 -O2 -Wall -Werror -o swimstroke-test packaging/wasm/test/swimstroke-test.c \
+             src/World/sithSoundClassSwim.c
+          ./swimstroke-test
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build
