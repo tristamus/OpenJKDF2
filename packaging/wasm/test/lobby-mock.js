@@ -192,7 +192,7 @@ window.jkLobbyMock = (function() {
             if (fresh.length) lobby.push(pick(fresh));
         } else if (r < 0.85 && lobby.length > 1) {
             lobby.splice(Math.floor(Math.random() * lobby.length), 1);
-        } else if (lobby.length && mine.length < 9) {
+        } else if (lobby.length && mine.length < 12) {   // past nine, so a room opens another row
             var host = lobby.shift();
             s.games.push(k === 'mots' ?
                 { id: nextId++, name: host + "'s game", game: 'mots', map: 'jkm_mp.jkl', episode: 'JKM_MP.goo',
