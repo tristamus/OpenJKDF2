@@ -5645,6 +5645,7 @@
       var NETCODE = 0;
       var ROOM_MAX_NAMES = 4;   // names on a table before "+N more"
       var ROOM_MAX_SEATS = 32;  // seat dots drawn around a table's button (the game's limit)
+      var ROOM_MIN_TABLES = 9;  // tables a room window shows at least, games and open ones (not on a phone)
       var ROOMS = {
         'nar-shaddaa': { game: 'jk1', name: 'Nar Shaddaa', title: 'Jedi Knight: Dark Forces II - Nar Shaddaa' },
         'sith-asteroid': { game: 'mots', name: 'Sith: Asteroid', title: 'Mysteries of the Sith - Sith: Asteroid' }
@@ -5654,7 +5655,7 @@
       var roster = document.getElementById('roster');
       var roomNote = document.getElementById('room-note');
       var lobbyLive = { state: 'connecting', status: null, updated: null, view: 'table', seen: {}, cols: 0,
-                        room: 'nar-shaddaa' };
+                        stacked: false, room: 'nar-shaddaa' };
       try {
         if (localStorage.getItem('jkdf2mp-room-view') === 'list') lobbyLive.view = 'list';
       } catch (e) {}
@@ -6021,16 +6022,30 @@
         return li;
       }
 
-      // Open tables fill out the last row, and there's always one to host at.
+      // How many tables to draw for n games in cols columns: full rows, always
+      // one open to host at, and at least ROOM_MIN_TABLES, so a quiet room
+      // still looks like it has room for more games. Once those are taken,
+      // the next game opens another row. When who's on is under the tables
+      // (stacked, as on a phone) there's just the one open table, so that
+      // list isn't screens of empty tables down.
+      function tableSlots(n, cols, stacked) {
+        var least = stacked ? 1 : ROOM_MIN_TABLES;
+        return Math.ceil(Math.max(least, n + 1) / cols) * cols;
+      }
+
+      // Open tables fill out the room's tables (tableSlots).
       function fillTables(force) {
         var ul = roomGames.querySelector('.tables');
         if (!ul) return;
         var cols = getComputedStyle(ul).gridTemplateColumns.split(' ').filter(Boolean).length || 1;
-        if (cols === lobbyLive.cols && !force) return;
+        // The phone layout turns the room body into a column, who's on last.
+        var stacked = getComputedStyle(roomGames.parentNode).flexDirection === 'column';
+        if (cols === lobbyLive.cols && stacked === lobbyLive.stacked && !force) return;
         lobbyLive.cols = cols;
+        lobbyLive.stacked = stacked;
         ul.querySelectorAll('.table.empty').forEach(function(e) { e.remove(); });
         var n = ul.children.length;
-        var slots = Math.max(cols, Math.ceil((n + 1) / cols) * cols);
+        var slots = tableSlots(n, cols, stacked);
         for (var i = n; i < slots; i++) ul.append(emptyTable(i));
       }
 
@@ -6289,8 +6304,19 @@
       document.querySelectorAll('[data-room], [data-opens-room]').forEach(function(b) {
         b.addEventListener('click', function() { openRoom(b.dataset.room || b.dataset.opensRoom); });
       });
+      // The tables are redrawn the frame after a resize, not while the
+      // observer reports it: on a phone the tables set the height of what it
+      // watches, and a size change mid-report is an error to Chrome, which
+      // window.onerror would show as the game stopping.
       if (typeof ResizeObserver === 'function') {
-        new ResizeObserver(function() { if (room.open) fillTables(); }).observe(roomGames);
+        var fillFrame = 0;
+        new ResizeObserver(function() {
+          if (!room.open || fillFrame) return;
+          fillFrame = requestAnimationFrame(function() {
+            fillFrame = 0;
+            if (room.open) fillTables();
+          });
+        }).observe(roomGames);
       }
 
       // The page watches the lobby while the landing page shows; the game
