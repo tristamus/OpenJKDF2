@@ -376,8 +376,8 @@ int stdSound_BufferUnlock(stdSound_buffer_t* sound, void* buffer, int bufferRead
 }
 
 // Added: sets a buffer's volume and its source's AL gain. While a buffer has a
-// source, that source's gain is sound->vol (written when the source is made,
-// with bForce, and on every play), so an unchanged volume needs no AL call. The
+// source, that source's gain is sound->vol (written when the source is made
+// and on every play), so an unchanged volume needs no AL call. The
 // mixer sets the volume of every sound on every update, and in the browser each
 // gain write is an AudioParam write.
 static void stdSound_SetSourceVolume(stdSound_buffer_t* sound, flex_t vol, int bForce)
@@ -433,7 +433,12 @@ int stdSound_BufferPlay(stdSound_buffer_t* buf, int loop)
 	    
 	    //printf("%u %u\n", buf->source, buf->buffer);
 
-        stdSound_SetSourceVolume(buf, buf->vol, 1);
+        // Changed: a new source gets the buffer's volume as it is. buf->vol is
+        // already scaled by the SFX volume (BufferCreate, BufferSetVolume), and
+        // passing it through stdSound_BufferSetVolume again scaled it twice: a
+        // sound started at the square of the SFX volume until something set its
+        // volume again.
+        alSourcef(buf->source, AL_GAIN, buf->vol);
 	}
 
     alGetSourcei(buf->source, AL_SOURCE_TYPE, &source_type);
@@ -473,7 +478,7 @@ int stdSound_BufferQueueAfterAnother(stdSound_buffer_t* bufPrev, stdSound_buffer
             alSourcei(bufPrev->source, AL_SOURCE_RELATIVE, AL_TRUE); // No 3D until we're given a position
         }
         
-        stdSound_SetSourceVolume(bufPrev, bufPrev->vol, 1);
+        alSourcef(bufPrev->source, AL_GAIN, bufPrev->vol); // Changed: as in stdSound_BufferPlay
     }
 
     alGetSourcei(bufPrev->source, AL_SOURCE_TYPE, &source_type);
