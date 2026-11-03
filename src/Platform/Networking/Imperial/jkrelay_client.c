@@ -180,9 +180,16 @@ static int jkr_WsRecvFrom(int sk, void* p, int cap, struct sockaddr_in* from)
     return n;
 }
 
+// Changed: a wait of 0 (the game's receive on every physics step, jkr_Pump(0)) no longer
+// yields. Each yield was a timer, which browsers hold for 4 ms once timers nest, so a slow
+// frame with many steps got slower still, and the rest of the frame was drawn after the
+// screen refresh it was meant for. Messages that came in are read at the frame's end, as
+// in a lobby match. Every loop that waits for a message asks for 10 or 20 ms, and still
+// sleeps.
 static int jkr_WsWait(int ms)
 {
-    emscripten_sleep(ms > 0 ? (unsigned)ms : 0);
+    if (ms > 0)
+        emscripten_sleep((unsigned)ms);
     return 1;
 }
 
