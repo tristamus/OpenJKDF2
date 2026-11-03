@@ -441,6 +441,49 @@ EM_JS(void, Window_wasmLockPointerNow, (), {
   } catch (e) {}
 });
 
+// Added: the state the waits below share, made once.
+// A hidden tab gets no screen refreshes, so there the game waits on a timer, and once a
+// tab has been hidden and silent for 30 s browsers run its timers once a second, or once a
+// minute (Chrome, after a minute, while no WebRTC link is open). A host's game then all but
+// stopped for everyone, and after 30 s the other players left ("no packets from the host"),
+// or a player was dropped. A Worker's timers aren't slowed, so in a match (bInMatch) a hidden
+// tab waits for the next message from one, sent every 16 ms while the game waits in a hidden
+// tab and stopped while it's shown. If the browser won't make a worker, it's a timer as before.
+EM_JS(void, Window_wasmPaceInit, (), {
+  if (Module.jkPace) return;
+  var pace = Module.jkPace = { sinceRefresh: 0, refreshAsked: false, resume: null, channel: new MessageChannel(), fences: [],
+                               worker: undefined, ticking: false, woken: null };
+  pace.channel.port1.onmessage = function() { var resume = pace.resume; pace.resume = null; if (resume) resume(); };
+  function wake() { var woken = pace.woken; pace.woken = null; if (woken) woken(); }
+  pace.hiddenWait = function(bInMatch) {
+    if (!bInMatch) pace.stopTicker();
+    else if (pace.worker === undefined) {
+      try {
+        var url = URL.createObjectURL(new Blob(['var t = 0; onmessage = function(e) { if (e.data && !t) t = setInterval(function() { postMessage(0); }, 16); ' +
+                                                'else if (!e.data && t) { clearInterval(t); t = 0; } };'], { type: 'text/javascript' }));
+        pace.worker = new Worker(url);
+        pace.worker.onmessage = wake;
+        pace.worker.onerror = function() { pace.worker = null; pace.ticking = false; wake(); };
+      } catch (e) {
+        pace.worker = null;
+      }
+    }
+    return new Promise(function(resolve) {
+      if (!bInMatch || !pace.worker) { setTimeout(resolve, 0); return; }
+      if (!pace.ticking) { pace.ticking = true; pace.worker.postMessage(1); }
+      /* A timer still ends the wait if the worker never answers. */
+      var timer = setTimeout(woken, 1000);
+      function woken() { clearTimeout(timer); if (pace.woken === woken) pace.woken = null; resolve(); }
+      pace.woken = woken;
+    });
+  };
+  pace.stopTicker = function() {
+    if (!pace.ticking) return;
+    pace.ticking = false;
+    if (pace.worker) pace.worker.postMessage(0);
+  };
+});
+
 // Added: how a frame ends in the browser. SDL's swap ended it with emscripten_sleep(0), a
 // setTimeout(0), which browsers hold for at least 4 ms once timers nest and which takes no
 // account of the screen or the graphics card: a fast machine drew frames nobody saw, and a
@@ -450,17 +493,14 @@ EM_JS(void, Window_wasmLockPointerNow, (), {
 // frame is drawn in it. With Vsync off, it yields through a MessageChannel, which has no
 // clamp, while the card has finished the frame before this one and for at most two frames
 // in a refresh; otherwise it waits for the refresh. A hidden tab gets no refreshes, so there
-// it waits on a timer as before, and a host's game keeps running, but also until the card
-// has drawn the frame: the browser doesn't slow timers in a tab playing sound, and the game
-// got seconds ahead of the card there, which came out as a freeze when the tab was shown.
+// it waits for the worker above (in a match) or a timer, so a host's game keeps running,
+// but also until the card has drawn the frame: the browser doesn't slow timers in a tab
+// playing sound, and the game got seconds ahead of the card there, which came out as a
+// freeze when the tab was shown.
 // Module.jkFrames keeps when the last in-game frames ended and when the game got the
 // thread back, for the page's slow-frame note and ?bench.
-EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame), {
+EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame, int bInMatch), {
   var pace = Module.jkPace;
-  if (!pace) {
-    pace = Module.jkPace = { sinceRefresh: 0, refreshAsked: false, resume: null, channel: new MessageChannel(), fences: [] };
-    pace.channel.port1.onmessage = function() { var resume = pace.resume; pace.resume = null; if (resume) resume(); };
-  }
   var frames = Module.jkFrames;
   if (!frames) frames = Module.jkFrames = { size: 2048, count: 0, broken: true, ends: new Float64Array(2048),
                                             resumes: new Float64Array(2048), joined: new Uint8Array(2048) };
@@ -487,9 +527,10 @@ EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame), {
   if (wasHidden) {
     var started = performance.now();
     do {
-      await new Promise(function(resolve) { setTimeout(resolve, 0); });
+      await pace.hiddenWait(bInMatch);
     } while (last && document.hidden && performance.now() - started < 1000 && !drawn(last));
   } else if (bVsync || pace.sinceRefresh >= 2 || (before && !drawn(before))) {
+    pace.stopTicker();
     /* A tab hidden while it waits gets no refresh, so that ends the wait too. */
     await new Promise(function(resolve) {
       function done() { document.removeEventListener('visibilitychange', done); resolve(); }
@@ -498,6 +539,7 @@ EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame), {
     });
     pace.sinceRefresh = 0;
   } else {
+    pace.stopTicker();
     if (!pace.refreshAsked) {
       pace.refreshAsked = true;
       requestAnimationFrame(function() { pace.refreshAsked = false; pace.sinceRefresh = 0; });
@@ -1857,7 +1899,10 @@ void Window_SdlVblank()
     // The browser shows what was drawn once the page gives the thread back, so there's
     // nothing to swap; SDL's swap only yielded, with a timer (see Window_wasmEndFrame).
     if (!jkGuiBuildMulti_bRendering)
-        Window_wasmEndFrame(jkPlayer_enableVsync, jkGame_isDDraw);
+    {
+        Window_wasmPaceInit();
+        Window_wasmEndFrame(jkPlayer_enableVsync, jkGame_isDDraw, sithNet_isMulti);
+    }
 #else
     SDL_GL_SwapWindow(displayWindow);
 #endif
