@@ -1690,6 +1690,7 @@
           the folder. Choose Upload to continue.</p>
         <section class="gfx-notice picker-intro" id="picker-gfx" role="alert" hidden></section>
         <section class="gfx-notice jit-notice picker-intro" id="picker-jit" role="status" hidden></section>
+        <section class="gfx-notice picker-intro" id="picker-privacy" role="status" hidden></section>
         <p class="saved-files picker-intro" id="saved-files" hidden><span class="saved-text"></span>
           <button class="text-button" type="button">Remove them</button></p>
         <div class="actions picker-intro">
@@ -3115,6 +3116,7 @@
         showPickerResult(problem || phoneNote() || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
         showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio);
+        showPrivacyNote(document.getElementById('picker-privacy'), !problem && privacyOn);
         if (!picker.open) picker.showModal();
         chooseButton.focus();
         var start = !problem && !folderOnly && !!pickerWant && !!gameFiles && savedKnown[pickerWant.game] !== false;
@@ -3362,6 +3364,48 @@
         el.hidden = false;
       }
 
+      // ---- Resist-fingerprinting (Firefox's privacy.resistFingerprinting, on
+      // in LibreWolf and Mullvad Browser) hides the graphics card's name, which
+      // then reads "Mozilla", holds WebGL to 2048 pixels across (16384 without
+      // it), steps the clock by 16.7 ms and scrambles what's read back from the
+      // screen, so screenshots come out as noise. A graphics card that really
+      // stops at 2048 doesn't hide its name, and only this steps the clock so,
+      // so the note needs all three. Timing the clock takes up to two of its
+      // steps (33 ms), and only where the first two signs are there.
+      function privacyMode(renderer) {
+        if (renderer !== 'Mozilla' || !/Firefox\//.test(navigator.userAgent)) return false;
+        var gl = webgl2();
+        if (!gl) return false;
+        var most = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+        releaseGl(gl);
+        if (!(most <= 2048)) return false;
+        var last = performance.now(), steps = [];
+        for (var i = 0; i < 1e7 && steps.length < 2; i++) {
+          var now = performance.now();
+          if (now !== last) {
+            steps.push(now - last);
+            last = now;
+          }
+        }
+        return steps.length === 2 && Math.min(steps[0], steps[1]) >= 16;
+      }
+
+      function showPrivacyNote(el, on) {
+        if (!on) {
+          el.hidden = true;
+          return;
+        }
+        el.innerHTML = '<h2>Privacy protection limits the game here</h2>' +
+          "<p>This browser's resist-fingerprinting is on, as in LibreWolf and Mullvad Browser. It holds the " +
+          "game's 3D graphics to 2048 pixels across, so a bigger window or fullscreen is drawn at a lower " +
+          'resolution, and screenshots come out as noise.</p>' +
+          '<p class="fine">To turn it off for this site only, go to <code>about:config</code> and add ' +
+          '<code class="site"></code> to <code>privacy.resistFingerprinting.exemptedDomains</code>, then reload ' +
+          'this page.</p>';
+        el.querySelector('.site').textContent = location.hostname;
+        el.hidden = false;
+      }
+
       function selectText(node) {
         var range = document.createRange();
         range.selectNodeContents(node);
@@ -3373,6 +3417,8 @@
       // Checked once, when the page opens; a restart of the browser reloads it.
       var gfxCheck = browserProblem() ? null : graphicsCheck();
       showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
+      var privacyOn = !!gfxCheck && gfxCheck.state !== 'none' && privacyMode(gfxCheck.renderer);
+      if (privacyOn) console.warn('Graphics: resist-fingerprinting is on, which holds WebGL to 2048 pixels');
 
       // ---- When the game can't get its 3D graphics (WebGL 2) at all, the
       // engine opens SDL's error box ("Could not create webgl context") and
