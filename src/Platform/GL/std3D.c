@@ -439,6 +439,13 @@ GLint std3D_tryFindUniform(GLuint program, const char* uniform_name)
 {
     GLint out = glGetUniformLocation(program, uniform_name);
     if (out == -1) {
+#ifdef ARCH_WASM
+        // Added: shaders drop the uniforms they don't use, so this printed about 15
+        // lines at every start in the browser, where nobody edits shaders. Say it once.
+        static int bPrinted = 0;
+        if (bPrinted) return out;
+        bPrinted = 1;
+#endif
         stdPlatform_Printf("std3D: Could not bind uniform %s!\n", uniform_name);
     }
     return out;
@@ -3072,7 +3079,10 @@ int std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is_alph
     }
 
     if (slot >= STD3D_MAX_TEXTURES) {
-        stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
+        // Added: once, not again for every texture after the cache fills
+        static int bPrinted = 0;
+        if (!bPrinted) stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
+        bPrinted = 1;
         return 1;
     }
     //printf("Add to texture cache\n");
@@ -3282,7 +3292,10 @@ int std3D_AddBitmapToTextureCache(stdBitmap *texture, int mipIdx, int is_alpha_t
 
     int cacheIdx = std3D_GetBitmapCacheIdx();
     if (cacheIdx < 0) {
-        stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
+        // Added: once, not again for every texture after the cache fills
+        static int bPrinted = 0;
+        if (!bPrinted) stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
+        bPrinted = 1;
         return 1;
     }
     //printf("Add to texture cache\n");

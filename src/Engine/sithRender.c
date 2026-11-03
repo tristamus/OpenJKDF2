@@ -38,6 +38,11 @@
 #include <nds.h>
 #endif
 
+// Added: the visible-sector limits below stay hit for as long as a big view
+// lasts, and each one used to print on every sector of every frame. Each
+// call site now prints its line once.
+#define sithRender_PrintOnce(msg) do { static int bPrinted_ = 0; if (!bPrinted_) { bPrinted_ = 1; jk_printf(msg); } } while (0)
+
 #ifdef QOL_IMPROVEMENTS
 #if 0
 static rdThing* lightDebugThing = NULL;
@@ -736,17 +741,17 @@ void sithRender_BuildVisibleSectorList(SithSector *pSector, rdClipFrustum *pFrus
         pSector->renderTick = sithRender_lastRenderTick;
         // Added: Prevent crashing
         if (sithRender_g_numVisibleSectors >= SITH_MAX_VISIBLE_SECTORS) {
-            jk_printf("OpenJKDF2: Hit max visible sectors.\n");
+            sithRender_PrintOnce("OpenJKDF2: Hit max visible sectors.\n");
             return;
         }
         // Added: Prevent crashing
         if (sithRender_numSecorFrustrums >= SITH_MAX_VISIBLE_SECTORS) {
-            jk_printf("OpenJKDF2: Hit max visible sector clip frustums.\n");
+            sithRender_PrintOnce("OpenJKDF2: Hit max visible sector clip frustums.\n");
             return;
         }
         // Added: Prevent crashing
         if (sithRender_numThingSectors >= SITH_MAX_VISIBLE_SECTORS_2) {
-            jk_printf("OpenJKDF2: Hit max visible sectors (2).\n");
+            sithRender_PrintOnce("OpenJKDF2: Hit max visible sectors (2).\n");
             return;
         }
 
@@ -1082,19 +1087,19 @@ void sithRender_NoClip(SithSector *sector, rdClipFrustum *frustumArg, flex_t pre
 
         // Added: Prevent crashing
         if (sithRender_g_numVisibleSectors >= SITH_MAX_VISIBLE_SECTORS) {
-            jk_printf("OpenJKDF2: Hit max visible sectors.\n");
+            sithRender_PrintOnce("OpenJKDF2: Hit max visible sectors.\n");
             return;
         }
 
         // Added: Prevent crashing
         if (sithRender_numSecorFrustrums >= SITH_MAX_VISIBLE_SECTORS) {
-            jk_printf("OpenJKDF2: Hit max visible sector clip frustums.\n");
+            sithRender_PrintOnce("OpenJKDF2: Hit max visible sector clip frustums.\n");
             return;
         }
 
         // Added: Prevent crashing
         if (sithRender_numThingSectors >= SITH_MAX_VISIBLE_SECTORS_2) {
-            jk_printf("OpenJKDF2: Hit max visible sectors (2).\n");
+            sithRender_PrintOnce("OpenJKDF2: Hit max visible sectors (2).\n");
             return;
         }
 
@@ -1319,19 +1324,19 @@ void sithRender_KindaClipAssignFrustum(SithSector *sector, rdClipFrustum *frustu
 
     // Added: Prevent crashing
     if (sithRender_g_numVisibleSectors >= SITH_MAX_VISIBLE_SECTORS) {
-        jk_printf("OpenJKDF2: Hit max visible sectors.\n");
+        sithRender_PrintOnce("OpenJKDF2: Hit max visible sectors.\n");
         return;
     }
 
     // Added: Prevent crashing
     if (sithRender_numSecorFrustrums >= SITH_MAX_VISIBLE_SECTORS) {
-        jk_printf("OpenJKDF2: Hit max visible sector clip frustums.\n");
+        sithRender_PrintOnce("OpenJKDF2: Hit max visible sector clip frustums.\n");
         return;
     }
 
     // Added: Prevent crashing
     if (sithRender_numThingSectors >= SITH_MAX_VISIBLE_SECTORS_2) {
-        jk_printf("OpenJKDF2: Hit max visible sectors (2).\n");
+        sithRender_PrintOnce("OpenJKDF2: Hit max visible sectors (2).\n");
         return;
     }
 

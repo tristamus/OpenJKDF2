@@ -545,7 +545,10 @@ void jkPlayer_WriteConf(char16_t *name)
 #endif
 
     if (!name || !name[0]) {
-        printf("jkPlayer_WriteConf NULL name?\n");
+        // Added: once. It's harmless (no player name, nothing to write) and came twice at every autostart
+        static int bPrinted = 0;
+        if (!bPrinted) printf("jkPlayer_WriteConf NULL name?\n");
+        bPrinted = 1;
         return; // Added
     }
 
