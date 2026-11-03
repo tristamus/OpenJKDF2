@@ -3132,6 +3132,11 @@
       }
 
       // reload: with a Reload button, for when only a reload brings the game back.
+      // Then the game can't use the mouse or the screen any more, so the box
+      // gives them back first. A box doesn't end the game's mouse lock by
+      // itself: the cursor stayed hidden and clicks went to the game, not to
+      // Reload, and in fullscreen with keyboard lock only holding Esc got out.
+      var gameLost = false;
       function showProblem(title, text, reload) {
         picker.classList.remove('checking');
         pickerTitle.textContent = title;
@@ -3139,6 +3144,14 @@
         modChoice.hidden = true;
         showPickerResult(text, true);
         problemReload.hidden = !reload;
+        if (reload) {
+          gameLost = true;
+          if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
+          if (document.fullscreenElement && document.exitFullscreen) {
+            var leaving = document.exitFullscreen();
+            if (leaving && leaving.catch) leaving.catch(function() {});
+          }
+        }
         if (!picker.open) picker.showModal();
         picker.onclick = function() { picker.close(); };
       }
@@ -6658,6 +6671,7 @@
       function playFullscreen() {
         if (!fullscreenOption.checked || document.fullscreenElement || !document.fullscreenEnabled) return;
         if (!document.getElementById('zone').hidden || document.querySelector('dialog[open]')) return;
+        if (gameLost) return;  // the game stopped or lost its graphics: only a reload helps
         // Chrome and Edge give these keys to the page this way, only in
         // fullscreen the page asked for: Esc, and W, T and N with any of Ctrl,
         // Shift and Alt, so Ctrl+W (Fire and Forward by default), Ctrl+T and

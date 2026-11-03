@@ -159,6 +159,57 @@ test("Emscripten's 'unwind' and ExitStatus aren't crashes", () => {
     assert.equal(p.leaveGuard(), true);
 });
 
+// The box itself, and the fullscreen start it holds back.
+const boxCode = cut('      // reload: with a Reload button', '      var problemReload = ');
+const fullscreenCode = cut('      function playFullscreen()', "      window.addEventListener('pointerdown'");
+function box({ locked = true, fullscreen = true } = {}) {
+    const calls = [];
+    const element = () => ({ hidden: false, textContent: '' });
+    const canvas = {}, root = {};
+    const document = {
+        pointerLockElement: locked ? canvas : null,
+        fullscreenElement: fullscreen ? root : null,
+        fullscreenEnabled: true,
+        exitPointerLock() { calls.push('exitPointerLock'); this.pointerLockElement = null; },
+        exitFullscreen() { calls.push('exitFullscreen'); this.fullscreenElement = null; return Promise.resolve(); },
+        getElementById: () => ({ hidden: true }),
+        querySelector: () => null,
+        documentElement: { requestFullscreen() { calls.push('requestFullscreen'); return Promise.resolve(); } },
+    };
+    const picker = {
+        open: false, classList: { remove() {} }, querySelectorAll: () => [],
+        showModal() { calls.push('showModal'); this.open = true; },
+    };
+    const env = {
+        document, picker, navigator: {},
+        pickerTitle: element(), modChoice: element(), problemReload: element(),
+        showPickerResult: () => {}, fullscreenOption: { checked: true },
+    };
+    const names = Object.keys(env);
+    const api = new Function(...names, boxCode + '\n' + fullscreenCode +
+        '\nreturn { showProblem, playFullscreen };')(...names.map(n => env[n]));
+    return { ...api, calls, document };
+}
+
+test('the box with Reload gives back the mouse and leaves fullscreen first, so Reload can be clicked', () => {
+    const b = box();
+    b.showProblem('The game stopped', 'unreachable', true);
+    assert.deepEqual(b.calls, ['exitPointerLock', 'exitFullscreen', 'showModal']);
+    // A click on the game after the box is hidden doesn't go fullscreen again.
+    b.playFullscreen();
+    assert.deepEqual(b.calls, ['exitPointerLock', 'exitFullscreen', 'showModal']);
+
+    const free = box({ locked: false, fullscreen: false });
+    free.showProblem('The game lost its graphics', 'Reload the page to play again.', true);
+    assert.deepEqual(free.calls, ['showModal']);
+});
+
+test('before any box, a click on the game still goes fullscreen', () => {
+    const b = box({ locked: false, fullscreen: false });
+    b.playFullscreen();
+    assert.deepEqual(b.calls, ['requestFullscreen']);
+});
+
 let failed = 0;
 for (const t of tests) {
     try {
