@@ -412,6 +412,10 @@ int Window_menu_mouseY = 0;
 extern int jkGuiBuildMulti_bRendering;
 
 #ifdef ARCH_WASM
+// Added: Platform/SDL2/stdControl.c, presses kept until the game reads them
+void stdControl_LatchSDLKeydown(int scancode);
+void stdControl_LatchMouseDown(int buttons);
+
 // Added: browsers draw their own "has control of your pointer" notice each
 // time the game locks the mouse, and while it's locked they keep Esc for
 // themselves: Esc frees the mouse and never reaches the game. SDL isn't told
@@ -1380,6 +1384,12 @@ void Window_SdlUpdate()
 
                 //if (!event.key.repeat)
                 //    stdControl_SetSDLKeydown(event.key.scancode, 1, event.key.timestamp);
+#ifdef ARCH_WASM
+                // Added: kept until the game next reads the keyboard, so a tap that's
+                // let go before then still counts (stdControl_LatchSDLKeydown)
+                if (!event.key.repeat)
+                    stdControl_LatchSDLKeydown(event.key.scancode);
+#endif
                 break;
             case SDL_EVENT_KEY_UP:
                 if (event.key.key == SDLK_ESCAPE)
@@ -1518,6 +1528,12 @@ void Window_SdlUpdate()
                     Window_bMouseLeft = left;
                 if (hasRight)
                     Window_bMouseRight = right;
+#ifdef ARCH_WASM
+                // Added: as for keys, a click that's let go before the game reads the
+                // buttons still counts (stdControl_LatchMouseDown)
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+                    stdControl_LatchMouseDown(left | right);
+#endif
 
                 // route button coords through the same letterbox transform as motion
                 Window_TranslateMouseToCanvas((int)mevent->x, (int)mevent->y, &Window_mouseX, &Window_mouseY);
