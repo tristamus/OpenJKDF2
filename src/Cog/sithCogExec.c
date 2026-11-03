@@ -32,21 +32,26 @@ int32_t sithCog_actionCogIdk = 0;
 #if defined(SITH_DEBUG_STRUCT_NAMES) && !defined(COG_CRC32_SYMBOL_NAMES)
 // Added: a cog that calls a verb this build doesn't have usually does it from a
 // pulse or a per-frame message, so the same line came out many times a second and
-// pushed everything else out of the log. Say it once for each script and verb in a
-// row, and stop after 16 lines in all.
+// pushed everything else out of the browser's log. There, say it once for each
+// script and verb in a row, and stop after 16 lines in all. Desktop prints every
+// one, as before, for people writing cogs.
 static void sithCogExec_WarnMissingVerb(sithCog *pCog, SithCogSymbol *pSymbol)
 {
+    const char* pVerb = pSymbol->pName ? pSymbol->pName : "";
+#ifdef ARCH_WASM
     static char lastScript[32];
     static char lastVerb[64];
     static int numWarned = 0;
 
-    const char* pVerb = pSymbol->pName ? pSymbol->pName : "";
     if (numWarned >= 16 || (!strcmp(lastScript, pCog->pScript->aName) && !strcmp(lastVerb, pVerb)))
         return;
     stdString_SafeStrCopy(lastScript, pCog->pScript->aName, sizeof(lastScript));
     stdString_SafeStrCopy(lastVerb, pVerb, sizeof(lastVerb));
     numWarned++;
     stdPlatform_Printf("OpenJKDF2: Script `%s` attempted to call `%s`, which doesn't exist...%s\n", pCog->pScript->aName, pVerb, numWarned == 16 ? " (no more of these will be shown)" : "");
+#else
+    stdPlatform_Printf("OpenJKDF2: Script `%s` attempted to call `%s`, which doesn't exist...\n", pCog->pScript->aName, pVerb);
+#endif
 }
 #endif
 

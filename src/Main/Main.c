@@ -751,9 +751,10 @@ void Main_ParseCmdLine(char *cmdline)
         {
             Main_bEnhancedCogVerbs = 1;
         }
-#ifdef PLATFORM_DROIDWORKS
-        // Added: only where the DroidWorks code is built in (not in the browser),
-        // so nothing can turn these modes on without it.
+#if defined(PLATFORM_DROIDWORKS) || !defined(ARCH_WASM)
+        // Added: not in the browser, which leaves the DroidWorks code out, so
+        // nothing there can turn these modes on without it. Other targets parse
+        // them as before.
         else if (!__strcmpi(pArgTok, "-dwCompat")
                  || !__strcmpi(pArgTok, "/dwCompat")
                  || !__strcmpi(pArgTok, "-droidworksCompat")
