@@ -676,6 +676,12 @@ void stdSound_SetPosition(stdSound_buffer_t* pSoundBuf, rdVector3 *pos)
 
     stdSound_DS3DToAL(pSoundBuf->pos, pos);
 
+    // Added: the position counts as known before the sound has a source, so
+    // stdSound_BufferPlay places the new source here before it starts. Before,
+    // a new 3D sound played from the listener's own position, and without the
+    // distance loss, until the next mixer update.
+    pSoundBuf->bHasPos = 1;
+
     if (!pSoundBuf->source)
         return;
 
@@ -683,7 +689,6 @@ void stdSound_SetPosition(stdSound_buffer_t* pSoundBuf, rdVector3 *pos)
 
     alSourcei(pSoundBuf->source, AL_SOURCE_RELATIVE, AL_FALSE);
     alSourcefv(pSoundBuf->source, AL_POSITION, pSoundBuf->pos);
-    pSoundBuf->bHasPos = 1;
 }
 
 void stdSound_SetVelocity(stdSound_buffer_t* pSoundBuf, rdVector3 *vel)
@@ -692,6 +697,9 @@ void stdSound_SetVelocity(stdSound_buffer_t* pSoundBuf, rdVector3 *vel)
 
     stdSound_DS3DToAL(pSoundBuf->vel, vel);
 
+    // Added: likewise, so a new source starts with its velocity (Doppler).
+    pSoundBuf->bHasVel = 1;
+
     if (!pSoundBuf->source)
         return;
 
@@ -699,7 +707,6 @@ void stdSound_SetVelocity(stdSound_buffer_t* pSoundBuf, rdVector3 *vel)
 
     alSourcei(pSoundBuf->source, AL_SOURCE_RELATIVE, AL_FALSE);
     alSourcefv(pSoundBuf->source, AL_VELOCITY, pSoundBuf->vel); // FLEXTODO
-    pSoundBuf->bHasVel = 1;
 }
 
 int stdSound_IsPlaying(stdSound_buffer_t* pSoundBuf, rdVector3 *pos)
