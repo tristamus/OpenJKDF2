@@ -649,10 +649,27 @@ static int Window_bWasmSentEsc = 0;
 // are a hand's. All movement in the 100 ms from the first one used to be left out,
 // which in Firefox and Chrome lost the start of a real turn after every Esc menu,
 // chat or switch to another window.
+// The browser can then put the cursor back where the lock holds it, which comes as
+// the next movement: the same jump exactly the other way (headless Chromium does,
+// after a scripted move). Kept on its own, that trip back turned the view as far as
+// the jump would have. So when the lock's first movement was a jump left out, and the
+// next movement within 500 ms undoes it exactly (to 2 pixels on each axis, for
+// rounding), that is left out too, and the two cancel. A hand's movement doesn't
+// undo a jump that exactly, and only that one movement is checked.
 #define WINDOW_WASM_LOCK_SETTLE_MS (100)
+#define WINDOW_WASM_LOCK_BACK_MS (500)
 #define WINDOW_WASM_LOCK_JUMP_FRACTION (0.2)
 static int Window_bWasmMoveLocked = 0; // the lock's first movement has come
 static Uint64 Window_wasmLockedAtMs = 0; // when the lock was seen to be taken, 0 while there's none
+static int Window_wasmLockJumpXRel = 0; // the jump just left out, while its trip back may come
+static int Window_wasmLockJumpYRel = 0;
+static Uint64 Window_wasmLockJumpMs = 0; // when it came, 0 when there's none
+
+// Whether a movement on one axis undoes a jump's movement on it.
+static int Window_WasmUndoesJump(int rel, int jumpRel)
+{
+    return abs(rel + jumpRel) <= 2;
+}
 
 static void Window_WasmSeeLock(int bLocked, Uint64 ms)
 {
@@ -660,6 +677,7 @@ static void Window_WasmSeeLock(int bLocked, Uint64 ms)
     {
         Window_wasmLockedAtMs = 0;
         Window_bWasmMoveLocked = 0;
+        Window_wasmLockJumpMs = 0;
     }
     else if (!Window_wasmLockedAtMs)
     {
@@ -667,21 +685,38 @@ static void Window_WasmSeeLock(int bLocked, Uint64 ms)
     }
 }
 
+// 1: a jump as the lock was taken, 2: the cursor's trip back from one, 0: a hand's movement.
 static int Window_WasmIsLockJump(int xrel, int yrel, Uint64 timestampNs)
 {
     Uint64 ms = timestampNs / 1000000;
     int bLocked = Window_wasmIsPointerLocked();
-    int bFirst;
+    int bFirst, bJump;
 
     Window_WasmSeeLock(bLocked, ms);
     if (!bLocked)
         return 0;
     bFirst = !Window_bWasmMoveLocked;
     Window_bWasmMoveLocked = 1;
+    bJump = abs(xrel) >= (int)(Window_screenXSize * WINDOW_WASM_LOCK_JUMP_FRACTION)
+         || abs(yrel) >= (int)(Window_screenYSize * WINDOW_WASM_LOCK_JUMP_FRACTION);
+    if (Window_wasmLockJumpMs && (xrel || yrel))
+    {
+        int bBack = ms >= Window_wasmLockJumpMs && ms - Window_wasmLockJumpMs < WINDOW_WASM_LOCK_BACK_MS
+                    && Window_WasmUndoesJump(xrel, Window_wasmLockJumpXRel)
+                    && Window_WasmUndoesJump(yrel, Window_wasmLockJumpYRel);
+        Window_wasmLockJumpMs = 0;
+        if (bBack)
+            return 2;
+    }
     if (!bFirst && ms >= Window_wasmLockedAtMs && ms - Window_wasmLockedAtMs >= WINDOW_WASM_LOCK_SETTLE_MS)
         return 0;
-    return abs(xrel) >= (int)(Window_screenXSize * WINDOW_WASM_LOCK_JUMP_FRACTION)
-        || abs(yrel) >= (int)(Window_screenYSize * WINDOW_WASM_LOCK_JUMP_FRACTION);
+    if (bJump && bFirst) // only the lock's first movement: a later jump can be the cursor's move to the middle, against the hand
+    {
+        Window_wasmLockJumpXRel = xrel;
+        Window_wasmLockJumpYRel = yrel;
+        Window_wasmLockJumpMs = ms ? ms : 1;
+    }
+    return bJump;
 }
 
 // Added: Chromium (Chrome, Edge, Opera, Brave) on Windows and Linux keeps the
@@ -934,9 +969,13 @@ void Window_HandleMouseMove(SDL_MouseMotionEvent *event)
     Window_yRelLeftOver -= yrel;
 
 #ifdef ARCH_WASM
-    if (Window_WasmIsLockJump(xrel, yrel, event->timestamp)) // Added
+    int lockJump = Window_WasmIsLockJump(xrel, yrel, event->timestamp); // Added
+    if (lockJump)
     {
-        stdPlatform_Printf("Mouse: left out a jump of %d,%d as the lock was taken\n", xrel, yrel);
+        if (lockJump == 2)
+            stdPlatform_Printf("Mouse: left out the cursor's trip back of %d,%d\n", xrel, yrel);
+        else
+            stdPlatform_Printf("Mouse: left out a jump of %d,%d as the lock was taken\n", xrel, yrel);
         xrel = yrel = 0;
     }
     else
