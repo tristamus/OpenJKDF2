@@ -30,7 +30,10 @@ macro(plat_initialize)
     # now speaks the SDL3_mixer API, which the SDL2_mixer port can't satisfy. WASM
     # builds until someone either vendors SDL3_mixer from source for WASM or Emscripten
     # ships a port; music/mixer playback is unverified/broken on this target for now.
-    set(USE_FLAGS "-sUSE_SDL=3 -sWASM=1 -s ALLOW_MEMORY_GROWTH=1 -sFULL_ES2 -sFULL_ES3 -sUSE_WEBGL2=1 -sASYNCIFY -sINITIAL_MEMORY=200mb -s STACK_SIZE=100mb")
+    # WebGL 2 only (the page already requires it and the engine asks for ES 3.0).
+    # No FULL_ES2/FULL_ES3: they emulate client-side vertex arrays and buffer
+    # mapping, and the renderer draws only from buffers it made itself.
+    set(USE_FLAGS "-sUSE_SDL=3 -sWASM=1 -s ALLOW_MEMORY_GROWTH=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sASYNCIFY -sINITIAL_MEMORY=200mb -s STACK_SIZE=100mb")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${USE_FLAGS}")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${USE_FLAGS}")
     #set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling --preload-file ${PROJECT_SOURCE_DIR}/wasm_out@/ ")
