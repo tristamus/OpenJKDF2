@@ -43,8 +43,9 @@
 #define MICROSECOND_TIME
 #endif
 
-// Droidworks app layer (src/Dw/...), desktop-only for now
-#if !defined(TARGET_RETRO_HOMEBREW)
+// Droidworks app layer (src/Dw/...), desktop-only for now. The browser build
+// leaves it out too (CMakeLists.txt drops src/Dw there): it only plays JK and MotS.
+#if !defined(TARGET_RETRO_HOMEBREW) && !defined(ARCH_WASM)
 #define PLATFORM_DROIDWORKS
 #endif
 

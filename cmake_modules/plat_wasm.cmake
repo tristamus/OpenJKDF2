@@ -30,7 +30,10 @@ macro(plat_initialize)
     # now speaks the SDL3_mixer API, which the SDL2_mixer port can't satisfy. WASM
     # builds until someone either vendors SDL3_mixer from source for WASM or Emscripten
     # ships a port; music/mixer playback is unverified/broken on this target for now.
-    set(USE_FLAGS "-sUSE_SDL=3 -sWASM=1 -s ALLOW_MEMORY_GROWTH=1 -sFULL_ES2 -sFULL_ES3 -sUSE_WEBGL2=1 -sASYNCIFY -sINITIAL_MEMORY=200mb -s STACK_SIZE=100mb")
+    # WebGL 2 only (the page already requires it and the engine asks for ES 3.0).
+    # No FULL_ES2/FULL_ES3: they emulate client-side vertex arrays and buffer
+    # mapping, and the renderer draws only from buffers it made itself.
+    set(USE_FLAGS "-sUSE_SDL=3 -sWASM=1 -s ALLOW_MEMORY_GROWTH=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sASYNCIFY -sINITIAL_MEMORY=200mb -s STACK_SIZE=100mb")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${USE_FLAGS}")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${USE_FLAGS}")
     #set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling --preload-file ${PROJECT_SOURCE_DIR}/wasm_out@/ ")
@@ -38,9 +41,13 @@ macro(plat_initialize)
     # player's own game files into MEMFS before main() runs. maps.js (map
     # downloads for joiners), mods.js (the host's mod, built on maps.js, so
     # it comes second) and netstats.js (network measurements and ?netsim) are
-    # bundled in, so they always match the engine.
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js ")
+    # bundled in, so they always match the engine. --profiling-funcs keeps the
+    # wasm's function names, so crash stacks stay readable, but unlike
+    # --profiling it lets the JS be minified and drops the other debug names.
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling-funcs -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js ")
     set(CMAKE_EXECUTABLE_SUFFIX .js)
+    # audio.js tunes the Web Audio graph Emscripten's OpenAL builds (k-rate panners).
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/audio.js")
 
     # Added: jk.c's _wcslen(const char16_t*) is a plain `for(len=0;str[len];len++)` loop,
     # but LLVM's builtin-recognition pass pattern-matches that exact shape as the "wcslen
@@ -60,6 +67,7 @@ endmacro()
 macro(plat_link_and_package)
     target_link_libraries(${BIN_NAME} PRIVATE -lm -lSDL3 -lGL -lGLEW -lopenal -lidbfs.js)
     set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js)
+    set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/audio.js)
     target_link_libraries(sith_engine PRIVATE nlohmann_json::nlohmann_json)
     if(TARGET_CAN_JKGM)
         target_link_libraries(sith_engine PRIVATE PNG::PNG ZLIB::ZLIB)

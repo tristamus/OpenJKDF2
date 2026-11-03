@@ -292,6 +292,39 @@ void stdControl_SetSDLKeydown(int keyNum, int bDown, uint32_t readTime)
     stdControl_UpdateKeyState(stdControl_aSdlToDik[keyNum], bDown, readTime);
 }
 
+#ifdef ARCH_WASM
+// Added: keys and mouse buttons pressed since the game last read them. The game
+// reads the keyboard and mouse buttons once a frame, so a key that went down and
+// up between two reads (a quick tap, or any press during a slow frame) left no
+// trace. Window_SdlUpdate keeps each press here until the next read, which then
+// sees the key held for that one frame: one press, as for a key held longer. A
+// press while the game isn't reading (menus, chat, the console) isn't kept.
+static uint8_t stdControl_aKeyLatch[256];
+static int stdControl_mouseLatch = 0; // 1: left, 2: right
+
+static void stdControl_ClearLatches()
+{
+    _memset(stdControl_aKeyLatch, 0, sizeof(stdControl_aKeyLatch));
+    stdControl_mouseLatch = 0;
+}
+
+void stdControl_LatchSDLKeydown(int scancode)
+{
+    if (scancode < 0 || scancode >= 256)
+        return;
+    if (!stdControl_bControlsActive || stdControl_bDisableKeyboard || jkQuakeConsole_bOpen)
+        return;
+    stdControl_aKeyLatch[scancode] = 1;
+}
+
+void stdControl_LatchMouseDown(int buttons)
+{
+    if (!stdControl_bControlsActive || !stdControl_bReadMouse || jkQuakeConsole_bOpen)
+        return;
+    stdControl_mouseLatch |= buttons & 3;
+}
+#endif
+
 // Added: a key held right now counts again only once it's let go and pressed.
 // The Controls screen calls this as it starts waiting for a key, so the Insert
 // that starts the wait (its Add shortcut) isn't read as the key to bind. The
@@ -303,6 +336,9 @@ void stdControl_IgnoreHeldKeys()
     {
         stdControl_aDebounce[i] = !!state[i];
     }
+#ifdef ARCH_WASM
+    stdControl_ClearLatches(); // Added
+#endif
 }
 
 #ifdef ARCH_WASM
@@ -746,6 +782,9 @@ void stdControl_SetActivation(int a)
 {
     extern SDL_Window* displayWindow;
 
+#ifdef ARCH_WASM
+    stdControl_ClearLatches(); // Added: presses from before don't carry into or out of a menu
+#endif
     if ( stdControl_bOpen )
     {
         if ( a )
@@ -898,6 +937,10 @@ void stdControl_ReadControls()
 {
     flex_d_t khz;
 
+#ifdef ARCH_WASM
+    if (!stdControl_bControlsActive || jkQuakeConsole_bOpen)
+        stdControl_ClearLatches(); // Added
+#endif
     if (!stdControl_bControlsActive)
         return;
     if (jkQuakeConsole_bOpen) return; // Hijack input to console
@@ -936,6 +979,9 @@ void stdControl_ReadControls()
         for (int i = 0; i < 256; i++)
         {
             int s = !!state[i];
+#ifdef ARCH_WASM
+            s |= stdControl_aKeyLatch[i]; // Added: pressed since the last read
+#endif
             if (s && stdControl_aDebounce[i]) {
                 continue;
             }
@@ -950,6 +996,9 @@ void stdControl_ReadControls()
         }
         // stdControl_UpdateKeyState(keyNum, keyVal, timestamp)
     }
+#ifdef ARCH_WASM
+    _memset(stdControl_aKeyLatch, 0, sizeof(stdControl_aKeyLatch)); // Added: read now
+#endif
 
     // HACK: ehh
     //if ( stdControl_bReadJoysticks )
@@ -1110,6 +1159,10 @@ static void stdControl_UpdateWheelKey(int keyNum, int notches)
 
 void stdControl_ReadMouse()
 {
+#ifdef ARCH_WASM
+    int latch = stdControl_mouseLatch; // Added
+    stdControl_mouseLatch = 0;
+#endif
     if (!stdControl_bReadMouse)
         return;
     if (jkQuakeConsole_bOpen) return; // Hijack input to console
@@ -1166,8 +1219,13 @@ void stdControl_ReadMouse()
     float x,y;
     uint32_t buttons = SDL_GetMouseState(&x, &y);
 
+#ifdef ARCH_WASM
+    stdControl_UpdateKeyState(KEY_MOUSE_B1, Window_bMouseLeft || (latch & 1), stdControl_curReadTime); // Added: or pressed since the last read
+    stdControl_UpdateKeyState(KEY_MOUSE_B2, Window_bMouseRight || (latch & 2), stdControl_curReadTime);
+#else
     stdControl_UpdateKeyState(KEY_MOUSE_B1, Window_bMouseLeft, stdControl_curReadTime);
     stdControl_UpdateKeyState(KEY_MOUSE_B2, Window_bMouseRight, stdControl_curReadTime);
+#endif
     stdControl_UpdateKeyState(KEY_MOUSE_B3, !!(buttons & SDL_BUTTON_MMASK), stdControl_curReadTime);
     stdControl_UpdateKeyState(KEY_MOUSE_B4, !!(buttons & SDL_BUTTON_X1MASK), stdControl_curReadTime);
     stdControl_UpdateKeyState(KEY_MOUSE_B5, !!(buttons & SDL_BUTTON_X2MASK), stdControl_curReadTime);

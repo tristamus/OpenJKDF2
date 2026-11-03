@@ -1,6 +1,6 @@
-// Tests for the graphics acceleration and Edge enhanced security notices in
-// packaging/wasm/index.html: when the page shows them, and the steps they
-// give. In Node:
+// Tests for the graphics acceleration, Edge enhanced security and
+// resist-fingerprinting notices in packaging/wasm/index.html: when the page
+// shows them, and the steps they give. In Node:
 // node packaging/wasm/test/graphics-test.mjs
 //
 // The page's functions are taken from index.html as they are; the browser
@@ -334,6 +334,61 @@ test('blocked storage still shows the notice, and Hide still hides it', () => {
     p.showJitNotice(el, 13.5);
     assert.equal(el.hidden, false);
     el.hide.click();
+    assert.equal(el.hidden, true);
+});
+
+// ---- The resist-fingerprinting note. A browser with WebGL 2 that names its
+// renderer `renderer` and holds textures and renderbuffers to `most` pixels,
+// and a clock that steps by `step` ms.
+function privacyBrowser({ renderer = 'Mozilla', most = 2048, step = 100 / 6, ua = FIREFOX, webgl = true } = {}) {
+    const lost = [];
+    const gl = {
+        RENDERER: 0x1F01, MAX_TEXTURE_SIZE: 0x0D33, MAX_RENDERBUFFER_SIZE: 0x84E8,
+        getExtension(name) { return name === 'WEBGL_lose_context' ? { loseContext() { lost.push(1); } } : null; },
+        getParameter(p) { return p === 0x1F01 ? renderer : most; },
+    };
+    const document = { createElement: () => ({ getContext: () => (webgl ? gl : null) }) };
+    let now = 1000, reads = 0;
+    // Each read moves the real clock on 0.05 ms; the browser shows it in steps.
+    const performance = { now: () => { reads++; return Math.floor((now += 0.05) / step) * step; } };
+    const fns = new Function('document', 'navigator', 'window', 'performance', 'location',
+        code + '\nreturn { privacyMode, showPrivacyNote };')(document, { userAgent: ua }, {}, performance, { hostname: 'jediknight.zone' });
+    return { ...fns, lost, reads: () => reads };
+}
+const FIREFOX = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:159.0) Gecko/20100101 Firefox/159.0';
+
+test('resist-fingerprinting is told by its hidden renderer, 2048-pixel limit and 16.7 ms clock together', () => {
+    const rfp = privacyBrowser();
+    assert.equal(rfp.privacyMode('Mozilla'), true);
+    assert.equal(rfp.lost.length, 1, 'the test context is let go');
+    // LibreWolf calls itself Firefox too.
+    assert.equal(privacyBrowser({ ua: 'Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0 LibreWolf/150.0' })
+        .privacyMode('Mozilla'), true);
+});
+
+test('no resist-fingerprinting note for a named card, a real 2048 limit, a fine clock or another browser', () => {
+    const named = privacyBrowser({ renderer: 'llvmpipe, or similar' });
+    assert.equal(named.privacyMode('llvmpipe, or similar'), false);
+    assert.equal(named.reads(), 0, 'the clock is only timed where the other signs are there');
+    assert.equal(privacyBrowser({ most: 16384 }).privacyMode('Mozilla'), false, 'Firefox hiding the name only');
+    assert.equal(privacyBrowser({ step: 1 }).privacyMode('Mozilla'), false, 'a card that stops at 2048');
+    assert.equal(privacyBrowser({ ua: 'Mozilla/5.0 Chrome/155.0.0.0' }).privacyMode('Mozilla'), false);
+    assert.equal(privacyBrowser({ webgl: false }).privacyMode('Mozilla'), false);
+});
+
+test('the resist-fingerprinting note says what it limits, and how to lift it for this site', () => {
+    const { showPrivacyNote } = privacyBrowser();
+    const el = notice();
+    let site = null;
+    el.querySelector = sel => (sel === '.site' ? { set textContent(t) { site = t; } } : null);
+    showPrivacyNote(el, true);
+    assert.equal(el.hidden, false);
+    assert.match(text(el), /resist-fingerprinting is on/);
+    assert.match(text(el), /2048 pixels across/);
+    assert.match(text(el), /screenshots come out as noise/);
+    assert.match(text(el), /privacy\.resistFingerprinting\.exemptedDomains/);
+    assert.equal(site, 'jediknight.zone');
+    showPrivacyNote(el, false);
     assert.equal(el.hidden, true);
 });
 

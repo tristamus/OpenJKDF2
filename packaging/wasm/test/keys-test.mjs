@@ -149,6 +149,20 @@ test('in fullscreen, Chrome and Edge give Esc, W, T and N to the game', () => {
     assert.ok(html.includes("navigator.keyboard.lock(['Escape', 'KeyW', 'KeyT', 'KeyN'])"));
 });
 
+test('Brave players are told their browser takes Esc, Ctrl+W, Ctrl+T and Ctrl+N back in fullscreen', async () => {
+    const at = html.indexOf('      function keysNote(nav)');
+    assert.ok(at > 0, 'index.html has keysNote');
+    const keysNote = new Function(html.substring(at, html.indexOf('      keysNote(navigator)', at)) + '\nreturn keysNote;')();
+    const brave = { isBrave: async () => true };
+    assert.equal(await keysNote({ brave, keyboard: null }), true, 'Brave 1.98: navigator.keyboard is null');
+    assert.equal(await keysNote({ brave, keyboard: { lock: null } }), true);
+    assert.equal(await keysNote({ brave, keyboard: { lock() {} } }), false, 'a Brave with keyboard lock');
+    assert.equal(await keysNote({ brave: { isBrave: () => Promise.reject(new Error('no')) }, keyboard: null }), false);
+    assert.equal(await keysNote({ keyboard: { lock() {} } }), false, 'Chrome');
+    assert.equal(await keysNote({}), false, 'Firefox');
+    assert.match(html, /id="keys-note" hidden>Brave doesn't let the game keep Esc, Ctrl\+W/);
+});
+
 // The console's rule in the browser, as the source has it: the condition after
 // "#ifdef ARCH_WASM" in jkQuakeConsole_WmHandler, run as JavaScript (it's
 // plain comparisons and && || ! ?:, which mean the same in both).

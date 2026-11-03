@@ -353,7 +353,9 @@ int sithUpdate()
 
             for (int i = 0; i < wholeFramesToApply; i++)
             {
+#ifndef ARCH_WASM
                 sithSoundMixer_Update(sithTime_g_frameTimeFlex);
+#endif
                 sithEvent_Process();
 
                 if ( sithMessage_g_inputstream )
@@ -390,6 +392,20 @@ int sithUpdate()
             sithTime_g_msecGameTime = tmp6;
             //stdControl_updateKHz = tmp4;
             //stdControl_updateHz = tmp5;
+
+#ifdef ARCH_WASM
+            // Added: in the browser, update sound once per frame, after the steps
+            // and with the game time they covered, not before each of the 150
+            // steps a second. Fades, pitch bends and the like move by the same
+            // total. Each update is many JS calls into Web Audio, and the camera,
+            // which places the listener, only moves once a frame anyway. Sounds
+            // started during the steps still start this frame. A finished sound
+            // now keeps its mixer slot until the end of the frame rather than the
+            // next step; a cog's PlaySoundClass with a mutually exclusive entry
+            // checks that slot, and sends its network message only if it plays.
+            if (wholeFramesToApply)
+                sithSoundMixer_Update(wholeFramesToApply * DELTA_PHYSTICK_FPS);
+#endif
         }
         else
 #endif

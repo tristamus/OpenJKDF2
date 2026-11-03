@@ -740,11 +740,14 @@
       #mod-choice .keep-folder { margin: 14px 0 0; }
       #mod-choice .keep-folder .fine { display: block; margin-top: 4px; }
       #mod-choice .mod-clash { margin: 0 0 12px; padding: 7px 10px; border-left: 3px solid var(--gold); font-size: 14px; white-space: pre-line; }
+      #mod-choice .keys-note { margin: -4px 0 14px; padding: 4px 10px; border-left: 3px solid var(--gold); font-size: 14px; }
       /* Full screen sits between the mods and Start, and on its own without mods. */
       #mod-choice .picker-option { margin: 0 0 14px; }
       #picker-result { margin-top: 14px; white-space: pre-line; }
       #picker-result:empty { display: none; }
       #picker-result.error { color: var(--bad); font-weight: bold; }
+      #problem-reload { margin-top: 14px; }
+      #picker #problem-reload[hidden] { display: none; }
 
       /* Shown only when the browser draws without the graphics card. */
       .gfx-notice {
@@ -1687,6 +1690,7 @@
           the folder. Choose Upload to continue.</p>
         <section class="gfx-notice picker-intro" id="picker-gfx" role="alert" hidden></section>
         <section class="gfx-notice jit-notice picker-intro" id="picker-jit" role="status" hidden></section>
+        <section class="gfx-notice picker-intro" id="picker-privacy" role="status" hidden></section>
         <p class="saved-files picker-intro" id="saved-files" hidden><span class="saved-text"></span>
           <button class="text-button" type="button">Remove them</button></p>
         <div class="actions picker-intro">
@@ -1721,6 +1725,9 @@
           <label class="picker-option"><input type="checkbox" id="fullscreen-option" checked>
             <span>Play in fullscreen <span class="fine">Click the game to fill the screen. Hold Esc to
               leave.</span></span></label>
+          <p class="keys-note" id="keys-note" hidden>Brave doesn't let the game keep Esc, Ctrl+W, Ctrl+T or Ctrl+N
+            in fullscreen: Esc leaves fullscreen, and Ctrl+W closes the tab. If you fire with Ctrl, give Fire
+            another key in the game's Setup &gt; Controls.</p>
           <label class="picker-option" id="raw-mouse-choice"><input type="checkbox" id="raw-mouse-option" checked>
             <span>Raw mouse input <span class="fine raw-mouse-about">Ticked, mouse look ignores Windows' pointer speed and
               Enhance pointer precision, so the view can't suddenly jolt. Unticked, it uses your Windows mouse settings,
@@ -1738,6 +1745,7 @@
             <button class="text-button" type="button">Stop checking</button></p>
         </div>
         <div id="picker-result" role="status"></div>
+        <div class="actions" id="problem-reload" hidden><button class="play" type="button">Reload</button></div>
       </div>
     </dialog>
 
@@ -1796,10 +1804,22 @@
         canvas: (function() {
           var canvas = document.getElementById('canvas');
 
-          // As a default initial behavior, pop up an alert when webgl context is lost. To make your
-          // application robust, you may want to override this behavior before shipping!
-          // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
-          canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
+          // The browser can take the game's 3D graphics away: after a graphics
+          // driver crash, reset or update, or when the computer runs low on
+          // memory. The game can't build them again by itself, so the player
+          // is told and offered a reload, in a box rather than alert(), which
+          // held up the whole tab (and a host's match with it) until clicked.
+          canvas.addEventListener("webglcontextlost", function(e) {
+            e.preventDefault();
+            console.warn('Graphics: the browser took the WebGL context away');
+            if (typeof showProblem === 'function') {
+              showProblem('The game lost its graphics',
+                          "The browser took the game's 3D graphics away. That happens after a graphics driver " +
+                          'crash, reset or update, or when the computer runs low on memory, and the game ' +
+                          "can't get them back by itself. Reload the page to play again.\n\nClick anywhere else " +
+                          'to hide this.', true);
+            }
+          }, false);
 
           // Ask for the faster graphics card on laptops that have two. The engine's
           // context leaves powerPreference at "default", which lets the browser pick
@@ -1892,21 +1912,77 @@
         if (imperial && imperial !== 'off' && IMPERIAL_HOSTS.indexOf(window.location.hostname) >= 0)
           Module['jkImperialUrl'] = imperial;
       })();
-      window.onerror = function(event) {
-        // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
-        Module.setStatus('Exception thrown, see JavaScript console');
+      window.onerror = function(message, source, line, column, error) {
+        if (engineError(error, source) && !controlFlow(error === undefined ? message : error))
+          engineStopped(String(message), error);
+      };
+
+      // ---- When the engine can't start, or stops. Only the engine's own
+      // errors count: those from openjkdf2.js or the wasm, from this page's
+      // code while the engine called it (its stack goes through the engine),
+      // and Emscripten's aborts (Module.onAbort). An error from anything else,
+      // such as a browser add-on's script, used to show "The game stopped" and
+      // turn off the leave warning while the game played on; now it's left to
+      // the console.
+      var ENGINE_FRAME = /openjkdf2(_data)?\.(js|wasm)|wasm-function|wasm:\/\//;
+      var engineRunning = false, engineProblem = false;
+
+      function engineError(error, source) {
+        var wasm = typeof WebAssembly === 'object' ? WebAssembly : {};
+        if (['RuntimeError', 'CompileError', 'LinkError', 'SuspendError'].some(function(type) {
+              return typeof wasm[type] === 'function' && error instanceof wasm[type];
+            }))
+          return true;
+        return ENGINE_FRAME.test(String(source || '')) || ENGINE_FRAME.test(String(error && error.stack || ''));
+      }
+
+      // Emscripten throws 'unwind' and ExitStatus on purpose; those aren't crashes.
+      function controlFlow(error) {
+        return error === 'unwind' || !!(error && error.name === 'ExitStatus') ||
+               /^(Uncaught )?(unwind|ExitStatus)\b|#<ExitStatus>/.test(String(error));
+      }
+
+      Module.onRuntimeInitialized = function() { engineRunning = true; };
+      // Emscripten calls this when the wasm didn't download or compile, or the
+      // browser couldn't give it its memory, and when the running engine
+      // aborts. The error it throws next is then only logged.
+      Module.onAbort = function(what) { engineStopped(String(what)); };
+      // The engine starts in a promise and every frame resumes from one, so
+      // its crashes and a failed start arrive here rather than at onerror.
+      // A DOMException is the browser turning down a request the engine made
+      // and didn't wait on (pointer lock while the window isn't focused,
+      // fullscreen, keyboard lock), not the engine stopping.
+      window.addEventListener('unhandledrejection', function(ev) {
+        if (typeof DOMException === 'function' && ev.reason instanceof DOMException) return;
+        if (engineError(ev.reason, '') && !controlFlow(ev.reason)) engineStopped(String(ev.reason), ev.reason);
+      });
+
+      // Says so once, with a Reload button. Before the engine ran (a failed
+      // download, a cut-off file, a server error during a deploy) the player
+      // used to see a spinner on black forever.
+      function engineStopped(why, error) {
+        console.error('OpenJKDF2: the game stopped: ' + why + (error && error.stack ? '\n' + error.stack : ''));
+        if (engineProblem) return;
+        engineProblem = true;
+        engineLog.push('The game stopped: ' + why);  // for the saved network log
+        leaveGuard = false;
         spinnerElement.style.display = 'none';
+        progressElement.hidden = true;
+        var title = engineRunning ? 'The game stopped' : "The game couldn't start";
+        statusElement.textContent = title;
         Module.setStatus = function(text) {
           if (text) Module.printErr('[post-exception status] ' + text);
         };
-        // The status line sits under the canvas, so say it where players can see it.
-        // Emscripten throws 'unwind' and ExitStatus on purpose; those aren't crashes.
-        if (!/unwind|ExitStatus/.test(String(event))) {
-          leaveGuard = false;
-          showProblem('The game stopped', String(event) +
-                      '\n\nPress F12 and open Console for details. Click anywhere to hide this.');
-        }
-      };
+        if (typeof showProblem !== 'function') return;
+        showProblem(title, engineRunning
+          ? why + '\n\nPress F12 and open Console for details. Click anywhere else to hide this.'
+          : /memory/i.test(why)
+          ? "The browser couldn't give the game the memory it needs. Close other tabs and programs, then " +
+            'reload the page.\n\nThe browser said: ' + why
+          : "Its files didn't download or start properly. That can happen on a flaky connection or while " +
+            'the site is being updated. Reload the page to try again.\n\nWhat went wrong: ' + why +
+            '\n\nClick anywhere else to hide this.', true);
+      }
 
       // ---- Mouse look. Without raw mouse input, Chromium (Chrome, Edge, Opera,
       // Brave) keeps the hidden cursor away from the page's edges by moving it
@@ -2099,20 +2175,136 @@
 
       var THUMB_WIDTH = 320;
 
-      // The PNG, and a small JPEG for the list on this page, so the page
-      // doesn't load every full-size picture to show them.
-      async function shotImages(pixels, w, h) {
-        var canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
+      // The picture on a canvas, and a small copy of it for the list on this
+      // page, so the page doesn't load every full-size picture to show them.
+      // newCanvas(w, h) makes a canvas: the page's own, or a worker's.
+      function shotCanvases(pixels, w, h, newCanvas) {
+        var canvas = newCanvas(w, h);
         canvas.getContext('2d').putImageData(new ImageData(pixels, w, h), 0, 0);
-        var thumb = document.createElement('canvas');
-        thumb.width = Math.min(THUMB_WIDTH, w);
-        thumb.height = Math.max(1, Math.round(h * thumb.width / w));
+        var tw = Math.min(THUMB_WIDTH, w);
+        var thumb = newCanvas(tw, Math.max(1, Math.round(h * tw / w)));
         var ctx = thumb.getContext('2d');
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(canvas, 0, 0, thumb.width, thumb.height);
-        return { png: await canvasBytes(canvas, 'image/png'), thumb: await canvasBytes(thumb, 'image/jpeg', 0.85) };
+        return { canvas: canvas, thumb: thumb };
+      }
+
+      // The PNG, and a small JPEG for the list, made on this page.
+      async function shotImages(rgba, w, h) {
+        var c = shotCanvases(shotPixels(rgba, w, h), w, h, function(w, h) {
+          var canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          return canvas;
+        });
+        return { png: await canvasBytes(c.canvas, 'image/png'), thumb: await canvasBytes(c.thumb, 'image/jpeg', 0.85) };
+      }
+
+      // ---- Made in a worker instead where the browser can (OffscreenCanvas
+      // there). Made on the page, a 1080p screenshot held the game up for
+      // 26-32 ms, and Chromium, which compresses a page canvas's PNG in idle
+      // time, forced it through in one go about a second later (80-150 ms)
+      // when the game left no idle time. The pixels move to the worker
+      // without a copy, and the worker sends the two files back.
+
+      // Runs in the worker, so it uses nothing else from this page but what
+      // shotWorkerSource gives it. It says first whether it can make them.
+      function shotWorker() {
+        var ok = false;
+        try {
+          ok = typeof OffscreenCanvas === 'function' && typeof ImageData === 'function' &&
+               typeof OffscreenCanvas.prototype.convertToBlob === 'function' &&
+               !!new OffscreenCanvas(1, 1).getContext('2d');
+        } catch (e) {}
+        postMessage({ ready: ok });
+        onmessage = function(ev) {
+          var job = ev.data;
+          Promise.resolve().then(function() {
+            var c = shotCanvases(shotPixels(new Uint8Array(job.buf), job.w, job.h), job.w, job.h,
+                                 function(w, h) { return new OffscreenCanvas(w, h); });
+            return Promise.all([c.canvas.convertToBlob({ type: 'image/png' }),
+                                c.thumb.convertToBlob({ type: 'image/jpeg', quality: 0.85 })]);
+          }).then(function(blobs) {
+            return Promise.all(blobs.map(function(b) { return b.arrayBuffer(); }));
+          }).then(function(files) {
+            postMessage({ id: job.id, png: files[0], thumb: files[1] }, files);
+          }, function(err) {
+            // The pixels go back, and the page makes the files itself.
+            postMessage({ id: job.id, error: String(err), buf: job.buf }, [job.buf]);
+          });
+        };
+      }
+
+      function shotWorkerSource() {
+        return 'var THUMB_WIDTH = ' + THUMB_WIDTH + ';\n' + shotPixels + '\n' + shotCanvases + '\n(' + shotWorker + ')();';
+      }
+
+      // makeImages for shotSaver: in a worker, started at the first
+      // screenshot, or with makeHere where it can't run or can't make them.
+      var SHOT_WORKER_START_MS = 5000;
+      function shotImagesInWorker(makeHere) {
+        var worker = null, ready = null, jobs = {}, nextId = 1;
+
+        function stop(why) {
+          if (why) console.warn('OpenJKDF2: screenshots are made on the page (' + why + ')');
+          ready = Promise.resolve(false);
+          if (worker) worker.terminate();
+          worker = null;
+          // A worker that stopped took the pictures it had with it.
+          for (var id in jobs) jobs[id].reject(new Error(why || 'the screenshot worker stopped'));
+          jobs = {};
+        }
+
+        function start() {
+          ready = new Promise(function(resolve) {
+            var timer = setTimeout(function() { resolve(false); }, SHOT_WORKER_START_MS);
+            try {
+              worker = new Worker(URL.createObjectURL(new Blob([shotWorkerSource()], { type: 'text/javascript' })));
+            } catch (e) {
+              console.warn('OpenJKDF2: screenshots are made on the page (no worker: ' + e + ')');
+              clearTimeout(timer);
+              return resolve(false);
+            }
+            worker.onmessage = function(ev) {
+              var m = ev.data;
+              if (m.ready !== undefined) {
+                clearTimeout(timer);
+                return resolve(m.ready);
+              }
+              var job = jobs[m.id];
+              delete jobs[m.id];
+              if (!job) return;
+              if (m.error) {
+                stop("the worker couldn't: " + m.error);
+                job.resolve(makeHere(new Uint8Array(m.buf), job.w, job.h));
+              } else {
+                job.resolve({ png: new Uint8Array(m.png), thumb: new Uint8Array(m.thumb) });
+              }
+            };
+            worker.onerror = function(ev) {
+              clearTimeout(timer);
+              resolve(false);
+              stop('the worker failed' + (ev && ev.message ? ': ' + ev.message : ''));
+            };
+          }).then(function(ok) {
+            if (!ok && worker) stop("this browser can't make them in a worker");
+            return ok;
+          });
+        }
+
+        return function(rgba, w, h) {
+          if (!ready) start();
+          return ready.then(function(ok) {
+            if (!ok) return makeHere(rgba, w, h);
+            return new Promise(function(resolve, reject) {
+              var id = nextId++;
+              jobs[id] = { resolve: resolve, reject: reject, w: w, h: h };
+              // The engine's copy of the frame has a buffer of its own, which moves.
+              var buf = rgba.byteOffset === 0 && rgba.byteLength === rgba.buffer.byteLength ? rgba.buffer : rgba.slice().buffer;
+              worker.postMessage({ id: id, buf: buf, w: w, h: h }, [buf]);
+            });
+          });
+        };
       }
 
       // A record per screenshot in meta (name, game, level, time, size and
@@ -2159,6 +2351,13 @@
           return all.sort(function(a, b) { return b.time - a.time; });
         }
 
+        // Their names only: reading every small picture held the game up
+        // for up to 44 ms at a time with 1000 screenshots kept.
+        async function keys() {
+          var db = await open();
+          return request(db.transaction('meta').objectStore('meta').getAllKeys());
+        }
+
         async function read(key) {
           var db = await open();
           return request(db.transaction('data').objectStore('data').get(key));
@@ -2182,12 +2381,14 @@
           await done(tx);
         }
 
-        return { list: list, read: read, add: add, remove: remove };
+        return { list: list, keys: keys, read: read, add: add, remove: remove };
       }
 
       // What the engine calls: save() takes a screenshot and stores it in the
       // background, and result() tells it how the oldest one still owed went
       // (0 not done yet, 1 saved, 2 not saved), each one once, in order.
+      // makeImages(rgba, w, h) makes the PNG and the small JPEG from the
+      // engine's pixels.
       function shotSaver(store, makeImages) {
         var queue = Promise.resolve();
         var results = [];
@@ -2195,11 +2396,11 @@
         function save(rgba, w, h, game, level) {
           var date = new Date();
           var job = queue.then(async function() {
-            var images = await makeImages(shotPixels(rgba, w, h), w, h);
+            var images = await makeImages(rgba, w, h);
             var base = shotName(game, level, date);
             var taken = {};
-            for (var m of await store.list())
-              taken[m.key] = true;
+            for (var key of await store.keys())
+              taken[key] = true;
             var name = base + '.png';
             for (var n = 2; taken[name]; n++)
               name = base + ' (' + n + ').png';
@@ -2299,9 +2500,9 @@
       var thumbUrls = [];
 
       Module.jkScreenshots = shotSaver(shots || {
-        list: async function() { return []; },
+        keys: async function() { return []; },
         add: async function() { throw new Error('this browser has no IndexedDB'); }
-      }, shotImages);
+      }, shotImagesInWorker(shotImages));
 
       function sizeText(bytes) {
         return bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB'
@@ -2883,10 +3084,13 @@
         if (withBundledData) {
           var data = document.createElement('script');
           data.src = 'openjkdf2_data.js';
+          data.onerror = function() { engineStopped("openjkdf2_data.js didn't download"); };
           document.body.appendChild(data);
         }
         var engine = document.createElement('script');
         engine.src = 'openjkdf2.js';
+        // The browser gives no reason (a 404, a 503, a dropped connection).
+        engine.onerror = function() { engineStopped("openjkdf2.js didn't download"); };
         document.body.appendChild(engine);
       }
 
@@ -2911,11 +3115,13 @@
           pickerWant.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight: Dark Forces II';
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = false; });
         modChoice.hidden = true;
+        problemReload.hidden = true;
         picker.onclick = null;
         var problem = browserProblem();
         showPickerResult(problem || phoneNote() || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
         showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio);
+        showPrivacyNote(document.getElementById('picker-privacy'), !problem && privacyOn);
         if (!picker.open) picker.showModal();
         chooseButton.focus();
         var start = !problem && !folderOnly && !!pickerWant && !!gameFiles && savedKnown[pickerWant.game] !== false;
@@ -2930,15 +3136,44 @@
         if (!readingFolder && picker.open) picker.close();
       }
 
-      function showProblem(title, text) {
+      // reload: with a Reload button, for when only a reload brings the game back.
+      // Then the game can't use the mouse or the screen any more, so the box
+      // gives them back first. A box doesn't end the game's mouse lock by
+      // itself: the cursor stayed hidden and clicks went to the game, not to
+      // Reload, and in fullscreen with keyboard lock only holding Esc got out.
+      var gameLost = false;
+      function showProblem(title, text, reload) {
         picker.classList.remove('checking');
         pickerTitle.textContent = title;
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
         modChoice.hidden = true;
         showPickerResult(text, true);
+        problemReload.hidden = !reload;
+        if (reload) {
+          gameLost = true;
+          if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
+          if (document.fullscreenElement && document.exitFullscreen) {
+            var leaving = document.exitFullscreen();
+            if (leaving && leaving.catch) leaving.catch(function() {});
+          }
+        }
         if (!picker.open) picker.showModal();
-        picker.onclick = function() { picker.close(); };
+        // A box with Reload closes only on a click outside it, so clicking its
+        // text (to copy the error) doesn't take the Reload button away.
+        picker.onclick = function(ev) {
+          if (reload && ev && typeof ev.clientX === 'number') {
+            var r = picker.getBoundingClientRect();
+            if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) return;
+          }
+          picker.close();
+        };
       }
+
+      var problemReload = document.getElementById('problem-reload');
+      problemReload.querySelector('button').addEventListener('click', function() {
+        leaveGuard = false;
+        location.reload();
+      });
 
       function hideZone() {
         document.getElementById('zone').hidden = true;
@@ -3155,6 +3390,48 @@
         el.hidden = false;
       }
 
+      // ---- Resist-fingerprinting (Firefox's privacy.resistFingerprinting, on
+      // in LibreWolf and Mullvad Browser) hides the graphics card's name, which
+      // then reads "Mozilla", holds WebGL to 2048 pixels across (16384 without
+      // it), steps the clock by 16.7 ms and scrambles what's read back from the
+      // screen, so screenshots come out as noise. A graphics card that really
+      // stops at 2048 doesn't hide its name, and only this steps the clock so,
+      // so the note needs all three. Timing the clock takes up to two of its
+      // steps (33 ms), and only where the first two signs are there.
+      function privacyMode(renderer) {
+        if (renderer !== 'Mozilla' || !/Firefox\//.test(navigator.userAgent)) return false;
+        var gl = webgl2();
+        if (!gl) return false;
+        var most = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+        releaseGl(gl);
+        if (!(most <= 2048)) return false;
+        var last = performance.now(), steps = [];
+        for (var i = 0; i < 1e7 && steps.length < 2; i++) {
+          var now = performance.now();
+          if (now !== last) {
+            steps.push(now - last);
+            last = now;
+          }
+        }
+        return steps.length === 2 && Math.min(steps[0], steps[1]) >= 16;
+      }
+
+      function showPrivacyNote(el, on) {
+        if (!on) {
+          el.hidden = true;
+          return;
+        }
+        el.innerHTML = '<h2>Privacy protection limits the game here</h2>' +
+          "<p>This browser's resist-fingerprinting is on, as in LibreWolf and Mullvad Browser. It holds the " +
+          "game's 3D graphics to 2048 pixels across, so a bigger window or fullscreen is drawn at a lower " +
+          'resolution, and screenshots come out as noise.</p>' +
+          '<p class="fine">To turn it off for this site only, go to <code>about:config</code> and add ' +
+          '<code class="site"></code> to <code>privacy.resistFingerprinting.exemptedDomains</code>, then reload ' +
+          'this page.</p>';
+        el.querySelector('.site').textContent = location.hostname;
+        el.hidden = false;
+      }
+
       function selectText(node) {
         var range = document.createRange();
         range.selectNodeContents(node);
@@ -3166,6 +3443,8 @@
       // Checked once, when the page opens; a restart of the browser reloads it.
       var gfxCheck = browserProblem() ? null : graphicsCheck();
       showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
+      var privacyOn = !!gfxCheck && gfxCheck.state !== 'none' && privacyMode(gfxCheck.renderer);
+      if (privacyOn) console.warn('Graphics: resist-fingerprinting is on, which holds WebGL to 2048 pixels');
 
       // ---- When the game can't get its 3D graphics (WebGL 2) at all, the
       // engine opens SDL's error box ("Could not create webgl context") and
@@ -6405,6 +6684,7 @@
       function playFullscreen() {
         if (!fullscreenOption.checked || document.fullscreenElement || !document.fullscreenEnabled) return;
         if (!document.getElementById('zone').hidden || document.querySelector('dialog[open]')) return;
+        if (gameLost) return;  // the game stopped or lost its graphics: only a reload helps
         // Chrome and Edge give these keys to the page this way, only in
         // fullscreen the page asked for: Esc, and W, T and N with any of Ctrl,
         // Shift and Alt, so Ctrl+W (Fire and Forward by default), Ctrl+T and
@@ -6422,6 +6702,19 @@
       window.addEventListener('pointerdown', function(ev) {
         if (ev.target === Module.canvas) playFullscreen();
       }, true);
+
+      // Brave has no keyboard lock (navigator.keyboard is null), so neither
+      // way above keeps those keys, and Ctrl+W (Fire and Forward) closes the
+      // tab. Its players are told next to the fullscreen box.
+      function keysNote(nav) {
+        if (!nav.brave || typeof nav.brave.isBrave !== 'function' ||
+            (nav.keyboard && typeof nav.keyboard.lock === 'function'))
+          return Promise.resolve(false);
+        return nav.brave.isBrave().then(function(yes) { return !!yes; }, function() { return false; });
+      }
+      keysNote(navigator).then(function(show) {
+        document.getElementById('keys-note').hidden = !show;
+      });
       window.addEventListener('keydown', function(ev) {
         // Not Esc, which can't start fullscreen, nor Alt, Ctrl, Shift or Windows
         // on their own or in a shortcut, so Alt+Tab doesn't go fullscreen on the

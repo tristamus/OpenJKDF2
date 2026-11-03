@@ -22,6 +22,10 @@
 
 #include "SDL2_helper.h"
 
+#ifdef ARCH_WASM
+#include <emscripten/html5_webgl.h>
+#endif
+
 #ifdef WIN32
 // Force Optimus/AMD to use non-integrated GPUs by default.
 __declspec(dllexport) DWORD NvOptimusEnablement = 1;
@@ -232,6 +236,146 @@ static void std3D_SetSceneDrawBuffers()
     glDrawBuffers(jkPlayer_enableSSAO ? 4 : 2, bufs);
 }
 
+// Added: scales w x h down by one factor, set by the side that is furthest over,
+// so that it fits in maxW x maxH while keeping its shape.
+static void std3D_FitSize(int32_t w, int32_t h, int32_t maxW, int32_t maxH, int32_t* pWidth, int32_t* pHeight)
+{
+    int32_t newW, newH;
+    if ((int64_t)w * maxH >= (int64_t)h * maxW)
+    {
+        newW = maxW;
+        newH = (int32_t)(((int64_t)h * maxW) / w);
+    }
+    else
+    {
+        newH = maxH;
+        newW = (int32_t)(((int64_t)w * maxH) / h);
+    }
+    if (newW < 1) newW = 1;
+    if (newH < 1) newH = 1;
+    *pWidth = newW;
+    *pHeight = newH;
+}
+
+// Added: Firefox with resist-fingerprinting (and LibreWolf and Mullvad Browser,
+// which turn it on) caps textures and renderbuffers at 2048 px. A scene target
+// bigger than the cap is incomplete and the scene draws black, which happens at
+// 1440p and above or with supersampling. Shrink the size to fit the GPU's limits,
+// keeping its shape; the scene is still stretched over the whole window.
+static void std3D_ClampRenderTargetSize(int32_t* pWidth, int32_t* pHeight)
+{
+    static GLint maxW = 0, maxH = 0;
+    static int32_t lastLoggedW = 0, lastLoggedH = 0;
+
+    if (!maxW || !maxH)
+    {
+        GLint maxTex = 0, maxRb = 0;
+        GLint maxView[2] = {0, 0};
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+        glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &maxRb);
+        glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxView);
+
+        // A limit that reads 0 (query failed) doesn't restrict anything
+        maxW = maxTex;
+        if (maxRb > 0 && (maxW <= 0 || maxRb < maxW)) maxW = maxRb;
+        maxH = maxW;
+        if (maxView[0] > 0 && (maxW <= 0 || maxView[0] < maxW)) maxW = maxView[0];
+        if (maxView[1] > 0 && (maxH <= 0 || maxView[1] < maxH)) maxH = maxView[1];
+        if (maxW <= 0 || maxH <= 0)
+        {
+            maxW = maxH = 0;
+            return;
+        }
+    }
+
+    int32_t w = *pWidth;
+    int32_t h = *pHeight;
+    if (w <= maxW && h <= maxH)
+        return;
+    if (w <= 0 || h <= 0)
+        return;
+
+    int32_t newW, newH;
+    std3D_FitSize(w, h, maxW, maxH, &newW, &newH);
+
+    if (w != lastLoggedW || h != lastLoggedH)
+    {
+        stdPlatform_Printf("std3D: render size %dx%d is over this GPU's limit of %dx%d, drawing the scene at %dx%d\n", w, h, maxW, maxH, newW, newH);
+        lastLoggedW = w;
+        lastLoggedH = h;
+    }
+
+    *pWidth = newW;
+    *pHeight = newH;
+}
+
+// Added: the part of the window's framebuffer (x, y, w, h) that the window passes
+// draw into: the scene blit, the menu and HUD buffer, the overlay and the UI.
+static GLint std3D_windowViewport[4] = {0, 0, 0, 0};
+
+// Added: Window_xSize x Window_ySize is the size asked of the canvas, but the browser
+// can give the canvas a smaller drawing buffer (when the canvas is over the GPU's
+// limits or memory is short). A viewport of the asked size then hangs off the buffer
+// and the frame comes out cropped, so the frame is drawn over the buffer actually
+// given, which the browser stretches over the canvas. A viewport over
+// MAX_VIEWPORT_DIMS would be cut down by GL and squash the frame into part of the
+// window, so it is shrunk keeping its shape and centred instead. Window_xSize and
+// Window_ySize stay the coordinates everything is drawn in; only the viewport changes.
+// Called at the start of every frame's window passes (std3D_DrawMenu).
+static void std3D_UpdateWindowViewport()
+{
+    static GLint maxView[2] = {-1, -1};
+    static int32_t lastLogged[4] = {0, 0, 0, 0};
+
+    int32_t bufW = Window_xSize;
+    int32_t bufH = Window_ySize;
+#ifdef ARCH_WASM
+    int dbW = 0, dbH = 0;
+    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx = emscripten_webgl_get_current_context();
+    if (ctx && emscripten_webgl_get_drawing_buffer_size(ctx, &dbW, &dbH) == EMSCRIPTEN_RESULT_SUCCESS
+        && dbW > 0 && dbH > 0)
+    {
+        if (dbW < bufW) bufW = dbW;
+        if (dbH < bufH) bufH = dbH;
+    }
+#endif
+
+    if (maxView[0] < 0)
+    {
+        // Read once; a limit that reads 0 (query failed) doesn't restrict anything
+        maxView[0] = maxView[1] = 0;
+        glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxView);
+    }
+
+    int32_t w = bufW;
+    int32_t h = bufH;
+    if (maxView[0] > 0 && maxView[1] > 0 && w > 0 && h > 0 && (w > maxView[0] || h > maxView[1]))
+        std3D_FitSize(bufW, bufH, maxView[0], maxView[1], &w, &h);
+
+    std3D_windowViewport[0] = (bufW - w) / 2;
+    std3D_windowViewport[1] = (bufH - h) / 2;
+    std3D_windowViewport[2] = w;
+    std3D_windowViewport[3] = h;
+
+    static int numLogged = 0;
+    if ((w != Window_xSize || h != Window_ySize) && numLogged < 8
+        && (Window_xSize != lastLogged[0] || Window_ySize != lastLogged[1] || w != lastLogged[2] || h != lastLogged[3]))
+    {
+        stdPlatform_Printf("std3D: window is %dx%d, drawable %dx%d, GPU viewport limit %dx%d: drawing the frame at %dx%d\n",
+                           Window_xSize, Window_ySize, bufW, bufH, maxView[0], maxView[1], w, h);
+        lastLogged[0] = Window_xSize;
+        lastLogged[1] = Window_ySize;
+        lastLogged[2] = w;
+        lastLogged[3] = h;
+        numLogged++;
+    }
+}
+
+static void std3D_SetWindowViewport()
+{
+    glViewport(std3D_windowViewport[0], std3D_windowViewport[1], std3D_windowViewport[2], std3D_windowViewport[3]);
+}
+
 void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* pFb)
 {
     // Generate the framebuffer
@@ -439,6 +583,13 @@ GLint std3D_tryFindUniform(GLuint program, const char* uniform_name)
 {
     GLint out = glGetUniformLocation(program, uniform_name);
     if (out == -1) {
+#ifdef ARCH_WASM
+        // Added: shaders drop the uniforms they don't use, so this printed about 15
+        // lines at every start in the browser, where nobody edits shaders. Say it once.
+        static int bPrinted = 0;
+        if (bPrinted) return out;
+        bPrinted = 1;
+#endif
         stdPlatform_Printf("std3D: Could not bind uniform %s!\n", uniform_name);
     }
     return out;
@@ -474,9 +625,11 @@ int init_resources()
     memset(std3D_aUITextures, 0, sizeof(std3D_aUITextures));
 
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &std3D_windowFbo);
+    std3D_UpdateWindowViewport(); // Added: std3D_DrawMenu updates it every frame
 
     int32_t tex_w = Window_xSize;
     int32_t tex_h = Window_ySize;
+    std3D_ClampRenderTargetSize(&tex_w, &tex_h); // Added
 
     std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[0]);
     std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[1]);
@@ -776,6 +929,9 @@ int std3D_StartScene()
 #endif
     int32_t tex_w = (int32_t)((double)Window_xSize * supersample_level);
     int32_t tex_h = (int32_t)((double)Window_ySize * supersample_level);
+    // Added: only the size drawn at is lowered; jkPlayer_ssaaMultiple (shown and
+    // saved by the menu) keeps the player's choice for when the limit allows it.
+    std3D_ClampRenderTargetSize(&tex_w, &tex_h);
 
     if (tex_w != std3D_pFb->w || tex_h != std3D_pFb->h 
         || (!(std3D_pFb->enable_extra & 1) && jkPlayer_enableBloom)
@@ -1196,7 +1352,7 @@ static void std3D_PresentSWWorld(void)
             -(width / 2) * scaleX, (height / 2) * scaleY, -1, 1
         };
         glUniformMatrix4fv(programMenu_uniform_mvp, 1, GL_FALSE, d3dmat);
-        glViewport(0, 0, width, height);
+        std3D_SetWindowViewport(); // Added: was glViewport(0, 0, width, height)
     }
 
     menu_data_elements[0] = GL_tmpTris[0].v1;
@@ -1218,6 +1374,8 @@ static void std3D_PresentSWWorld(void)
 void std3D_DrawMenu()
 {
     if (Main_bHeadless) return;
+
+    std3D_UpdateWindowViewport(); // Added
 
     //printf("Draw menu\n");
     std3D_DrawSceneFbo();
@@ -1550,7 +1708,7 @@ void std3D_DrawMenu()
     };
     
     glUniformMatrix4fv(programMenu_uniform_mvp, 1, GL_FALSE, d3dmat);
-    glViewport(0, 0, width, height);
+    std3D_SetWindowViewport(); // Added: was glViewport(0, 0, width, height)
 
     }
     
@@ -1600,6 +1758,14 @@ void std3D_DrawMapOverlay()
     float menu_h = (double)Window_ySize;
 
     if (!jkGame_isDDraw)
+    {
+        return;
+    }
+
+    // Added: when nothing was drawn into the overlay this frame or last frame, the
+    // buffer is empty and the quad would draw nothing, so skip the full-size upload
+    // and the full-screen quad (jkGame_Update keeps the flags).
+    if (!Video_bOverlayDrawn && !Video_bOverlayDrawnLast)
     {
         return;
     }
@@ -1689,7 +1855,7 @@ void std3D_DrawMapOverlay()
     };
     
     glUniformMatrix4fv(programMenu_uniform_mvp, 1, GL_FALSE, d3dmat);
-    glViewport(0, 0, width, height);
+    std3D_SetWindowViewport(); // Added: was glViewport(0, 0, width, height)
 
     }
     
@@ -2051,7 +2217,10 @@ void std3D_DrawUIRenderList()
     };
     
     glUniformMatrix4fv(std3D_uiProgram.uniform_mvp, 1, GL_FALSE, d3dmat);
-    glViewport(0, 0, width, height);
+    if (jkGuiBuildMulti_bRendering)
+        glViewport(0, 0, width, height);
+    else
+        std3D_SetWindowViewport(); // Added
     glUniform2f(std3D_uiProgram.uniform_iResolution, internalWidth, internalHeight);
 
     float param1 = 1.0;
@@ -2310,7 +2479,10 @@ void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo
     };
     
     glUniformMatrix4fv(pStage->uniform_mvp, 1, GL_FALSE, d3dmat);
-    glViewport(0, 0, width, height);
+    if (pFbo == &std3D_pFb->window)
+        std3D_SetWindowViewport(); // Added
+    else
+        glViewport(0, 0, width, height);
     glUniform2f(pStage->uniform_iResolution, pFbo->iw, pFbo->ih);
 
     glUniform1f(pStage->uniform_param1, param1);
@@ -3072,7 +3244,10 @@ int std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is_alph
     }
 
     if (slot >= STD3D_MAX_TEXTURES) {
-        stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
+        // Added: once, not again for every texture after the cache fills
+        static int bPrinted = 0;
+        if (!bPrinted) stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
+        bPrinted = 1;
         return 1;
     }
     //printf("Add to texture cache\n");
@@ -3282,7 +3457,10 @@ int std3D_AddBitmapToTextureCache(stdBitmap *texture, int mipIdx, int is_alpha_t
 
     int cacheIdx = std3D_GetBitmapCacheIdx();
     if (cacheIdx < 0) {
-        stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
+        // Added: once, not again for every texture after the cache fills
+        static int bPrinted = 0;
+        if (!bPrinted) stdPlatform_Printf("ERROR: Texture cache exhausted!! Ask ShinyQuagsire to increase the size.\n");
+        bPrinted = 1;
         return 1;
     }
     //printf("Add to texture cache\n");
@@ -3686,13 +3864,15 @@ void std3D_ScreenshotWindow(const char* pFpath)
 // page to encode (jkGame_UpdateScreenshots). The caller frees it.
 uint8_t* std3D_ReadWindowRGBA(int* pW, int* pH)
 {
-    int w = Window_xSize, h = Window_ySize;
+    // Only the part the frame was drawn into (std3D_UpdateWindowViewport)
+    int x = std3D_windowViewport[0], y = std3D_windowViewport[1];
+    int w = std3D_windowViewport[2], h = std3D_windowViewport[3];
     if (Main_bHeadless || w <= 0 || h <= 0) return NULL;
 
     uint8_t* data = (uint8_t*)malloc((size_t)w * h * 4);
     if (!data) return NULL;
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_windowFbo);
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data);
     *pW = w;
     *pH = h;
     return data;

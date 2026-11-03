@@ -41,7 +41,8 @@ cp build_emcc/openjkdf2.wasm wasm_out/openjkdf2.wasm
 if [ -f build_emcc/openjkdf2_data.data ]; then
     cp build_emcc/openjkdf2_data.js wasm_out/openjkdf2_data.js
     cp build_emcc/openjkdf2_data.data wasm_out/openjkdf2_data.data
-    gsed -i 's/var hasByteServing/var hasByteServing = false;\/\//g' wasm_out/openjkdf2.js
+    # The JS is minified to one line, so short-circuit the test instead of commenting out the rest of the line
+    gsed -i -E 's/var hasByteServing ?= ?/var hasByteServing=false\&\&/g' wasm_out/openjkdf2.js
 fi
 
 # Update maxthomas.dev/openjkdf2, if you're me

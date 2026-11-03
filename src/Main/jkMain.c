@@ -68,14 +68,52 @@ static char jkMain_aMissingMap[128];  // Added: the server went on to a level we
 #ifdef ARCH_WASM
 #include <emscripten.h>
 
+void Window_WasmWaitForTick(double msLeft, int bRefresh); // Added: Win95/Window.c
+
+// Added: the FPS limit in the browser. The next frame was due a whole number of ms after the
+// last (1000 / limit, rounded down) and only once the ms clock had passed that, so 60 gave
+// 58.8 frames a second at most, and 144 or 165 gave 142.9; with Vsync on, a limit at the
+// screen's rate dropped refreshes. The due time is now kept in fractions of a ms, one period
+// after the last, so the limit is what it says. A frame a little early counts as due: with
+// Vsync the refreshes time the frames, and they don't come exactly a period apart (and
+// Firefox's clock is in whole ms), so up to 4 ms early; without it, 1 ms for the clock;
+// never more than half a period. More than a period behind (a slow frame, a menu), the next
+// is due a period from now. Without a limit, a frame is due on every new ms, as before.
+static double jkMain_tickDueMs = 0.0;
+
+static int jkMain_TickDue(uint32_t now)
+{
+    double period, early, t;
+
+    if (jkPlayer_fpslimit <= 0)
+        return now > (uint32_t)jkMain_lastTickMs;
+
+    period = 1000.0 / jkPlayer_fpslimit;
+    early = jkPlayer_enableVsync ? 4.0 : 1.0;
+    if (early > period * 0.5)
+        early = period * 0.5;
+    t = emscripten_get_now();
+    if (t < jkMain_tickDueMs - early)
+        return 0;
+    jkMain_tickDueMs += period;
+    if (jkMain_tickDueMs < t)
+        jkMain_tickDueMs = t + period;
+    return 1;
+}
+
 // Added: with an FPS limit, the loop came back here until the next tick was due, without
 // drawing or yielding. A browser runs the page on one thread, so that spin kept a CPU core
-// busy and the browser waiting. Sleep for the rest of the wait instead.
-static void jkMain_WaitForTick(uint32_t now)
+// busy and the browser waiting. Wait for the rest of the period instead, or with bRefresh
+// for the next screen refresh (Window_WasmWaitForTick). 1 if it waited.
+static int jkMain_WaitForTick(int bRefresh)
 {
-    uint32_t due = jkMain_lastTickMs + TICKRATE_MS + 1;
-    if (TICKRATE_MS && due > now)
-        emscripten_sleep(due - now);
+    double left;
+
+    if (jkPlayer_fpslimit <= 0)
+        return 0;
+    left = jkMain_tickDueMs - emscripten_get_now();
+    Window_WasmWaitForTick(left > 0.0 ? left : 0.0, bRefresh);
+    return 1;
 }
 #endif
 
@@ -253,13 +291,17 @@ void jkMain_GuiAdvance()
             {
                 v1 = stdPlatform_GetTimeMsec();
                 
+#ifdef ARCH_WASM
+                if (jkMain_TickDue(v1)) // Added
+#else
                 if (v1 > jkMain_lastTickMs + TICKRATE_MS)
+#endif
                 {
                     jkMain_lastTickMs = v1;
                     if (!sithUpdate()) return;
                 }
 #ifdef ARCH_WASM
-                else jkMain_WaitForTick(v1);
+                else jkMain_WaitForTick(0);
 #endif
                 
                 if ( g_sithMode == 5 )
@@ -381,13 +423,17 @@ void jkMain_EscapeMenuTick(int a2)
 
     v1 = stdPlatform_GetTimeMsec();
     
+#ifdef ARCH_WASM
+    if (jkMain_TickDue(v1)) // Added
+#else
     if (v1 > jkMain_lastTickMs + TICKRATE_MS)
+#endif
     {
         jkMain_lastTickMs = v1;
         if (sithUpdate()) return;
     }
 #ifdef ARCH_WASM
-    else jkMain_WaitForTick(v1);
+    else jkMain_WaitForTick(0);
 #endif
     
     if ( g_sithMode == 5 )
@@ -779,13 +825,21 @@ void jkMain_GameplayTick(int a2)
 
     v1 = stdPlatform_GetTimeMsec();
 
+#ifdef ARCH_WASM
+    if (jkMain_TickDue(v1)) // Added
+#else
     if (v1 > jkMain_lastTickMs + TICKRATE_MS)
+#endif
     {
         jkMain_lastTickMs = v1;
         if (sithUpdate()) return;
     }
 #ifdef ARCH_WASM
-    else jkMain_WaitForTick(v1);
+    // Added: input that came in during the wait is read now, before the frame it's for,
+    // not a frame late: this frame isn't drawn, and the next loop ticks. Between two
+    // frames, as at a frame's end, so Esc, chat and a resize aren't handled mid-tick.
+    else if (jkMain_WaitForTick(jkPlayer_enableVsync) && jkGame_isDDraw)
+        Window_SdlUpdate();
 #endif
     
     if ( g_sithMode == 5 )

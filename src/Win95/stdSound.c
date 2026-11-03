@@ -129,6 +129,7 @@ ALCdevice *device;
 ALCcontext *context;
 static ALfloat stdSound_listenerPos[3] = {0.0f, 0.0f , 0.0f};
 static ALfloat stdSound_listenerOri[6] = { 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f };
+static int stdSound_bListenerSent = 0; // Added: the two above are what OpenAL has
 
 void stdSound_DS3DToAL(ALfloat* pOut, rdVector3* pIn)
 {
@@ -171,9 +172,11 @@ int stdSound_Startup()
     iosAudioSession_Initialize();
 #endif
 
+	// Added: a plain note, not an error: only the default device is ever opened
+	// below, and the browser's OpenAL never has the extension.
 	enumeration = alcIsExtensionPresent(NULL, "ALC_ENUMERATION_EXT");
 	if (enumeration == AL_FALSE)
-		fprintf(stderr, "enumeration extension not available\n");
+		printf("OpenAL device enumeration not available, using the default device\n");
 
 	if (!defaultDeviceName)
 		defaultDeviceName = alcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
@@ -206,6 +209,7 @@ int stdSound_Startup()
     alListenerf(AL_REFERENCE_DISTANCE, 5.0f);
     alListenerf(AL_MAX_GAIN, 1.0f);
     alListenerf(AL_MIN_GAIN, 0.0f);
+    stdSound_bListenerSent = 0; // Added: the next listener update sends everything
 
     jkGuiSound_musicVolume = wuRegistry_GetFloat("musicVolume", jkGuiSound_musicVolume);
     jkGuiSound_sfxVolume = wuRegistry_GetFloat("sfxVolume", jkGuiSound_sfxVolume);
@@ -247,6 +251,7 @@ stdSound_buffer_t* stdSound_BufferCreate(int bStereo, uint32_t nSamplesPerSec, u
     out->bitsPerSample = bitsPerSample;
     out->refcnt = 1;
     out->vol = 1.0;
+    out->pitch = 1.0;
 
     out->pos[0] = 0.0;
     out->pos[1] = 0.0;
@@ -311,11 +316,11 @@ void* stdSound_BufferSetData(stdSound_buffer_t* sound, int bufferBytes, int32_t*
     sound->bufferBytes = bufferBytes;
     
     _memset(sound->data, 0, sound->bufferBytes);
-    
-    if (!Main_bHeadless)
-        alBufferData(sound->buffer, sound->format, sound->data, sound->bufferBytes, sound->nSamplesPerSec);
-    
-    
+
+    // Added: no alBufferData of the zeroed buffer here. Every caller fills the
+    // data and then calls stdSound_BufferUnlock, which uploads it; uploading the
+    // zeros first only cost a second conversion (a full float copy in the browser).
+
     return sound->data;
 }
 
@@ -361,26 +366,44 @@ int stdSound_BufferUnlock(stdSound_buffer_t* sound, void* buffer, int bufferRead
     }
 #endif
 
-    if (!sound->source)
-    {
-        alGenSources((ALuint)1, &sound->source);
-
-        alSourcef(sound->source, AL_PITCH, 1.0);
-        if (sound->bHasPos) {
-            alSourcefv(sound->source, AL_POSITION, sound->pos);
-        }
-        if (sound->bHasVel) {
-            alSourcefv(sound->source, AL_VELOCITY, sound->vel);
-        }
-        if (!sound->bHasPos) {
-            alSourcei(sound->source, AL_SOURCE_RELATIVE, AL_TRUE); // No 3D until we're given a position
-        }
-        
-        //printf("%u %u\n", buf->source, buf->buffer);
-    }
-    //alSourcei(sound->source, AL_BUFFER, sound->buffer);
+    // Added: no AL source is made here any more. The mixer only ever plays
+    // duplicates of a loaded sound, so the source made here for every loaded
+    // sound sat idle until the level ended (in the browser, each one is a
+    // GainNode rendered every audio block). stdSound_BufferPlay and
+    // stdSound_BufferQueueAfterAnother make the source when it is first needed.
 
     return 1;
+}
+
+// Added: sets a buffer's volume and its source's AL gain. While a buffer has a
+// source, that source's gain is sound->vol (written when the source is made
+// and on every play), so an unchanged volume needs no AL call. The
+// mixer sets the volume of every sound on every update, and in the browser each
+// gain write is an AudioParam write.
+static void stdSound_SetSourceVolume(stdSound_buffer_t* sound, flex_t vol, int bForce)
+{
+    flex_t newVol = vol * stdSound_fMenuVolume;
+    int bChanged = bForce || newVol != sound->vol;
+
+    sound->vol = newVol;
+    if (!sound->source)
+        return;
+
+    if (bChanged)
+        alSourcef(sound->source, AL_GAIN, sound->vol);
+
+    if (vol == 0.0)
+    {
+        alSourcei(sound->source, AL_LOOPING, AL_FALSE);
+        alSourceStop(sound->source);
+    }
+}
+
+// Added: the AL_PITCH a new source gets. 0 is a buffer whose pitch was never
+// set (OpenAL needs a pitch above 0), so it plays at the normal rate.
+static ALfloat stdSound_SourcePitch(stdSound_buffer_t* buf)
+{
+    return buf->pitch > 0.0 ? buf->pitch : 1.0;
 }
 
 int stdSound_BufferPlay(stdSound_buffer_t* buf, int loop)
@@ -395,7 +418,9 @@ int stdSound_BufferPlay(stdSound_buffer_t* buf, int loop)
     {
         alGenSources((ALuint)1, &buf->source);
 
-	    alSourcef(buf->source, AL_PITCH, 1.0);
+        // Added: the source starts at the buffer's pitch, which may have been
+        // set before it had a source (see stdSound_BufferSetFrequency).
+	    alSourcef(buf->source, AL_PITCH, stdSound_SourcePitch(buf));
         if (buf->bHasPos) {
             alSourcefv(buf->source, AL_POSITION, buf->pos);
         }
@@ -408,7 +433,12 @@ int stdSound_BufferPlay(stdSound_buffer_t* buf, int loop)
 	    
 	    //printf("%u %u\n", buf->source, buf->buffer);
 
-        stdSound_BufferSetVolume(buf, buf->vol);
+        // Changed: a new source gets the buffer's volume as it is. buf->vol is
+        // already scaled by the SFX volume (BufferCreate, BufferSetVolume), and
+        // passing it through stdSound_BufferSetVolume again scaled it twice: a
+        // sound started at the square of the SFX volume until something set its
+        // volume again.
+        alSourcef(buf->source, AL_GAIN, buf->vol);
 	}
 
     alGetSourcei(buf->source, AL_SOURCE_TYPE, &source_type);
@@ -437,7 +467,7 @@ int stdSound_BufferQueueAfterAnother(stdSound_buffer_t* bufPrev, stdSound_buffer
     {
         alGenSources((ALuint)1, &bufPrev->source);
 
-        alSourcef(bufPrev->source, AL_PITCH, 1.0);
+        alSourcef(bufPrev->source, AL_PITCH, stdSound_SourcePitch(bufPrev));
         if (bufPrev->bHasPos) {
             alSourcefv(bufPrev->source, AL_POSITION, bufPrev->pos);
         }
@@ -448,7 +478,7 @@ int stdSound_BufferQueueAfterAnother(stdSound_buffer_t* bufPrev, stdSound_buffer
             alSourcei(bufPrev->source, AL_SOURCE_RELATIVE, AL_TRUE); // No 3D until we're given a position
         }
         
-        stdSound_BufferSetVolume(bufPrev, bufPrev->vol);
+        alSourcef(bufPrev->source, AL_GAIN, bufPrev->vol); // Changed: as in stdSound_BufferPlay
     }
 
     alGetSourcei(bufPrev->source, AL_SOURCE_TYPE, &source_type);
@@ -572,7 +602,10 @@ void stdSound_BufferSetFrequency(stdSound_buffer_t* sound, int freq)
     if (Main_bHeadless) return;
 
     flex_t pitch = (flex_d_t)freq / (flex_d_t)sound->nSamplesPerSec;
-    
+
+    // Added: keep the pitch even when there is no source yet, so the source
+    // starts at it (DirectSound kept a buffer's frequency the same way).
+    sound->pitch = pitch;
     if (sound->source) {
         alSourcef(sound->source, AL_PITCH, pitch);
     }
@@ -594,6 +627,7 @@ stdSound_buffer_t* stdSound_BufferDuplicate(stdSound_buffer_t* sound)
     out->bitsPerSample = sound->bitsPerSample;
     out->refcnt = 1;
     out->vol = sound->vol;
+    out->pitch = sound->pitch;
     out->format = sound->format;
     out->bufferBytes = sound->bufferBytes;
     out->bIsCopy = 1;
@@ -638,18 +672,8 @@ void stdSound_BufferSetVolume(stdSound_buffer_t* sound, flex_t vol)
 {
     if (Main_bHeadless) return;
     if (!sound) return;
-    
-    sound->vol = vol * stdSound_fMenuVolume;
-    if (!sound->source)
-        return;
 
-    alSourcef(sound->source, AL_GAIN, sound->vol);
-    
-    if (vol == 0.0)
-    {
-        alSourcei(sound->source, AL_LOOPING, AL_FALSE);
-        alSourceStop(sound->source);
-    }
+    stdSound_SetSourceVolume(sound, vol, 0);
 }
 
 int stdSound_3DSetMode(stdSound_buffer_t* a1, int a2)
@@ -668,49 +692,91 @@ void stdSound_CommitDeferredSettings()
 
 void stdSound_SetPositionOrientation(rdVector3 *pos, rdVector3 *lvec, rdVector3 *uvec)
 {
+    ALfloat newPos[3];
+    ALfloat newOri[6];
+
     if (!pos || !lvec || !uvec) return;
 
-    stdSound_DS3DToAL(stdSound_listenerPos, pos);
+    stdSound_DS3DToAL(newPos, pos);
 
-    stdSound_DS3DToAL(&stdSound_listenerOri[0], lvec);
-    stdSound_DS3DToAL(&stdSound_listenerOri[3], uvec);
+    stdSound_DS3DToAL(&newOri[0], lvec);
+    stdSound_DS3DToAL(&newOri[3], uvec);
+
+    // Added: send the listener only when it moved or turned. In the browser each
+    // alListenerfv rewrites every listener AudioParam and goes over every source,
+    // and the camera is often still.
+    int bPosChanged = !stdSound_bListenerSent || memcmp(newPos, stdSound_listenerPos, sizeof(newPos)) != 0;
+    int bOriChanged = !stdSound_bListenerSent || memcmp(newOri, stdSound_listenerOri, sizeof(newOri)) != 0;
+    memcpy(stdSound_listenerPos, newPos, sizeof(newPos));
+    memcpy(stdSound_listenerOri, newOri, sizeof(newOri));
 
     if (Main_bHeadless) return;
 
-    alListenerfv(AL_POSITION, stdSound_listenerPos);
-    alListenerfv(AL_ORIENTATION, stdSound_listenerOri);
+    if (bPosChanged)
+        alListenerfv(AL_POSITION, stdSound_listenerPos);
+    if (bOriChanged)
+        alListenerfv(AL_ORIENTATION, stdSound_listenerOri);
+    stdSound_bListenerSent = 1;
 }
 
 void stdSound_SetPosition(stdSound_buffer_t* pSoundBuf, rdVector3 *pos)
 {
+    ALfloat newPos[3];
+
     if (!pSoundBuf || !pos) return;
 
-    stdSound_DS3DToAL(pSoundBuf->pos, pos);
+    stdSound_DS3DToAL(newPos, pos);
+
+    // Added: while a buffer has a source and a position, that source is not
+    // listener-relative and already holds pSoundBuf->pos (it gets both when it is
+    // made, or below), so only a new position needs an AL call. The mixer sets
+    // the position of every 3D sound on every update.
+    int bHadPos = pSoundBuf->bHasPos;
+    int bChanged = !bHadPos || memcmp(newPos, pSoundBuf->pos, sizeof(newPos)) != 0;
+    memcpy(pSoundBuf->pos, newPos, sizeof(newPos));
+
+    // Added: the position counts as known before the sound has a source, so
+    // stdSound_BufferPlay places the new source here before it starts. Before,
+    // a new 3D sound played from the listener's own position, and without the
+    // distance loss, until the next mixer update.
+    pSoundBuf->bHasPos = 1;
 
     if (!pSoundBuf->source)
         return;
 
     if (Main_bHeadless) return;
 
-    alSourcei(pSoundBuf->source, AL_SOURCE_RELATIVE, AL_FALSE);
-    alSourcefv(pSoundBuf->source, AL_POSITION, pSoundBuf->pos);
-    pSoundBuf->bHasPos = 1;
+    if (!bHadPos)
+        alSourcei(pSoundBuf->source, AL_SOURCE_RELATIVE, AL_FALSE);
+    if (bChanged)
+        alSourcefv(pSoundBuf->source, AL_POSITION, pSoundBuf->pos);
 }
 
 void stdSound_SetVelocity(stdSound_buffer_t* pSoundBuf, rdVector3 *vel)
 {
+    ALfloat newVel[3];
+
     if (!pSoundBuf || !vel) return;
 
-    stdSound_DS3DToAL(pSoundBuf->vel, vel);
+    stdSound_DS3DToAL(newVel, vel);
+
+    // Added: as in stdSound_SetPosition, only a new velocity needs an AL call.
+    int bChanged = !pSoundBuf->bHasVel || memcmp(newVel, pSoundBuf->vel, sizeof(newVel)) != 0;
+    memcpy(pSoundBuf->vel, newVel, sizeof(newVel));
+
+    // Added: likewise, so a new source starts with its velocity (Doppler).
+    pSoundBuf->bHasVel = 1;
 
     if (!pSoundBuf->source)
         return;
 
     if (Main_bHeadless) return;
 
-    alSourcei(pSoundBuf->source, AL_SOURCE_RELATIVE, AL_FALSE);
-    alSourcefv(pSoundBuf->source, AL_VELOCITY, pSoundBuf->vel); // FLEXTODO
-    pSoundBuf->bHasVel = 1;
+    // A source with a position is already not relative (see above).
+    if (!pSoundBuf->bHasPos)
+        alSourcei(pSoundBuf->source, AL_SOURCE_RELATIVE, AL_FALSE);
+    if (bChanged)
+        alSourcefv(pSoundBuf->source, AL_VELOCITY, pSoundBuf->vel); // FLEXTODO
 }
 
 int stdSound_IsPlaying(stdSound_buffer_t* pSoundBuf, rdVector3 *pos)

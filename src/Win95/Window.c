@@ -412,6 +412,10 @@ int Window_menu_mouseY = 0;
 extern int jkGuiBuildMulti_bRendering;
 
 #ifdef ARCH_WASM
+// Added: Platform/SDL2/stdControl.c, presses kept until the game reads them
+void stdControl_LatchSDLKeydown(int scancode);
+void stdControl_LatchMouseDown(int buttons);
+
 // Added: browsers draw their own "has control of your pointer" notice each
 // time the game locks the mouse, and while it's locked they keep Esc for
 // themselves: Esc frees the mouse and never reaches the game. SDL isn't told
@@ -437,6 +441,49 @@ EM_JS(void, Window_wasmLockPointerNow, (), {
   } catch (e) {}
 });
 
+// Added: the state the waits below share, made once.
+// A hidden tab gets no screen refreshes, so there the game waits on a timer, and once a
+// tab has been hidden and silent for 30 s browsers run its timers once a second, or once a
+// minute (Chrome, after a minute, while no WebRTC link is open). A host's game then all but
+// stopped for everyone, and after 30 s the other players left ("no packets from the host"),
+// or a player was dropped. A Worker's timers aren't slowed, so in a match (bInMatch) a hidden
+// tab waits for the next message from one, sent every 16 ms while the game waits in a hidden
+// tab and stopped while it's shown. If the browser won't make a worker, it's a timer as before.
+EM_JS(void, Window_wasmPaceInit, (), {
+  if (Module.jkPace) return;
+  var pace = Module.jkPace = { sinceRefresh: 0, refreshAsked: false, resume: null, channel: new MessageChannel(), fences: [],
+                               worker: undefined, ticking: false, woken: null };
+  pace.channel.port1.onmessage = function() { var resume = pace.resume; pace.resume = null; if (resume) resume(); };
+  function wake() { var woken = pace.woken; pace.woken = null; if (woken) woken(); }
+  pace.hiddenWait = function(bInMatch) {
+    if (!bInMatch) pace.stopTicker();
+    else if (pace.worker === undefined) {
+      try {
+        var url = URL.createObjectURL(new Blob(['var t = 0; onmessage = function(e) { if (e.data && !t) t = setInterval(function() { postMessage(0); }, 16); ' +
+                                                'else if (!e.data && t) { clearInterval(t); t = 0; } };'], { type: 'text/javascript' }));
+        pace.worker = new Worker(url);
+        pace.worker.onmessage = wake;
+        pace.worker.onerror = function() { pace.worker = null; pace.ticking = false; wake(); };
+      } catch (e) {
+        pace.worker = null;
+      }
+    }
+    return new Promise(function(resolve) {
+      if (!bInMatch || !pace.worker) { setTimeout(resolve, 0); return; }
+      if (!pace.ticking) { pace.ticking = true; pace.worker.postMessage(1); }
+      /* A timer still ends the wait if the worker never answers. */
+      var timer = setTimeout(woken, 1000);
+      function woken() { clearTimeout(timer); if (pace.woken === woken) pace.woken = null; resolve(); }
+      pace.woken = woken;
+    });
+  };
+  pace.stopTicker = function() {
+    if (!pace.ticking) return;
+    pace.ticking = false;
+    if (pace.worker) pace.worker.postMessage(0);
+  };
+});
+
 // Added: how a frame ends in the browser. SDL's swap ended it with emscripten_sleep(0), a
 // setTimeout(0), which browsers hold for at least 4 ms once timers nest and which takes no
 // account of the screen or the graphics card: a fast machine drew frames nobody saw, and a
@@ -446,17 +493,14 @@ EM_JS(void, Window_wasmLockPointerNow, (), {
 // frame is drawn in it. With Vsync off, it yields through a MessageChannel, which has no
 // clamp, while the card has finished the frame before this one and for at most two frames
 // in a refresh; otherwise it waits for the refresh. A hidden tab gets no refreshes, so there
-// it waits on a timer as before, and a host's game keeps running, but also until the card
-// has drawn the frame: the browser doesn't slow timers in a tab playing sound, and the game
-// got seconds ahead of the card there, which came out as a freeze when the tab was shown.
+// it waits for the worker above (in a match) or a timer, so a host's game keeps running,
+// but also until the card has drawn the frame: the browser doesn't slow timers in a tab
+// playing sound, and the game got seconds ahead of the card there, which came out as a
+// freeze when the tab was shown.
 // Module.jkFrames keeps when the last in-game frames ended and when the game got the
 // thread back, for the page's slow-frame note and ?bench.
-EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame), {
+EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame, int bInMatch), {
   var pace = Module.jkPace;
-  if (!pace) {
-    pace = Module.jkPace = { sinceRefresh: 0, refreshAsked: false, resume: null, channel: new MessageChannel(), fences: [] };
-    pace.channel.port1.onmessage = function() { var resume = pace.resume; pace.resume = null; if (resume) resume(); };
-  }
   var frames = Module.jkFrames;
   if (!frames) frames = Module.jkFrames = { size: 2048, count: 0, broken: true, ends: new Float64Array(2048),
                                             resumes: new Float64Array(2048), joined: new Uint8Array(2048) };
@@ -483,9 +527,10 @@ EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame), {
   if (wasHidden) {
     var started = performance.now();
     do {
-      await new Promise(function(resolve) { setTimeout(resolve, 0); });
+      await pace.hiddenWait(bInMatch);
     } while (last && document.hidden && performance.now() - started < 1000 && !drawn(last));
   } else if (bVsync || pace.sinceRefresh >= 2 || (before && !drawn(before))) {
+    pace.stopTicker();
     /* A tab hidden while it waits gets no refresh, so that ends the wait too. */
     await new Promise(function(resolve) {
       function done() { document.removeEventListener('visibilitychange', done); resolve(); }
@@ -494,6 +539,7 @@ EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame), {
     });
     pace.sinceRefresh = 0;
   } else {
+    pace.stopTicker();
     if (!pace.refreshAsked) {
       pace.refreshAsked = true;
       requestAnimationFrame(function() { pace.refreshAsked = false; pace.sinceRefresh = 0; });
@@ -514,6 +560,61 @@ EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame), {
   } else {
     frames.broken = true;
   }
+});
+
+// Added: the FPS limit's wait (jkMain_WaitForTick), msLeft until the next frame is due.
+// bRefresh (a level with Vsync on): wait for the next screen refresh instead. The frame
+// is then drawn inside that refresh, as with no limit, not in a timer after it and shown
+// a refresh late, and the limit skips whole refreshes, which drops none it keeps. A hidden
+// tab waits as a hidden frame does.
+EM_ASYNC_JS(void, Window_wasmWaitForTick, (double msLeft, int bRefresh, int bInMatch), {
+  var pace = Module.jkPace;
+  if (document.hidden && bInMatch) {
+    await pace.hiddenWait(1);
+  } else if (bRefresh && !document.hidden) {
+    await new Promise(function(resolve) {
+      function done() { document.removeEventListener('visibilitychange', done); resolve(); }
+      document.addEventListener('visibilitychange', done);
+      requestAnimationFrame(done);
+    });
+  } else {
+    await new Promise(function(resolve) { setTimeout(resolve, Math.max(0, Math.ceil(msLeft))); });
+  }
+});
+
+void Window_WasmWaitForTick(double msLeft, int bRefresh)
+{
+    Window_wasmPaceInit();
+    Window_wasmWaitForTick(msLeft, bRefresh, sithNet_isMulti);
+}
+
+// Added: a menu frame in a match (the Esc menu, the waiting room) in a hidden tab. Hiding
+// the tab takes the mouse away, and the page then opens the Esc menu, so a hidden host's
+// game runs from here, not from Window_wasmEndFrame. A menu frame yields twice, in SDL's
+// swap and in SDL_Delay, both timers, which a hidden tab runs about once a second each:
+// the match nearly stopped for everyone, as it did in the level. 1 if the frame should
+// wait on the worker (Window_wasmMenuHiddenWait) instead; a shown menu stops its timer.
+EM_JS(int, Window_wasmMenuHidden, (int bInMatch), {
+  var pace = Module.jkPace;
+  if (document.hidden && bInMatch) return 1;
+  pace.stopTicker();
+  return 0;
+});
+
+// Added: the hidden menu frame's wait: the worker's next message, then on until the card
+// has drawn the frame, as a hidden frame in the level waits (Window_wasmEndFrame), at
+// most 1 s.
+EM_ASYNC_JS(void, Window_wasmMenuHiddenWait, (), {
+  var pace = Module.jkPace, gl = Module.ctx, fence = null;
+  function drawn() {
+    try { return gl.isContextLost() || gl.getSyncParameter(fence, gl.SYNC_STATUS) === gl.SIGNALED; } catch (e) { return true; }
+  }
+  try { fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); gl.flush(); } catch (e) { fence = null; }
+  var started = performance.now();
+  do {
+    await pace.hiddenWait(1);
+  } while (fence && document.hidden && performance.now() - started < 1000 && !drawn());
+  try { if (fence) gl.deleteSync(fence); } catch (e) {}
 });
 
 // Added: a menu drew a frame, so the next frame in a level doesn't count the time in menus.
@@ -542,19 +643,80 @@ static int Window_bWasmSentEsc = 0;
 // Added: the browser can report one big movement just after it takes the mouse
 // lock (the first click back in the game after a menu or another window), as
 // far as the cursor's trip to wherever it locks, which turns the player round.
-// Mouse movement from the first moments of a lock is left out.
+// Such a jump comes with the lock's first movement, however long after the lock
+// that is, so the first movement, and any in the first 100 ms of the lock, is left
+// out when it's a fifth of the page or more (as for the jumps below). Smaller ones
+// are a hand's. All movement in the 100 ms from the first one used to be left out,
+// which in Firefox and Chrome lost the start of a real turn after every Esc menu,
+// chat or switch to another window.
+// The browser can then put the cursor back where the lock holds it, which comes as
+// the next movement: the same jump exactly the other way (headless Chromium does,
+// after a scripted move). Kept on its own, that trip back turned the view as far as
+// the jump would have. So when the lock's first movement was a jump left out, and the
+// next movement within 500 ms undoes it exactly (to 2 pixels on each axis, for
+// rounding), that is left out too, and the two cancel. A hand's movement doesn't
+// undo a jump that exactly, and only that one movement is checked.
 #define WINDOW_WASM_LOCK_SETTLE_MS (100)
-static int Window_bWasmMoveLocked = 0;
-static Uint64 Window_wasmLockedAtMs = 0;
+#define WINDOW_WASM_LOCK_BACK_MS (500)
+#define WINDOW_WASM_LOCK_JUMP_FRACTION (0.2)
+static int Window_bWasmMoveLocked = 0; // the lock's first movement has come
+static Uint64 Window_wasmLockedAtMs = 0; // when the lock was seen to be taken, 0 while there's none
+static int Window_wasmLockJumpXRel = 0; // the jump just left out, while its trip back may come
+static int Window_wasmLockJumpYRel = 0;
+static Uint64 Window_wasmLockJumpMs = 0; // when it came, 0 when there's none
 
-static int Window_WasmLockJustTaken()
+// Whether a movement on one axis undoes a jump's movement on it.
+static int Window_WasmUndoesJump(int rel, int jumpRel)
 {
-    int bLocked = Window_wasmIsPointerLocked();
+    return abs(rel + jumpRel) <= 2;
+}
 
-    if (bLocked && !Window_bWasmMoveLocked)
-        Window_wasmLockedAtMs = SDL_GetTicks();
-    Window_bWasmMoveLocked = bLocked;
-    return bLocked && SDL_GetTicks() - Window_wasmLockedAtMs < WINDOW_WASM_LOCK_SETTLE_MS;
+static void Window_WasmSeeLock(int bLocked, Uint64 ms)
+{
+    if (!bLocked)
+    {
+        Window_wasmLockedAtMs = 0;
+        Window_bWasmMoveLocked = 0;
+        Window_wasmLockJumpMs = 0;
+    }
+    else if (!Window_wasmLockedAtMs)
+    {
+        Window_wasmLockedAtMs = ms ? ms : 1;
+    }
+}
+
+// 1: a jump as the lock was taken, 2: the cursor's trip back from one, 0: a hand's movement.
+static int Window_WasmIsLockJump(int xrel, int yrel, Uint64 timestampNs)
+{
+    Uint64 ms = timestampNs / 1000000;
+    int bLocked = Window_wasmIsPointerLocked();
+    int bFirst, bJump;
+
+    Window_WasmSeeLock(bLocked, ms);
+    if (!bLocked)
+        return 0;
+    bFirst = !Window_bWasmMoveLocked;
+    Window_bWasmMoveLocked = 1;
+    bJump = abs(xrel) >= (int)(Window_screenXSize * WINDOW_WASM_LOCK_JUMP_FRACTION)
+         || abs(yrel) >= (int)(Window_screenYSize * WINDOW_WASM_LOCK_JUMP_FRACTION);
+    if (Window_wasmLockJumpMs && (xrel || yrel))
+    {
+        int bBack = ms >= Window_wasmLockJumpMs && ms - Window_wasmLockJumpMs < WINDOW_WASM_LOCK_BACK_MS
+                    && Window_WasmUndoesJump(xrel, Window_wasmLockJumpXRel)
+                    && Window_WasmUndoesJump(yrel, Window_wasmLockJumpYRel);
+        Window_wasmLockJumpMs = 0;
+        if (bBack)
+            return 2;
+    }
+    if (!bFirst && ms >= Window_wasmLockedAtMs && ms - Window_wasmLockedAtMs >= WINDOW_WASM_LOCK_SETTLE_MS)
+        return 0;
+    if (bJump && bFirst) // only the lock's first movement: a later jump can be the cursor's move to the middle, against the hand
+    {
+        Window_wasmLockJumpXRel = xrel;
+        Window_wasmLockJumpYRel = yrel;
+        Window_wasmLockJumpMs = ms ? ms : 1;
+    }
+    return bJump;
 }
 
 // Added: Chromium (Chrome, Edge, Opera, Brave) on Windows and Linux keeps the
@@ -686,8 +848,8 @@ static void Window_WasmKeepPointerLock()
         // Not locked yet: back from a menu, or just gone fullscreen
         Window_wasmLockPointerNow();
     }
+    Window_WasmSeeLock(bLocked, SDL_GetTicks()); // Added: the lock's settle time starts when it's taken
     if (!bLocked) {
-        Window_bWasmMoveLocked = 0; // Added
         Window_wasmLastRelMs = 0; // Added
         Window_wasmHeldAxes = 0; // Added
     }
@@ -712,7 +874,7 @@ static void Window_WasmPointerLockReleased()
 
     Window_bWasmHadPointerLock = 0;
     Window_bWasmSentEsc = 0;
-    Window_bWasmMoveLocked = 0; // Added
+    Window_WasmSeeLock(0, 0); // Added
     Window_wasmLastRelMs = 0; // Added
     Window_wasmHeldAxes = 0; // Added
 }
@@ -807,8 +969,15 @@ void Window_HandleMouseMove(SDL_MouseMotionEvent *event)
     Window_yRelLeftOver -= yrel;
 
 #ifdef ARCH_WASM
-    if (Window_WasmLockJustTaken()) // Added
+    int lockJump = Window_WasmIsLockJump(xrel, yrel, event->timestamp); // Added
+    if (lockJump)
+    {
+        if (lockJump == 2)
+            stdPlatform_Printf("Mouse: left out the cursor's trip back of %d,%d\n", xrel, yrel);
+        else
+            stdPlatform_Printf("Mouse: left out a jump of %d,%d as the lock was taken\n", xrel, yrel);
         xrel = yrel = 0;
+    }
     else
         Window_WasmFilterMouseJumps(&xrel, &yrel, event->timestamp); // Added
 #endif
@@ -914,10 +1083,14 @@ void Window_HandleWindowEvent(SDL_Event* event)
 #endif
             break;
         case SDL_EVENT_WINDOW_MOUSE_ENTER:
+#ifndef ARCH_WASM // Added: in the browser this came with every trip of the cursor over the page's edge
             stdPlatform_Printf("Mouse entered window %d\n", event->window.windowID);
+#endif
             break;
         case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+#ifndef ARCH_WASM // Added
             stdPlatform_Printf("Mouse left window %d\n", event->window.windowID);
+#endif
             break;
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
             stdPlatform_Printf("Window %d gained keyboard focus\n", event->window.windowID);
@@ -1347,6 +1520,12 @@ void Window_SdlUpdate()
 
                 //if (!event.key.repeat)
                 //    stdControl_SetSDLKeydown(event.key.scancode, 1, event.key.timestamp);
+#ifdef ARCH_WASM
+                // Added: kept until the game next reads the keyboard, so a tap that's
+                // let go before then still counts (stdControl_LatchSDLKeydown)
+                if (!event.key.repeat)
+                    stdControl_LatchSDLKeydown(event.key.scancode);
+#endif
                 break;
             case SDL_EVENT_KEY_UP:
                 if (event.key.key == SDLK_ESCAPE)
@@ -1485,6 +1664,12 @@ void Window_SdlUpdate()
                     Window_bMouseLeft = left;
                 if (hasRight)
                     Window_bMouseRight = right;
+#ifdef ARCH_WASM
+                // Added: as for keys, a click that's let go before the game reads the
+                // buttons still counts (stdControl_LatchMouseDown)
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+                    stdControl_LatchMouseDown(left | right);
+#endif
 
                 // route button coords through the same letterbox transform as motion
                 Window_TranslateMouseToCanvas((int)mevent->x, (int)mevent->y, &Window_mouseX, &Window_mouseY);
@@ -1686,6 +1871,8 @@ void Window_SdlUpdate()
 #ifdef ARCH_WASM
         Window_WasmPointerLockReleased();
         Window_wasmMenuFrame();
+        Window_wasmPaceInit();
+        int bHiddenInMatch = Window_wasmMenuHidden(sithNet_isMulti); // Added
 #endif
 
         if (!jkGuiBuildMulti_bRendering) {
@@ -1695,6 +1882,9 @@ void Window_SdlUpdate()
 #endif
             std3D_DrawMenu();
             std3D_EndScene();
+#ifdef ARCH_WASM
+            if (!bHiddenInMatch) // Added: the swap only yields, with a timer; this frame waits below
+#endif
             SDL_GL_SwapWindow(displayWindow);
         }
         else {
@@ -1702,6 +1892,9 @@ void Window_SdlUpdate()
             jkQuakeConsole_Render();
 #endif
             std3D_DrawMenu();
+#ifdef ARCH_WASM
+            if (!bHiddenInMatch) // Added
+#endif
             SDL_GL_SwapWindow(displayWindow);
             //menu_framelimit_amt_ms = 64;
         }
@@ -1724,6 +1917,11 @@ void Window_SdlUpdate()
         if (sampleTime_delay >= menu_framelimit_amt_ms) {
             sampleTime_delay = menu_framelimit_amt_ms;
         }
+#ifdef ARCH_WASM
+        if (bHiddenInMatch)
+            Window_wasmMenuHiddenWait(); // Added: in place of the swap's and this delay's timers
+        else
+#endif
         SDL_Delay(sampleTime_delay);
     }
     else
@@ -1808,7 +2006,10 @@ void Window_SdlVblank()
     // The browser shows what was drawn once the page gives the thread back, so there's
     // nothing to swap; SDL's swap only yielded, with a timer (see Window_wasmEndFrame).
     if (!jkGuiBuildMulti_bRendering)
-        Window_wasmEndFrame(jkPlayer_enableVsync, jkGame_isDDraw);
+    {
+        Window_wasmPaceInit();
+        Window_wasmEndFrame(jkPlayer_enableVsync, jkGame_isDDraw, sithNet_isMulti);
+    }
 #else
     SDL_GL_SwapWindow(displayWindow);
 #endif
