@@ -36,6 +36,13 @@ static SDL_Palette* stdDisplay_GetOrCreateSurfacePalette(SDL_Surface* surface)
 
 uint32_t Video_menuTexId = 0;
 uint32_t Video_overlayTexId = 0;
+
+// Added: whether anything was drawn into the overlay buffer (automap, force-power
+// target circles) this frame and last frame. It is empty on most frames, so
+// jkGame_Update only clears it after a frame that drew into it, and
+// std3D_DrawMapOverlay skips the upload and the full-screen quad when neither did.
+int Video_bOverlayDrawn = 0;
+int Video_bOverlayDrawnLast = 0;
 rdColor24 stdDisplay_masterPalette[256];
 int Video_bModeSet = 0;
 
@@ -151,7 +158,10 @@ int stdDisplay_SetMode(unsigned int modeIdx, const void *palette, int paged)
     Video_otherBuf.sdlSurface = otherSurface;
     Video_menuBuffer.sdlSurface = menuSurface;
     Video_overlayMapBuffer.sdlSurface = overlaySurface;
-    
+
+    // Added: treat the new overlay buffer as drawn into, so the next frame clears it
+    Video_bOverlayDrawn = 1;
+
     Video_menuBuffer.format.rowSize = menuSurface->pitch;
     Video_otherBuf.format.rowSize = otherSurface->pitch;
     Video_overlayMapBuffer.format.rowSize = overlaySurface->pitch;

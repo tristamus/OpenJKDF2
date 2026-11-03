@@ -405,10 +405,19 @@ int jkGame_Update()
 #endif
 
 #if defined(SDL2_RENDER)
-    tVBuffer* pOverlayBuffer = Video_pCanvasOverlayMap->pVBuffer;
-    stdDisplay_VBufferLock(pOverlayBuffer);
-    stdDisplay_VBufferFill(pOverlayBuffer, Video_fillColor, 0);
-    stdDisplay_VBufferUnlock(pOverlayBuffer);
+    // Added: the overlay buffer only holds the automap and the force-power target
+    // circles, so it is empty on most frames. It needs clearing only when last frame
+    // drew into it; otherwise it is still clear from before. std3D_DrawMapOverlay
+    // skips the upload and the quad when neither frame drew anything.
+    Video_bOverlayDrawnLast = Video_bOverlayDrawn;
+    Video_bOverlayDrawn = 0;
+    if (Video_bOverlayDrawnLast)
+    {
+        tVBuffer* pOverlayBuffer = Video_pCanvasOverlayMap->pVBuffer;
+        stdDisplay_VBufferLock(pOverlayBuffer);
+        stdDisplay_VBufferFill(pOverlayBuffer, Video_fillColor, 0);
+        stdDisplay_VBufferUnlock(pOverlayBuffer);
+    }
 #endif
 
     // MOTS added: scope/security cam overlays

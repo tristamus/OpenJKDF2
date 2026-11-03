@@ -1253,6 +1253,10 @@ void jkHud_DrawGPU()
     rdScreenPoint tmpScreenPt;
     if ( jkHud_bHasTarget && jkHud_pTargetThing && rdPrimit3_GetScreenCoord(&jkHud_pTargetThing->position, &tmpScreenPt) )
     {
+#ifdef SDL2_RENDER
+        // Added: the force-power target circles go into the overlay buffer too
+        Video_bOverlayDrawn = 1;
+#endif
         flex_t valSin, valCos;
         a2 = sithTime_g_secGameTime * 200.0;
         if ( Video_format.format.is16bit )

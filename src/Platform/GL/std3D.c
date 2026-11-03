@@ -1611,6 +1611,14 @@ void std3D_DrawMapOverlay()
         return;
     }
 
+    // Added: when nothing was drawn into the overlay this frame or last frame, the
+    // buffer is empty and the quad would draw nothing, so skip the full-size upload
+    // and the full-screen quad (jkGame_Update keeps the flags).
+    if (!Video_bOverlayDrawn && !Video_bOverlayDrawnLast)
+    {
+        return;
+    }
+
     menu_w = Video_menuBuffer.format.width;
     menu_h = Video_menuBuffer.format.height;
 

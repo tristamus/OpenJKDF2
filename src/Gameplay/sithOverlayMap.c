@@ -6,6 +6,7 @@
 #include "Dss/sithMulti.h"
 #include "Primitives/rdPrimit2.h"
 #include "Main/sithMain.h"
+#include "Win95/Video.h"
 #include "stdPlatform.h"
 #include "jk.h"
 
@@ -81,6 +82,11 @@ int sithOverlayMap_Draw(rdCanvas *pCanvas)
     result = sithOverlayMap_bMapVisible;
     if (!sithOverlayMap_bMapVisible)
         return 0;
+
+#ifdef SDL2_RENDER
+    // Added: the map is drawn into the overlay buffer, so it must be cleared and shown
+    Video_bOverlayDrawn = 1;
+#endif
 
     sithAdvanceRenderTick();
     rdSetGeometryMode(2);
