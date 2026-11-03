@@ -562,6 +562,32 @@ EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame, int bInMatch), 
   }
 });
 
+// Added: the FPS limit's wait (jkMain_WaitForTick), msLeft until the next frame is due.
+// bRefresh (a level with Vsync on): wait for the next screen refresh instead. The frame
+// is then drawn inside that refresh, as with no limit, not in a timer after it and shown
+// a refresh late, and the limit skips whole refreshes, which drops none it keeps. A hidden
+// tab waits as a hidden frame does.
+EM_ASYNC_JS(void, Window_wasmWaitForTick, (double msLeft, int bRefresh, int bInMatch), {
+  var pace = Module.jkPace;
+  if (document.hidden && bInMatch) {
+    await pace.hiddenWait(1);
+  } else if (bRefresh && !document.hidden) {
+    await new Promise(function(resolve) {
+      function done() { document.removeEventListener('visibilitychange', done); resolve(); }
+      document.addEventListener('visibilitychange', done);
+      requestAnimationFrame(done);
+    });
+  } else {
+    await new Promise(function(resolve) { setTimeout(resolve, Math.max(0, Math.ceil(msLeft))); });
+  }
+});
+
+void Window_WasmWaitForTick(double msLeft, int bRefresh)
+{
+    Window_wasmPaceInit();
+    Window_wasmWaitForTick(msLeft, bRefresh, sithNet_isMulti);
+}
+
 // Added: a menu drew a frame, so the next frame in a level doesn't count the time in menus.
 EM_JS(void, Window_wasmMenuFrame, (), {
   if (Module.jkFrames) Module.jkFrames.broken = true;
