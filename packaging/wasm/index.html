@@ -745,6 +745,8 @@
       #picker-result { margin-top: 14px; white-space: pre-line; }
       #picker-result:empty { display: none; }
       #picker-result.error { color: var(--bad); font-weight: bold; }
+      #problem-reload { margin-top: 14px; }
+      #picker #problem-reload[hidden] { display: none; }
 
       /* Shown only when the browser draws without the graphics card. */
       .gfx-notice {
@@ -1738,6 +1740,7 @@
             <button class="text-button" type="button">Stop checking</button></p>
         </div>
         <div id="picker-result" role="status"></div>
+        <div class="actions" id="problem-reload" hidden><button class="play" type="button">Reload</button></div>
       </div>
     </dialog>
 
@@ -1796,10 +1799,22 @@
         canvas: (function() {
           var canvas = document.getElementById('canvas');
 
-          // As a default initial behavior, pop up an alert when webgl context is lost. To make your
-          // application robust, you may want to override this behavior before shipping!
-          // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
-          canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
+          // The browser can take the game's 3D graphics away: after a graphics
+          // driver crash, reset or update, or when the computer runs low on
+          // memory. The game can't build them again by itself, so the player
+          // is told and offered a reload, in a box rather than alert(), which
+          // held up the whole tab (and a host's match with it) until clicked.
+          canvas.addEventListener("webglcontextlost", function(e) {
+            e.preventDefault();
+            console.warn('Graphics: the browser took the WebGL context away');
+            if (typeof showProblem === 'function') {
+              showProblem('The game lost its graphics',
+                          "The browser took the game's 3D graphics away. That happens after a graphics driver " +
+                          'crash, reset or update, or when the computer runs low on memory, and the game ' +
+                          "can't get them back by itself. Reload the page to play again.\n\nClick anywhere else " +
+                          'to hide this.', true);
+            }
+          }, false);
 
           // Ask for the faster graphics card on laptops that have two. The engine's
           // context leaves powerPreference at "default", which lets the browser pick
@@ -1892,21 +1907,72 @@
         if (imperial && imperial !== 'off' && IMPERIAL_HOSTS.indexOf(window.location.hostname) >= 0)
           Module['jkImperialUrl'] = imperial;
       })();
-      window.onerror = function(event) {
-        // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
-        Module.setStatus('Exception thrown, see JavaScript console');
+      window.onerror = function(message, source, line, column, error) {
+        if (engineError(error, source) && !controlFlow(error === undefined ? message : error))
+          engineStopped(String(message), error);
+      };
+
+      // ---- When the engine can't start, or stops. Only the engine's own
+      // errors count: those from openjkdf2.js or the wasm, from this page's
+      // code while the engine called it (its stack goes through the engine),
+      // and Emscripten's aborts (Module.onAbort). An error from anything else,
+      // such as a browser add-on's script, used to show "The game stopped" and
+      // turn off the leave warning while the game played on; now it's left to
+      // the console.
+      var ENGINE_FRAME = /openjkdf2(_data)?\.(js|wasm)|wasm-function|wasm:\/\//;
+      var engineRunning = false, engineProblem = false;
+
+      function engineError(error, source) {
+        var wasm = typeof WebAssembly === 'object' ? WebAssembly : {};
+        if (['RuntimeError', 'CompileError', 'LinkError', 'SuspendError'].some(function(type) {
+              return typeof wasm[type] === 'function' && error instanceof wasm[type];
+            }))
+          return true;
+        return ENGINE_FRAME.test(String(source || '')) || ENGINE_FRAME.test(String(error && error.stack || ''));
+      }
+
+      // Emscripten throws 'unwind' and ExitStatus on purpose; those aren't crashes.
+      function controlFlow(error) {
+        return error === 'unwind' || !!(error && error.name === 'ExitStatus') ||
+               /^(Uncaught )?(unwind|ExitStatus)\b|#<ExitStatus>/.test(String(error));
+      }
+
+      Module.onRuntimeInitialized = function() { engineRunning = true; };
+      // Emscripten calls this when the wasm didn't download or compile, or the
+      // browser couldn't give it its memory, and when the running engine
+      // aborts. The error it throws next is then only logged.
+      Module.onAbort = function(what) { engineStopped(String(what)); };
+      // The engine starts in a promise and every frame resumes from one, so
+      // its crashes and a failed start arrive here rather than at onerror.
+      window.addEventListener('unhandledrejection', function(ev) {
+        if (engineError(ev.reason, '') && !controlFlow(ev.reason)) engineStopped(String(ev.reason), ev.reason);
+      });
+
+      // Says so once, with a Reload button. Before the engine ran (a failed
+      // download, a cut-off file, a server error during a deploy) the player
+      // used to see a spinner on black forever.
+      function engineStopped(why, error) {
+        console.error('OpenJKDF2: the game stopped: ' + why + (error && error.stack ? '\n' + error.stack : ''));
+        if (engineProblem) return;
+        engineProblem = true;
+        engineLog.push('The game stopped: ' + why);  // for the saved network log
+        leaveGuard = false;
         spinnerElement.style.display = 'none';
+        progressElement.hidden = true;
+        var title = engineRunning ? 'The game stopped' : "The game couldn't start";
+        statusElement.textContent = title;
         Module.setStatus = function(text) {
           if (text) Module.printErr('[post-exception status] ' + text);
         };
-        // The status line sits under the canvas, so say it where players can see it.
-        // Emscripten throws 'unwind' and ExitStatus on purpose; those aren't crashes.
-        if (!/unwind|ExitStatus/.test(String(event))) {
-          leaveGuard = false;
-          showProblem('The game stopped', String(event) +
-                      '\n\nPress F12 and open Console for details. Click anywhere to hide this.');
-        }
-      };
+        if (typeof showProblem !== 'function') return;
+        showProblem(title, engineRunning
+          ? why + '\n\nPress F12 and open Console for details. Click anywhere else to hide this.'
+          : /memory/i.test(why)
+          ? "The browser couldn't give the game the memory it needs. Close other tabs and programs, then " +
+            'reload the page.\n\nThe browser said: ' + why
+          : "Its files didn't download or start properly. That can happen on a flaky connection or while " +
+            'the site is being updated. Reload the page to try again.\n\nWhat went wrong: ' + why, true);
+      }
 
       // ---- Mouse look. Without raw mouse input, Chromium (Chrome, Edge, Opera,
       // Brave) keeps the hidden cursor away from the page's edges by moving it
@@ -2883,10 +2949,13 @@
         if (withBundledData) {
           var data = document.createElement('script');
           data.src = 'openjkdf2_data.js';
+          data.onerror = function() { engineStopped("openjkdf2_data.js didn't download"); };
           document.body.appendChild(data);
         }
         var engine = document.createElement('script');
         engine.src = 'openjkdf2.js';
+        // The browser gives no reason (a 404, a 503, a dropped connection).
+        engine.onerror = function() { engineStopped("openjkdf2.js didn't download"); };
         document.body.appendChild(engine);
       }
 
@@ -2911,6 +2980,7 @@
           pickerWant.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight: Dark Forces II';
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = false; });
         modChoice.hidden = true;
+        problemReload.hidden = true;
         picker.onclick = null;
         var problem = browserProblem();
         showPickerResult(problem || phoneNote() || '', !!problem);
@@ -2930,15 +3000,23 @@
         if (!readingFolder && picker.open) picker.close();
       }
 
-      function showProblem(title, text) {
+      // reload: with a Reload button, for when only a reload brings the game back.
+      function showProblem(title, text, reload) {
         picker.classList.remove('checking');
         pickerTitle.textContent = title;
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
         modChoice.hidden = true;
         showPickerResult(text, true);
+        problemReload.hidden = !reload;
         if (!picker.open) picker.showModal();
         picker.onclick = function() { picker.close(); };
       }
+
+      var problemReload = document.getElementById('problem-reload');
+      problemReload.querySelector('button').addEventListener('click', function() {
+        leaveGuard = false;
+        location.reload();
+      });
 
       function hideZone() {
         document.getElementById('zone').hidden = true;
