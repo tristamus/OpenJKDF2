@@ -914,10 +914,14 @@ void Window_HandleWindowEvent(SDL_Event* event)
 #endif
             break;
         case SDL_EVENT_WINDOW_MOUSE_ENTER:
+#ifndef ARCH_WASM // Added: in the browser this came with every trip of the cursor over the page's edge
             stdPlatform_Printf("Mouse entered window %d\n", event->window.windowID);
+#endif
             break;
         case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+#ifndef ARCH_WASM // Added
             stdPlatform_Printf("Mouse left window %d\n", event->window.windowID);
+#endif
             break;
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
             stdPlatform_Printf("Window %d gained keyboard focus\n", event->window.windowID);

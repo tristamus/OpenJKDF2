@@ -3013,7 +3013,7 @@ void jkGuiRend_UpdateController()
                 jkGuiRend_activeMenu->lastMouseDownClickable = jkGuiRend_activeMenu->lastMouseOverClickable;
                 jkGuiRend_InvokeClicked(jkGuiRend_activeMenu->lastMouseOverClickable, jkGuiRend_activeMenu, jkGuiRend_mouseX, jkGuiRend_mouseY, 1);
             }
-            stdPlatform_Printf("a1\n");
+            //stdPlatform_Printf("a1\n");
         }
     }
     else if (lastB1 && !valB1) {
@@ -3027,7 +3027,7 @@ void jkGuiRend_UpdateController()
                 jkGuiRend_activeMenu->lastMouseDownClickable = jkGuiRend_activeMenu->lastMouseOverClickable;
                 jkGuiRend_InvokeClicked(jkGuiRend_activeMenu->lastMouseOverClickable, jkGuiRend_activeMenu, jkGuiRend_mouseX, jkGuiRend_mouseY, 1);
             }
-            stdPlatform_Printf("a2\n");
+            //stdPlatform_Printf("a2\n");
         }
 
         if (jkGuiRend_activeMenu) {
@@ -3038,11 +3038,11 @@ void jkGuiRend_UpdateController()
 
     if (stdControl_ReadKey(KEY_JOY1_B2, &val) && val) {
         jkGuiRend_WindowHandler(0, WM_KEYFIRST, VK_ESCAPE, 0, 0);
-        stdPlatform_Printf("b\n");
+        //stdPlatform_Printf("b\n");
     }
     if (stdControl_ReadKey(KEY_JOY1_B3, &val) && val) {
         //jkGuiRend_WindowHandler(0, WM_KEYFIRST, VK_TAB, 0, 0);
-        stdPlatform_Printf("x\n");
+        //stdPlatform_Printf("x\n");
         if (jkGuiRend_activeMenu && jkGuiRend_activeMenu->pReturnKeyShortcutElement) {
             jkGuiRend_InvokeClicked(jkGuiRend_activeMenu->pReturnKeyShortcutElement, jkGuiRend_activeMenu, jkGuiRend_mouseX, jkGuiRend_mouseY, 1);
         }
