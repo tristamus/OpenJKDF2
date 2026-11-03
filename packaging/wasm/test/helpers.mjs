@@ -257,6 +257,7 @@ export function makeIDB() {
             return {
                 get: k => request(() => (s.data.has(k) ? copy(s.data.get(k)) : undefined)),
                 getAll: () => request(() => [...s.data.values()].map(copy)),
+                getAllKeys: () => request(() => [...s.data.keys()].sort()),
                 put: (v, k) => request(() => { s.data.set(keyOf(v, k), copy(v)); return keyOf(v, k); }),
                 delete: k => request(() => { s.data.delete(k); }),
             };

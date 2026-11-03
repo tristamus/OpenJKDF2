@@ -2165,20 +2165,136 @@
 
       var THUMB_WIDTH = 320;
 
-      // The PNG, and a small JPEG for the list on this page, so the page
-      // doesn't load every full-size picture to show them.
-      async function shotImages(pixels, w, h) {
-        var canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
+      // The picture on a canvas, and a small copy of it for the list on this
+      // page, so the page doesn't load every full-size picture to show them.
+      // newCanvas(w, h) makes a canvas: the page's own, or a worker's.
+      function shotCanvases(pixels, w, h, newCanvas) {
+        var canvas = newCanvas(w, h);
         canvas.getContext('2d').putImageData(new ImageData(pixels, w, h), 0, 0);
-        var thumb = document.createElement('canvas');
-        thumb.width = Math.min(THUMB_WIDTH, w);
-        thumb.height = Math.max(1, Math.round(h * thumb.width / w));
+        var tw = Math.min(THUMB_WIDTH, w);
+        var thumb = newCanvas(tw, Math.max(1, Math.round(h * tw / w)));
         var ctx = thumb.getContext('2d');
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(canvas, 0, 0, thumb.width, thumb.height);
-        return { png: await canvasBytes(canvas, 'image/png'), thumb: await canvasBytes(thumb, 'image/jpeg', 0.85) };
+        return { canvas: canvas, thumb: thumb };
+      }
+
+      // The PNG, and a small JPEG for the list, made on this page.
+      async function shotImages(rgba, w, h) {
+        var c = shotCanvases(shotPixels(rgba, w, h), w, h, function(w, h) {
+          var canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          return canvas;
+        });
+        return { png: await canvasBytes(c.canvas, 'image/png'), thumb: await canvasBytes(c.thumb, 'image/jpeg', 0.85) };
+      }
+
+      // ---- Made in a worker instead where the browser can (OffscreenCanvas
+      // there). Made on the page, a 1080p screenshot held the game up for
+      // 26-32 ms, and Chromium, which compresses a page canvas's PNG in idle
+      // time, forced it through in one go about a second later (80-150 ms)
+      // when the game left no idle time. The pixels move to the worker
+      // without a copy, and the worker sends the two files back.
+
+      // Runs in the worker, so it uses nothing else from this page but what
+      // shotWorkerSource gives it. It says first whether it can make them.
+      function shotWorker() {
+        var ok = false;
+        try {
+          ok = typeof OffscreenCanvas === 'function' && typeof ImageData === 'function' &&
+               typeof OffscreenCanvas.prototype.convertToBlob === 'function' &&
+               !!new OffscreenCanvas(1, 1).getContext('2d');
+        } catch (e) {}
+        postMessage({ ready: ok });
+        onmessage = function(ev) {
+          var job = ev.data;
+          Promise.resolve().then(function() {
+            var c = shotCanvases(shotPixels(new Uint8Array(job.buf), job.w, job.h), job.w, job.h,
+                                 function(w, h) { return new OffscreenCanvas(w, h); });
+            return Promise.all([c.canvas.convertToBlob({ type: 'image/png' }),
+                                c.thumb.convertToBlob({ type: 'image/jpeg', quality: 0.85 })]);
+          }).then(function(blobs) {
+            return Promise.all(blobs.map(function(b) { return b.arrayBuffer(); }));
+          }).then(function(files) {
+            postMessage({ id: job.id, png: files[0], thumb: files[1] }, files);
+          }, function(err) {
+            // The pixels go back, and the page makes the files itself.
+            postMessage({ id: job.id, error: String(err), buf: job.buf }, [job.buf]);
+          });
+        };
+      }
+
+      function shotWorkerSource() {
+        return 'var THUMB_WIDTH = ' + THUMB_WIDTH + ';\n' + shotPixels + '\n' + shotCanvases + '\n(' + shotWorker + ')();';
+      }
+
+      // makeImages for shotSaver: in a worker, started at the first
+      // screenshot, or with makeHere where it can't run or can't make them.
+      var SHOT_WORKER_START_MS = 5000;
+      function shotImagesInWorker(makeHere) {
+        var worker = null, ready = null, jobs = {}, nextId = 1;
+
+        function stop(why) {
+          if (why) console.warn('OpenJKDF2: screenshots are made on the page (' + why + ')');
+          ready = Promise.resolve(false);
+          if (worker) worker.terminate();
+          worker = null;
+          // A worker that stopped took the pictures it had with it.
+          for (var id in jobs) jobs[id].reject(new Error(why || 'the screenshot worker stopped'));
+          jobs = {};
+        }
+
+        function start() {
+          ready = new Promise(function(resolve) {
+            var timer = setTimeout(function() { resolve(false); }, SHOT_WORKER_START_MS);
+            try {
+              worker = new Worker(URL.createObjectURL(new Blob([shotWorkerSource()], { type: 'text/javascript' })));
+            } catch (e) {
+              console.warn('OpenJKDF2: screenshots are made on the page (no worker: ' + e + ')');
+              clearTimeout(timer);
+              return resolve(false);
+            }
+            worker.onmessage = function(ev) {
+              var m = ev.data;
+              if (m.ready !== undefined) {
+                clearTimeout(timer);
+                return resolve(m.ready);
+              }
+              var job = jobs[m.id];
+              delete jobs[m.id];
+              if (!job) return;
+              if (m.error) {
+                stop("the worker couldn't: " + m.error);
+                job.resolve(makeHere(new Uint8Array(m.buf), job.w, job.h));
+              } else {
+                job.resolve({ png: new Uint8Array(m.png), thumb: new Uint8Array(m.thumb) });
+              }
+            };
+            worker.onerror = function(ev) {
+              clearTimeout(timer);
+              resolve(false);
+              stop('the worker failed' + (ev && ev.message ? ': ' + ev.message : ''));
+            };
+          }).then(function(ok) {
+            if (!ok && worker) stop("this browser can't make them in a worker");
+            return ok;
+          });
+        }
+
+        return function(rgba, w, h) {
+          if (!ready) start();
+          return ready.then(function(ok) {
+            if (!ok) return makeHere(rgba, w, h);
+            return new Promise(function(resolve, reject) {
+              var id = nextId++;
+              jobs[id] = { resolve: resolve, reject: reject, w: w, h: h };
+              // The engine's copy of the frame has a buffer of its own, which moves.
+              var buf = rgba.byteOffset === 0 && rgba.byteLength === rgba.buffer.byteLength ? rgba.buffer : rgba.slice().buffer;
+              worker.postMessage({ id: id, buf: buf, w: w, h: h }, [buf]);
+            });
+          });
+        };
       }
 
       // A record per screenshot in meta (name, game, level, time, size and
@@ -2225,6 +2341,13 @@
           return all.sort(function(a, b) { return b.time - a.time; });
         }
 
+        // Their names only: reading every small picture held the game up
+        // for up to 44 ms at a time with 1000 screenshots kept.
+        async function keys() {
+          var db = await open();
+          return request(db.transaction('meta').objectStore('meta').getAllKeys());
+        }
+
         async function read(key) {
           var db = await open();
           return request(db.transaction('data').objectStore('data').get(key));
@@ -2248,12 +2371,14 @@
           await done(tx);
         }
 
-        return { list: list, read: read, add: add, remove: remove };
+        return { list: list, keys: keys, read: read, add: add, remove: remove };
       }
 
       // What the engine calls: save() takes a screenshot and stores it in the
       // background, and result() tells it how the oldest one still owed went
       // (0 not done yet, 1 saved, 2 not saved), each one once, in order.
+      // makeImages(rgba, w, h) makes the PNG and the small JPEG from the
+      // engine's pixels.
       function shotSaver(store, makeImages) {
         var queue = Promise.resolve();
         var results = [];
@@ -2261,11 +2386,11 @@
         function save(rgba, w, h, game, level) {
           var date = new Date();
           var job = queue.then(async function() {
-            var images = await makeImages(shotPixels(rgba, w, h), w, h);
+            var images = await makeImages(rgba, w, h);
             var base = shotName(game, level, date);
             var taken = {};
-            for (var m of await store.list())
-              taken[m.key] = true;
+            for (var key of await store.keys())
+              taken[key] = true;
             var name = base + '.png';
             for (var n = 2; taken[name]; n++)
               name = base + ' (' + n + ').png';
@@ -2365,9 +2490,9 @@
       var thumbUrls = [];
 
       Module.jkScreenshots = shotSaver(shots || {
-        list: async function() { return []; },
+        keys: async function() { return []; },
         add: async function() { throw new Error('this browser has no IndexedDB'); }
-      }, shotImages);
+      }, shotImagesInWorker(shotImages));
 
       function sizeText(bytes) {
         return bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB'
