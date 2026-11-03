@@ -542,19 +542,45 @@ static int Window_bWasmSentEsc = 0;
 // Added: the browser can report one big movement just after it takes the mouse
 // lock (the first click back in the game after a menu or another window), as
 // far as the cursor's trip to wherever it locks, which turns the player round.
-// Mouse movement from the first moments of a lock is left out.
+// Such a jump comes with the lock's first movement, however long after the lock
+// that is, so the first movement, and any in the first 100 ms of the lock, is left
+// out when it's a fifth of the page or more (as for the jumps below). Smaller ones
+// are a hand's. All movement in the 100 ms from the first one used to be left out,
+// which in Firefox and Chrome lost the start of a real turn after every Esc menu,
+// chat or switch to another window.
 #define WINDOW_WASM_LOCK_SETTLE_MS (100)
-static int Window_bWasmMoveLocked = 0;
-static Uint64 Window_wasmLockedAtMs = 0;
+#define WINDOW_WASM_LOCK_JUMP_FRACTION (0.2)
+static int Window_bWasmMoveLocked = 0; // the lock's first movement has come
+static Uint64 Window_wasmLockedAtMs = 0; // when the lock was seen to be taken, 0 while there's none
 
-static int Window_WasmLockJustTaken()
+static void Window_WasmSeeLock(int bLocked, Uint64 ms)
 {
-    int bLocked = Window_wasmIsPointerLocked();
+    if (!bLocked)
+    {
+        Window_wasmLockedAtMs = 0;
+        Window_bWasmMoveLocked = 0;
+    }
+    else if (!Window_wasmLockedAtMs)
+    {
+        Window_wasmLockedAtMs = ms ? ms : 1;
+    }
+}
 
-    if (bLocked && !Window_bWasmMoveLocked)
-        Window_wasmLockedAtMs = SDL_GetTicks();
-    Window_bWasmMoveLocked = bLocked;
-    return bLocked && SDL_GetTicks() - Window_wasmLockedAtMs < WINDOW_WASM_LOCK_SETTLE_MS;
+static int Window_WasmIsLockJump(int xrel, int yrel, Uint64 timestampNs)
+{
+    Uint64 ms = timestampNs / 1000000;
+    int bLocked = Window_wasmIsPointerLocked();
+    int bFirst;
+
+    Window_WasmSeeLock(bLocked, ms);
+    if (!bLocked)
+        return 0;
+    bFirst = !Window_bWasmMoveLocked;
+    Window_bWasmMoveLocked = 1;
+    if (!bFirst && ms >= Window_wasmLockedAtMs && ms - Window_wasmLockedAtMs >= WINDOW_WASM_LOCK_SETTLE_MS)
+        return 0;
+    return abs(xrel) >= (int)(Window_screenXSize * WINDOW_WASM_LOCK_JUMP_FRACTION)
+        || abs(yrel) >= (int)(Window_screenYSize * WINDOW_WASM_LOCK_JUMP_FRACTION);
 }
 
 // Added: Chromium (Chrome, Edge, Opera, Brave) on Windows and Linux keeps the
@@ -686,8 +712,8 @@ static void Window_WasmKeepPointerLock()
         // Not locked yet: back from a menu, or just gone fullscreen
         Window_wasmLockPointerNow();
     }
+    Window_WasmSeeLock(bLocked, SDL_GetTicks()); // Added: the lock's settle time starts when it's taken
     if (!bLocked) {
-        Window_bWasmMoveLocked = 0; // Added
         Window_wasmLastRelMs = 0; // Added
         Window_wasmHeldAxes = 0; // Added
     }
@@ -712,7 +738,7 @@ static void Window_WasmPointerLockReleased()
 
     Window_bWasmHadPointerLock = 0;
     Window_bWasmSentEsc = 0;
-    Window_bWasmMoveLocked = 0; // Added
+    Window_WasmSeeLock(0, 0); // Added
     Window_wasmLastRelMs = 0; // Added
     Window_wasmHeldAxes = 0; // Added
 }
@@ -807,8 +833,11 @@ void Window_HandleMouseMove(SDL_MouseMotionEvent *event)
     Window_yRelLeftOver -= yrel;
 
 #ifdef ARCH_WASM
-    if (Window_WasmLockJustTaken()) // Added
+    if (Window_WasmIsLockJump(xrel, yrel, event->timestamp)) // Added
+    {
+        stdPlatform_Printf("Mouse: left out a jump of %d,%d as the lock was taken\n", xrel, yrel);
         xrel = yrel = 0;
+    }
     else
         Window_WasmFilterMouseJumps(&xrel, &yrel, event->timestamp); // Added
 #endif
