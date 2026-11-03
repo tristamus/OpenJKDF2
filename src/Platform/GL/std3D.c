@@ -232,6 +232,70 @@ static void std3D_SetSceneDrawBuffers()
     glDrawBuffers(jkPlayer_enableSSAO ? 4 : 2, bufs);
 }
 
+// Added: Firefox with resist-fingerprinting (and LibreWolf and Mullvad Browser,
+// which turn it on) caps textures and renderbuffers at 2048 px. A scene target
+// bigger than the cap is incomplete and the scene draws black, which happens at
+// 1440p and above or with supersampling. Shrink the size to fit the GPU's limits,
+// keeping its shape; the scene is still stretched over the whole window.
+static void std3D_ClampRenderTargetSize(int32_t* pWidth, int32_t* pHeight)
+{
+    static GLint maxW = 0, maxH = 0;
+    static int32_t lastLoggedW = 0, lastLoggedH = 0;
+
+    if (!maxW || !maxH)
+    {
+        GLint maxTex = 0, maxRb = 0;
+        GLint maxView[2] = {0, 0};
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+        glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &maxRb);
+        glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxView);
+
+        // A limit that reads 0 (query failed) doesn't restrict anything
+        maxW = maxTex;
+        if (maxRb > 0 && (maxW <= 0 || maxRb < maxW)) maxW = maxRb;
+        maxH = maxW;
+        if (maxView[0] > 0 && (maxW <= 0 || maxView[0] < maxW)) maxW = maxView[0];
+        if (maxView[1] > 0 && (maxH <= 0 || maxView[1] < maxH)) maxH = maxView[1];
+        if (maxW <= 0 || maxH <= 0)
+        {
+            maxW = maxH = 0;
+            return;
+        }
+    }
+
+    int32_t w = *pWidth;
+    int32_t h = *pHeight;
+    if (w <= maxW && h <= maxH)
+        return;
+    if (w <= 0 || h <= 0)
+        return;
+
+    // Scale both sides by the same factor, set by the side that is furthest over
+    int32_t newW, newH;
+    if ((int64_t)w * maxH >= (int64_t)h * maxW)
+    {
+        newW = maxW;
+        newH = (int32_t)(((int64_t)h * maxW) / w);
+    }
+    else
+    {
+        newH = maxH;
+        newW = (int32_t)(((int64_t)w * maxH) / h);
+    }
+    if (newW < 1) newW = 1;
+    if (newH < 1) newH = 1;
+
+    if (w != lastLoggedW || h != lastLoggedH)
+    {
+        stdPlatform_Printf("std3D: render size %dx%d is over this GPU's limit of %dx%d, drawing the scene at %dx%d\n", w, h, maxW, maxH, newW, newH);
+        lastLoggedW = w;
+        lastLoggedH = h;
+    }
+
+    *pWidth = newW;
+    *pHeight = newH;
+}
+
 void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* pFb)
 {
     // Generate the framebuffer
@@ -484,6 +548,7 @@ int init_resources()
 
     int32_t tex_w = Window_xSize;
     int32_t tex_h = Window_ySize;
+    std3D_ClampRenderTargetSize(&tex_w, &tex_h); // Added
 
     std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[0]);
     std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[1]);
@@ -783,6 +848,9 @@ int std3D_StartScene()
 #endif
     int32_t tex_w = (int32_t)((double)Window_xSize * supersample_level);
     int32_t tex_h = (int32_t)((double)Window_ySize * supersample_level);
+    // Added: only the size drawn at is lowered; jkPlayer_ssaaMultiple (shown and
+    // saved by the menu) keeps the player's choice for when the limit allows it.
+    std3D_ClampRenderTargetSize(&tex_w, &tex_h);
 
     if (tex_w != std3D_pFb->w || tex_h != std3D_pFb->h 
         || (!(std3D_pFb->enable_extra & 1) && jkPlayer_enableBloom)
