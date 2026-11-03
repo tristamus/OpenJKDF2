@@ -357,7 +357,8 @@ static void std3D_UpdateWindowViewport()
     std3D_windowViewport[2] = w;
     std3D_windowViewport[3] = h;
 
-    if ((w != Window_xSize || h != Window_ySize)
+    static int numLogged = 0;
+    if ((w != Window_xSize || h != Window_ySize) && numLogged < 8
         && (Window_xSize != lastLogged[0] || Window_ySize != lastLogged[1] || w != lastLogged[2] || h != lastLogged[3]))
     {
         stdPlatform_Printf("std3D: window is %dx%d, drawable %dx%d, GPU viewport limit %dx%d: drawing the frame at %dx%d\n",
@@ -366,6 +367,7 @@ static void std3D_UpdateWindowViewport()
         lastLogged[1] = Window_ySize;
         lastLogged[2] = w;
         lastLogged[3] = h;
+        numLogged++;
     }
 }
 

@@ -292,10 +292,6 @@ void stdControl_SetSDLKeydown(int keyNum, int bDown, uint32_t readTime)
     stdControl_UpdateKeyState(stdControl_aSdlToDik[keyNum], bDown, readTime);
 }
 
-// Added: a key held right now counts again only once it's let go and pressed.
-// The Controls screen calls this as it starts waiting for a key, so the Insert
-// that starts the wait (its Add shortcut) isn't read as the key to bind. The
-// original game read buffered DirectInput key events, which behaved this way.
 #ifdef ARCH_WASM
 // Added: keys and mouse buttons pressed since the game last read them. The game
 // reads the keyboard and mouse buttons once a frame, so a key that went down and
@@ -329,6 +325,10 @@ void stdControl_LatchMouseDown(int buttons)
 }
 #endif
 
+// Added: a key held right now counts again only once it's let go and pressed.
+// The Controls screen calls this as it starts waiting for a key, so the Insert
+// that starts the wait (its Add shortcut) isn't read as the key to bind. The
+// original game read buffered DirectInput key events, which behaved this way.
 void stdControl_IgnoreHeldKeys()
 {
     const bool *state = SDL_GetKeyboardState(NULL);

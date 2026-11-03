@@ -399,7 +399,10 @@ int sithUpdate()
             // steps a second. Fades, pitch bends and the like move by the same
             // total. Each update is many JS calls into Web Audio, and the camera,
             // which places the listener, only moves once a frame anyway. Sounds
-            // started during the steps still start this frame.
+            // started during the steps still start this frame. A finished sound
+            // now keeps its mixer slot until the end of the frame rather than the
+            // next step; a cog's PlaySoundClass with a mutually exclusive entry
+            // checks that slot, and sends its network message only if it plays.
             if (wholeFramesToApply)
                 sithSoundMixer_Update(wholeFramesToApply * DELTA_PHYSTICK_FPS);
 #endif
