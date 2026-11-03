@@ -74,10 +74,11 @@ void Window_WasmWaitForTick(double msLeft, int bRefresh); // Added: Win95/Window
 // last (1000 / limit, rounded down) and only once the ms clock had passed that, so 60 gave
 // 58.8 frames a second at most, and 144 or 165 gave 142.9; with Vsync on, a limit at the
 // screen's rate dropped refreshes. The due time is now kept in fractions of a ms, one period
-// after the last, so the limit is what it says. A frame up to 2 ms early (at most half a
-// period) counts as due: with Vsync the refreshes time the frames, and they don't come
-// exactly a period apart. More than a period behind (a slow frame, a menu), the next is due
-// a period from now. Without a limit, a frame is due on every new ms, as before.
+// after the last, so the limit is what it says. A frame a little early counts as due: with
+// Vsync the refreshes time the frames, and they don't come exactly a period apart (and
+// Firefox's clock is in whole ms), so up to 4 ms early; without it, 1 ms for the clock;
+// never more than half a period. More than a period behind (a slow frame, a menu), the next
+// is due a period from now. Without a limit, a frame is due on every new ms, as before.
 static double jkMain_tickDueMs = 0.0;
 
 static int jkMain_TickDue(uint32_t now)
@@ -88,7 +89,9 @@ static int jkMain_TickDue(uint32_t now)
         return now > (uint32_t)jkMain_lastTickMs;
 
     period = 1000.0 / jkPlayer_fpslimit;
-    early = period * 0.5 < 2.0 ? period * 0.5 : 2.0;
+    early = jkPlayer_enableVsync ? 4.0 : 1.0;
+    if (early > period * 0.5)
+        early = period * 0.5;
     t = emscripten_get_now();
     if (t < jkMain_tickDueMs - early)
         return 0;
