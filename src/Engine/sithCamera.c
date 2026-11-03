@@ -5,6 +5,7 @@
 #include "World/sithWorld.h"
 #include "World/jkPlayer.h"
 #include "Engine/sithCollision.h"
+#include "Devices/sithControl.h"
 #include "Primitives/rdMath.h"
 #include "Primitives/rdVector.h"
 #include "Primitives/rdMatrix.h"
@@ -276,6 +277,19 @@ void sithCamera_Update(SithCamera *pCamera)
                 {
                     rdVector_Add3Acc(&v76, &sithCamera_g_vecCameraAngleOffset);
                 }
+
+#ifdef QOL_IMPROVEMENTS
+                // Added: above 150 fps some frames get no physics step, and the
+                // player's yaw only changes in a step, so the view stopped for
+                // that frame and turned double in the next. Show the turn the
+                // mouse asked for now; the next step turns the player by the
+                // same amount, so the view carries on from here. Yaw is the
+                // outermost rotation of the head angles, so this matches the
+                // step's own turn. Only the view moves early: aim, hits and
+                // what other players see still follow the player's orientation.
+                if ( focusThing == sithPlayer_g_pLocalPlayerThing )
+                    v76.y += sithControl_GetPendingTurn();
+#endif
 
                 rdMatrix_PreRotate34(&pCamera->orient, &v76);
                 rdMatrix_PostTranslate34(&pCamera->orient, &focusThing->position);

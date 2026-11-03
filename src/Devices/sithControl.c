@@ -86,6 +86,11 @@ static flex_t sithControl_TurnSpeed(flex_t degrees)
     }
     return degrees / sithControl_turnSecs;
 }
+
+flex_t sithControl_GetPendingTurn()
+{
+    return sithControl_turnCarry;
+}
 #endif
 
 static const char *sithControl_aFunctionStrs[INPUT_FUNC_MAX+1] =
