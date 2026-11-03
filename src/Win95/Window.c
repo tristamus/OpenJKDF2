@@ -588,6 +588,35 @@ void Window_WasmWaitForTick(double msLeft, int bRefresh)
     Window_wasmWaitForTick(msLeft, bRefresh, sithNet_isMulti);
 }
 
+// Added: a menu frame in a match (the Esc menu, the waiting room) in a hidden tab. Hiding
+// the tab takes the mouse away, and the page then opens the Esc menu, so a hidden host's
+// game runs from here, not from Window_wasmEndFrame. A menu frame yields twice, in SDL's
+// swap and in SDL_Delay, both timers, which a hidden tab runs about once a second each:
+// the match nearly stopped for everyone, as it did in the level. 1 if the frame should
+// wait on the worker (Window_wasmMenuHiddenWait) instead; a shown menu stops its timer.
+EM_JS(int, Window_wasmMenuHidden, (int bInMatch), {
+  var pace = Module.jkPace;
+  if (document.hidden && bInMatch) return 1;
+  pace.stopTicker();
+  return 0;
+});
+
+// Added: the hidden menu frame's wait: the worker's next message, then on until the card
+// has drawn the frame, as a hidden frame in the level waits (Window_wasmEndFrame), at
+// most 1 s.
+EM_ASYNC_JS(void, Window_wasmMenuHiddenWait, (), {
+  var pace = Module.jkPace, gl = Module.ctx, fence = null;
+  function drawn() {
+    try { return gl.isContextLost() || gl.getSyncParameter(fence, gl.SYNC_STATUS) === gl.SIGNALED; } catch (e) { return true; }
+  }
+  try { fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); gl.flush(); } catch (e) { fence = null; }
+  var started = performance.now();
+  do {
+    await pace.hiddenWait(1);
+  } while (fence && document.hidden && performance.now() - started < 1000 && !drawn());
+  try { if (fence) gl.deleteSync(fence); } catch (e) {}
+});
+
 // Added: a menu drew a frame, so the next frame in a level doesn't count the time in menus.
 EM_JS(void, Window_wasmMenuFrame, (), {
   if (Module.jkFrames) Module.jkFrames.broken = true;
@@ -1803,6 +1832,8 @@ void Window_SdlUpdate()
 #ifdef ARCH_WASM
         Window_WasmPointerLockReleased();
         Window_wasmMenuFrame();
+        Window_wasmPaceInit();
+        int bHiddenInMatch = Window_wasmMenuHidden(sithNet_isMulti); // Added
 #endif
 
         if (!jkGuiBuildMulti_bRendering) {
@@ -1812,6 +1843,9 @@ void Window_SdlUpdate()
 #endif
             std3D_DrawMenu();
             std3D_EndScene();
+#ifdef ARCH_WASM
+            if (!bHiddenInMatch) // Added: the swap only yields, with a timer; this frame waits below
+#endif
             SDL_GL_SwapWindow(displayWindow);
         }
         else {
@@ -1819,6 +1853,9 @@ void Window_SdlUpdate()
             jkQuakeConsole_Render();
 #endif
             std3D_DrawMenu();
+#ifdef ARCH_WASM
+            if (!bHiddenInMatch) // Added
+#endif
             SDL_GL_SwapWindow(displayWindow);
             //menu_framelimit_amt_ms = 64;
         }
@@ -1841,6 +1878,11 @@ void Window_SdlUpdate()
         if (sampleTime_delay >= menu_framelimit_amt_ms) {
             sampleTime_delay = menu_framelimit_amt_ms;
         }
+#ifdef ARCH_WASM
+        if (bHiddenInMatch)
+            Window_wasmMenuHiddenWait(); // Added: in place of the swap's and this delay's timers
+        else
+#endif
         SDL_Delay(sampleTime_delay);
     }
     else
