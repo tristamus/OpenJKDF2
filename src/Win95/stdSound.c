@@ -171,9 +171,11 @@ int stdSound_Startup()
     iosAudioSession_Initialize();
 #endif
 
+	// Added: a plain note, not an error: only the default device is ever opened
+	// below, and the browser's OpenAL never has the extension.
 	enumeration = alcIsExtensionPresent(NULL, "ALC_ENUMERATION_EXT");
 	if (enumeration == AL_FALSE)
-		fprintf(stderr, "enumeration extension not available\n");
+		printf("OpenAL device enumeration not available, using the default device\n");
 
 	if (!defaultDeviceName)
 		defaultDeviceName = alcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
