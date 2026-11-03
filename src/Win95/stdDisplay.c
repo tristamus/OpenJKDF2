@@ -294,6 +294,16 @@ void stdDisplay_VBufferUnlock(tVBuffer *buf)
     SDL_UnlockSurface(buf->sdlSurface);
 }
 
+// Added: narrows [*pLo, *pHi) to the i for which 0 <= i + offset < limit. That is
+// the test the old per-pixel loops made with unsigned compares, done once per rect.
+static void stdDisplay_ClipSpan(int64_t* pLo, int64_t* pHi, int32_t offset, int32_t limit)
+{
+    int64_t lo = -(int64_t)offset;
+    int64_t hi = (int64_t)(uint32_t)limit - offset;
+    if (*pLo < lo) *pLo = lo;
+    if (*pHi > hi) *pHi = hi;
+}
+
 int stdDisplay_VBufferCopy(tVBuffer *vbuf, tVBuffer *vbuf2, unsigned int blit_x, int blit_y, rdRect *rect, int alpha_maybe)
 {
     if (!vbuf || !vbuf2) return 1;
@@ -359,9 +369,10 @@ int stdDisplay_VBufferCopy(tVBuffer *vbuf, tVBuffer *vbuf2, unsigned int blit_x,
 
         SDL_Rect dstRect_inter = {0, 0, rect->width, rect->height};
 
-        for (int i = 0; i < rect->width; i++)
+        // Added: rows outside, columns inside, so memory is read in order
+        for (int j = 0; j < rect->height; j++)
         {
-            for (int j = 0; j < rect->height; j++)
+            for (int i = 0; i < rect->width; i++)
             {
                 if ((uint32_t)(i + srcRect.x) > (uint32_t)vbuf2->format.width) continue;
                 if ((uint32_t)(j + srcRect.y) > (uint32_t)vbuf2->format.height) continue;
@@ -387,21 +398,38 @@ int stdDisplay_VBufferCopy(tVBuffer *vbuf, tVBuffer *vbuf2, unsigned int blit_x,
     
     int once = 0;
     int has_alpha = !(rect->width == 640) && (alpha_maybe & 1);
-    
-    for (int i = 0; i < rect->width; i++)
+
+    // Added: copy row by row. This used to go column by column with four bounds
+    // checks per pixel. Working out once which part of the rect lies inside both
+    // buffers copies exactly the same pixels, and a row with no colour key is a
+    // plain memcpy. With the key (has_alpha), pixels of colour 0 are still skipped.
+    int64_t i0 = 0, i1 = rect->width;
+    int64_t j0 = 0, j1 = rect->height;
+    stdDisplay_ClipSpan(&i0, &i1, srcRect.x, vbuf2->format.width);
+    stdDisplay_ClipSpan(&i0, &i1, dstRect.x, vbuf->format.width);
+    stdDisplay_ClipSpan(&j0, &j1, srcRect.y, vbuf2->format.height);
+    stdDisplay_ClipSpan(&j0, &j1, dstRect.y, vbuf->format.height);
+
+    if (i0 < i1)
     {
-        for (int j = 0; j < rect->height; j++)
+        size_t rowLen = (size_t)(i1 - i0);
+        for (int64_t j = j0; j < j1; j++)
         {
-            if ((uint32_t)(i + srcRect.x) >= (uint32_t)vbuf2->format.width) continue;
-            if ((uint32_t)(j + srcRect.y) >= (uint32_t)vbuf2->format.height) continue;
-            
-            uint8_t pixel = srcPixels[(i + srcRect.x) + ((j + srcRect.y)*srcStride)];
+            const uint8_t* srcRow = srcPixels + (size_t)(i0 + srcRect.x) + (size_t)(j + srcRect.y) * srcStride;
+            uint8_t* dstRow = dstPixels + (size_t)(i0 + dstRect.x) + (size_t)(j + dstRect.y) * dstStride;
 
-            if (!pixel && has_alpha) continue;
-            if ((uint32_t)(i + dstRect.x) >= (uint32_t)vbuf->format.width) continue;
-            if ((uint32_t)(j + dstRect.y) >= (uint32_t)vbuf->format.height) continue;
+            if (!has_alpha)
+            {
+                memcpy(dstRow, srcRow, rowLen);
+                continue;
+            }
 
-            dstPixels[(i + dstRect.x) + ((j + dstRect.y)*dstStride)] = pixel;
+            for (size_t k = 0; k < rowLen; k++)
+            {
+                uint8_t pixel = srcRow[k];
+                if (pixel)
+                    dstRow[k] = pixel;
+            }
         }
     }
 
@@ -426,25 +454,52 @@ int stdDisplay_VBufferFill(tVBuffer *vbuf, int fillColor, rdRect *rect)
     //if (vbuf == &Video_menuBuffer)
     //    stdPlatform_Printf("Vbuffer fill to menu %u,%u %ux%u\n", rect->x, rect->y, rect->width, rect->height);
 
-    SDL_Rect dstRect = {rect->x, rect->y, rect->width, rect->height};
-    
     //printf("%x; %u %u %u %u\n", fillColor, rect->x, rect->y, rect->width, rect->height);
-    
+
+    // Added: the HUD and overlay buffers are cleared with this every frame, and the
+    // old loop went column by column, one byte at a time, with a bounds check per
+    // pixel: several ms per frame at 1080p. Now each row is one memset.
+    // It writes the same bytes as before. The old loop wrote byte
+    // (x + i) + (y + j) * stride for every pixel of the rect and skipped any outside
+    // the buffer, so a rect sticking out on the left or right wraps into the row
+    // before or after, and the parts above or below the buffer are dropped.
+    // (It also wrote the one byte just past the end; that byte is not touched now.)
     uint8_t* dstPixels = (uint8_t*)vbuf->sdlSurface->pixels;
-    uint32_t dstStride = vbuf->format.rowSize;
-    uint32_t max_idx = dstStride * vbuf->format.height;
-    for (int i = 0; i < rect->width; i++)
+    int64_t stride = vbuf->format.rowSize;
+    int64_t bufLen = stride * vbuf->format.height;
+    int64_t w = rect->width;
+    int64_t h = rect->height;
+    if (w <= 0 || h <= 0 || bufLen <= 0)
+        return 1;
+
+    int64_t start = (int64_t)rect->x + (int64_t)rect->y * stride;
+    if (w >= stride)
     {
-        for (int j = 0; j < rect->height; j++)
-        {
-            uint32_t idx = (i + dstRect.x) + ((j + dstRect.y)*dstStride);
-            if (idx > max_idx)
-                continue;
-            
-            dstPixels[idx] = fillColor;
-        }
+        // Rows touch or overlap (a whole-buffer clear when the pitch is the width),
+        // so the rect is one run of bytes
+        int64_t end = start + (h - 1) * stride + w;
+        if (start < 0) start = 0;
+        if (end > bufLen) end = bufLen;
+        if (start < end)
+            memset(dstPixels + start, fillColor, (size_t)(end - start));
+        return 1;
     }
-    
+
+    // Skip rows that end before the buffer starts
+    int64_t j = 0;
+    if (start + w <= 0)
+        j = (-(start + w)) / stride + 1;
+    for (; j < h; j++)
+    {
+        int64_t rowStart = start + j * stride;
+        int64_t rowEnd = rowStart + w;
+        if (rowStart >= bufLen)
+            break;
+        if (rowStart < 0) rowStart = 0;
+        if (rowEnd > bufLen) rowEnd = bufLen;
+        memset(dstPixels + rowStart, fillColor, (size_t)(rowEnd - rowStart));
+    }
+
     //SDL_FillRect(vbuf, &dstRect, fillColor); //TODO error check
 
     return 1;
