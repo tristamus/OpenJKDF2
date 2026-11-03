@@ -62,6 +62,7 @@ typedef struct stdALBuffer
     int bHasVel;
     ALfloat pos[3];
     ALfloat vel[3];
+    ALfloat pitch; // Added: AL_PITCH for the source, kept while there is none (0 means 1.0)
 } stdALBuffer;
 #else
 typedef struct IDirectSoundBuffer

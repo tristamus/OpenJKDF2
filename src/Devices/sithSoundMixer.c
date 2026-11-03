@@ -1248,6 +1248,15 @@ LABEL_19:
         return 0;
     if ( jkGuiSound_b3DSound )
         stdSound_CommitDeferredSettings();
+
+    // Added: a pitch set while the sound had no buffer yet (a COG's
+    // ChangeSoundPitch soon after PlaySoundThing, or the first step of a pitch
+    // bend: 3D sounds only get their buffer in the mixer update) was kept only in
+    // sound->pitch, and the sound then played at the normal pitch to the end.
+    // Give it to the buffer now, so it starts at that pitch.
+    if (sound->sound && sound->pitch != 1.0)
+        stdSound_BufferSetFrequency(sound->pSoundBuf, (int)((flex_d_t)sound->sound->sampleRate * sound->pitch));
+
     stdSound_BufferPlay(sound->pSoundBuf, sound->flags & SITHSOUNDFLAG_LOOP);
     sound->flags |= SITHSOUNDFLAG_PLAYING;
     sithSoundMixer_activeChannels++;

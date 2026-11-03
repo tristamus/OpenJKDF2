@@ -251,6 +251,7 @@ stdSound_buffer_t* stdSound_BufferCreate(int bStereo, uint32_t nSamplesPerSec, u
     out->bitsPerSample = bitsPerSample;
     out->refcnt = 1;
     out->vol = 1.0;
+    out->pitch = 1.0;
 
     out->pos[0] = 0.0;
     out->pos[1] = 0.0;
@@ -398,6 +399,13 @@ static void stdSound_SetSourceVolume(stdSound_buffer_t* sound, flex_t vol, int b
     }
 }
 
+// Added: the AL_PITCH a new source gets. 0 is a buffer whose pitch was never
+// set (OpenAL needs a pitch above 0), so it plays at the normal rate.
+static ALfloat stdSound_SourcePitch(stdSound_buffer_t* buf)
+{
+    return buf->pitch > 0.0 ? buf->pitch : 1.0;
+}
+
 int stdSound_BufferPlay(stdSound_buffer_t* buf, int loop)
 {
     ALint source_type;
@@ -410,7 +418,9 @@ int stdSound_BufferPlay(stdSound_buffer_t* buf, int loop)
     {
         alGenSources((ALuint)1, &buf->source);
 
-	    alSourcef(buf->source, AL_PITCH, 1.0);
+        // Added: the source starts at the buffer's pitch, which may have been
+        // set before it had a source (see stdSound_BufferSetFrequency).
+	    alSourcef(buf->source, AL_PITCH, stdSound_SourcePitch(buf));
         if (buf->bHasPos) {
             alSourcefv(buf->source, AL_POSITION, buf->pos);
         }
@@ -452,7 +462,7 @@ int stdSound_BufferQueueAfterAnother(stdSound_buffer_t* bufPrev, stdSound_buffer
     {
         alGenSources((ALuint)1, &bufPrev->source);
 
-        alSourcef(bufPrev->source, AL_PITCH, 1.0);
+        alSourcef(bufPrev->source, AL_PITCH, stdSound_SourcePitch(bufPrev));
         if (bufPrev->bHasPos) {
             alSourcefv(bufPrev->source, AL_POSITION, bufPrev->pos);
         }
@@ -587,7 +597,10 @@ void stdSound_BufferSetFrequency(stdSound_buffer_t* sound, int freq)
     if (Main_bHeadless) return;
 
     flex_t pitch = (flex_d_t)freq / (flex_d_t)sound->nSamplesPerSec;
-    
+
+    // Added: keep the pitch even when there is no source yet, so the source
+    // starts at it (DirectSound kept a buffer's frequency the same way).
+    sound->pitch = pitch;
     if (sound->source) {
         alSourcef(sound->source, AL_PITCH, pitch);
     }
@@ -609,6 +622,7 @@ stdSound_buffer_t* stdSound_BufferDuplicate(stdSound_buffer_t* sound)
     out->bitsPerSample = sound->bitsPerSample;
     out->refcnt = 1;
     out->vol = sound->vol;
+    out->pitch = sound->pitch;
     out->format = sound->format;
     out->bufferBytes = sound->bufferBytes;
     out->bIsCopy = 1;
