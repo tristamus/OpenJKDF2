@@ -231,8 +231,9 @@ if(TARGET_TWL OR TARGET_DREAMCAST)
         ${PROJECT_SOURCE_DIR}/src/Raster/rdZRaster.c)
 endif()
 
-# DroidWorks app layer (src/Dw/...) is desktop-only for now
-if(TARGET_TWL OR TARGET_DREAMCAST)
+# DroidWorks app layer (src/Dw/...) is desktop-only for now. The browser build
+# only plays JK and MotS, and DroidWorks was 13% of its wasm.
+if(TARGET_TWL OR TARGET_DREAMCAST OR TARGET_WASM)
     file(GLOB DW_SRCS ${PROJECT_SOURCE_DIR}/src/Dw/*.c ${PROJECT_SOURCE_DIR}/src/Dw/*.cpp)
     if(DW_SRCS)
         list(REMOVE_ITEM ENGINE_SOURCE_FILES ${DW_SRCS})

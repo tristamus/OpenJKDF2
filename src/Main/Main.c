@@ -751,6 +751,9 @@ void Main_ParseCmdLine(char *cmdline)
         {
             Main_bEnhancedCogVerbs = 1;
         }
+#ifdef PLATFORM_DROIDWORKS
+        // Added: only where the DroidWorks code is built in (not in the browser),
+        // so nothing can turn these modes on without it.
         else if (!__strcmpi(pArgTok, "-dwCompat")
                  || !__strcmpi(pArgTok, "/dwCompat")
                  || !__strcmpi(pArgTok, "-droidworksCompat")
@@ -764,6 +767,7 @@ void Main_ParseCmdLine(char *cmdline)
             Main_bDroidWorks = 1;
             Main_bDwCompat = 1;
         }
+#endif
         else if (!__strcmpi(pArgTok, "-dwCogVerbs") || !__strcmpi(pArgTok, "/dwCogVerbs"))
         {
             // DW COG verb import into JK/MOTS games (analog of -enhancedCogVerbs).
