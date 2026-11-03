@@ -740,6 +740,7 @@
       #mod-choice .keep-folder { margin: 14px 0 0; }
       #mod-choice .keep-folder .fine { display: block; margin-top: 4px; }
       #mod-choice .mod-clash { margin: 0 0 12px; padding: 7px 10px; border-left: 3px solid var(--gold); font-size: 14px; white-space: pre-line; }
+      #mod-choice .keys-note { margin: -4px 0 14px; padding: 4px 10px; border-left: 3px solid var(--gold); font-size: 14px; }
       /* Full screen sits between the mods and Start, and on its own without mods. */
       #mod-choice .picker-option { margin: 0 0 14px; }
       #picker-result { margin-top: 14px; white-space: pre-line; }
@@ -1723,6 +1724,9 @@
           <label class="picker-option"><input type="checkbox" id="fullscreen-option" checked>
             <span>Play in fullscreen <span class="fine">Click the game to fill the screen. Hold Esc to
               leave.</span></span></label>
+          <p class="keys-note" id="keys-note" hidden>Brave doesn't let the game keep Esc, Ctrl+W, Ctrl+T or Ctrl+N
+            in fullscreen: Esc leaves fullscreen, and Ctrl+W closes the tab. If you fire with Ctrl, give Fire
+            another key in the game's Setup &gt; Controls.</p>
           <label class="picker-option" id="raw-mouse-choice"><input type="checkbox" id="raw-mouse-option" checked>
             <span>Raw mouse input <span class="fine raw-mouse-about">Ticked, mouse look ignores Windows' pointer speed and
               Enhance pointer precision, so the view can't suddenly jolt. Unticked, it uses your Windows mouse settings,
@@ -6625,6 +6629,19 @@
       window.addEventListener('pointerdown', function(ev) {
         if (ev.target === Module.canvas) playFullscreen();
       }, true);
+
+      // Brave has no keyboard lock (navigator.keyboard is null), so neither
+      // way above keeps those keys, and Ctrl+W (Fire and Forward) closes the
+      // tab. Its players are told next to the fullscreen box.
+      function keysNote(nav) {
+        if (!nav.brave || typeof nav.brave.isBrave !== 'function' ||
+            (nav.keyboard && typeof nav.keyboard.lock === 'function'))
+          return Promise.resolve(false);
+        return nav.brave.isBrave().then(function(yes) { return !!yes; }, function() { return false; });
+      }
+      keysNote(navigator).then(function(show) {
+        document.getElementById('keys-note').hidden = !show;
+      });
       window.addEventListener('keydown', function(ev) {
         // Not Esc, which can't start fullscreen, nor Alt, Ctrl, Shift or Windows
         // on their own or in a shortcut, so Alt+Tab doesn't go fullscreen on the
