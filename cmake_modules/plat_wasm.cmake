@@ -46,6 +46,8 @@ macro(plat_initialize)
     # --profiling it lets the JS be minified and drops the other debug names.
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling-funcs -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js ")
     set(CMAKE_EXECUTABLE_SUFFIX .js)
+    # audio.js tunes the Web Audio graph Emscripten's OpenAL builds (k-rate panners).
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/audio.js")
 
     # Added: jk.c's _wcslen(const char16_t*) is a plain `for(len=0;str[len];len++)` loop,
     # but LLVM's builtin-recognition pass pattern-matches that exact shape as the "wcslen
@@ -65,6 +67,7 @@ endmacro()
 macro(plat_link_and_package)
     target_link_libraries(${BIN_NAME} PRIVATE -lm -lSDL3 -lGL -lGLEW -lopenal -lidbfs.js)
     set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js)
+    set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/audio.js)
     target_link_libraries(sith_engine PRIVATE nlohmann_json::nlohmann_json)
     if(TARGET_CAN_JKGM)
         target_link_libraries(sith_engine PRIVATE PNG::PNG ZLIB::ZLIB)
