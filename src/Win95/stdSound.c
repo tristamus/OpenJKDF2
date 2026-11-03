@@ -313,11 +313,11 @@ void* stdSound_BufferSetData(stdSound_buffer_t* sound, int bufferBytes, int32_t*
     sound->bufferBytes = bufferBytes;
     
     _memset(sound->data, 0, sound->bufferBytes);
-    
-    if (!Main_bHeadless)
-        alBufferData(sound->buffer, sound->format, sound->data, sound->bufferBytes, sound->nSamplesPerSec);
-    
-    
+
+    // Added: no alBufferData of the zeroed buffer here. Every caller fills the
+    // data and then calls stdSound_BufferUnlock, which uploads it; uploading the
+    // zeros first only cost a second conversion (a full float copy in the browser).
+
     return sound->data;
 }
 
@@ -363,24 +363,11 @@ int stdSound_BufferUnlock(stdSound_buffer_t* sound, void* buffer, int bufferRead
     }
 #endif
 
-    if (!sound->source)
-    {
-        alGenSources((ALuint)1, &sound->source);
-
-        alSourcef(sound->source, AL_PITCH, 1.0);
-        if (sound->bHasPos) {
-            alSourcefv(sound->source, AL_POSITION, sound->pos);
-        }
-        if (sound->bHasVel) {
-            alSourcefv(sound->source, AL_VELOCITY, sound->vel);
-        }
-        if (!sound->bHasPos) {
-            alSourcei(sound->source, AL_SOURCE_RELATIVE, AL_TRUE); // No 3D until we're given a position
-        }
-        
-        //printf("%u %u\n", buf->source, buf->buffer);
-    }
-    //alSourcei(sound->source, AL_BUFFER, sound->buffer);
+    // Added: no AL source is made here any more. The mixer only ever plays
+    // duplicates of a loaded sound, so the source made here for every loaded
+    // sound sat idle until the level ended (in the browser, each one is a
+    // GainNode rendered every audio block). stdSound_BufferPlay and
+    // stdSound_BufferQueueAfterAnother make the source when it is first needed.
 
     return 1;
 }
