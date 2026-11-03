@@ -1949,7 +1949,11 @@
       Module.onAbort = function(what) { engineStopped(String(what)); };
       // The engine starts in a promise and every frame resumes from one, so
       // its crashes and a failed start arrive here rather than at onerror.
+      // A DOMException is the browser turning down a request the engine made
+      // and didn't wait on (pointer lock while the window isn't focused,
+      // fullscreen, keyboard lock), not the engine stopping.
       window.addEventListener('unhandledrejection', function(ev) {
+        if (typeof DOMException === 'function' && ev.reason instanceof DOMException) return;
         if (engineError(ev.reason, '') && !controlFlow(ev.reason)) engineStopped(String(ev.reason), ev.reason);
       });
 
@@ -1976,7 +1980,8 @@
           ? "The browser couldn't give the game the memory it needs. Close other tabs and programs, then " +
             'reload the page.\n\nThe browser said: ' + why
           : "Its files didn't download or start properly. That can happen on a flaky connection or while " +
-            'the site is being updated. Reload the page to try again.\n\nWhat went wrong: ' + why, true);
+            'the site is being updated. Reload the page to try again.\n\nWhat went wrong: ' + why +
+            '\n\nClick anywhere else to hide this.', true);
       }
 
       // ---- Mouse look. Without raw mouse input, Chromium (Chrome, Edge, Opera,
@@ -3153,7 +3158,15 @@
           }
         }
         if (!picker.open) picker.showModal();
-        picker.onclick = function() { picker.close(); };
+        // A box with Reload closes only on a click outside it, so clicking its
+        // text (to copy the error) doesn't take the Reload button away.
+        picker.onclick = function(ev) {
+          if (reload && ev && typeof ev.clientX === 'number') {
+            var r = picker.getBoundingClientRect();
+            if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) return;
+          }
+          picker.close();
+        };
       }
 
       var problemReload = document.getElementById('problem-reload');

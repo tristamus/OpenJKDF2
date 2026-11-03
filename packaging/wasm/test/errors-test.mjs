@@ -159,6 +159,18 @@ test("Emscripten's 'unwind' and ExitStatus aren't crashes", () => {
     assert.equal(p.leaveGuard(), true);
 });
 
+test("the browser turning down a request the engine didn't wait on isn't a crash", () => {
+    // Firefox rejects a pointer lock asked for while the window isn't focused,
+    // and the stack runs through the engine's JavaScript.
+    const p = page();
+    p.env.Module.onRuntimeInitialized();
+    const refused = new DOMException('The document is not focused.', 'WrongDocumentError');
+    Object.defineProperty(refused, 'stack', { value: 'requestPointerLock@https://jediknight.zone/openjkdf2.js:1:2345\n' });
+    p.rejection(refused);
+    assert.deepEqual(p.shown, []);
+    assert.equal(p.leaveGuard(), true);
+});
+
 // The box itself, and the fullscreen start it holds back.
 const boxCode = cut('      // reload: with a Reload button', '      var problemReload = ');
 const fullscreenCode = cut('      function playFullscreen()', "      window.addEventListener('pointerdown'");
