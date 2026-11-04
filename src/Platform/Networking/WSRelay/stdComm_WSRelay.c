@@ -293,6 +293,8 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             // packets.
             var mc = pc.createDataChannel('jk-map', { negotiated: true, id: 1 });
             mc.binaryType = 'arraybuffer';
+            mc.bufferedAmountLowThreshold = 262144;
+            mc.onbufferedamountlow = function() { net.pumpMaps(); };
             // joiner: a link between two joiners (net.linkOffer), not one with
             // the host. sw: both ends switch to it (see the top of the file),
             // which a link with the host does once the other end says it can
@@ -416,6 +418,8 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (p.pos) try { p.pos.close(); } catch (e) {}
             try { p.pc.close(); } catch (e) {}
             net.closeBulk(id);
+            // Map parts for its links; the joiner asks again through the lobby.
+            if (Module.jkMaps && Module.jkMaps.forget) Module.jkMaps.forget(+id, true);
         };
 
         net.closeAll = function() {
@@ -474,6 +478,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
             net.stats.dcRecv++;
             net.lastFrom[id] = performance.now();
+            net.pumpMaps();
             if (Module.jkNetStats) Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takePeerPacket(id, d); });
             else net.takePeerPacket(id, data);
         };
@@ -537,6 +542,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (!(data instanceof ArrayBuffer) || data.byteLength < 12) return;
             net.stats.fastRecv++;
             net.lastFrom[id] = performance.now();
+            net.pumpMaps();
             if (Module.jkNetStats) Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takeFastPacket(id, d); }, true);
             else net.takeFastPacket(id, data);
         };
@@ -887,7 +893,10 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                     return 'direct';
                 } catch (e) {}
             }
-            if (net.state !== 1) return null;
+            // The lobby closes a socket that sends it more than 64 KiB at
+            // once, and a host's ends its room: a part cut for the map channel
+            // that closed is left for the joiner to ask for again.
+            if (net.state !== 1 || bytes.byteLength > 65536) return null;
             net.ws.send(bytes);
             return 'relay';
         };
@@ -895,6 +904,104 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         net.mapDirect = function(id) {
             var p = net.peers[id];
             return !!(p && p.open && p.mc.readyState === 'open');
+        };
+
+        /* What waits to go to player id the way a map frame sent now would
+           go (maps.js sends while it's little). */
+        net.mapBacklog = function(id, via) {
+            var n = net.bulkNumber(via);
+            if (n) {
+                var l = (net.bulk[id] || {})[n];
+                return l ? l.mc.bufferedAmount : 0;
+            }
+            if (via !== 'relay' && net.mapDirect(id)) return net.peers[id].mc.bufferedAmount;
+            return net.state === 1 ? net.ws.bufferedAmount || 0 : 0;
+        };
+
+        /* A host is in a match while anyone but player id (who downloads,
+           and sends no game packets meanwhile) was heard from in the last
+           2 s. Uploads to id then go paced, so they don't hold up the
+           others' game. */
+        net.mapInMatch = function(id) {
+            if (!net.isHost) return false;
+            var now = performance.now();
+            for (var k in net.lastFrom) {
+                if (+k !== id && now - net.lastFrom[k] < 2000) return true;
+            }
+            return false;
+        };
+
+        /* Whether a queue is building on the way out (true), isn't (false),
+           or there's no telling (null), for maps.js's rate in a match. What
+           the browser has waiting doesn't show what waits in the computer or
+           the router, but the lobby's answer to ping does: it comes back
+           behind everything sent before the ping on the same connection
+           (lobby.js answers it without waking up; relay.py never does).
+           Direct links have their own signs: game packets waiting in a data
+           channel, position updates dropped behind a backlog, a map channel
+           that doesn't empty, and netstats.js's round trips where it pings.
+           Without the lobby's answer, those say nothing about what goes
+           through the lobby (lobby). Asked at most every 250 ms, never right
+           after a send, which what's waiting would count. */
+        net.mapCongested = function(lobby) {
+            var m = net.mapSigns = net.mapSigns || { fastBacklog: 0, mapWaits: false };
+            var now = performance.now(), lp = net.lobbyPing, queued = false, seen = false;
+            if (net.state === 1 && lp.got) {
+                seen = true;
+                var waited = lp.sent.length ? now - lp.sent[0] : 0;
+                if (lp.rtt > lp.base + 100 || waited > lp.base + 100) queued = true;
+            }
+            if (net.state === 1 && !lp.sent.length) net.pingLobby();
+            var mapWaits = false;
+            for (var id in net.peers) {
+                var p = net.peers[id];
+                if (!p.open) continue;
+                seen = true;
+                if (p.dc.bufferedAmount > 4096 || (p.pos && p.pos.bufferedAmount > 4096)) queued = true;
+                if (p.mc.bufferedAmount >= 65536) mapWaits = true;
+                for (var n in net.bulk[id] || {}) {
+                    if (net.bulk[id][n].mc.bufferedAmount >= 65536) mapWaits = true;
+                }
+            }
+            // Twice running: a map channel holds up to that much just after a send.
+            if (mapWaits && m.mapWaits) queued = true;
+            m.mapWaits = mapWaits;
+            if (net.stats.fastBacklog !== m.fastBacklog) queued = true;
+            m.fastBacklog = net.stats.fastBacklog;
+            var ns = Module.jkNetStats && Module.jkNetStats.queueMs ? Module.jkNetStats.queueMs() : null;
+            if (ns !== null) {
+                seen = true;
+                if (ns > 100) queued = true;
+            }
+            if (queued) return true;
+            if (lobby && !lp.got) return null;
+            return seen ? false : null;
+        };
+
+        /* The lobby's ping and its answer: the times the pings not yet
+           answered went, the last round trip and the shortest. */
+        net.lobbyPing = { sent: [], rtt: 0, base: 0, got: 0 };
+        net.pingLobby = function() {
+            var lp = net.lobbyPing;
+            if (net.state !== 1) return;
+            // A lobby that doesn't answer (relay.py) isn't asked again but
+            // for the keepalive.
+            if (!lp.got && lp.sent.length >= 8) lp.sent.shift();
+            net.ws.send('ping');
+            lp.sent.push(performance.now());
+        };
+        net.onPong = function() {
+            var lp = net.lobbyPing;
+            if (!lp.sent.length) return;
+            var rtt = performance.now() - lp.sent.shift();
+            lp.base = lp.got ? Math.min(lp.base, rtt) : rtt;
+            lp.rtt = rtt;
+            lp.got++;
+        };
+
+        /* maps.js sends what waits for joiners now. */
+        net.pumpMaps = function() {
+            if (net.isHost && Module.jkMaps && Module.jkMaps.pump) Module.jkMaps.pump();
         };
 
         /* Transfer links: more links to the host while a map or mod download
@@ -942,6 +1049,8 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             }
             var mc = pc.createDataChannel('jk-map', { negotiated: true, id: 1 });
             mc.binaryType = 'arraybuffer';
+            mc.bufferedAmountLowThreshold = 262144;
+            mc.onbufferedamountlow = function() { net.pumpMaps(); };
             net.closeBulkLink(id, n);
             var links = net.bulk[id] = net.bulk[id] || {};
             var l = links[n] = { pc: pc, mc: mc, at: performance.now() };
@@ -1036,6 +1145,10 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (obj.d && obj.d.type === 'offer') {
                 if (!net.isHost || from < 2 || !net.peers[from]) return;
                 if (!l && net.bulkCount() >= BULK_HOST_MAX) return;
+                // In a match a joiner downloads over the map channel alone,
+                // which keeps the blocks out at once few enough for the paced
+                // upload to keep each of them coming (maps.js).
+                if (net.mapInMatch(from)) return;
                 l = net.bulkLink(from, n);
                 l.pc.setRemoteDescription(obj.d)
                     .then(function() { return l.pc.createAnswer(); })
@@ -1117,6 +1230,10 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 net.onIce(ice[1], parseInt(ice[2], 10));
                 return true;
             }
+            if (op === 'pong') {
+                net.onPong();
+                return true;
+            }
             /* The host's credentials for the link the new player offers. */
             if (op === 'peer-joined') net.askIce();
             if (op === 'signal') {
@@ -1146,6 +1263,9 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 if (op === 'peer-left') net.closePeer(parseInt(text.substring(sp + 1), 10));
                 else net.closeAll();
             }
+            /* Map parts waiting for whoever had the id are dropped. */
+            if (((op === 'peer-left' && !(gone && gone.open)) || op === 'peer-joined') && Module.jkMaps && Module.jkMaps.forget)
+                Module.jkMaps.forget(parseInt(text.substring(sp + 1), 10));
             return false;
         };
         /* The live counts: this player's name and game, sent when the socket
@@ -1230,7 +1350,8 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 net.sayHello();
                 /* With game packets on WebRTC, the socket can sit idle for a whole
                    match, and proxies drop idle WebSockets. */
-                keepalive = setInterval(function() { if (ws.readyState === 1) ws.send('ping'); }, 25000);
+                net.lobbyPing = { sent: [], rtt: 0, base: 0, got: 0 };
+                keepalive = setInterval(function() { if (ws.readyState === 1 && net.ws === ws) net.pingLobby(); }, 25000);
                 net.rejoinMs = 1000;
                 var seat = net.session && net.seat;
                 if (seat) {
@@ -1270,6 +1391,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                     if (ev.data.byteLength < 8) return;
                     var from = new DataView(ev.data).getUint32(0, true);
                     net.lastFrom[from] = performance.now();
+                    net.pumpMaps();
                     if (Module.jkNetStats) Module.jkNetStats.inbound(from, ev.data, 'relay', function(d) { if (net.ws === ws) net.take(from, d, 'relay'); });
                     else net.take(from, ev.data, 'relay');
                     return;
@@ -1411,6 +1533,12 @@ EM_JS(void, wsrelay_js_map_host, (const char* pName, const char* pExt), {
 
 EM_JS(void, wsrelay_js_map_unhost, (), {
     if (Module.jkMaps) Module.jkMaps.unhost();
+});
+
+// Map and mod parts waiting for joiners go out paced (maps.js). The engine's
+// frames keep them going in a hidden tab, whose timers barely run.
+EM_JS(void, wsrelay_js_map_pump, (), {
+    if (Module.jkNet) Module.jkNet.pumpMaps();
 });
 
 // Same states as the map, and one more: the engine has to restart into the
@@ -2570,7 +2698,10 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
     wsrelay_WatchRelay();
     wsrelay_WatchMatch();
     if (stdComm_bIsServer)
+    {
         wsrelay_CheckLeftPending();
+        wsrelay_js_map_pump();
+    }
 
     while (1)
     {

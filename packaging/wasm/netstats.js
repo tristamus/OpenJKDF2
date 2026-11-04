@@ -1320,6 +1320,20 @@
             match.build = String(build || '').slice(0, 16);
         },
         hello: function(id, version) { if (id && id !== me.id) player(id).hello = version | 0; },
+        // How much longer the last ping on a player's game path took than the
+        // shortest kept, the most of the players still heard from, in ms, or
+        // null where nothing is measured: a queue building on the way, which
+        // a host's paced map uploads slow down for (maps.js).
+        queueMs: function() {
+            var worst = null, t = clock.now();
+            for (var id in players) {
+                var p = players[id], r = p.game.rtts;
+                if (r.length < 2 || t - p.heard > GONE_MS) continue;
+                var d = r[r.length - 1] - Math.min.apply(null, r);
+                worst = worst === null ? d : Math.max(worst, d);
+            }
+            return worst;
+        },
         hit: hit,
         motion: motion,
         sync: sync,

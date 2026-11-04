@@ -102,6 +102,8 @@ function makeLobby(world) {
         signals: [],
         asked: [],             // who asked for TURN credentials: [id, when]
         relayed: 0,
+        pong: true,            // answers ping, as lobby.js does without waking up (relay.py doesn't)
+        tooBig: 0,             // messages over its 64 KiB, for which lobby.js closes the socket
         accept(ws) {
             conns.set(ws, { room: 0, id: 0 });
         },
@@ -124,6 +126,14 @@ function makeLobby(world) {
         },
         receive(ws, data) {
             const c = conns.get(ws), r = rooms.get(c.room);
+            if ((typeof data === 'string' ? data.length : data.byteLength) > 64 * 1024) {
+                lobby.tooBig++;
+                return;
+            }
+            if (data === 'ping') {
+                if (lobby.pong) lobby.send(ws, 'pong');
+                return;
+            }
             if (typeof data === 'string') {
                 const [op, to, blob] = data.split(' ');
                 // A socket that dropped takes its seat back.
@@ -1339,6 +1349,8 @@ test('the host takes 12 transfer links at most at once, and a joiner it turned d
     const games = await room(world, [2, 3, 4, 5, 6]);
     const host = games[0], joiners = games.slice(1);
     echoMaps(host, ...joiners);
+    // Not in a match: nothing came from the others for 2 s.
+    await world.run(2000);
     for (const j of joiners) {
         j.net.mapBulk(1, true);
         await world.run(200);
@@ -1356,6 +1368,125 @@ test('the host takes 12 transfer links at most at once, and a joiner it turned d
     assert.equal(joiners[0].net.mapLanes(1).length, 1);
     assert.equal(joiners[4].net.mapLanes(1).length, 4);
     assert.equal(host.net.bulkCount(), 12);
+});
+
+// ---- Map and mod uploads (maps.js paces them; these are the ways it asks
+// about).
+
+test('a map frame over the lobby\'s 64 KiB never goes to it, whichever way it was meant for', async () => {
+    const world = makeWorld();
+    const [host, join] = await room(world, [2]);
+    echoMaps(host, join);
+    const frame = n => {
+        const b = new ArrayBuffer(n);
+        new DataView(b).setUint32(4, 2, true);
+        return b;
+    };
+    // A block's part cut for the map channel (64 KiB and its headers), and
+    // the channel closes before it goes.
+    const relayed = world.lobby.relayed;
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'direct'), 'direct');
+    host.net.peers[2].mc.end();
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'direct'), null);
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'relay'), null);
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 16384), 'direct'), 'relay');
+    assert.equal(host.net.mapSend(2, frame(65536), 'relay'), 'relay');
+    await world.run(100);
+    assert.equal(world.lobby.tooBig, 0);
+    assert.equal(world.lobby.relayed, relayed + 2);
+    assert.equal(join.maps.length, 1);
+});
+
+test('in a match the host turns down new transfer links, and takes them before one', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    await world.run(2000);
+    assert.ok(!host.net.mapInMatch(2), 'nobody heard from for 2 s');
+    // Player 3 plays; player 2 is downloading.
+    const playing = world.every(() => send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(200);
+    assert.ok(host.net.mapInMatch(2) && !host.net.mapInMatch(3));
+    a.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(), 0);
+    assert.deepEqual(a.net.mapLanes(1), ['direct']);
+    world.cancel(playing);
+    await world.run(32000);
+    a.net.mapLanes(1);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(), 3, 'taken once the match is quiet');
+});
+
+test('the lobby\'s answer to ping shows a queue building on the way to it', async () => {
+    const world = makeWorld();
+    const [host] = await room(world, [2]);
+    const net = host.net;
+    // Nothing known yet: the first ping goes.
+    assert.equal(net.mapCongested(true), null);
+    await world.run(100);
+    assert.equal(net.lobbyPing.got, 1);
+    assert.equal(net.mapCongested(true), false);
+    // The answer takes long: a queue on the way.
+    world.lobby.delay = 400;
+    await world.run(300);
+    net.mapCongested(true);
+    await world.run(200);
+    assert.equal(net.mapCongested(true), true, 'still waiting for it');
+    await world.run(300);
+    assert.ok(net.lobbyPing.rtt >= 400);
+    assert.equal(net.mapCongested(true), true);
+    // Back to quick: the ping already out still comes back late.
+    world.lobby.delay = 20;
+    await world.run(500);
+    assert.equal(net.mapCongested(true), true);
+    await world.run(100);
+    assert.equal(net.mapCongested(true), false);
+    // The answer goes nowhere near the engine.
+    assert.ok(!net.queue.some(d => d === 'pong'));
+});
+
+test('a lobby that never answers ping (relay.py) says nothing about a queue, and is not pinged again', async () => {
+    const world = makeWorld();
+    world.lobby.pong = false;
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const pings = () => host.net.lobbyPing.sent.length;
+    for (let i = 0; i < 20; i++) {
+        assert.equal(host.net.mapCongested(true), null);
+        await world.run(250);
+    }
+    assert.equal(pings(), 1);
+    // Direct links alone have their own signs.
+    assert.equal(host.net.mapCongested(false), null, 'no direct links either');
+});
+
+test('a player who left, or whose number someone new has, has nothing waiting for them; a link that closes, nothing for it', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const forgot = [];
+    let pumps = 0;
+    host.Module.jkMaps = { isFrame: () => false, onFrame() {}, forget: (...a) => forgot.push(a), pump: () => pumps++ };
+    host.net.ws.deliver('peer-left 2');
+    host.net.ws.deliver('peer-joined 4');
+    await world.run(10);
+    assert.deepEqual(forgot, [[2], [4]]);
+    world.canLink = () => true;
+    const join = makeGame(world, { id: 5 });
+    await world.run(5);
+    world.lobby.seat(join.net.ws, 1, 5);
+    await world.run(50);
+    join.js.wsrelay_js_rtc_begin(0);
+    await world.run(1000);
+    assert.ok(host.net.peers[5] && host.net.peers[5].open);
+    forgot.length = 0;
+    host.net.closePeer(5);
+    assert.deepEqual(forgot, [[5, true]]);
+    // The engine's frames and packets coming in send what may go.
+    pumps = 0;
+    host.js.wsrelay_js_map_pump();
+    assert.equal(pumps, 1);
 });
 
 let failed = 0;
