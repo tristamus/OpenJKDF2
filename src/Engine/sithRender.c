@@ -33,6 +33,7 @@
 #include "Platform/std3D.h"
 #include "Primitives/rdMath.h"
 #include "stdPlatform.h"
+#include "Engine/sithInterp.h"
 
 #if defined(TARGET_TWL)
 #include <nds.h>
@@ -430,14 +431,14 @@ void sithRender_Draw()
     rdSetRenderOptions(rdGetRenterOptions() | 1);
 #endif
 
-    if (!sithCamera_g_pCurCamera || !sithCamera_g_pCurCamera->sector)
+    if (!sithCamera_g_pCurCamera || !sithCamera_g_renderView.sector)
         return;
 
-    sithPlayer_SetScreenTint(sithCamera_g_pCurCamera->sector->tint.x, sithCamera_g_pCurCamera->sector->tint.y, sithCamera_g_pCurCamera->sector->tint.z);
+    sithPlayer_SetScreenTint(sithCamera_g_renderView.sector->tint.x, sithCamera_g_renderView.sector->tint.y, sithCamera_g_renderView.sector->tint.z);
 
     // TODO: Verify this is expensive
 #ifndef TARGET_TWL
-    if ( (sithCamera_g_pCurCamera->sector->flags & 2) != 0 )
+    if ( (sithCamera_g_renderView.sector->flags & 2) != 0 )
     {
         flex_t fov = sithCamera_g_pCurCamera->fov;
         flex_t aspect = sithCamera_g_pCurCamera->aspectRatio;
@@ -492,32 +493,32 @@ void sithRender_Draw()
 
     // Added: noclip
     if (!sithPlayer_bNoClippingRend) {
-        //sithRender_BuildVisibleSectorList(sithCamera_g_pCurCamera->sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
+        //sithRender_BuildVisibleSectorList(sithCamera_g_renderView.sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
         sithRender_renderflags |= 4;
         sithRender_f_82F4B0 = rdCamera_g_pCurCamera->pClipFrustum->farPlane * 1.5;
-        sithRender_KindaClipAssignFrustum(sithCamera_g_pCurCamera->sector, rdCamera_g_pCurCamera->pClipFrustum, 0, 0);
-        sithRender_KindaClip(sithCamera_g_pCurCamera->sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
+        sithRender_KindaClipAssignFrustum(sithCamera_g_renderView.sector, rdCamera_g_pCurCamera->pClipFrustum, 0, 0);
+        sithRender_KindaClip(sithCamera_g_renderView.sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
         sithRender_renderflags &= ~4;
     }
     else {
         sithPlayer_bNoClippingRend = 0;
         sithRender_renderflags |= 4;
         sithRender_f_82F4B0 = 3.0;
-        sithRender_NoClip(sithCamera_g_pCurCamera->sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
+        sithRender_NoClip(sithCamera_g_renderView.sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
         sithRender_renderflags &= ~4;
         sithPlayer_bNoClippingRend = 1;
 
-        rdVector3 camPos = sithCamera_g_pCurCamera->lookPos;
+        rdVector3 camPos = sithCamera_g_renderView.lookPos;
         for (int i = 0; i < sithWorld_g_pCurrentWorld->numSectors; i++)
         {
             SithSector* pSectorIter = &sithWorld_g_pCurrentWorld->aSectors[i];
-            if (pSectorIter == sithCamera_g_pCurCamera->sector) {
+            if (pSectorIter == sithCamera_g_renderView.sector) {
                 //continue;
             }
             if (pSectorIter->clipVisited == sithRender_lastRenderTick || pSectorIter->renderTick == sithRender_lastRenderTick) {
                 continue;
             }
-            /*flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_pCurCamera->lookPos, &rdCamera_g_pCurCamera->orient.lvec, &pSectorIter->center);
+            /*flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_renderView.lookPos, &rdCamera_g_pCurCamera->orient.lvec, &pSectorIter->center);
             if (dist + (pSectorIter->radius * 3.5) < 0.0) {
                 continue;
             }
@@ -545,20 +546,20 @@ void sithRender_Draw()
 #else
     // Added: noclip
     if (!sithPlayer_bNoClippingRend) {
-        //sithRender_BuildVisibleSectorList(sithCamera_g_pCurCamera->sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
+        //sithRender_BuildVisibleSectorList(sithCamera_g_renderView.sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
 #if 0
-        sithRender_KindaClipAssignFrustum(sithCamera_g_pCurCamera->sector, rdCamera_g_pCurCamera->pClipFrustum, 0, 0);
-        sithRender_KindaClip(sithCamera_g_pCurCamera->sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
+        sithRender_KindaClipAssignFrustum(sithCamera_g_renderView.sector, rdCamera_g_pCurCamera->pClipFrustum, 0, 0);
+        sithRender_KindaClip(sithCamera_g_renderView.sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
 #else
-        sithRender_BuildVisibleSectorList(sithCamera_g_pCurCamera->sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
+        sithRender_BuildVisibleSectorList(sithCamera_g_renderView.sector, rdCamera_g_pCurCamera->pClipFrustum, 0.0, 0);
 #endif
     }
     else {
-        rdVector3 camPos = sithCamera_g_pCurCamera->lookPos;
+        rdVector3 camPos = sithCamera_g_renderView.lookPos;
         for (int i = 0; i < sithWorld_g_pCurrentWorld->numSectors; i++)
         {
             SithSector* pSectorIter = &sithWorld_g_pCurrentWorld->aSectors[i];
-            if (pSectorIter == sithCamera_g_pCurCamera->sector) {
+            if (pSectorIter == sithCamera_g_renderView.sector) {
                 //continue;
             }
             if (pSectorIter->clipVisited == sithRender_lastRenderTick || pSectorIter->renderTick == sithRender_lastRenderTick) {
@@ -566,7 +567,7 @@ void sithRender_Draw()
             }
 
             // Only render aSectors that are in front of the camera near plane
-            /*flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_pCurCamera->lookPos, &rdCamera_g_pCurCamera->orient.uvec, &pSectorIter->center);
+            /*flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_renderView.lookPos, &rdCamera_g_pCurCamera->orient.uvec, &pSectorIter->center);
             if (dist + (pSectorIter->radius * 3.5) < 0.0) {
                 continue;
             }
@@ -577,7 +578,7 @@ void sithRender_Draw()
             rdVector3 centerTrans = pSectorIter->center;
             rdMatrix_TransformPoint34Acc(&centerTrans, &rdCamera_g_pCurCamera->orient);
             if (rdClip_SphereInFrustrum(rdCamera_g_pCurCamera->pClipFrustum, &centerTrans, pSectorIter->radius * 3.5) == SPHERE_FULLY_OUTSIDE) {
-                flex_t dist = rdVector_Dist3(&sithCamera_g_pCurCamera->lookPos, &pSectorIter->center);
+                flex_t dist = rdVector_Dist3(&sithCamera_g_renderView.lookPos, &pSectorIter->center);
                 if (dist + (pSectorIter->radius * 3.5) < 0.0) {
                     continue;
                 }
@@ -871,7 +872,7 @@ void sithRender_BuildVisibleSectorList(SithSector *pSector, rdClipFrustum *pFrus
         }
 
         v20 = &sithWorld_g_pCurrentWorld->aVertices[*adjoinSurface->surfaceInfo.face.vertexPosIdx];
-        flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_pCurCamera->lookPos, &adjoinSurface->surfaceInfo.face.normal, v20);
+        flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_renderView.lookPos, &adjoinSurface->surfaceInfo.face.normal, v20);
         flex_t adjoinDistAdd = adjoinIter->dist + adjoinIter->mirror->dist + prevAdjoinDistAdd;
 
         // Avoid rendering adjoins if they're far enough away
@@ -889,7 +890,7 @@ void sithRender_BuildVisibleSectorList(SithSector *pSector, rdClipFrustum *pFrus
         }
 #endif
 
-        if ( dist > 0.0 || (dist == 0.0 && pSector == sithCamera_g_pCurCamera->sector))
+        if ( dist > 0.0 || (dist == 0.0 && pSector == sithCamera_g_renderView.sector))
         {
             int bAdjoinIsTransparent = (((!adjoinSurface->surfaceInfo.face.material ||
                         (adjoinSurface->surfaceInfo.face.geometryMode == 0)) ||
@@ -1204,7 +1205,7 @@ void sithRender_NoClip(SithSector *sector, rdClipFrustum *frustumArg, flex_t pre
         adjoinSurface = adjoinIter->surface;
 
         v20 = &sithWorld_g_pCurrentWorld->aVertices[*adjoinSurface->surfaceInfo.face.vertexPosIdx];
-        flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_pCurCamera->lookPos, &adjoinSurface->surfaceInfo.face.normal, v20);
+        flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_renderView.lookPos, &adjoinSurface->surfaceInfo.face.normal, v20);
         flex_t adjoinDistAdd = adjoinIter->dist + adjoinIter->mirror->dist + prevAdjoinDistAdd;
 
         // Avoid rendering adjoins if they're far enough away
@@ -1222,7 +1223,7 @@ void sithRender_NoClip(SithSector *sector, rdClipFrustum *frustumArg, flex_t pre
         }
 #endif
 
-        if ( dist > 0.0 || (dist == 0.0 && sector == sithCamera_g_pCurCamera->sector))
+        if ( dist > 0.0 || (dist == 0.0 && sector == sithCamera_g_renderView.sector))
         {
             adjoinMat = adjoinSurface->surfaceInfo.face.material;
             if ( adjoinMat )
@@ -1445,7 +1446,7 @@ void sithRender_KindaClip(SithSector *sector, rdClipFrustum *frustumArg, flex_t 
         adjoinSurface = adjoinIter->surface;
 
         v20 = &sithWorld_g_pCurrentWorld->aVertices[*adjoinSurface->surfaceInfo.face.vertexPosIdx];
-        flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_pCurCamera->lookPos, &adjoinSurface->surfaceInfo.face.normal, v20);
+        flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_renderView.lookPos, &adjoinSurface->surfaceInfo.face.normal, v20);
         flex_t adjoinDistAdd = adjoinIter->dist /*+ adjoinIter->mirror->dist*/ + prevAdjoinDistAdd;
 
         // Avoid rendering adjoins if they're far enough away
@@ -1468,7 +1469,7 @@ void sithRender_KindaClip(SithSector *sector, rdClipFrustum *frustumArg, flex_t 
         }
 #endif
 
-        if ( dist > 0.0 || (dist == 0.0 && sector == sithCamera_g_pCurCamera->sector))
+        if ( dist > 0.0 || (dist == 0.0 && sector == sithCamera_g_renderView.sector))
         {
             adjoinMat = adjoinSurface->surfaceInfo.face.material;
             if ( adjoinMat )
@@ -2009,7 +2010,7 @@ void sithRender_RenderSectors()
         v65 = level_idk->surfaces;
 
 #if defined(TARGET_TWL) || defined(SITHRENDER_SPHERE_TEST_SURFACES) || defined(EXPERIMENTAL_FIXED_POINT)
-        BOOL noDistCulling = (level_idk != sithCamera_g_pCurCamera->sector);
+        BOOL noDistCulling = (level_idk != sithCamera_g_renderView.sector);
 #endif
         rdClipFrustum* pSectorFrustum = level_idk->pClipFrustum;
 
@@ -2022,7 +2023,7 @@ void sithRender_RenderSectors()
             vertices_alloc = sithWorld_g_pCurrentWorld->aVertices;
 
             BOOL bIsSkySurface = (v65->flags & (SITH_SURFACE_CEILING_SKY|SITH_SURFACE_HORIZON_SKY));
-            flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_pCurCamera->lookPos, &v65->surfaceInfo.face.normal, &vertices_alloc[*v65->surfaceInfo.face.vertexPosIdx]);
+            flex_t dist = rdMath_DistancePointToPlane(&sithCamera_g_renderView.lookPos, &v65->surfaceInfo.face.normal, &vertices_alloc[*v65->surfaceInfo.face.vertexPosIdx]);
             if (UNLIKELY(dist <= 0.0))
                 continue;
 #ifdef TARGET_TWL
@@ -2937,6 +2938,14 @@ void sithRender_RenderThings()
         rdSetCullFlags(0);
     }
 
+#ifdef QOL_IMPROVEMENTS
+    // Added: level of detail from the game camera, not the render view
+    // (sithCamera_BuildRenderView): the geoset chosen here is shared with the
+    // model, and MotS collision reads it.
+    rdMatrix34 lodView;
+    rdMatrix_InvertOrtho34(&lodView, &sithCamera_g_pCurCamera->orient);
+#endif
+
     rdSetZBufferMethod(RD_ZBUFFER_READ_WRITE);
     rdSetOcclusionMethod(0);
     rdSetVertexColorMode(0);
@@ -3036,10 +3045,17 @@ void sithRender_RenderThings()
                     curWorld = sithWorld_g_pCurrentWorld;
 
                     flex_t yval = thingIter->transformedPos.y;
+#ifdef QOL_IMPROVEMENTS
+                    {
+                        rdVector3 lodPos;
+                        rdMatrix_TransformPoint34(&lodPos, &thingIter->position, &lodView);
+                        yval = lodPos.y;
+                    }
+#endif
 
                     // MoTS added
                     if (sithCamera_g_pCurCamera->zoomScale != 1.0) {
-                        yval = sithCamera_g_pCurCamera->invZoomScale * (thingIter->transformedPos).y;
+                        yval = sithCamera_g_pCurCamera->invZoomScale * yval;
                     }
 
 #ifdef TARGET_TWL
@@ -3203,6 +3219,102 @@ void sithRender_RenderThings()
     
 }
 
+#ifdef SITHINTERP_ENABLED
+// Added: render interpolation. While the camera is drawn where the last step
+// left it (r_interp 1), the thing it follows and the thing that one stands on
+// are drawn there too, or a lift would bob against the view.
+static int sithRender_InterpFollowsCamera(SithThing *pThing)
+{
+    SithThing* pFocus = sithCamera_g_pCurCamera ? sithCamera_g_pCurCamera->pPrimaryFocusThing : NULL;
+    if (!pFocus)
+        return 0;
+    if (pThing == pFocus)
+        return 1;
+    return (pFocus->attach_flags & (SITH_ATTACH_THINGFACE | SITH_ATTACH_THING)) && pThing == pFocus->attachedThing;
+}
+
+// Draws pThing at its interpolated placement by moving the view instead of
+// the thing: every rd draw path reads the view through
+// rdCamera_g_pCurCamera->orient (world to camera) and rdCamera_g_camMatrix
+// (its inverse), so with D taking the thing's true placement to the drawn
+// one, the view V*D and the camera D^-1*C draw it there, while its joints,
+// lights and everything the game reads stay at the true placement.
+// Returns 1 when the view was moved; sithRender_InterpPop puts it back.
+typedef struct sithRender_InterpSaved
+{
+    rdMatrix34 view;
+    rdMatrix34 camMatrix;
+    uint32_t clippingIdk;
+} sithRender_InterpSaved;
+
+static int sithRender_InterpPush(SithThing *pThing, sithRender_InterpSaved* pSaved)
+{
+    rdMatrix34 drawn, invTrue, D, invD;
+    int bTranslateOnly = 0;
+
+    if (!sithInterp_IsArmed() || !rdCamera_g_pCurCamera)
+        return 0;
+    int bCameraToo = (sithInterp_mode == SITHINTERP_MODE_ALL || sithInterp_mode == SITHINTERP_MODE_IDENTITY);
+    if (!bCameraToo && sithRender_InterpFollowsCamera(pThing))
+        return 0;
+    if (bCameraToo && pThing == sithPlayer_g_pLocalPlayerThing)
+    {
+        // As the render view has it: where the player is drawn, with the
+        // last step's orientation turned by the view's mouse turn lead in
+        // third person, so the model turns with the camera.
+        flex_t lead = (sithCamera_g_renderView.bLeadLocalModel && sithRender_InterpFollowsCamera(pThing))
+                      ? sithCamera_g_renderView.yawLead : (flex_t)0.0;
+        rdVector3 posR;
+        if (!sithInterp_GetRenderPos(pThing, &posR) && lead == 0.0)
+            return 0;
+        rdMatrix_Copy34(&drawn, &pThing->orient);
+        if (lead != 0.0)
+        {
+            rdVector3 yaw = { 0.0, lead, 0.0 };
+            rdVector_Zero3(&drawn.scale);
+            rdMatrix_PreRotate34(&drawn, &yaw);
+        }
+        drawn.scale = posR;
+    }
+    else if (!sithInterp_GetRenderPlacement(pThing, &drawn, &bTranslateOnly))
+    {
+        return 0;
+    }
+
+    if (bTranslateOnly)
+    {
+        rdMatrix_Identity34(&D);
+        rdVector_Sub3(&D.scale, &drawn.scale, &pThing->position);
+    }
+    else
+    {
+        // pThing->orient.scale holds the position during the draw.
+        rdMatrix_InvertOrtho34(&invTrue, &pThing->orient);
+        rdMatrix_Multiply34(&D, &drawn, &invTrue);
+    }
+    rdMatrix_InvertOrtho34(&invD, &D);
+
+    rdMatrix_Copy34(&pSaved->view, &rdCamera_g_pCurCamera->orient);
+    rdMatrix_Copy34(&pSaved->camMatrix, &rdCamera_g_camMatrix);
+    pSaved->clippingIdk = pThing->renderData.clippingIdk;
+
+    rdMatrix_Multiply34(&rdCamera_g_pCurCamera->orient, &pSaved->view, &D);
+    rdMatrix_Multiply34(&rdCamera_g_camMatrix, &invD, &pSaved->camMatrix);
+    // Culled at the true position: a moved sprite or particle still clips at
+    // the near plane.
+    if (pThing->renderData.clippingIdk == SPHERE_FULLY_INSIDE)
+        pThing->renderData.clippingIdk = SPHERE_CLIPPING_EDGE;
+    return 1;
+}
+
+static void sithRender_InterpPop(SithThing *pThing, const sithRender_InterpSaved* pSaved)
+{
+    rdMatrix_Copy34(&rdCamera_g_pCurCamera->orient, &pSaved->view);
+    rdMatrix_Copy34(&rdCamera_g_camMatrix, &pSaved->camMatrix);
+    pThing->renderData.clippingIdk = pSaved->clippingIdk;
+}
+#endif
+
 int sithRender_RenderThing(SithThing *pThing)
 {
     int ret;
@@ -3245,11 +3357,21 @@ int sithRender_RenderThing(SithThing *pThing)
     }
 #endif
 
+#ifdef SITHINTERP_ENABLED
+    // Added: render interpolation, the thing and its saber drawn between its
+    // last two step poses.
+    sithRender_InterpSaved interpSaved;
+    int bInterpPushed = sithRender_InterpPush(pThing, &interpSaved);
+#endif
     ret = rdThing_Draw(&pThing->renderData, &pThing->orient);
     rdVector_Zero3(&pThing->orient.scale);
     if (sithRender_pExtraThingRenderFunc && (pThing->flags & SITH_TF_RENDERWEAPON)) {
         sithRender_pExtraThingRenderFunc(pThing);
     }
+#ifdef SITHINTERP_ENABLED
+    if (bInterpPushed)
+        sithRender_InterpPop(pThing, &interpSaved);
+#endif
 #ifdef TARGET_TWL
     }
     else {

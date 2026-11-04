@@ -55,6 +55,25 @@ void sithCamera_CycleCamera();
 MATH_FUNC void sithCamera_SetZoom(SithCamera *pCamera, flex_t zoomScale, flex_t zoom_2); // MOTS added
 MATH_FUNC void sithCamera_UpdateZoom(SithCamera *pCamera);
 
+// Added: the view the world is drawn from this frame (sithCamera_RenderScene).
+// It is the current camera, moved with what it follows to where render
+// interpolation draws that, and turned by the mouse turn the next physics
+// step will make (sithControl_GetPendingTurn). Only drawing reads it: sound,
+// AI awareness, aim and everything else in the game keep reading the camera.
+typedef struct sithCameraRenderView
+{
+    rdMatrix34 orient;
+    rdVector3 lookPos;
+    rdVector3 lookPYR;
+    SithSector* sector;
+    flex_t yawLead;        // the turn added to the local player's yaw
+    int bLeadLocalModel;   // the local player is drawn turned by it too (third person)
+} sithCameraRenderView;
+
+extern sithCameraRenderView sithCamera_g_renderView;
+extern uint32_t sithCamera_renderViewClamps; // render eye stopped by a wall, true view drawn
+void sithCamera_BuildRenderView(SithCamera *pCamera);
+
 #ifndef __cplusplus
 //static void (*sithCamera_Shutdown)() = (void*)sithCamera_Shutdown_ADDR;
 static int (*sithCamera_NewEntry_)(SithCamera *camera, int a2, int a3, flex_t fov, flex_t a5, rdCanvas* a6, SithThing *focus_far, SithThing *focus_near) = (void*)sithCamera_NewEntry_ADDR;

@@ -9,6 +9,7 @@
 #include "Primitives/rdVector.h"
 #include "Primitives/rdMatrix.h"
 #include "World/sithWorld.h"
+#include "Devices/sithControl.h"
 
 int sithInterp_mode = SITHINTERP_MODE_OFF;
 
@@ -64,6 +65,7 @@ static int sithInterp_bArmed = 0;
 static flex_d_t sithInterp_alpha = 1.0;     // from the last stepped sithUpdate
 static flex_d_t sithInterp_alphaDraw = 1.0; // for the armed draw
 static flex_d_t sithInterp_capStepSecs = 0.0;
+static flex_t sithInterp_localKeyYaw = 0.0;
 static uint32_t sithInterp_numLogged = 0;
 
 void sithInterp_Reset()
@@ -175,6 +177,7 @@ void sithInterp_CaptureCur()
     sithInterp_curTop = n;
     sithInterp_curEpoch = sithInterp_epoch;
     sithInterp_capStepSecs = DELTA_PHYSTICK_FPS;
+    sithInterp_localKeyYaw = sithControl_GetKeyYawPerStep(sithPlayer_g_pLocalPlayerThing);
 }
 
 void sithInterp_FrameStepped(flex_d_t rollSteps, flex_d_t stepSecs)
@@ -229,6 +232,11 @@ int sithInterp_IsArmed()
 flex_t sithInterp_GetAlpha()
 {
     return sithInterp_bArmed ? (flex_t)sithInterp_alphaDraw : (flex_t)1.0;
+}
+
+flex_t sithInterp_GetLocalKeyYaw()
+{
+    return sithInterp_bArmed ? sithInterp_localKeyYaw : (flex_t)0.0;
 }
 
 void sithInterp_Snap(SithThing* pThing)

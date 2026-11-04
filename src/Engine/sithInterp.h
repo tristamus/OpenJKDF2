@@ -59,6 +59,10 @@ void sithInterp_Arm();
 void sithInterp_Disarm();
 int sithInterp_IsArmed();
 flex_t sithInterp_GetAlpha();
+// The local player's yaw from the turn keys in the last step (degrees), for
+// the view's turn between steps: the view is drawn turned back by
+// (1 - alpha) of it.
+flex_t sithInterp_GetLocalKeyYaw();
 
 // After code that puts a thing somewhere new outright (spawn, teleport, a
 // cog's SetThingPos, a network warp): it isn't drawn sliding there.

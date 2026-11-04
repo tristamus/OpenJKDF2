@@ -1030,15 +1030,15 @@ void jkPlayer_DrawPov()
         rdSetOcclusionMethod(0);
 #endif
 
-        flex_t ambLight = stdMath_Clamp(sithCamera_g_pCurCamera->sector->extraLight + sithCamera_g_pCurCamera->sector->ambientLight, 0.0, 1.0);
+        flex_t ambLight = stdMath_Clamp(sithCamera_g_renderView.sector->extraLight + sithCamera_g_renderView.sector->ambientLight, 0.0, 1.0);
 
         rdCamera_SetAmbientLight(&sithCamera_g_pCurCamera->rdCamera, ambLight);
-        rdColormap_SetCurrent(sithCamera_g_pCurCamera->sector->colormap);
+        rdColormap_SetCurrent(sithCamera_g_renderView.sector->colormap);
 #ifdef JKM_LIGHTING
         rdSetVertexColorMode(0); // MOTS added: JKM.EXE draws the first-person model in mono (0x405c15)
 #endif
 
-        rdMatrix_Copy34(&orient, &sithCamera_g_pCurCamera->orient);
+        rdMatrix_Copy34(&orient, &sithCamera_g_renderView.orient);
         rdVector_Copy3(&trans, &playerThings[playerThingIdx].actorThing->actorParams.eyeOffset);
         //printf("%f %f %f\n", (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.x, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.y, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.z);
 #ifdef QOL_IMPROVEMENTS
