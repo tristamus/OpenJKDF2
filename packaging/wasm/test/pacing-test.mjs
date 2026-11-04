@@ -394,6 +394,11 @@ for (const s of [
         assert.equal(paced.reasks, 0);
         assert.ok(paced.max * 4 < old.max, `max wait ${paced.max} ms, live host ${old.max} ms`);
         assert.ok(paced.p95 * 4 < old.p95, `p95 wait ${paced.p95} ms, live host ${old.p95} ms`);
+        // The live host makes them wait seconds, so that alone misses a rate
+        // that grows too fast past a slow upload.
+        assert.ok(paced.max < 1000, `max wait ${paced.max} ms`);
+        if (s.path === 'imperial')
+            assert.ok(paced.clear <= paced.answers + 1, `no queue said ${paced.clear} times for ${paced.answers} answers`);
     });
 }
 
@@ -424,6 +429,9 @@ test('on the Imperial Network Protocol the rate grows on a fast upload, as the r
     assert.equal(mute.reasks, 0);
     assert.ok(paced.xfer * 2 < mute.xfer, `${paced.xfer.toFixed(1)} s, ${mute.xfer.toFixed(1)} s without answers`);
     assert.ok(paced.max < 300, 'game packets wait ' + paced.max + ' ms');
+    // Each answer that shows no queue grows the rate once, not at each look
+    // until the next answer 2 s on.
+    assert.ok(paced.clear <= paced.answers + 1, `no queue said ${paced.clear} times for ${paced.answers} answers`);
     // Without the server's answers, only what waits in the browser shows:
     // the rate never grows.
     assert.ok(mute.rate < 100000, 'rate ' + mute.rate);
@@ -434,6 +442,64 @@ test('on the Imperial Network Protocol the rate grows on a fast upload, as the r
         assert.ok(r.probesAt.length >= 2 && Math.min(...gaps) >= every, `timed requests ${Math.min(...gaps)} ms apart`);
         assert.ok(r.probesAt.length <= r.secs * 1000 / every + 1, `${r.probesAt.length} timed requests in ${r.secs.toFixed(0)} s`);
     }
+});
+
+for (const s of [
+    { path: 'relay', mbit: 20, mapBytes: 8000000 },
+    { path: 'direct', mbit: 20, mapBytes: 8000000 },
+    { path: 'direct', mbit: 20, mapBytes: 25000000 },
+    { path: 'direct', mbit: 5, mapBytes: 8000000 },
+    { path: 'imperial', mbit: 20, mapBytes: 8000000 },
+]) {
+    const what = `${{ relay: 'through the lobby', direct: 'over the map channel', imperial: 'on the Imperial Network Protocol' }[s.path]} ` +
+                 `at ${s.mbit} Mbit/s up, a ${s.mapBytes / 1e6} MB map`;
+    test(what + ': the rate soon uses a fast upload, and the map takes at most twice as long as from the live host and 2 s', async () => {
+        const paced = await run({ ...s, K, paced: true });
+        const old = await run({ ...s, K, paced: false });
+        console.log('    paced     ' + describe(what, paced));
+        console.log('    live host ' + describe(what, old));
+        assert.ok(paced.ok && old.ok);
+        assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+        assert.equal(paced.reasks, 0);
+        assert.ok(paced.xfer < old.xfer * 2 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+        assert.ok(paced.max < 500, 'game packets wait ' + paced.max + ' ms');
+    });
+}
+
+test('on the Imperial Network Protocol each answer with no queue counts once, and a queue at every look until the next', async () => {
+    const clock = makeClock();
+    const host = {};
+    const ws = { bufferedAmount: 0 };
+    host.jkrWs = { socks: { 1: { ws, out: [] } } };
+    const js = bindJs(IMPERIAL_JS, { Module: host, performance: clock.performance, HEAPU8: new Uint8Array(16), HEAP32: new Int32Array(4) });
+    js.imperial_js_xfer_init(1);
+    const m = host.jkImperial;
+    const serve = (got, rtt, waited) => js.imperial_js_xfer_serve(1, got, rtt, 50, waited);
+    const looks = n => Array.from({ length: n }, () => m.mapCongested());
+    serve(0, 0, -1);
+    assert.deepEqual(looks(2), [null, null]);
+    serve(1, 50, -1);
+    assert.deepEqual(looks(3), [false, null, null]);
+    // The next request, out 100 ms, then 140 ms (base + 80 is 130).
+    serve(1, 50, 100);
+    assert.deepEqual(looks(2), [null, null]);
+    serve(1, 50, 140);
+    assert.deepEqual(looks(3), [true, true, true]);
+    serve(2, 60, -1);
+    assert.deepEqual(looks(3), [false, null, null]);
+    // A late answer stands until the next.
+    serve(3, 200, -1);
+    assert.deepEqual(looks(3), [true, true, true]);
+    serve(4, 50, -1);
+    // What waits in the socket counts at once, an answer once it doesn't.
+    ws.bufferedAmount = 16384;
+    assert.deepEqual(looks(2), [true, true]);
+    ws.bufferedAmount = 0;
+    assert.deepEqual(looks(2), [false, null]);
+    // A new connection counts its answers from the first again.
+    serve(0, 0, -1);
+    serve(1, 50, -1);
+    assert.deepEqual(looks(2), [false, null]);
 });
 
 test('through a lobby that never answers ping (relay.py) the rate stays where it starts', async () => {
