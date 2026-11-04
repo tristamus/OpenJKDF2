@@ -315,7 +315,9 @@ EM_JS(void, imperial_js_xfer_init, (int bActive), {
         // than the shortest, or the one out has waited that long. What waits
         // in the browser says so at once. Until the server has answered,
         // there's no telling (the queue only waits for the engine's next
-        // frame). The engine sends one when it's asked for.
+        // frame). The engine sends one when it's asked for, but once the
+        // server has answered, no sooner than 2 s after the last: an answer
+        // stands until the next.
         Module.jkImperial.mapCongested = function() {
             var m = Module.jkImperial, pr = m.probe;
             if (!pr || !pr.got || pr.waited < 0) m.wantProbe = true;

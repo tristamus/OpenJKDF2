@@ -941,7 +941,10 @@ void jkrelay_AskTimed(void)
         memset(&jkr_timed, 0, sizeof(jkr_timed));
         jkr_timed.ws = ws;
     }
-    if (jkr_timed.seq && (jkr_timed.got || now - jkr_timed.sentMs < 10000)) return;
+    // Once answered, one each 2 s at most: the relay server isn't ours to
+    // change, and the menu asks it this every 5 s.
+    if (jkr_timed.got ? (jkr_timed.seq || now - jkr_timed.sentMs < 2000)
+                      : (jkr_timed.seq && now - jkr_timed.sentMs < 10000)) return;
     jkr_timed.seq = ++R.nextSeq;
     jkr_timed.sentMs = now;
     jkr_PutHdr(pkt, JKR_LIST, jkr_timed.seq);   // the games listed, as the menu asks

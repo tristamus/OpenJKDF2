@@ -11,8 +11,9 @@
 // asks. What waits for a machine that left the game is dropped.
 //
 // Then that request on its own (jkrelay_AskTimed in jkrelay_client.c), with a
-// made-up connection: one at a time, its round trip and the shortest, and
-// asked again only while the server hasn't answered one.
+// made-up connection: one at a time, its round trip and the shortest, asked
+// again only while the server hasn't answered one, and once it has, no
+// sooner than 2 s after the last however often it's asked for.
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -271,15 +272,25 @@ int main(void)
     CHECK(jkr_TimedAnswer(101), "didn't take its answer");
     CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 1 && rtt == 50 && base == 50 && waited < 0, "%.0f %.0f %.0f", rtt, base, waited);
 
-    // Behind a queue: longer than the shortest, which stays.
+    // Answered: the next goes 2 s after the last went, not before.
     jkrelay_AskTimed();
+    nowMs += 1949;
+    jkrelay_AskTimed();
+    CHECK(sends == 1 && jkrelay_TimedState(&rtt, &base, &waited) == 1 && waited < 0, "sent %d within 2 s", sends);
+    nowMs += 1;
+    jkrelay_AskTimed();
+    CHECK(sends == 2 && lastSeq == 102, "sent %d at 2 s", sends);
+
+    // Behind a queue: longer than the shortest, which stays.
     nowMs += 900;
     CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 1 && waited == 900, "waited %.0f", waited);
     jkr_TimedAnswer(102);
     CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 2 && rtt == 900 && base == 50, "%.0f %.0f", rtt, base);
 
     // Once the server has answered, one that doesn't come back isn't sent again.
+    nowMs += 1100;
     jkrelay_AskTimed();
+    CHECK(sends == 3, "sent %d", sends);
     nowMs += 20000;
     jkrelay_AskTimed();
     CHECK(sends == 3, "sent %d", sends);
@@ -297,11 +308,44 @@ int main(void)
     jkrelay_AskTimed();
     CHECK(sends == 5, "sent %d", sends);
 
+    // Asked for each frame, answered within 50 ms: one each 2 s, where the
+    // menu asks every 5 s.
+    jkr_wsSocks[1].ws = 6;
+    {
+        int first = sends;
+        uint32_t answered = lastSeq;
+        uint64_t sentAt = 0, shortest = (uint64_t)-1, longest = 0;
+        for (int t = 0; t < 60000; t += 16, nowMs += 16)
+        {
+            if (lastSeq != answered && nowMs - sentAt >= 50)
+            {
+                answered = lastSeq;
+                jkr_TimedAnswer(lastSeq);
+            }
+            int before = sends;
+            jkrelay_AskTimed();
+            if (sends == before) continue;
+            if (sends - first > 1)
+            {
+                if (nowMs - sentAt < shortest) shortest = nowMs - sentAt;
+                if (nowMs - sentAt > longest) longest = nowMs - sentAt;
+            }
+            sentAt = nowMs;
+        }
+        printf("    asked for each frame for 60 s: %d sent, %llu to %llu ms apart\\n", sends - first, (unsigned long long)shortest, (unsigned long long)longest);
+        CHECK(sends - first == 30, "sent %d in 60 s", sends - first);
+        CHECK(shortest >= 2000 && longest <= 2016, "%llu to %llu ms apart", (unsigned long long)shortest, (unsigned long long)longest);
+        CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 30 && rtt == 64 && base == 64, "%.0f %.0f", rtt, base);
+    }
+
     // Not in a game: nothing.
-    R.inSession = 0;
-    nowMs += 20000;
-    jkrelay_AskTimed();
-    CHECK(sends == 5, "sent %d out of a game", sends);
+    {
+        int before = sends;
+        R.inSession = 0;
+        nowMs += 20000;
+        jkrelay_AskTimed();
+        CHECK(sends == before, "sent %d out of a game", sends - before);
+    }
 
     printf(failed ? "%d failed\\n" : "the timed request: all passed\\n", failed);
     return failed ? 1 : 0;

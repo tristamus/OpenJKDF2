@@ -20,7 +20,8 @@
 // each frame, in pieces of 1360 bytes, at most 1 MiB/s, and with this
 // maps.js no more while the socket has 16 KiB waiting. The relay server
 // answers the request the engine times (jkrelay_AskTimed) behind everything
-// sent before it, as the lobby answers ping.
+// sent before it, as the lobby answers ping; once it has answered one, the
+// engine sends the next no sooner than 2 s after the last.
 //
 // Made-up maps, no game files.
 
@@ -105,7 +106,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     const stream = gob.length + 4;
     const host = { FS: makeFS({ ...retailInstall, '/jk1/episode/ctf_pace.gob': gob }) };
     const join = { FS: makeFS({ ...retailInstall }) };
-    const waits = [], waitsAt = [];
+    const waits = [], waitsAt = [], probesAt = [];
     const requests = [];
     let blockBytes = 0, transferring = false, t0 = Infinity;
     const playing = () => clock.now() - t0 >= matchAt;
@@ -209,8 +210,11 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         // engine's next frame after it comes.
         const probe = { seq: 0, out: false, back: false, sentAt: 0, rtt: 0, base: 0, got: 0 };
         const sendProbe = () => {
-            if (probe.out && (probe.got || clock.now() - probe.sentAt < 10000))
+            if (probe.got ? probe.out || clock.now() - probe.sentAt < 2000
+                          : probe.out && clock.now() - probe.sentAt < 10000)
                 return;
+            if (transferring)
+                probesAt.push(clock.now());
             const seq = ++probe.seq;
             probe.out = true;
             probe.back = false;
@@ -283,7 +287,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     const r = {
         state, secs, stream, ratio: blockBytes / stream, asks: requests.length, reasks: requests.length - new Set(requests).size,
         blocks, median: at(0.5), p95: at(0.95), max: Math.round(waits[waits.length - 1]),
-        rate: paced ? host.jkMaps.uploads().rate : null, waitsAt,
+        rate: paced ? host.jkMaps.uploads().rate : null, waitsAt, probesAt,
         ok: state === 1 && Buffer.compare(Buffer.from(join.FS.files.get('/jk1/episode/ctf_pace.gob') || []), Buffer.from(gob)) === 0,
     };
     return r;
@@ -293,7 +297,8 @@ function describe(name, r) {
     return `${name}: ${['stopped', 'done', 'failed'][r.state] || r.state} in ${r.secs.toFixed(0)} s, ` +
            `${(r.ratio).toFixed(2)}x the stream sent, ${r.reasks} block(s) asked for again; ` +
            `game packets wait median ${r.median} ms, p95 ${r.p95} ms, max ${r.max} ms` +
-           (r.rate !== null ? `; rate at the end ${(r.rate / 1000).toFixed(0)} KB/s` : '');
+           (r.rate !== null ? `; rate at the end ${(r.rate / 1000).toFixed(0)} KB/s` : '') +
+           (r.probesAt.length ? `; ${r.probesAt.length} timed request(s) to the relay server` : '');
 }
 
 const tests = [];
@@ -353,6 +358,13 @@ test('on the Imperial Network Protocol the rate grows on a fast upload, as the r
     // Without the server's answers, only what waits in the browser shows:
     // the rate never grows.
     assert.ok(mute.rate < 100000, 'rate ' + mute.rate);
+    // The server isn't ours: once it has answered, a request each 2 s at
+    // most, and one each 10 s to a server that never does.
+    for (const [r, every] of [[paced, 2000], [mute, 10000]]) {
+        const gaps = r.probesAt.slice(1).map((t, i) => t - r.probesAt[i]);
+        assert.ok(r.probesAt.length >= 2 && Math.min(...gaps) >= every, `timed requests ${Math.min(...gaps)} ms apart`);
+        assert.ok(r.probesAt.length <= r.secs * 1000 / every + 1, `${r.probesAt.length} timed requests in ${r.secs.toFixed(0)} s`);
+    }
 });
 
 test('through a lobby that never answers ping (relay.py) the rate stays where it starts', async () => {
