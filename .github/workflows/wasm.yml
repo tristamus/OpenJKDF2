@@ -90,6 +90,24 @@ jobs:
       # and TURN credentials, with made-up browsers, WebRTC and lobby.
       - name: Test network paths
         run: node packaging/wasm/test/transport-test.mjs
+      # Joining a room with a password, in C with the tree's own list, join
+      # and reply code cut out of stdComm_WSRelay.c: what the join sends of
+      # the password and logs, and what the lobby's answers become.
+      - name: Test joining a room with a password
+        run: sh packaging/wasm/test/passwords-test.sh
+      # A host's map upload to a player joining mid-match, over a modelled
+      # upload with queues the page can't see, through the lobby, over the
+      # map channel and on the Imperial Network Protocol: the map comes, sent
+      # once and soon at a fast upload's speed, and the host's game packets
+      # don't wait behind it as they do with the live build's.
+      - name: Test paced map uploads
+        run: node packaging/wasm/test/pacing-test.mjs
+      # The Imperial Network Protocol's transfer pump, on its own in C, with
+      # a made-up queue and socket: its 1 MiB/s ceiling, and nothing while
+      # the socket has 16 KiB waiting. Then the request it times on the relay
+      # server, at most one each 2 s once the server has answered.
+      - name: Test the Imperial transfer pump
+        run: node packaging/wasm/test/xferpump-test.mjs
       # Hit what you see's check on a hit claim, on its own in C, with
       # made-up records of where a player was and made-up claims.
       - name: Test the hit claim check
@@ -106,6 +124,12 @@ jobs:
           cc -std=c11 -O2 -Wall -Werror -o motion-test packaging/wasm/test/motion-test.c \
              src/Platform/Networking/WSRelay/stdComm_WSRelayPlayout.c -lm
           ./motion-test
+      # The resend buffer for reliable game messages, in C with the tree's
+      # own code and made-up games and network: acks for every message id,
+      # the count of messages waiting, resends and when they stop, a player
+      # index that changes hands, and how a receiver acks and drops repeats.
+      - name: Test reliable messages
+        run: sh packaging/wasm/test/sithcomm-test.sh
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

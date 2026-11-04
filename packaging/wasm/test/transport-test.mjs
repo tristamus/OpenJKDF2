@@ -98,16 +98,21 @@ function makeLobby(world) {
         turn: false,           // says "turn" and answers turn with TURN credentials
         turnMs: 100,           // how long getting them takes
         turnTtl: 86400,        // how many seconds they last, 0 for none (only STUN)
+        pw: false,             // says "pw": it checks room passwords, so its list carries none
+        listed: '3 1 ' + '00'.repeat(240), // what it answers list with: <room> <players> <entry>
         delay: 20,             // how long the lobby takes to pass something on
+        said: [],              // the control lines games sent it, but signal and ping
         signals: [],
         asked: [],             // who asked for TURN credentials: [id, when]
         relayed: 0,
+        pong: true,            // answers ping, as lobby.js does without waking up (relay.py doesn't)
+        tooBig: 0,             // messages over its 64 KiB, for which lobby.js closes the socket
         accept(ws) {
             conns.set(ws, { room: 0, id: 0 });
         },
         opened(ws) {
             lobby.send(ws, 'ice ' + btoa(JSON.stringify(STUN)));
-            const can = (lobby.links ? ['links'] : []).concat(lobby.turn ? ['turn'] : []);
+            const can = (lobby.links ? ['links'] : []).concat(lobby.turn ? ['turn'] : [], lobby.pw ? ['pw'] : []);
             if (can.length) lobby.send(ws, 'lobby ' + can.join(' '));
         },
         send(ws, data) {
@@ -124,8 +129,18 @@ function makeLobby(world) {
         },
         receive(ws, data) {
             const c = conns.get(ws), r = rooms.get(c.room);
+            if ((typeof data === 'string' ? data.length : data.byteLength) > 64 * 1024) {
+                lobby.tooBig++;
+                return;
+            }
+            if (data === 'ping') {
+                if (lobby.pong) lobby.send(ws, 'pong');
+                return;
+            }
             if (typeof data === 'string') {
                 const [op, to, blob] = data.split(' ');
+                if (op !== 'signal' && op !== 'ping') lobby.said.push(data);
+                if (op === 'list') lobby.send(ws, 'list ' + lobby.listed);
                 // A socket that dropped takes its seat back.
                 if (op === 'rejoin' || op === 'rehost') {
                     const parts = data.split(' ');
@@ -1158,13 +1173,150 @@ test('a joiner whose relay goes while it waits for its host\'s switch takes what
 test('a game tells the lobby its build\'s netcode in the address, after what the address has, also when it reconnects', async () => {
     const world = makeWorld();
     const game = makeGame(world, { id: 2 });
-    assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE);
+    assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE + '&pw=1');
     await world.run(5);
     game.net.ws.drop();
     game.js.wsrelay_js_connect(NETCODE);
-    assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE);
+    assert.equal(game.net.ws.url, 'ws://lobby/relay?net=' + NETCODE + '&pw=1');
     const other = makeGame(world, { id: 3, relayUrl: 'ws://lobby/relay?x=1' });
-    assert.equal(other.net.ws.url, 'ws://lobby/relay?x=1&net=' + NETCODE);
+    assert.equal(other.net.ws.url, 'ws://lobby/relay?x=1&net=' + NETCODE + '&pw=1');
+});
+
+// ---- Room passwords.
+
+// The password box as the engine hands it to wsrelay_js_join: UTF-16 units
+// in the module's memory, then a 0.
+function typed(game, text) {
+    const at = 4096, units = new Uint16Array(game.mem.buffer, at, text.length + 1);
+    for (let i = 0; i < text.length; i++) units[i] = text.charCodeAt(i);
+    units[text.length] = 0;
+    return at;
+}
+
+const joins = world => world.lobby.said.filter(line => /^join /.test(line));
+
+// A game on the join screen: its socket is open and the lobby's list is in.
+async function listed(world, opts = { id: 2 }) {
+    const game = makeGame(world, opts);
+    await world.run(100);
+    game.net.ws.send('list jk1');
+    await world.run(100);
+    return game;
+}
+
+test('a game asks the lobby to check room passwords (pw=1); one with ?netold doesn\'t', async () => {
+    const world = makeWorld();
+    assert.match(makeGame(world, { id: 2 }).net.ws.url, /[?&]pw=1$/);
+    const old = makeGame(world, { id: 3, old: true });
+    assert.equal(old.net.ws.url, 'ws://lobby/relay?net=' + NETCODE);
+    await world.run(5);
+    old.net.ws.drop();
+    old.js.wsrelay_js_connect(NETCODE);
+    assert.equal(old.net.ws.url, 'ws://lobby/relay?net=' + NETCODE, 'nor when it reconnects');
+});
+
+test('a list from a lobby that says pw is one whose games it checks the passwords of; not without pw, or with ?netold', async () => {
+    for (const [pw, old, checks] of [[true, false, 1], [false, false, 0], [true, true, 0]]) {
+        const world = makeWorld();
+        world.lobby.pw = pw;
+        const game = await listed(world, { id: 2, old });
+        const what = `lobby ${pw ? 'with' : 'without'} pw${old ? ', ?netold' : ''}`;
+        assert.equal(game.net.lobbyCan.includes('pw'), pw, what);
+        assert.equal(game.js.wsrelay_js_list_pw(), checks, what);
+        // The engine still gets the list, and never the lobby line.
+        assert.deepEqual(game.net.queue.filter(d => typeof d === 'string'), ['list ' + world.lobby.listed], what);
+    }
+});
+
+test('what a list said about passwords stays until the next list: a socket that comes back without its lobby line yet changes nothing', async () => {
+    const world = makeWorld();
+    world.lobby.pw = true;
+    const game = await listed(world);
+    assert.equal(game.js.wsrelay_js_list_pw(), 1);
+    // The lobby is replaced by one that doesn't check passwords, and is slow
+    // to say so on the socket that comes back.
+    world.lobby.pw = false;
+    world.lobby.delay = 1000;
+    game.net.ws.drop();
+    game.js.wsrelay_js_connect(NETCODE);
+    await world.run(10);
+    assert.equal(game.net.state, 1, 'back');
+    assert.deepEqual(game.net.lobbyCan, []);
+    assert.equal(game.js.wsrelay_js_list_pw(), 1, 'the list on the screen came from a lobby that checks them');
+    game.net.ws.send('list jk1');
+    await world.run(500);
+    assert.equal(game.js.wsrelay_js_list_pw(), 1, 'still, before the new list is in');
+    await world.run(1000);
+    assert.deepEqual(game.net.lobbyCan, ['links']);
+    assert.equal(game.js.wsrelay_js_list_pw(), 0, 'the new list came from one that doesn\'t');
+});
+
+test('join carries the password typed as the hex of its UTF-16LE units, 31 at most, and nothing when it\'s empty', async () => {
+    const world = makeWorld();
+    world.lobby.pw = true;
+    const game = await listed(world);
+    for (const text of ['sekrit9', 'pässwörd', 'café€密', 'x'.repeat(40), ''])
+        assert.equal(game.js.wsrelay_js_join(7, typed(game, text)), 1);
+    // A lobby that doesn't check them gets none (the engine passes 0).
+    assert.equal(game.js.wsrelay_js_join(7, 0), 1);
+    assert.deepEqual(joins(world), [
+        'join 7 73006500' + '6b007200' + '69007400' + '3900',
+        'join 7 7000' + 'e400' + '73007300' + '7700' + 'f600' + '72006400',
+        'join 7 630061006600' + 'e900' + 'ac20' + 'c65b',
+        'join 7 ' + '7800'.repeat(31),
+        'join 7',
+        'join 7',
+    ]);
+    // As Node writes UTF-16LE.
+    assert.equal(joins(world)[2], 'join 7 ' + Buffer.from('café€密', 'utf16le').toString('hex'));
+});
+
+test('join ends the seat this game had, and sends nothing while the socket is down', async () => {
+    const world = makeWorld();
+    world.lobby.pw = true;
+    const game = await listed(world);
+    game.net.seat = { room: 1, id: 2, key: '' };
+    game.js.wsrelay_js_join(3, typed(game, 'sekrit9'));
+    assert.equal(game.net.seat, null);
+    game.net.ws.drop();
+    assert.equal(game.js.wsrelay_js_join(3, typed(game, 'sekrit9')), 0);
+    assert.equal(joins(world).length, 1);
+});
+
+test('the password typed shows up nowhere the page logs or saves', async () => {
+    const world = makeWorld();
+    world.lobby.pw = true;
+    const game = await listed(world);
+    game.js.wsrelay_js_join(3, typed(game, 'sekrit9'));
+    await world.run(100);
+    assert.equal(joins(world)[0], 'join 3 ' + Buffer.from('sekrit9', 'utf16le').toString('hex'));
+    const logged = game.log.concat(game.net.log).join('\n');
+    assert.ok(!/sekrit9|7300650/.test(logged), logged);
+});
+
+// The engine's side, which runs in C, read from its source: what it logs of
+// a join with ?netlog (Main_bVerboseNetworking), and what the lobby's answers
+// to a password become on the join screen.
+test('the engine logs a join without the password, and shows the lobby\'s password answers', async () => {
+    const body = (source, name) => {
+        const m = new RegExp('\\n(?:static )?\\w+ ' + name + '\\([^)]*\\)\\n\\{\\n([\\s\\S]*?)\\n\\}\\n').exec(source);
+        assert.ok(m, name);
+        return m[1];
+    };
+    const sendJoin = body(relayC, 'wsrelay_SendJoin');
+    assert.match(sendJoin, /wsrelay_verbosePrintf\("Relay << join %d%s\\n", room, pwPassword \? " <hidden>" : ""\);/);
+    assert.doesNotMatch(sendJoin, /wsrelay_SendText/, 'which logs the whole line');
+    const open = body(relayC, 'stdComm_Open');
+    assert.match(open, /int bSendPw = wsrelay_aShownPw\[idx\] && \(jkGuiMultiplayer_aEntries\[idx\]\.sessionFlags & SESSIONFLAG_PASSWORD\);\n\s+wsrelay_SendJoin\(wsrelay_aShownRooms\[idx\], bSendPw \? pwPassword : NULL\);/);
+    // error password: wrong (5), error password wait: too many wrong lately (6).
+    assert.match(body(relayC, 'wsrelay_HandleText'),
+                 /else if \(pCode && !strcmp\(pCode, "password"\)\)\n\s+wsrelay_joinError = \(pDetail && !strcmp\(pDetail, "wait"\)\) \? 6 : 5;/);
+    assert.match(open, /if \(err == 5\)\n\s+return 0x88770154; \/\/ GUINET_WRONGPASSWORD\n\s+if \(err == 6\)\n\s+return STDCOMM_WSRELAY_PASSWORD_WAIT;/);
+    const gui = read('src/Gui/jkGUIMultiplayer.c');
+    assert.match(gui, /else if \( v10 == 0x88770154 \)\n\s+\{\n\s+v27 = jkStrings_GetUniStringWithFallback\("GUINET_WRONGPASSWORD"\);/);
+    assert.match(gui, /else if \( v10 == STDCOMM_WSRELAY_PASSWORD_WAIT \)\n\s+\{\n\s+v27 = u"Too many wrong passwords for this game\. Wait a minute, then try again\.";/);
+    // The join screen leaves the check to a lobby that checks, as to Imperial.
+    assert.match(gui, /if \(stdComm_Imperial_bActive \|\| stdComm_WSRelay_LobbyChecksPassword\(v7\)\)\n\s+check = 0;/);
 });
 
 test('a game leaving a match posts its summary to /summary on the lobby\'s address, while its links are up, once', async () => {
@@ -1356,6 +1508,225 @@ test('the host takes 12 transfer links at most at once, and a joiner it turned d
     assert.equal(joiners[0].net.mapLanes(1).length, 1);
     assert.equal(joiners[4].net.mapLanes(1).length, 4);
     assert.equal(host.net.bulkCount(), 12);
+});
+
+// ---- Map and mod uploads (maps.js paces them; these are the ways it asks
+// about).
+
+test('a map frame over the lobby\'s 64 KiB never goes to it, whichever way it was meant for', async () => {
+    const world = makeWorld();
+    const [host, join] = await room(world, [2]);
+    echoMaps(host, join);
+    const frame = n => {
+        const b = new ArrayBuffer(n);
+        new DataView(b).setUint32(4, 2, true);
+        return b;
+    };
+    // A block's part cut for the map channel (64 KiB and its headers), and
+    // the channel closes before it goes.
+    const relayed = world.lobby.relayed;
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'direct'), 'direct');
+    host.net.peers[2].mc.end();
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'direct'), null);
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'relay'), null);
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 16384), 'direct'), 'relay');
+    assert.equal(host.net.mapSend(2, frame(65536), 'relay'), 'relay');
+    await world.run(100);
+    assert.equal(world.lobby.tooBig, 0);
+    assert.equal(world.lobby.relayed, relayed + 2);
+    assert.equal(join.maps.length, 1);
+});
+
+test('in a match the host turns down new transfer links, and takes them before one', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    await world.run(2000);
+    assert.ok(!host.net.mapInMatch(2), 'nobody heard from for 2 s');
+    // Player 3 plays; player 2 is downloading.
+    const playing = world.every(() => send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(200);
+    assert.ok(host.net.mapInMatch(2) && !host.net.mapInMatch(3));
+    a.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(), 0);
+    assert.deepEqual(a.net.mapLanes(1), ['direct']);
+    world.cancel(playing);
+    await world.run(32000);
+    a.net.mapLanes(1);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(), 3, 'taken once the match is quiet');
+});
+
+test('links set up as players join don\'t count as a match: two joining at once both get transfer links', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    // Both just linked up (their link frames went through the lobby), and
+    // neither plays yet.
+    assert.ok(!host.net.mapInMatch(2) && !host.net.mapInMatch(3));
+    a.net.mapBulk(1, true);
+    b.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(2), 3);
+    assert.equal(host.net.bulkCount(3), 3);
+    assert.equal(a.net.mapLanes(1).length, 4);
+    // A netstats.js frame isn't a game packet either.
+    const ns = new Uint8Array(16);
+    ns.set([0x4A, 0x4E, 0, 0], 0);
+    send(b, 1, ns);
+    await world.run(100);
+    assert.ok(!host.net.mapInMatch(2));
+    send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4]));
+    await world.run(100);
+    assert.ok(host.net.mapInMatch(2), 'player 3 plays');
+});
+
+test('the lobby\'s answer to ping shows a queue building on the way to it', async () => {
+    const world = makeWorld();
+    const [host] = await room(world, [2]);
+    const net = host.net;
+    // The first ping went as the socket opened, with nothing ahead of it.
+    assert.equal(net.lobbyPing.got, 1);
+    assert.ok(net.lobbyPing.base < 50);
+    assert.equal(net.mapCongested(true), false);
+    // The answer takes long: a queue on the way.
+    world.lobby.delay = 400;
+    await world.run(300);
+    net.mapCongested(true);
+    await world.run(200);
+    assert.equal(net.mapCongested(true), true, 'still waiting for it');
+    await world.run(300);
+    assert.ok(net.lobbyPing.rtt >= 400);
+    assert.equal(net.mapCongested(true), true);
+    // Back to quick: the ping already out still comes back late.
+    world.lobby.delay = 20;
+    await world.run(500);
+    assert.equal(net.mapCongested(true), true);
+    await world.run(100);
+    assert.equal(net.mapCongested(true), false);
+    // The answer goes nowhere near the engine.
+    assert.ok(!net.queue.some(d => d === 'pong'));
+});
+
+test('the shortest round trip to the lobby is taken as a socket opens, before anything waits on it', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const net = host.net;
+    // The lobby drops; the host comes back to it on a new socket.
+    net.ws.drop();
+    await world.run(3000);
+    assert.equal(net.state, 1);
+    assert.equal(net.lobbyPing.got, 1);
+    const base = net.lobbyPing.base;
+    assert.ok(base < 50, 'base ' + base);
+    // Answers that come back behind a queue later don't lower the bar for one.
+    world.lobby.delay = 2000;
+    net.mapCongested(true);
+    await world.run(2500);
+    assert.equal(net.lobbyPing.base, base);
+    assert.equal(net.mapCongested(true), true);
+});
+
+test('a lobby that never answers ping (relay.py) says nothing about a queue, and is not pinged again', async () => {
+    const world = makeWorld();
+    world.lobby.pong = false;
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const pings = () => host.net.lobbyPing.sent.length;
+    for (let i = 0; i < 20; i++) {
+        assert.equal(host.net.mapCongested(true), null);
+        await world.run(250);
+    }
+    assert.equal(pings(), 1);
+    // Direct links alone have their own signs.
+    assert.equal(host.net.mapCongested(false), null, 'no direct links either');
+});
+
+test('one player\'s backed-up link isn\'t a queue at the host; most of those playing showing one is', async () => {
+    const world = makeWorld();
+    const [host, ...joiners] = await room(world, [2, 3, 4, 5]);
+    const net = host.net;
+    // Players 3, 4 and 5 play; player 2 downloads.
+    const playing = world.every(() => joiners.slice(1).forEach(j => send(j, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4]))), 50);
+    await world.run(300);
+    const sample = async () => {
+        await world.run(250);
+        return net.mapCongested(false);
+    };
+    assert.equal(await sample(), false);
+    net.peers[3].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), false, 'one of three');
+    net.peers[2].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), false, 'the one downloading isn\'t playing');
+    net.peers[4].pos.bufferedAmount = 10000;
+    assert.equal(await sample(), true, 'two of three');
+    net.peers[4].pos.bufferedAmount = 0;
+    assert.equal(await sample(), false);
+    // Position updates dropped behind a backlog count for their player.
+    net.peers[4].pos.bufferedAmount = 5000;
+    send(host, 4, position(1), true);
+    net.peers[4].pos.bufferedAmount = 0;
+    assert.equal(await sample(), true);
+    assert.equal(await sample(), false, 'counted once');
+    world.cancel(playing);
+});
+
+test('a map channel or transfer link that doesn\'t empty isn\'t a queue at the host, and maps.js still sends no more to it', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    const net = host.net;
+    a.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(net.bulkCount(2), 3);
+    // Player 3 plays; player 2 downloads, and its tab is slow to take it.
+    const playing = world.every(() => send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(300);
+    const sample = async () => {
+        await world.run(250);
+        return net.mapCongested(false);
+    };
+    net.peers[2].mc.bufferedAmount = 1 << 20;
+    for (const l of Object.values(net.bulk[2]))
+        l.mc.bufferedAmount = 1 << 20;
+    for (let i = 0; i < 4; i++)
+        assert.equal(await sample(), false, 'nobody else waits behind it');
+    assert.equal(net.mapBacklog(2, 'direct'), 1 << 20);
+    assert.equal(net.mapBacklog(2, 'direct2'), 1 << 20);
+    // Player 3's own link backed up still counts.
+    net.peers[3].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), true);
+    world.cancel(playing);
+});
+
+test('a player who left, or whose number someone new has, has nothing waiting for them; a link that closes, nothing for it', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const forgot = [];
+    let pumps = 0;
+    host.Module.jkMaps = { isFrame: () => false, onFrame() {}, forget: (...a) => forgot.push(a), pump: () => pumps++ };
+    host.net.ws.deliver('peer-left 2');
+    host.net.ws.deliver('peer-joined 4');
+    await world.run(10);
+    assert.deepEqual(forgot, [[2], [4]]);
+    world.canLink = () => true;
+    const join = makeGame(world, { id: 5 });
+    await world.run(5);
+    world.lobby.seat(join.net.ws, 1, 5);
+    await world.run(50);
+    join.js.wsrelay_js_rtc_begin(0);
+    await world.run(1000);
+    assert.ok(host.net.peers[5] && host.net.peers[5].open);
+    forgot.length = 0;
+    host.net.closePeer(5);
+    assert.deepEqual(forgot, [[5, true]]);
+    // The engine's frames and packets coming in send what may go.
+    pumps = 0;
+    host.js.wsrelay_js_map_pump();
+    assert.equal(pumps, 1);
 });
 
 let failed = 0;
