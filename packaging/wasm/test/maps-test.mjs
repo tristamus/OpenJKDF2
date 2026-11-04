@@ -435,10 +435,11 @@ test('a joiner without the map gets it straight from the host', async () => {
         assert.ok(!contains(f.bytes, retailA) && !contains(f.bytes, retailB), 'retail bytes sent');
         assert.equal(f.via, 'direct');
     }
-    // Random bytes don't get smaller, so the one block goes as it is.
+    // Random bytes don't get smaller, so the one block goes as it is, in
+    // parts of 16 KiB whatever size was asked for.
     const stream = customMap.length - 8000 + 4 + 80;
     assert.equal(framesTo(g.log, 'join', 4).length, 0);
-    assert.equal(framesTo(g.log, 'join', 6).length, Math.ceil(stream / 65536));
+    assert.equal(framesTo(g.log, 'join', 6).length, Math.ceil(stream / 16384));
     assert.equal(framesTo(g.log, 'host', 5).length, 1);
 });
 
@@ -464,7 +465,7 @@ test('through the relay, frames stay under its cap', async () => {
     const blocks = Math.ceil(stream / 1048576);
     let parts = 0;
     for (let b = 0; b < blocks; b++)
-        parts += Math.ceil(Math.min(1048576, stream - b * 1048576) / (48 * 1024));
+        parts += Math.ceil(Math.min(1048576, stream - b * 1048576) / 16384);
     assert.equal(framesTo(g.log, 'join', 6).length, parts);
     const requests = framesTo(g.log, 'host', 5).length + framesTo(g.log, 'host', 1).length;
     console.log(`    ${big.length} byte map over the relay: ${parts} block parts, ${requests} requests`);
