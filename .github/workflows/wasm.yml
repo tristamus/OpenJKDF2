@@ -90,6 +90,17 @@ jobs:
       # and TURN credentials, with made-up browsers, WebRTC and lobby.
       - name: Test network paths
         run: node packaging/wasm/test/transport-test.mjs
+      # A host's map upload to a player joining mid-match, over a modelled
+      # upload with queues the page can't see, through the lobby and on the
+      # Imperial Network Protocol: the map comes, sent once, and the host's
+      # game packets don't wait behind it as they do with the live build's.
+      - name: Test paced map uploads
+        run: node packaging/wasm/test/pacing-test.mjs
+      # The Imperial Network Protocol's transfer pump, on its own in C, with
+      # a made-up queue and socket: its 1 MiB/s ceiling, and nothing while
+      # the socket has 16 KiB waiting.
+      - name: Test the Imperial transfer pump
+        run: node packaging/wasm/test/xferpump-test.mjs
       # Hit what you see's check on a hit claim, on its own in C, with
       # made-up records of where a player was and made-up claims.
       - name: Test the hit claim check
