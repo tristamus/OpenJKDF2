@@ -43,7 +43,7 @@ extern "C" {
 
 extern int sithInterp_mode;
 
-// Debug counters (console: interp).
+// Debug counters (read them from a debugger or a probe build; no console command yet).
 extern uint32_t sithInterp_unexplainedSnaps; // distance or turn fallback fired with no snap hook before it
 extern uint32_t sithInterp_drawnShifted;     // things drawn away from their last step's pose
 extern uint32_t sithInterp_framesArmed;

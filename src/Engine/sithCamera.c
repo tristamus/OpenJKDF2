@@ -602,26 +602,6 @@ void sithCamera_ResetRenderView(SithCamera *pCamera)
     rdMatrix_InvertOrtho34(&pView->trueView, &pCamera->orient);
 }
 
-#ifdef QOL_IMPROVEMENTS
-// How far pPos is from the nearest surface of pSector the camera can't pass
-// (walls, and adjoins that block movement).
-static flex_t sithCamera_WallClearance(SithSector* pSector, const rdVector3* pPos)
-{
-    flex_t best = 3.4e38;
-    for (int i = 0; i < pSector->numSurfaces; i++)
-    {
-        SithSurface* pSurface = &pSector->surfaces[i];
-        if (pSurface->pAdjoin && (pSurface->pAdjoin->flags & SITHSURF_ADJOIN_ALLOW_MOVEMENT))
-            continue;
-        flex_t d = rdMath_DistancePointToPlane(pPos, &pSurface->surfaceInfo.face.normal,
-                                               &sithWorld_g_pCurrentWorld->aVertices[*pSurface->surfaceInfo.face.vertexPosIdx]);
-        if (d < best)
-            best = d;
-    }
-    return best;
-}
-#endif
-
 void sithCamera_BuildRenderView(SithCamera *pCamera)
 {
     sithCameraRenderView* pView = &sithCamera_g_renderView;
@@ -695,7 +675,12 @@ void sithCamera_BuildRenderView(SithCamera *pCamera)
     }
 #endif
     if (lead == 0.0 && !bTurned && sithCamera_VecsEqual(&posR, &pFocus->position))
+    {
+        // These follow the focus's position only, so it can still turn as drawn.
+        if (type >= 32)
+            pView->bFocusTrue = 0;
         return;
+    }
 
     // D takes the focus's true placement to its drawn one, turned by the
     // lead: T(posR) * orientR * Yaw(lead) * orient^-1 * T(-pos). The view
@@ -741,22 +726,12 @@ void sithCamera_BuildRenderView(SithCamera *pCamera)
             sithCamera_renderViewClamps++;
             return;
         }
-        // A camera on a boom keeps 0.02 from walls (sithCamera_Update), more
-        // than the near plane; the drawn eye, swung by the turn lead or
-        // carried along a wall, must keep as much, or a sliver of the wall
-        // goes missing for the frame. A first-person eye is drawn between
-        // two places the player's own eye was, so it never comes closer.
-        if (type != 1)
-        {
-            flex_t need = sithCamera_WallClearance(pCamera->sector, &pCamera->lookPos);
-            if (need > 0.02)
-                need = 0.02;
-            if (sithCamera_WallClearance(pSector, &eye) < need)
-            {
-                sithCamera_renderViewClamps++;
-                return;
-            }
-        }
+        // Known: a third-person eye swung by the turn lead, or drawn behind a
+        // boom the wall is shortening, can come nearer a wall than the 0.02
+        // the camera keeps, so a sliver at the screen's edge can miss that
+        // wall for a frame. A plane-distance test here fell back at doorways,
+        // stair risers and with the boom resting on a surface, which was
+        // worse; a sphere sweep like sithCamera_Update's would be the fix.
     }
 
     rdMatrix_Copy34(&pView->orient, &orient);

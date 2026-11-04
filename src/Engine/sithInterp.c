@@ -65,6 +65,7 @@ static int sithInterp_bArmed = 0;
 static flex_d_t sithInterp_alpha = 1.0;     // from the last stepped sithUpdate
 static flex_d_t sithInterp_alphaDraw = 1.0; // for the armed draw
 static flex_d_t sithInterp_capStepSecs = 0.0;
+static int sithInterp_capStepRate = 0; // steps a second, compared instead of capStepSecs: no rounding question
 static flex_t sithInterp_localKeyYaw = 0.0;
 static uint32_t sithInterp_numLogged = 0;
 
@@ -177,6 +178,7 @@ void sithInterp_CaptureCur()
     sithInterp_curTop = n;
     sithInterp_curEpoch = sithInterp_epoch;
     sithInterp_capStepSecs = (flex_d_t)DELTA_PHYSTICK_FPS;
+    sithInterp_capStepRate = (int)TARGET_PHYSTICK_FPS;
     sithInterp_localKeyYaw = sithControl_GetKeyYawPerStep(sithPlayer_g_pLocalPlayerThing);
 }
 
@@ -214,7 +216,7 @@ void sithInterp_Arm()
         && sithInterp_prevEpoch == sithInterp_epoch
         && sithInterp_curEpoch == sithInterp_epoch
         && sithInterp_pWorld == sithWorld_g_pCurrentWorld
-        && sithInterp_capStepSecs == (flex_d_t)DELTA_PHYSTICK_FPS) // the cast drops x87 excess precision
+        && sithInterp_capStepRate == (int)TARGET_PHYSTICK_FPS)
     {
         sithInterp_bArmed = 1;
         sithInterp_alphaDraw = (sithInterp_mode == SITHINTERP_MODE_IDENTITY) ? 1.0 : sithInterp_alpha;
