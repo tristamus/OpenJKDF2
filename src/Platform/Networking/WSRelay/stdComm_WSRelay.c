@@ -966,15 +966,14 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
            behind everything sent before the ping on the same connection
            (lobby.js answers it without waking up; relay.py never does).
            Direct links have their own signs: game packets waiting in a data
-           channel, position updates dropped behind a backlog, a map channel
-           that doesn't empty, and netstats.js's round trips where it pings.
-           A player's own slow or jittery link shows the same signs, so those
-           of the players in the match count only where most of them show
-           them. Without the lobby's answer, they say nothing about what goes
-           through the lobby (lobby). Asked at most every 250 ms, never right
-           after a send, which what's waiting would count. */
+           channel, position updates dropped behind a backlog, and
+           netstats.js's round trips where it pings. A player's own slow or
+           jittery link shows the same signs, so those of the players in the
+           match count only where most of them show them. Without the lobby's
+           answer, they say nothing about what goes through the lobby (lobby).
+           Asked at most every 250 ms, never right after a send, which what's
+           waiting would count. */
         net.mapCongested = function(lobby) {
-            var m = net.mapSigns = net.mapSigns || { mapWaits: false };
             var now = performance.now(), lp = net.lobbyPing, queued = false, seen = false;
             if (net.state === 1 && lp.got) {
                 seen = true;
@@ -982,15 +981,15 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 if (lp.rtt > lp.base + 80 || waited > lp.base + 80) queued = true;
             }
             if (net.state === 1 && !lp.sent.length) net.pingLobby();
-            var mapWaits = false, playing = 0, backed = 0;
+            var playing = 0, backed = 0;
             for (var id in net.peers) {
                 var p = net.peers[id];
                 if (!p.open) continue;
                 seen = true;
-                if (p.mc.bufferedAmount >= 65536) mapWaits = true;
-                for (var n in net.bulk[id] || {}) {
-                    if (net.bulk[id][n].mc.bufferedAmount >= 65536) mapWaits = true;
-                }
+                /* Not what waits in a map channel or a transfer link: that's
+                   mostly the downloading player's tab slow to take the data,
+                   which nobody else's packets wait behind, and maps.js sends
+                   it no more while it's full (net.mapBacklog). */
                 var dropped = p.posDropped || 0, was = p.posDroppedSeen || 0;
                 p.posDroppedSeen = dropped;
                 if (!(now - net.playedAt[id] < 2000)) continue;
@@ -998,9 +997,6 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 if (p.dc.bufferedAmount > 4096 || (p.pos && p.pos.bufferedAmount > 4096) || dropped !== was) backed++;
             }
             if (backed * 2 > playing) queued = true;
-            // Twice running: a map channel holds up to that much just after a send.
-            if (mapWaits && m.mapWaits) queued = true;
-            m.mapWaits = mapWaits;
             var ns = Module.jkNetStats && Module.jkNetStats.queueMs ? Module.jkNetStats.queueMs() : null;
             if (ns !== null) {
                 seen = true;
