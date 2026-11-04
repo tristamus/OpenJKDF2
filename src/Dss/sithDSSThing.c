@@ -22,8 +22,8 @@
 
 #ifdef PLATFORM_WSRELAY
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
-#include "Engine/sithInterp.h"
 #endif
+#include "Engine/sithInterp.h"
 
 void sithDSSThing_Pos(SithThing *pThing, int toID, int dpFlags)
 {

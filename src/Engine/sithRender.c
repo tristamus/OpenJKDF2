@@ -438,7 +438,9 @@ void sithRender_Draw()
 
     // TODO: Verify this is expensive
 #ifndef TARGET_TWL
-    if ( (sithCamera_g_renderView.sector->flags & 2) != 0 )
+    // The game camera's sector, not the render view's: the FOV set here is
+    // still there at the next step, and MotS turns the player by it.
+    if ( sithCamera_g_pCurCamera->sector && (sithCamera_g_pCurCamera->sector->flags & 2) != 0 )
     {
         flex_t fov = sithCamera_g_pCurCamera->fov;
         flex_t aspect = sithCamera_g_pCurCamera->aspectRatio;
@@ -2939,11 +2941,13 @@ void sithRender_RenderThings()
     }
 
 #ifdef QOL_IMPROVEMENTS
-    // Added: level of detail from the game camera, not the render view
-    // (sithCamera_BuildRenderView): the geoset chosen here is shared with the
-    // model, and MotS collision reads it.
-    rdMatrix34 lodView;
-    rdMatrix_InvertOrtho34(&lodView, &sithCamera_g_pCurCamera->orient);
+    // Added: level of detail from the game camera as the frame was set up,
+    // not from the render view (sithCamera_BuildRenderView): the geoset
+    // chosen here is shared with the model, and MotS collision reads it.
+    // Which things get here still follows the drawn view's culling, so with
+    // r_interp 2 the last model drawn, and so the shared geoset, can differ
+    // at the edge of the view, as which models get joints built does.
+    const rdMatrix34* pLodView = &sithCamera_g_renderView.trueView;
 #endif
 
     rdSetZBufferMethod(RD_ZBUFFER_READ_WRITE);
@@ -3048,7 +3052,7 @@ void sithRender_RenderThings()
 #ifdef QOL_IMPROVEMENTS
                     {
                         rdVector3 lodPos;
-                        rdMatrix_TransformPoint34(&lodPos, &thingIter->position, &lodView);
+                        rdMatrix_TransformPoint34(&lodPos, &thingIter->position, pLodView);
                         yval = lodPos.y;
                     }
 #endif
@@ -3221,8 +3225,9 @@ void sithRender_RenderThings()
 
 #ifdef SITHINTERP_ENABLED
 // Added: render interpolation. While the camera is drawn where the last step
-// left it (r_interp 1), the thing it follows and the thing that one stands on
-// are drawn there too, or a lift would bob against the view.
+// left it (r_interp 1, or a frame where the render view stayed true), the
+// thing it follows and the thing that one stands on are drawn there too, or
+// a lift would bob against the view.
 static int sithRender_InterpFollowsCamera(SithThing *pThing)
 {
     SithThing* pFocus = sithCamera_g_pCurCamera ? sithCamera_g_pCurCamera->pPrimaryFocusThing : NULL;
@@ -3255,7 +3260,7 @@ static int sithRender_InterpPush(SithThing *pThing, sithRender_InterpSaved* pSav
     if (!sithInterp_IsArmed() || !rdCamera_g_pCurCamera)
         return 0;
     int bCameraToo = (sithInterp_mode == SITHINTERP_MODE_ALL || sithInterp_mode == SITHINTERP_MODE_IDENTITY);
-    if (!bCameraToo && sithRender_InterpFollowsCamera(pThing))
+    if ((!bCameraToo || sithCamera_g_renderView.bFocusTrue) && sithRender_InterpFollowsCamera(pThing))
         return 0;
     if (bCameraToo && pThing == sithPlayer_g_pLocalPlayerThing)
     {

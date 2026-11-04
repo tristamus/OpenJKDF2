@@ -11,7 +11,7 @@
 #include "World/sithWorld.h"
 #include "Devices/sithControl.h"
 
-int sithInterp_mode = SITHINTERP_MODE_OFF;
+int sithInterp_mode = SITHINTERP_MODE_DEFAULT;
 
 uint32_t sithInterp_unexplainedSnaps = 0;
 uint32_t sithInterp_drawnShifted = 0;
@@ -176,7 +176,7 @@ void sithInterp_CaptureCur()
         sithInterp_aEntries[i].cur.sig = 0;
     sithInterp_curTop = n;
     sithInterp_curEpoch = sithInterp_epoch;
-    sithInterp_capStepSecs = DELTA_PHYSTICK_FPS;
+    sithInterp_capStepSecs = (flex_d_t)DELTA_PHYSTICK_FPS;
     sithInterp_localKeyYaw = sithControl_GetKeyYawPerStep(sithPlayer_g_pLocalPlayerThing);
 }
 
@@ -199,6 +199,10 @@ void sithInterp_FrameNotStepped()
 {
     sithInterp_bInLastStep = 0;
     sithInterp_bTickValid = 0;
+    // Things (and the turn keys) move on these frames without a capture, so
+    // the pair from before them must not be blended after them.
+    sithInterp_prevEpoch = 0;
+    sithInterp_curEpoch = 0;
 }
 
 void sithInterp_Arm()
@@ -210,7 +214,7 @@ void sithInterp_Arm()
         && sithInterp_prevEpoch == sithInterp_epoch
         && sithInterp_curEpoch == sithInterp_epoch
         && sithInterp_pWorld == sithWorld_g_pCurrentWorld
-        && sithInterp_capStepSecs == DELTA_PHYSTICK_FPS)
+        && sithInterp_capStepSecs == (flex_d_t)DELTA_PHYSTICK_FPS) // the cast drops x87 excess precision
     {
         sithInterp_bArmed = 1;
         sithInterp_alphaDraw = (sithInterp_mode == SITHINTERP_MODE_IDENTITY) ? 1.0 : sithInterp_alpha;

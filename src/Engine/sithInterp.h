@@ -22,12 +22,22 @@ extern "C" {
 #endif
 
 // r_interp: 0 off; 1 things only, camera true; 2 things and camera;
-// 9 identity (debug: alpha 1, so everything is drawn at its last step's pose
-// through the same code).
+// 9 identity (debug: alpha 1, so everything is drawn at its last step's pose,
+// to rounding, through the same code).
 #define SITHINTERP_MODE_OFF (0)
 #define SITHINTERP_MODE_THINGS (1)
 #define SITHINTERP_MODE_ALL (2)
 #define SITHINTERP_MODE_IDENTITY (9)
+
+// On for the web build, where the browser's refresh rate (60 to 240 Hz and
+// more) almost never divides 150 steps a second. Desktop builds keep it off
+// until they have their own judder measurements; their per-step sound reads
+// the game camera, which this never changes either way.
+#ifdef ARCH_WASM
+#define SITHINTERP_MODE_DEFAULT SITHINTERP_MODE_ALL
+#else
+#define SITHINTERP_MODE_DEFAULT SITHINTERP_MODE_OFF
+#endif
 
 #ifdef SITHINTERP_ENABLED
 

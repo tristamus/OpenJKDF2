@@ -68,10 +68,16 @@ typedef struct sithCameraRenderView
     SithSector* sector;
     flex_t yawLead;        // the turn added to the local player's yaw
     int bLeadLocalModel;   // the local player is drawn turned by it too (third person)
+    int bFocusTrue;        // the view follows its focus but stayed true this frame, so the focus
+                           // and what it stands on are drawn true with it
+    rdMatrix34 trueView;   // world to camera of the game camera when the frame was set up (level of detail)
 } sithCameraRenderView;
 
 extern sithCameraRenderView sithCamera_g_renderView;
 extern uint32_t sithCamera_renderViewClamps; // render eye stopped by a wall, true view drawn
+// The game camera as it is, with nothing moved: what's drawn when the world
+// isn't (sithDrawScene's submode 8) and what BuildRenderView starts from.
+void sithCamera_ResetRenderView(SithCamera *pCamera);
 void sithCamera_BuildRenderView(SithCamera *pCamera);
 
 #ifndef __cplusplus

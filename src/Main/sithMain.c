@@ -481,6 +481,10 @@ void sithDrawScene()
     jkPlayer_enableOrigAspect = 0;
 #endif
 
+    // Added: the weapon and the map read the render view even when the world
+    // isn't drawn (submode 8); then it's the camera as it is.
+    sithCamera_ResetRenderView(sithCamera_g_pCurCamera);
+
     if ( (g_submodeFlags & 8) == 0 )
     {
         sithAdvanceRenderTick();

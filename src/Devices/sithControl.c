@@ -122,6 +122,9 @@ static void sithControl_NoteKeyYaw(flex_t rate, flex_t written)
     sithControl_keyYawWritten = written;
 }
 
+// In MotS the action cog can refuse a turn; the refusal shown here is the one
+// from the last update that turned (the cog isn't asked on frames with no
+// step), so a refusal that starts or ends in between shows for one frame.
 flex_t sithControl_GetPendingTurn(void)
 {
     if (!sithControl_bTurnedThisUpdate)

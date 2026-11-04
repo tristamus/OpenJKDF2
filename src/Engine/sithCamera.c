@@ -102,6 +102,7 @@ int sithCamera_Open(rdCanvas *pCanvas, flex_t aspect)
     }
 #endif // DW_CAMERA
     sithCamera_Update(sithCamera_g_pCurCamera);
+    sithCamera_ResetRenderView(sithCamera_g_pCurCamera); // Added: nothing left from a closed level
     sithCamera_bOpen = 1;
     return 1;
 }
@@ -110,6 +111,7 @@ void sithCamera_Close()
 {
     if ( sithCamera_bOpen ) {
         sithCamera_bOpen = 0;
+        sithCamera_ResetRenderView(NULL); // Added: it points into the world
 
         // Added: Prevent UAF
         rdCamera_SetCanvas(&sithCamera_g_aCameras[0].rdCamera, NULL);
@@ -581,15 +583,49 @@ static int sithCamera_VecsEqual(const rdVector3* a, const rdVector3* b)
     return memcmp(a, b, sizeof(rdVector3)) == 0;
 }
 
-void sithCamera_BuildRenderView(SithCamera *pCamera)
+void sithCamera_ResetRenderView(SithCamera *pCamera)
 {
     sithCameraRenderView* pView = &sithCamera_g_renderView;
+    if (!pCamera)
+    {
+        memset(pView, 0, sizeof(*pView));
+        return;
+    }
     rdMatrix_Copy34(&pView->orient, &pCamera->orient);
     pView->lookPos = pCamera->lookPos;
     pView->lookPYR = pCamera->lookPYR;
     pView->sector = pCamera->sector;
     pView->yawLead = 0.0;
     pView->bLeadLocalModel = 0;
+    pView->bFocusTrue = 0;
+    // As rdCamera_Update would make it from the game camera.
+    rdMatrix_InvertOrtho34(&pView->trueView, &pCamera->orient);
+}
+
+#ifdef QOL_IMPROVEMENTS
+// How far pPos is from the nearest surface of pSector the camera can't pass
+// (walls, and adjoins that block movement).
+static flex_t sithCamera_WallClearance(SithSector* pSector, const rdVector3* pPos)
+{
+    flex_t best = 3.4e38;
+    for (int i = 0; i < pSector->numSurfaces; i++)
+    {
+        SithSurface* pSurface = &pSector->surfaces[i];
+        if (pSurface->pAdjoin && (pSurface->pAdjoin->flags & SITHSURF_ADJOIN_ALLOW_MOVEMENT))
+            continue;
+        flex_t d = rdMath_DistancePointToPlane(pPos, &pSurface->surfaceInfo.face.normal,
+                                               &sithWorld_g_pCurrentWorld->aVertices[*pSurface->surfaceInfo.face.vertexPosIdx]);
+        if (d < best)
+            best = d;
+    }
+    return best;
+}
+#endif
+
+void sithCamera_BuildRenderView(SithCamera *pCamera)
+{
+    sithCameraRenderView* pView = &sithCamera_g_renderView;
+    sithCamera_ResetRenderView(pCamera);
 
 #ifdef QOL_IMPROVEMENTS
     SithThing* pFocus = pCamera->pPrimaryFocusThing;
@@ -598,6 +634,10 @@ void sithCamera_BuildRenderView(SithCamera *pCamera)
         return;
     if (type != 1 && type != 4 && type != 32 && type != 64 && type != 128)
         return;
+    // From here the view follows its focus. Unless it ends up following
+    // where the focus is drawn, the focus is drawn true with it (and so is
+    // what the focus stands on), or the model would bob against the view.
+    pView->bFocusTrue = 1;
     // A path thing's camera rides its first joint, not its placement.
     if (type == 1 && pFocus->moveType == SITH_MT_PATH && pFocus->renderData.paJointMatrices)
         return;
@@ -701,6 +741,22 @@ void sithCamera_BuildRenderView(SithCamera *pCamera)
             sithCamera_renderViewClamps++;
             return;
         }
+        // A camera on a boom keeps 0.02 from walls (sithCamera_Update), more
+        // than the near plane; the drawn eye, swung by the turn lead or
+        // carried along a wall, must keep as much, or a sliver of the wall
+        // goes missing for the frame. A first-person eye is drawn between
+        // two places the player's own eye was, so it never comes closer.
+        if (type != 1)
+        {
+            flex_t need = sithCamera_WallClearance(pCamera->sector, &pCamera->lookPos);
+            if (need > 0.02)
+                need = 0.02;
+            if (sithCamera_WallClearance(pSector, &eye) < need)
+            {
+                sithCamera_renderViewClamps++;
+                return;
+            }
+        }
     }
 
     rdMatrix_Copy34(&pView->orient, &orient);
@@ -709,6 +765,7 @@ void sithCamera_BuildRenderView(SithCamera *pCamera)
     pView->sector = pSector;
     pView->yawLead = lead;
     pView->bLeadLocalModel = (bLocal && type == 4 && bInterp);
+    pView->bFocusTrue = 0;
 #endif // QOL_IMPROVEMENTS
 }
 

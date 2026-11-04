@@ -188,8 +188,9 @@ void jkPlayer_StartupVars()
     sithCvar_RegisterInt("r_fpslimit",                  0,                          &jkPlayer_fpslimit,                 CVARFLAG_LOCAL);
     sithCvar_RegisterBool("r_enableVsync",              1,                          &jkPlayer_enableVsync,              CVARFLAG_LOCAL);
 #ifdef SITHINTERP_ENABLED
-    // Added: draw moving things between physics steps (0 off, 1 things, 2 things and camera)
-    sithCvar_RegisterInt("r_interp",                    SITHINTERP_MODE_OFF,        &sithInterp_mode,                   CVARFLAG_LOCAL);
+    // Added: draw moving things between physics steps (0 off, 1 things, 2 things and camera).
+    // The default isn't saved, so a later change of default reaches everyone who never set it.
+    sithCvar_RegisterInt("r_interp",                    SITHINTERP_MODE_DEFAULT,    &sithInterp_mode,                   CVARFLAG_LOCAL | CVARFLAG_UPDATABLE_DEFAULT);
 #endif
     sithCvar_RegisterFlex("r_ssaaMultiple",             1.0,                        &jkPlayer_ssaaMultiple,             CVARFLAG_LOCAL);
     sithCvar_RegisterFlex("r_gamma",                    1.0,                        &jkPlayer_gamma,                    CVARFLAG_LOCAL);
@@ -241,7 +242,7 @@ void jkPlayer_ResetVars()
     jkPlayer_fpslimit = 0;
     jkPlayer_enableVsync = 1;
 #ifdef SITHINTERP_ENABLED
-    sithInterp_mode = SITHINTERP_MODE_OFF;
+    sithInterp_mode = SITHINTERP_MODE_DEFAULT;
 #endif
     jkPlayer_ssaaMultiple = 1.0;
     jkPlayer_gamma = 1.0;
@@ -1030,15 +1031,17 @@ void jkPlayer_DrawPov()
         rdSetOcclusionMethod(0);
 #endif
 
-        flex_t ambLight = stdMath_Clamp(sithCamera_g_renderView.sector->extraLight + sithCamera_g_renderView.sector->ambientLight, 0.0, 1.0);
+        // Added: lit and drawn as the world is (sithCamera_g_renderView).
+        SithSector* pPovSector = sithCamera_g_renderView.sector ? sithCamera_g_renderView.sector : sithCamera_g_pCurCamera->sector;
+        flex_t ambLight = stdMath_Clamp(pPovSector->extraLight + pPovSector->ambientLight, 0.0, 1.0);
 
         rdCamera_SetAmbientLight(&sithCamera_g_pCurCamera->rdCamera, ambLight);
-        rdColormap_SetCurrent(sithCamera_g_renderView.sector->colormap);
+        rdColormap_SetCurrent(pPovSector->colormap);
 #ifdef JKM_LIGHTING
         rdSetVertexColorMode(0); // MOTS added: JKM.EXE draws the first-person model in mono (0x405c15)
 #endif
 
-        rdMatrix_Copy34(&orient, &sithCamera_g_renderView.orient);
+        rdMatrix_Copy34(&orient, sithCamera_g_renderView.sector ? &sithCamera_g_renderView.orient : &sithCamera_g_pCurCamera->orient);
         rdVector_Copy3(&trans, &playerThings[playerThingIdx].actorThing->actorParams.eyeOffset);
         //printf("%f %f %f\n", (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.x, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.y, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.z);
 #ifdef QOL_IMPROVEMENTS
