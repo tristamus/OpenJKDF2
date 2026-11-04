@@ -1349,8 +1349,6 @@ test('the host takes 12 transfer links at most at once, and a joiner it turned d
     const games = await room(world, [2, 3, 4, 5, 6]);
     const host = games[0], joiners = games.slice(1);
     echoMaps(host, ...joiners);
-    // Not in a match: nothing came from the others for 2 s.
-    await world.run(2000);
     for (const j of joiners) {
         j.net.mapBulk(1, true);
         await world.run(200);
@@ -1416,6 +1414,30 @@ test('in a match the host turns down new transfer links, and takes them before o
     a.net.mapLanes(1);
     await world.run(1000);
     assert.equal(host.net.bulkCount(), 3, 'taken once the match is quiet');
+});
+
+test('links set up as players join don\'t count as a match: two joining at once both get transfer links', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    // Both just linked up (their link frames went through the lobby), and
+    // neither plays yet.
+    assert.ok(!host.net.mapInMatch(2) && !host.net.mapInMatch(3));
+    a.net.mapBulk(1, true);
+    b.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(2), 3);
+    assert.equal(host.net.bulkCount(3), 3);
+    assert.equal(a.net.mapLanes(1).length, 4);
+    // A netstats.js frame isn't a game packet either.
+    const ns = new Uint8Array(16);
+    ns.set([0x4A, 0x4E, 0, 0], 0);
+    send(b, 1, ns);
+    await world.run(100);
+    assert.ok(!host.net.mapInMatch(2));
+    send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4]));
+    await world.run(100);
+    assert.ok(host.net.mapInMatch(2), 'player 3 plays');
 });
 
 test('the lobby\'s answer to ping shows a queue building on the way to it', async () => {

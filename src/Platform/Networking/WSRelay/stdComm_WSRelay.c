@@ -173,7 +173,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null, netcode: netcode,
                                stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0,
                                         fastSent: 0, fastRecv: 0, fastOld: 0, fastBacklog: 0 },
-                               log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
+                               log: [], lastFrom: {}, playedAt: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
                                seqTo: {}, seqSent: {}, seqFrom: {}, links: {}, lobbyCan: [], pending: {},
                                bulk: {}, bulkUse: {},
                                turn: null, turnEnds: 0, iceUntil: 0, iceAsked: false, iceAskedAt: 0, iceWaiters: [],
@@ -478,6 +478,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (!(data instanceof ArrayBuffer) || data.byteLength < 8) return;
             net.stats.dcRecv++;
             net.lastFrom[id] = performance.now();
+            net.heardPlaying(id, data);
             net.pumpMaps();
             if (Module.jkNetStats) Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takePeerPacket(id, d); });
             else net.takePeerPacket(id, data);
@@ -542,6 +543,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (!(data instanceof ArrayBuffer) || data.byteLength < 12) return;
             net.stats.fastRecv++;
             net.lastFrom[id] = performance.now();
+            net.playedAt[id] = net.lastFrom[id];
             net.pumpMaps();
             if (Module.jkNetStats) Module.jkNetStats.inbound(id, data, 'direct', function(d) { net.takeFastPacket(id, d); }, true);
             else net.takeFastPacket(id, data);
@@ -919,16 +921,27 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         };
 
         /* A host is in a match while anyone but player id (who downloads,
-           and sends no game packets meanwhile) was heard from in the last
-           2 s. Uploads to id then go paced, so they don't hold up the
+           and sends no game packets meanwhile) sent a game packet in the
+           last 2 s. Uploads to id then go paced, so they don't hold up the
            others' game. */
         net.mapInMatch = function(id) {
             if (!net.isHost) return false;
             var now = performance.now();
-            for (var k in net.lastFrom) {
-                if (+k !== id && now - net.lastFrom[k] < 2000) return true;
+            for (var k in net.playedAt) {
+                if (+k !== id && now - net.playedAt[k] < 2000) return true;
             }
             return false;
+        };
+
+        /* A packet from player id that the engine sends: not a link's own
+           frame or netstats.js's, which come while links are set up and
+           players download, before anyone plays. */
+        net.heardPlaying = function(id, data) {
+            if (data.byteLength >= 12) {
+                var b = new Uint8Array(data, 8, 4);
+                if (b[0] === 0x4A && (b[1] === 0x4C || b[1] === 0x4E) && b[2] === 0 && b[3] === 0) return;
+            }
+            net.playedAt[id] = performance.now();
         };
 
         /* Whether a queue is building on the way out (true), isn't (false),
@@ -1391,6 +1404,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                     if (ev.data.byteLength < 8) return;
                     var from = new DataView(ev.data).getUint32(0, true);
                     net.lastFrom[from] = performance.now();
+                    net.heardPlaying(from, ev.data);
                     net.pumpMaps();
                     if (Module.jkNetStats) Module.jkNetStats.inbound(from, ev.data, 'relay', function(d) { if (net.ws === ws) net.take(from, d, 'relay'); });
                     else net.take(from, ev.data, 'relay');
@@ -1444,6 +1458,7 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     net.sessionNo++;
     net.isHost = !!isHost;
     net.lastFrom = {};
+    net.playedAt = {};
     net.relayPosAt = {};
     net.seqTo = {};
     net.seqSent = {};
