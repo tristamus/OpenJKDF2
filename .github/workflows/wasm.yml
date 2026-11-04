@@ -96,9 +96,10 @@ jobs:
       - name: Test joining a room with a password
         run: sh packaging/wasm/test/passwords-test.sh
       # A host's map upload to a player joining mid-match, over a modelled
-      # upload with queues the page can't see, through the lobby and on the
-      # Imperial Network Protocol: the map comes, sent once, and the host's
-      # game packets don't wait behind it as they do with the live build's.
+      # upload with queues the page can't see, through the lobby, over the
+      # map channel and on the Imperial Network Protocol: the map comes, sent
+      # once and soon at a fast upload's speed, and the host's game packets
+      # don't wait behind it as they do with the live build's.
       - name: Test paced map uploads
         run: node packaging/wasm/test/pacing-test.mjs
       # The Imperial Network Protocol's transfer pump, on its own in C, with

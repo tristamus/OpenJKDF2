@@ -316,15 +316,19 @@ EM_JS(void, imperial_js_xfer_init, (int bActive), {
         // in the browser says so at once. Until the server has answered,
         // there's no telling (the queue only waits for the engine's next
         // frame). The engine sends one when it's asked for, but once the
-        // server has answered, no sooner than 2 s after the last: an answer
-        // stands until the next.
+        // server has answered, no sooner than 2 s after the last. A queue
+        // stands until the next answer; no queue is said once for each
+        // answer, as maps.js grows the rate each time it's said.
         Module.jkImperial.mapCongested = function() {
             var m = Module.jkImperial, pr = m.probe;
             if (!pr || !pr.got || pr.waited < 0) m.wantProbe = true;
             if (m.sockBacklog() >= 16384) return true;
             if (!pr || !pr.got) return null;
             var waited = pr.waited < 0 ? 0 : pr.waited + performance.now() - pr.at;
-            return pr.rtt > pr.base + 80 || waited > pr.base + 80;
+            if (pr.rtt > pr.base + 80 || waited > pr.base + 80) return true;
+            if (pr.got === m.said) return null;
+            m.said = pr.got;
+            return false;
         };
     }
     // Parts maps.js has waiting were numbered for the other connection.
@@ -340,6 +344,8 @@ EM_JS(int, imperial_js_xfer_serve, (int bInMatch, int got, double rtt, double ba
     var m = Module.jkImperial;
     if (!m) return 0;
     m.inMatch = !!bInMatch;
+    // Answers count again from 0 on a new connection.
+    if (m.probe && got < m.probe.got) m.said = 0;
     m.probe = { got: got, rtt: rtt, base: base, waited: waited, at: performance.now() };
     if (m.active && Module.jkMaps && Module.jkMaps.pump) Module.jkMaps.pump();
     var want = !!m.wantProbe;

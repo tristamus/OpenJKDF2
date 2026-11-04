@@ -883,6 +883,63 @@ for (const [what, joiners, mapBytes = 3500000] of [
     });
 }
 
+// The paced rate at each look at the link (every 250 ms), as the link says
+// says[i] at its ith answer. Through the lobby an answer comes at every
+// look; from the Imperial relay server at every 8th (2 s), with no news in
+// between, but a queue it showed stands until the next.
+async function rateLooks(imperial, says) {
+    const clock = makeClock();
+    const { gob } = bigMap(20000000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_rate.gob': gob }, [{ id: 2, direct: true }], { imperial });
+    const every = imperial ? 8 : 1;
+    const rates = [];
+    g.host[imperial ? 'jkImperial' : 'jkNet'].mapCongested = () => {
+        const n = rates.length, c = says[Math.floor(n / every)];
+        rates.push(g.host.jkMaps.uploads().rate);
+        return c === true || n % every === 0 ? c : null;
+    };
+    await hostOn(clock, g, 'ctf_rate');
+    g.tab(2).jkMaps.fetch('ctf_rate', 'gob');
+    assert.ok(await clock.until(() => rates.length > says.length * every, 60000, 10));
+    assert.equal(g.tab(2).jkMaps.state(), 0, 'the map came before the looks ended');
+    g.tab(2).jkMaps.abort('cancelled');
+    return rates;
+}
+
+const near = (a, b) => Math.abs(a - b) < 1;
+
+test('in a match the rate grows by a quarter a look until a queue shows, then halves and grows a step at a time', async () => {
+    const says = [...Array(18).fill(false), true, false, false, null, null, false];
+    const r = await rateLooks(false, says);
+    assert.equal(r[0], 48000);
+    for (let i = 0; i < 17; i++)
+        assert.ok(near(r[i + 1], Math.min(2e6, r[i] * 1.25)), `look ${i}: ${r[i]} then ${r[i + 1]}`);
+    assert.equal(r[18], 2e6);
+    assert.ok(near(r[19], 1e6) && near(r[20], 1016000) && near(r[21], 1032000), r.slice(18, 22).join(' '));
+    // No news holds it; the next clear look grows it for the time since.
+    assert.ok(near(r[22], 1032000) && near(r[23], 1032000) && near(r[24], 1080000), r.slice(21, 25).join(' '));
+});
+
+test('on the Imperial Network Protocol the rate grows once for each answer, and a queue halves it at every look till the next', async () => {
+    const says = [false, false, false, false, true, false, false, null, false];
+    const r = await rateLooks(true, says);
+    const least = 3 * 65536 * 1000 / 2500;
+    const at = i => r[i * 8 + 1];   // just after the ith answer
+    for (let i = 0; i < says.length; i++) {
+        if (says[i] !== true)
+            assert.ok(r.slice(i * 8 + 1, i * 8 + 9).every(x => x === at(i)), `answer ${i}: ` + r.slice(i * 8, i * 8 + 9).join(' '));
+    }
+    // Slow start: twice as fast for each answer, not for each look.
+    assert.ok(near(at(2), 2 * at(1)) && near(at(3), 2 * at(2)), [at(1), at(2), at(3)].join(' '));
+    // The queue halves it down to the least by its last look. Then 16 KB/s
+    // for the one look since, and 64 KB/s for each answer 2 s on, also after
+    // one that said nothing.
+    assert.ok(near(r[40], least), r.slice(32, 41).join(' '));
+    assert.ok(near(at(5), least + 16000), 'after the queue ' + at(5));
+    assert.ok(near(at(6), at(5) + 64000), 'the next answer ' + at(6));
+    assert.ok(near(at(8), at(6) + 64000), 'after no news ' + at(8));
+});
+
 test('outside a match a paced host sends as fast as its links take it', async () => {
     const clock = makeClock();
     const { gob } = bigMap(3500000);

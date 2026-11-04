@@ -1353,8 +1353,10 @@
     // building (link().mapCongested) and grows while it says it doesn't. What
     // waits in the browser is all a page can see, not what waits in the
     // computer or the router, so the rate starts low and only grows on a
-    // sign that sees those. A part asked for again while it waits isn't
-    // queued twice: it goes the way of the newer request.
+    // sign that sees those. Until the first queue it grows by a quarter each
+    // time (slow start), so a fast upload is soon used; from then on, a step
+    // at a time. A part asked for again while it waits isn't queued twice:
+    // it goes the way of the newer request.
 
     // What may wait on the way a part goes before another goes: on the
     // lobby's or Imperial's socket in a match, outside one, and on a map
@@ -1368,12 +1370,24 @@
     var PACE_LOW_CHANNEL_MATCH = 64 * 1024;
     var PACE_MAX_QUEUED = 16 * 1024 * 1024;  // waiting for one joiner
     // Bytes a second in a match: where it starts, at most, and what it grows
-    // by each PACE_EVERY_MS that the link says no queue is building.
+    // by each PACE_EVERY_MS that the link says no queue is building: times
+    // PACE_GROW until it first says there is one, PACE_STEP after.
     var PACE_START = 48000;
     var PACE_FLOOR = 24000;
     var PACE_MAX = 2000000;
     var PACE_STEP = 16000;
+    // Faster overshoots a slower upload by more: at half again, game packets
+    // waited up to 720 ms in pacing-test.mjs's model, against 450 ms.
+    var PACE_GROW = 1.25;
     var PACE_EVERY_MS = 250;
+    // A link that says so less often grows for the time since the rate last
+    // changed, up to PACE_SAID_MS of it, and in slow start by PACE_GROW_MOST
+    // at most: nothing says how the new rate does until its next answer, and
+    // a queue it starts builds until then. The Imperial relay server answers
+    // every 2 s at most, so the rate there grows half as fast as through the
+    // lobby; twice that, and game packets wait a second on a 2 Mbit/s upload.
+    var PACE_SAID_MS = 1000;
+    var PACE_GROW_MOST = 2;
     // Joiners ask for a block again when no part of it came for
     // CHUNK_RESEND_MS, and give up after STALL_MS without any: every block
     // being sent gets a part at least twice that often, however low the rate.
@@ -1388,9 +1402,12 @@
         next: 0,
         queued: {},        // joiner -> bytes waiting for them
         rate: PACE_START,
+        slow: true,        // no queue seen since the rate started over
         tokens: 0,
         at: 0,             // when tokens were last added
         sampledAt: 0,
+        changedAt: 0,      // when the rate last grew or halved
+        paced: false,      // the last pump was in a match
         // The most part bytes a turn round the groups took lately, and when.
         need: 0, needAt: 0,
         sentAt: 0,
@@ -1560,6 +1577,7 @@
             up.gap = up.gapNow = 0;
             up.gapSince = up.at = now;
             up.tokens = Math.min(up.tokens, 1);
+            up.paced = false;
         } else {
             if (now - up.gapSince > 2000) {
                 up.gap = up.gapNow;
@@ -1588,20 +1606,31 @@
             // Every block (or joiner's chunks) being sent gets a part each
             // PACE_PART_MS, the way they take turns.
             var least = Math.max(PACE_FLOOR, up.need * 1000 / PACE_PART_MS);
-            if (now - up.sentAt > PACE_FORGET_MS)
+            if (up.sentAt && now - up.sentAt > PACE_FORGET_MS) {
                 up.rate = PACE_START;
+                up.slow = true;
+            }
+            // The time it grows for counts from when it's paced again.
+            if (!up.paced)
+                up.changedAt = now;
             if (now - up.sampledAt >= PACE_EVERY_MS && !up.dirty && net && net.mapCongested) {
                 var c = net.mapCongested(lobby);
                 up.sampledAt = now;
-                if (c === true)
+                if (c === true) {
                     up.rate /= 2;
-                else if (c === false)
-                    up.rate += PACE_STEP;
+                    up.slow = false;
+                    up.changedAt = now;
+                } else if (c === false) {
+                    var k = Math.max(1, Math.floor(Math.min(PACE_SAID_MS, now - up.changedAt) / PACE_EVERY_MS));
+                    up.rate = up.slow ? up.rate * Math.min(PACE_GROW_MOST, Math.pow(PACE_GROW, k)) : up.rate + PACE_STEP * k;
+                    up.changedAt = now;
+                }
             }
             up.rate = Math.min(PACE_MAX, Math.max(least, up.rate));
             var burst = up.rate * Math.max(50, up.gap, up.gapNow) / 1000;
             up.tokens = Math.min(burst, up.tokens + Math.max(0, now - up.at) * up.rate / 1000);
         }
+        up.paced = inMatch;
         up.at = now;
         // Round the blocks, a part from each that has room on its way.
         for (var idle = 0; up.groups.size && idle < up.turn.length; ) {
