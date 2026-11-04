@@ -2,7 +2,8 @@
 // for every message id, the count of slots in use, resends and when they
 // stop, a player index that changes hands, the one slot all reliable messages
 // share, and how a receiver acks and drops repeats. Made-up games run the
-// tree's own sithComm, stdComm and sithPlayer code over a made-up network.
+// tree's own sithComm, stdComm, sithPlayer and sithMulti code over a made-up
+// network.
 // sithcomm-test.sh cuts that code out of the sources and builds this file
 // around it. From the top of the source tree:
 //
@@ -12,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uchar.h>
 
 // The message structs, message ids and packet readers, from src/.
 #include "sithcomm-types.inc"
@@ -25,14 +27,32 @@ typedef int (*cogMsg_Handler)(SithMessage*);
 #define SITH_FREE free
 #define CHECK_ALIGN(t) (1)
 #define NETMSG_IN_START(x) intptr_t _readingPacket = (intptr_t)&x->pktData[0]; \
-    uint16_t _readingOutU16; int16_t _readingOutS16;
+    uint16_t _readingOutU16; int16_t _readingOutS16; int32_t _readingOutS32;
+#define _strncpy strncpy
+
+// What the code reads of a player's thing. The test's players have none.
+typedef struct SithThing
+{
+    uint32_t flags;
+    int idx;
+    struct SithThing* pTemplate;
+    struct { void* model3; } renderData;
+} SithThing;
+#define SITH_TF_DISABLED 0x80000
 
 // What the code reads of a player's record.
 typedef struct SithPlayer
 {
+    char16_t player_name[32];
     uint32_t flags;
     uint32_t playerNetId;
+    SithThing* pLocalPlayer;
     uint32_t msecLastCommTime;
+    int numKills;
+    int numKilled;
+    int numSuicides;
+    int teamNum;
+    int score;
 } SithPlayer;
 
 // One game's copy of the engine globals that the code uses.
@@ -101,11 +121,48 @@ int sithComm_cogMsg_Reset(SithMessage *msg);
 int stdComm_Recv(SithMessage *msg);
 int stdComm_SendToPlayer(SithMessage *msg, int sendto_id);
 uint32_t sithPlayer_GetPlayerNum(int playerId);
+void sithPlayer_Startup(int idx);
+int sithMulti_ProcessSyncPlayers(SithMessage *pMsg);
 
 static void sithMessage_FileWrite(SithMessage* pMessage) { (void)pMessage; }
 static void sithMulti_QuitPlayer(int id) { (void)id; }
 static void sithMulti_ProcessPlayerLost(int idPlayer) { (void)idPlayer; }
 static void sithMulti_SyncPlayers(int idTo, int dpFlags) { (void)idTo; (void)dpFlags; }
+
+// What sithPlayer_Startup and sithMulti_ProcessSyncPlayers use besides
+// sithComm: the world, the console, sounds, cogs and the score table.
+static void* sithWorld_g_pCurrentWorld;
+static SithThing* sithPlayer_g_pLocalPlayerThing;
+static int sithNet_MultiModeFlags;
+static int sithNet_serverNetId;
+static uint32_t sithNet_dword_8C4BA8;
+static int16_t sithNet_teamScore[5];
+static int sithMulti_quitGameState;
+static uint32_t sithMulti_msecQuitGameTime;
+static void (*sithMulti_pfNewPlayerJoinedCallback)(void);
+#define MULTIMODEFLAG_TEAMS 0x1
+#define MULTI_LEAVEJOIN_DELAY_MS 1000
+#define SITH_MESSAGE_JOIN 37
+#define SITH_MESSAGE_LEAVE 38
+static uint32_t stdPlatform_GetTimeMsec(void) { return sithTime_g_msecGameTime; }
+static void sithThing_SetThingModel(SithThing* pThing, void* pModel) { (void)pThing; (void)pModel; }
+static char16_t* sithStrTable_GetUniStringWithFallback(const char* pKey) { static char16_t none[1]; (void)pKey; return none; }
+static int jk_snwprintf(char16_t* pOut, size_t n, const char16_t* pFmt, ...) { (void)pFmt; if (n) pOut[0] = 0; return 0; }
+static void sithConsole_PrintWString(const char16_t* pStr) { (void)pStr; }
+static void sithConsole_AlertSound(void) {}
+static void sithSoundClass_StopSound(SithThing* pThing, const void* pSound) { (void)pThing; (void)pSound; }
+static void sithCog_BroadcastMessage(int msg, int senderType, int senderIdx, int sourceType, int sourceIdx)
+{
+    (void)msg; (void)senderType; (void)senderIdx; (void)sourceType; (void)sourceIdx;
+}
+static void sithDSSThing_UpdateState(SithThing* pThing, int sendto, int mpFlags) { (void)pThing; (void)sendto; (void)mpFlags; }
+static void stdString_CharToWchar(char16_t* pOut, const char* pIn, int n)
+{
+    int i = 0;
+    for (; i < n && pIn[i]; i++)
+        pOut[i] = (uint8_t)pIn[i];
+    pOut[i] = 0;
+}
 
 #ifdef PLATFORM_WSRELAY
 // Hit what you see holds only swing, animation and sound messages.
@@ -262,7 +319,7 @@ static void startGame(int g, int netId, int idx, int n)
     G->maxPlayers = n;
     for (int j = 0; j < n; j++)
     {
-        G->players[j].flags = 1;
+        G->players[j].flags = 5; // as sithPlayer_ShowPlayer leaves them
         G->players[j].playerNetId = j == idx ? netId : j + 1;
     }
     G->outputstream = 1;
@@ -271,6 +328,7 @@ static void startGame(int g, int netId, int idx, int n)
     G->msgId = 1; // as sithComm_Startup leaves it
     G->typeFuncs[DSS_RESET] = sithComm_cogMsg_Reset;
     G->typeFuncs[TESTMSG] = onTestMessage;
+    G->typeFuncs[DSS_LEAVEJOIN] = sithMulti_ProcessSyncPlayers;
 }
 
 // Games 0..n-1, game g as net id g + 1 at index g. Game 0 hosts.
@@ -487,27 +545,47 @@ static void testSlotCount(void)
     CHECK(countWrong == 0, "sithComm_idk2 was wrong on %d frames", countWrong);
 }
 
-// What sithPlayer_Startup does to sithComm when a player leaves game g.
+// The player at index idx leaves game g.
 static void leave(int g, int idx)
 {
     use(g);
-    G->players[idx].flags &= ~1u;
-    sithComm_ForgetSender(G->players[idx].playerNetId);
-    sithComm_ForgetRecipient(idx);
-    G->players[idx].playerNetId = 0;
+    sithPlayer_Startup(idx);
 }
 
-// What sithMulti_ProcessSyncPlayers does when index idx gets another net id.
-static void renumber(int g, int idx, int netId)
+static void put(uint8_t** pp, const void* v, size_t n)
 {
-    use(g);
-    if (G->players[idx].playerNetId != (uint32_t)netId)
+    memcpy(*pp, v, n);
+    *pp += n;
+}
+
+// The host's player list, DSS_LEAVEJOIN as sithMulti_SyncPlayers writes it,
+// from game `from` to game `to`. It goes out once and not reliably, as the
+// host sends it when a player leaves.
+static void sendPlayerList(int from, int to)
+{
+    static uint8_t d[4 + 10 + 32 * 34];
+    uint8_t* p = d;
+    Game* h = &games[from];
+    uint16_t head[2] = { DSS_LEAVEJOIN, 0 };
+    int32_t modeFlags = 0, serverNetId = h->netId;
+    int16_t maxPlayers = h->maxPlayers, scores[5] = { 0 };
+    char name[16] = { 0 };
+    put(&p, head, sizeof(head));
+    put(&p, &modeFlags, 4);
+    put(&p, &serverNetId, 4);
+    put(&p, &maxPlayers, 2);
+    for (uint32_t j = 0; j < h->maxPlayers; j++)
     {
-        sithComm_ForgetSender(G->players[idx].playerNetId);
-        sithComm_ForgetRecipient(idx);
+        int32_t flags = h->players[j].flags, netId = h->players[j].playerNetId;
+        put(&p, &flags, 4);
+        if (flags & 4)
+        {
+            put(&p, &netId, 4);
+            put(&p, name, sizeof(name));
+            put(&p, scores, sizeof(scores));
+        }
     }
-    G->players[idx].playerNetId = netId;
-    G->players[idx].flags = 1;
+    addPacket(h->netId, games[to].netId, d, p - d);
 }
 
 // Game 1 (net id 2) is gone, and game 3 joins as net id 4 at its index.
@@ -529,7 +607,7 @@ static void testIndexReassigned(void)
     leave(0, 1);
     runFor(300);
     joinAtIndex1();
-    games[0].players[1].flags = 1;
+    games[0].players[1].flags = 5;
     games[0].players[1].playerNetId = 4;
     runFor(15000);
     CHECK(countSent(0, id, 4) == 0, "the host resent the last player's message to the new one %d times", countSent(0, id, 4));
@@ -546,10 +624,28 @@ static void testIndexReassigned(void)
     CHECK(runs[0][2][1] == 1, "the host ran the message %d times", runs[0][2][1]);
     joinAtIndex1();
     games[0].players[1].playerNetId = 4;
-    renumber(2, 1, 4);
+    sendPlayerList(0, 2);
+    runFor(100);
+    CHECK(games[2].players[1].playerNetId == 4, "the joiner has net id %u at index 1", games[2].players[1].playerNetId);
     runFor(15000);
     CHECK(countSent(2, id, 4) == 0, "the joiner resent the last player's message to the new one %d times", countSent(2, id, 4));
     CHECK(runs[3][2][1] == 0, "the new player ran the last player's message %d times", runs[3][2][1]);
+    CHECK(slotsInUse(2) == 0, "%d slots in use", slotsInUse(2));
+    CHECK(countWrong == 0, "sithComm_idk2 was wrong on %d frames", countWrong);
+
+    // A player list forgets only the indices whose net id changed: the
+    // joiner's message to the host, not through yet, is still resent.
+    setup(3);
+    linkDown[2][0] = 1;
+    id = sendTest(2, 1, 1);
+    runFor(500);
+    sendPlayerList(0, 2);
+    runFor(100);
+    CHECK(slotsInUse(2) == 1, "%d slots in use after the player list", slotsInUse(2));
+    linkDown[2][0] = 0;
+    runFor(3000);
+    CHECK(runs[0][2][1] == 1, "the host ran the joiner's message %d times", runs[0][2][1]);
+    CHECK(countSent(2, id, 1) == 2, "the joiner's message went out %d times, not 2", countSent(2, id, 1));
     CHECK(slotsInUse(2) == 0, "%d slots in use", slotsInUse(2));
     CHECK(countWrong == 0, "sithComm_idk2 was wrong on %d frames", countWrong);
 }
@@ -561,7 +657,7 @@ static void fillTable(int g)
     use(g);
     for (int j = G->maxPlayers; j < 32; j++)
     {
-        G->players[j].flags = 1;
+        G->players[j].flags = 5;
         G->players[j].playerNetId = j + 1;
     }
     G->maxPlayers = 32;

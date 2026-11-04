@@ -38,7 +38,7 @@ cut_out() {
     cut_out types.h 'typedef struct net_msg'
     cut_out types.h 'typedef struct sithCogMsg_Pair'
     cut_out types.h 'typedef struct SithMessage'
-    grep -E '^#define NETMSG_POP[US]16\(\)' "$src/Dss/sithMulti.h"
+    grep -E '^#define NETMSG_POP([US]16|S32|STR)\(' "$src/Dss/sithMulti.h"
 } > "$out/sithcomm-types.inc"
 
 {
@@ -53,6 +53,8 @@ cut_out() {
     cut_out Win95/stdComm.c 'int stdComm_Recv('
     cut_out Win95/stdComm.c 'int stdComm_SendToPlayer('
     cut_out Gameplay/sithPlayer.c 'uint32_t sithPlayer_GetPlayerNum('
+    cut_out Gameplay/sithPlayer.c 'void sithPlayer_Startup('
+    cut_out Dss/sithMulti.c 'int sithMulti_ProcessSyncPlayers('
 } > "$out/sithcomm-code.inc"
 
 for shape in "" PLATFORM_WSRELAY SITHCOMM_HEAP_MSGBUF; do
