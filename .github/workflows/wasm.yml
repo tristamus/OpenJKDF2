@@ -90,6 +90,11 @@ jobs:
       # and TURN credentials, with made-up browsers, WebRTC and lobby.
       - name: Test network paths
         run: node packaging/wasm/test/transport-test.mjs
+      # Joining a room with a password, in C with the tree's own list, join
+      # and reply code cut out of stdComm_WSRelay.c: what the join sends of
+      # the password and logs, and what the lobby's answers become.
+      - name: Test joining a room with a password
+        run: sh packaging/wasm/test/passwords-test.sh
       # Hit what you see's check on a hit claim, on its own in C, with
       # made-up records of where a player was and made-up claims.
       - name: Test the hit claim check
