@@ -96,8 +96,9 @@ int sithControl_GetLastSelected();
 extern flex_t sithControl_turnSecs;
 
 // Added: the turn (degrees of yaw) the mouse asked for in a frame that got no
-// physics step, which the next step applies; 0 once it has been.
-flex_t sithControl_GetPendingTurn();
+// physics step, which the next step applies; 0 once it has been, or when this
+// frame's input didn't turn the player.
+flex_t sithControl_GetPendingTurn(void);
 #endif // QOL_IMPROVEMENTS
 
 //static stdControlKeyInfo* (*sithControl_EnumBindings)(sithControlEnumFunc_t func, int a2, int a3, int a4, int a5) = (void*)sithControl_EnumBindings_ADDR;

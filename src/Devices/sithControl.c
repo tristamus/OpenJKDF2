@@ -59,6 +59,11 @@ static int sithControl_008d7f5c = 0;
 
 flex_t sithControl_turnSecs = 0.0;
 static flex_t sithControl_turnCarry = 0.0;
+// Added: whether sithControl_TurnSpeed ran in this frame's sithControl_Update,
+// and whether MotS's action cog turned the last turn down (see
+// sithControl_GetPendingTurn).
+static int sithControl_bTurnedThisUpdate = 0;
+static int sithControl_bTurnVetoed = 0;
 
 // The mouse's X and Y axes bound to turning or looking without "Map directly".
 static int sithControl_IsMouseLook(int axisId, int dxKeyNum)
@@ -77,6 +82,7 @@ static int sithControl_IsMouseLook(int axisId, int dxKeyNum)
 // the frame gets, and a frame without any passes it on to the next.
 static flex_t sithControl_TurnSpeed(flex_t degrees)
 {
+    sithControl_bTurnedThisUpdate = 1;
     degrees += sithControl_turnCarry;
     sithControl_turnCarry = 0.0;
     if (sithControl_turnSecs <= 0.0)
@@ -87,8 +93,18 @@ static flex_t sithControl_TurnSpeed(flex_t degrees)
     return degrees / sithControl_turnSecs;
 }
 
-flex_t sithControl_GetPendingTurn()
+// The yaw the next physics step will turn the player by for the mouse
+// movement of a frame that got no step: the carry, times MotS's turn scale
+// (the camera's zoom, which the step applies too). 0 when this frame's input
+// didn't go through sithControl_TurnSpeed (dead, controls disabled, strafe
+// toggle held, not walking), so a carry left from earlier isn't shown, and in
+// MotS while the action cog turns turning down, as the step won't turn then.
+flex_t sithControl_GetPendingTurn(void)
 {
+    if (!sithControl_bTurnedThisUpdate)
+        return 0.0;
+    if (Main_bMotsCompat)
+        return sithControl_bTurnVetoed ? 0.0 : sithControl_turnCarry * sithControl_008d7f44;
     return sithControl_turnCarry;
 }
 #endif
@@ -241,6 +257,12 @@ int sithControl_Open()
     {
         sithControl_msIdle = 0;
         sithControl_bOpened = 1;
+#ifdef QOL_IMPROVEMENTS
+        // Added: a turn left over from the last level isn't the next one's.
+        sithControl_turnCarry = 0.0;
+        sithControl_bTurnedThisUpdate = 0;
+        sithControl_bTurnVetoed = 0;
+#endif
         return 1;
     }
     return 0;
@@ -320,6 +342,9 @@ void sithControl_RegisterControlFunctions()
 // MOTS altered
 void sithControl_Update(flex_t secDeltaTime, int msecDeltaTime)
 {
+#ifdef QOL_IMPROVEMENTS
+    sithControl_bTurnedThisUpdate = 0; // Added: see sithControl_GetPendingTurn
+#endif
     if ( !sithControl_bOpened )
         return;
 
@@ -1575,6 +1600,9 @@ void sithControl_PlayerMovementMots(SithThing *player)
             fVar4 = fVar4 * sithControl_008d7f44;
             sithControl_008d7f50 = 1;
             iVar2 = sithThing_MotsTick(5,0,fVar4);
+#ifdef QOL_IMPROVEMENTS
+            sithControl_bTurnVetoed = (iVar2 == 0); // Added: see sithControl_GetPendingTurn
+#endif
             if (iVar2 == 0) {
                 thing->physicsParams.angularVelocity.y = 0.0;
             }
