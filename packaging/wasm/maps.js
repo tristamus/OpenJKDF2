@@ -1461,7 +1461,10 @@
             // lobby's connection they're cut at that: none goes over the
             // lobby's 64 KiB, and game packets never wait behind a big one.
             // On the Imperial Network Protocol, desktop joiners get the size
-            // they asked for.
+            // they asked for. The least rate there is then a 64 KiB part of
+            // each block every PACE_PART_MS, about 79 KB/s for each joiner
+            // with three out: more than a 1 Mbit/s upload once two download
+            // at once, and the others' game packets then wait seconds.
             var cut = net && net === Module.jkImperial ? part : UNIT;
             var key = to + ' ' + k + ' b' + b;
             var g = up.groups.get(key);
