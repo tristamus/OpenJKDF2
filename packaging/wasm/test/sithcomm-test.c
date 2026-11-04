@@ -351,6 +351,19 @@ static void setup(int n)
     use(0);
 }
 
+// Fills game g's player table to 32 players. Index j has net id j + 1, and
+// those without a game lose every packet.
+static void fillTable(int g)
+{
+    use(g);
+    for (int j = G->maxPlayers; j < 32; j++)
+    {
+        G->players[j].flags = 5;
+        G->players[j].playerNetId = j + 1;
+    }
+    G->maxPlayers = 32;
+}
+
 static void runFor(uint32_t ms)
 {
     for (uint32_t t = 0; t < ms; t += FRAME)
@@ -519,6 +532,23 @@ static void testSlotCount(void)
     CHECK(slotsInUse(0) == 0, "%d slots in use with no recipient left", slotsInUse(0));
     checkCount(0, "after forgetting both recipients");
 
+    // An ack frees a message to everyone only for the player who sent it:
+    // the one who didn't get it still gets the resend.
+    setup(3);
+    linkDown[0][1] = 1;
+    id = sendTest(0, -1, 1);
+    runFor(500);
+    CHECK(slotsInUse(0) == 1 && slots(0)[0].netMsg.field_14 == 2,
+          "after one of two acks the message waits for players %08x", slotsInUse(0) ? slots(0)[0].netMsg.field_14 : 0);
+    checkCount(0, "after one of two acks");
+    linkDown[0][1] = 0;
+    runFor(3000);
+    CHECK(runs[1][0][1] == 1, "the player still waiting ran it %d times", runs[1][0][1]);
+    CHECK(countSent(0, id, 2) == 2, "it went out %d times to the player still waiting, not 2", countSent(0, id, 2));
+    CHECK(countSent(0, id, 3) == 1, "it went out %d times to the player who acked, not once", countSent(0, id, 3));
+    CHECK(slotsInUse(0) == 0, "%d slots in use after both acks", slotsInUse(0));
+    CHECK(countWrong == 0, "sithComm_idk2 was wrong on %d frames", countWrong);
+
     // Forgetting a recipient before anything was sent (a new session) is
     // fine, also before the retro ports' buffer exists.
     setup(2);
@@ -528,6 +558,24 @@ static void testSlotCount(void)
     sithComm_ForgetRecipient(-1);
     sithComm_ForgetRecipient(32);
     checkCount(1, "after forgetting with nothing sent");
+
+    // An index outside the table forgets nobody, also while a message waits
+    // for indices 0 and 31 (a player list's player count comes off the wire
+    // unchecked). Read from memory, so the compiler can't fold the shifts.
+    static volatile int outside[] = { -1, 32, 33, 64 };
+    setup(2);
+    fillTable(1);
+    linkDown[1][0] = 1;
+    sendTest(1, -1, 1);
+    use(1);
+    for (int k = 0; k < (int)(sizeof(outside) / sizeof(outside[0])); k++)
+        sithComm_ForgetRecipient(outside[k]);
+    uint32_t waiting = slotsInUse(1) ? slots(1)[0].netMsg.field_14 : 0;
+    CHECK(waiting == 0xFFFFFFFDu, "after forgetting indices outside the table the message waits for players %08x", waiting);
+    checkCount(1, "after forgetting indices outside the table");
+    linkDown[1][0] = 0;
+    runFor(3000);
+    CHECK(runs[0][1][1] == 1, "the host ran the message %d times", runs[0][1][1]);
 
     // An ack for id 0, which no game sends, frees no slot and stops no resend.
     setup(2);
@@ -648,19 +696,6 @@ static void testIndexReassigned(void)
     CHECK(countSent(2, id, 1) == 2, "the joiner's message went out %d times, not 2", countSent(2, id, 1));
     CHECK(slotsInUse(2) == 0, "%d slots in use", slotsInUse(2));
     CHECK(countWrong == 0, "sithComm_idk2 was wrong on %d frames", countWrong);
-}
-
-// Fills game g's player table to 32 players. Index j has net id j + 1, and
-// those without a game lose every packet.
-static void fillTable(int g)
-{
-    use(g);
-    for (int j = G->maxPlayers; j < 32; j++)
-    {
-        G->players[j].flags = 5;
-        G->players[j].playerNetId = j + 1;
-    }
-    G->maxPlayers = 32;
 }
 
 static void testLateAck(void)
