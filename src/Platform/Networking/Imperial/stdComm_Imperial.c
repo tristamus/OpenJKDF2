@@ -287,22 +287,27 @@ EM_JS(void, imperial_js_xfer_init, (int bActive), {
             return 'direct';
         };
         Module.jkImperial.mapDirect = function(id) { return !!Module.jkImperial.active; };
-        // What waits to go: the queue, and the relay's WebSocket.
-        Module.jkImperial.mapBacklog = function(id, via) {
-            var n = 0;
-            Module.jkImperial.out.forEach(function(f) { n += f.b.length; });
-            var socks = Module.jkrWs ? Module.jkrWs.socks : {};
+        // What the relay's WebSocket has yet to send.
+        Module.jkImperial.sockBacklog = function() {
+            var n = 0, socks = Module.jkrWs ? Module.jkrWs.socks : {};
             for (var k in socks) {
                 n += socks[k].ws ? socks[k].ws.bufferedAmount || 0 : 0;
                 socks[k].out.forEach(function(d) { n += d.length; });
             }
             return n;
         };
+        // What waits to go: the queue, and the socket.
+        Module.jkImperial.mapBacklog = function(id, via) {
+            var n = Module.jkImperial.sockBacklog();
+            Module.jkImperial.out.forEach(function(f) { n += f.b.length; });
+            return n;
+        };
         Module.jkImperial.mapInMatch = function(id) { return !!Module.jkImperial.inMatch; };
         // Only what waits in the browser shows, which can say a queue is
-        // building but never that none is.
+        // building but never that none is. The queue only waits for the
+        // engine's next frame.
         Module.jkImperial.mapCongested = function() {
-            return Module.jkImperial.mapBacklog() >= 16384 ? true : null;
+            return Module.jkImperial.sockBacklog() >= 16384 ? true : null;
         };
     }
     // Parts maps.js has waiting were numbered for the other connection.
