@@ -736,7 +736,7 @@ function pacedGame(clock, hostFiles, joiners, { imperial = false } = {}) {
     const deliver = (to, from, bytes, via) => {
         const copy = bytes.slice(0);
         const b = new Uint8Array(copy), v = new DataView(copy);
-        log.push({ to, from, via, type: b[12], len: copy.byteLength,
+        log.push({ t: clock.now(), to, from, via, type: b[12], len: copy.byteLength,
                    block: b[12] === 6 || b[12] === 4 ? v.getUint32(24, true) : null,
                    at: b[12] === 6 ? v.getUint32(32, true) : null, bytes: b[12] === 6 ? null : b });
         clock.setTimeout(() => (to === 1 ? host : tabs.get(to).tab).jkMaps.onFrame(from, copy, via), link.delay);
@@ -837,14 +837,19 @@ function chunkRequest(id8, size, first, count) {
 
 const idOfGob = gob => Buffer.from(sha(gob).slice(0, 16), 'hex');
 
-for (const [what, joiners] of [
+// A map whose stream is 3 MiB exactly: joiners that start together finish
+// their blocks in the same turn.
+const MAP_3MIB = 3 * 1048576 - 4 - 1000 - 288;
+
+for (const [what, joiners, mapBytes = 3500000] of [
     ['through the lobby (two blocks out)', [{ id: 2, direct: false }]],
     ['over the map channel (three blocks out)', [{ id: 2, direct: true }]],
     ['to two joiners at once', [{ id: 2, direct: true }, { id: 3, direct: true }]],
+    ['to four joiners at once, whose blocks end together', [2, 3, 4, 5].map(id => ({ id, direct: true })), MAP_3MIB],
 ]) {
     test('in a match, an old joiner gets a paced host\'s map ' + what + ' in 16 KiB parts, asking for no block twice', async () => {
         const clock = makeClock();
-        const { gob, stream } = bigMap(3500000);
+        const { gob, stream } = bigMap(mapBytes);
         const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_pace.gob': gob }, joiners);
         await hostOn(clock, g, 'ctf_pace');
         const t0 = clock.now();
@@ -862,11 +867,19 @@ for (const [what, joiners] of [
             assert.ok(parts.every(f => f.len - 40 <= UNIT && f.at % UNIT === 0), 'a part over 16 KiB');
             assert.equal(parts.reduce((n, f) => n + f.len - 40, 0), stream, 'bytes sent');
             assert.equal(blockReqs(g.log, j.id).length, blocks, 'a block asked for again');
+            // A part of each block at least every 2.5 s (the joiner asks
+            // again after 5 s), however many finish at once.
+            const last = {};
+            for (const f of parts) {
+                if (last[f.block] !== undefined)
+                    assert.ok(f.t - last[f.block] < 2600, `block ${f.block} waited ${f.t - last[f.block]} ms`);
+                last[f.block] = f.t;
+            }
         }
         assert.equal(g.link.overCap, 0);
         const rate = g.host.jkMaps.uploads().rate;
         console.log(`    ${joiners.length} joiner(s), ${(stream / 1e6).toFixed(1)} MB each, in ${secs.toFixed(0)} s at ${(rate / 1000).toFixed(1)} KB/s`);
-        assert.ok(rate < 40000, 'rate ' + rate);
+        assert.ok(rate <= Math.max(24000, joiners.length * 3 * UNIT * 1000 / 2500) + 1, 'rate ' + rate);
     });
 }
 

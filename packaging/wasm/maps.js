@@ -1388,6 +1388,8 @@
         tokens: 0,
         at: 0,             // when tokens were last added
         sampledAt: 0,
+        // The most part bytes a turn round the groups took lately, and when.
+        need: 0, needAt: 0,
         sentAt: 0,
         // The longest wait between pumps lately: in a hidden tab timers run
         // once a second at most, so a pump may have to send a second's worth.
@@ -1569,10 +1571,17 @@
                 lobby = true;
             need += g.cut;
         });
+        // Groups that finish leave the turn they finished in no shorter for
+        // the others still in it: the rate doesn't fall for that until a
+        // whole turn has gone.
+        if (need >= up.need || now - up.needAt > PACE_PART_MS) {
+            up.need = need;
+            up.needAt = now;
+        }
         if (inMatch) {
             // Every block (or joiner's chunks) being sent gets a part each
             // PACE_PART_MS, the way they take turns.
-            var least = Math.max(PACE_FLOOR, need * 1000 / PACE_PART_MS);
+            var least = Math.max(PACE_FLOOR, up.need * 1000 / PACE_PART_MS);
             if (now - up.sentAt > PACE_FORGET_MS)
                 up.rate = PACE_START;
             if (now - up.sampledAt >= PACE_EVERY_MS && !up.dirty && net && net.mapCongested) {
