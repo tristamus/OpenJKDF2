@@ -949,7 +949,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (net.state === 1 && lp.got) {
                 seen = true;
                 var waited = lp.sent.length ? now - lp.sent[0] : 0;
-                if (lp.rtt > lp.base + 100 || waited > lp.base + 100) queued = true;
+                if (lp.rtt > lp.base + 80 || waited > lp.base + 80) queued = true;
             }
             if (net.state === 1 && !lp.sent.length) net.pingLobby();
             var mapWaits = false;

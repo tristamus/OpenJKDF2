@@ -1355,9 +1355,13 @@
     // computer or the router, so the rate starts low and only grows on a
     // sign that sees those. A part asked for again while it waits isn't
     // queued twice: it goes the way of the newer request.
-    var PACE_LOW_SOCKET = 16 * 1024;         // what the lobby's or Imperial's socket may have waiting
-    var PACE_LOW_CHANNEL = 1024 * 1024;      // a map channel, outside a match
-    var PACE_LOW_CHANNEL_MATCH = 64 * 1024;  // and in one
+    // What may wait on the way a part goes before another goes: on the
+    // lobby's or Imperial's socket in a match, outside one, and on a map
+    // channel outside a match and in one.
+    var PACE_LOW_SOCKET_MATCH = 16 * 1024;
+    var PACE_LOW_SOCKET = 256 * 1024;
+    var PACE_LOW_CHANNEL = 1024 * 1024;
+    var PACE_LOW_CHANNEL_MATCH = 64 * 1024;
     var PACE_MAX_QUEUED = 16 * 1024 * 1024;  // waiting for one joiner
     // Bytes a second in a match: where it starts, at most, and what it grows
     // by each PACE_EVERY_MS that the link says no queue is building.
@@ -1515,14 +1519,20 @@
     function hasRoom(net, g, inMatch) {
         if (!net || !net.mapBacklog)
             return true;
-        var low = onSocket(net, g) ? PACE_LOW_SOCKET : inMatch ? PACE_LOW_CHANNEL_MATCH : PACE_LOW_CHANNEL;
+        var low = onSocket(net, g) ? (inMatch ? PACE_LOW_SOCKET_MATCH : PACE_LOW_SOCKET)
+                                   : (inMatch ? PACE_LOW_CHANNEL_MATCH : PACE_LOW_CHANNEL);
         return net.mapBacklog(g.to, g.via) < low;
     }
 
     // Sends what may go now. The network code calls it each frame and as
     // packets come in, as well as the timer here, which a hidden tab slows.
     function pump() {
-        if (up.pumping || !up.groups.size)
+        if (!up.groups.size) {
+            // Idle: the next transfer starts with no burst saved up.
+            up.pumpedAt = 0;
+            return;
+        }
+        if (up.pumping)
             return;
         up.pumping = true;
         try {
@@ -1537,7 +1547,11 @@
     function pumpNow() {
         var now = Date.now();
         var net = link();
-        if (up.pumpedAt) {
+        if (!up.pumpedAt) {
+            up.gap = up.gapNow = 0;
+            up.gapSince = up.at = now;
+            up.tokens = Math.min(up.tokens, 1);
+        } else {
             if (now - up.gapSince > 2000) {
                 up.gap = up.gapNow;
                 up.gapNow = 0;
