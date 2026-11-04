@@ -554,6 +554,38 @@ static void testIndexReassigned(void)
     CHECK(countWrong == 0, "sithComm_idk2 was wrong on %d frames", countWrong);
 }
 
+// Fills game g's player table to 32 players. Index j has net id j + 1, and
+// those without a game lose every packet.
+static void fillTable(int g)
+{
+    use(g);
+    for (int j = G->maxPlayers; j < 32; j++)
+    {
+        G->players[j].flags = 1;
+        G->players[j].playerNetId = j + 1;
+    }
+    G->maxPlayers = 32;
+}
+
+static void testLateAck(void)
+{
+    // Game 1 acks the host's message to everyone and leaves before the ack
+    // arrives. Its ack must not count for anyone else: index 31, who never
+    // got the message, still gets every resend.
+    setup(2);
+    fillTable(0);
+    int id = sendTest(0, -1, 1);
+    runFor(40);
+    CHECK(runs[1][0][1] == 1 && countAcks(1) == 1, "game 1 ran the message %d times", runs[1][0][1]);
+    leave(0, 1);
+    runFor(100);
+    uint32_t waiting = slotsInUse(0) ? slots(0)[0].netMsg.field_14 : 0;
+    CHECK(waiting == 0xFFFFFFFCu, "after the late ack the message waits for players %08x", waiting);
+    runFor(15000);
+    CHECK(countSent(0, id, 32) == 7, "index 31 got the message %d times, not 7", countSent(0, id, 32));
+    CHECK(countWrong == 0, "sithComm_idk2 was wrong on %d frames", countWrong);
+}
+
 static void testOneSlot(void)
 {
     // Five messages while the link is down for a second: only the newest
@@ -647,6 +679,7 @@ int main(void)
     testAckHighIds();
     testSlotCount();
     testIndexReassigned();
+    testLateAck();
     testOneSlot();
     testWire();
     testReceiver();

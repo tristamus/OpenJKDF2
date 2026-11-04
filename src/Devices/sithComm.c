@@ -475,8 +475,8 @@ void sithComm_ClearMsgTmpBuf()
 int sithComm_cogMsg_Reset(SithMessage *msg)
 {
     int v1; // edi
-    char playerIdx; // al
-    
+    int playerIdx; // al
+
     int foundIdx;
 
     NETMSG_IN_START(msg);
@@ -494,6 +494,11 @@ int sithComm_cogMsg_Reset(SithMessage *msg)
     // count off) an empty slot.
     if ( !v1 )
         return 1;
+    // Added: an ack from a player no longer in the table (one who left before
+    // it arrived) is from no recipient. Shifting by its index, -1, cleared
+    // index 31's bit instead.
+    if ( playerIdx < 0 || playerIdx >= 32 )
+        return 1;
     for (foundIdx = 0; foundIdx < 32; foundIdx++)
     {
         if (sithComm_MsgTmpBuf[foundIdx].netMsg.msgId == v1 )
@@ -502,7 +507,7 @@ int sithComm_cogMsg_Reset(SithMessage *msg)
 
     if ( foundIdx != 32 )
     {
-        sithComm_MsgTmpBuf[foundIdx].netMsg.field_14 &= ~(1 << playerIdx);
+        sithComm_MsgTmpBuf[foundIdx].netMsg.field_14 &= ~(1u << playerIdx);
         if (!sithComm_MsgTmpBuf[foundIdx].netMsg.field_14)
         {
             _memset(&sithComm_MsgTmpBuf[foundIdx], 0, sizeof(SithMessage));
