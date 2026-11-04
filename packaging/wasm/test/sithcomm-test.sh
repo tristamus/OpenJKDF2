@@ -15,21 +15,37 @@ src=${1:-$top}/src
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 
-# Prints the lines of src/$1 from the first one that starts with $2 and is
-# not a declaration (ending in ";") to the next one that starts with $3 ("}"
-# if not given).
+# Prints the lines of src/$1 from the one that starts with $2 and is not a
+# declaration (ending in ";", maybe with a comment) to the next one that starts with $3 ("}" if not
+# given). There must be one such line, not right after an #if, #ifdef,
+# #ifndef, #elif or #else: otherwise a copy the game doesn't build could be
+# tested in place of the one it does. Only for a $2 that is itself an #ifdef
+# the first is taken, as several SITHCOMM_HEAP_MSGBUF blocks open the same
+# way; the buffer's is the first, and any other fails to build in that shape.
 cut_out() {
     end=${3-}
     [ -n "$end" ] || end='}'
-    if ! awk -v a="$2" -v b="$end" '
-            !p && index($0, a) == 1 && !/;[ \t]*$/ { p = 1; print; next }
-            p { print }
-            p && index($0, b) == 1 { done = 1; exit }
-            END { exit !done }' "$src/$1"
-    then
-        echo "sithcomm-test.sh: no \"$2\" in src/$1" >&2
-        exit 1
-    fi
+    case $2 in '#'*) one=0 ;; *) one=1 ;; esac
+    st=0
+    awk -v a="$2" -v b="$end" -v one=$one '
+            index($0, a) == 1 && !/;[ \t]*(\/\/.*)?$/ {
+                n++
+                if (last ~ /^[ \t]*#[ \t]*(if|el)/)
+                    guarded = 1
+                if (n == 1) { p = 1; print; last = $0; next }
+            }
+            p {
+                print
+                if (index($0, b) == 1) { p = 0; done = 1; if (!one) exit }
+            }
+            !/^[ \t]*(\/\/.*)?$/ { last = $0 }
+            END { exit (!done ? 2 : !one ? 0 : n > 1 ? 3 : guarded ? 4 : 0) }' "$src/$1" || st=$?
+    case $st in
+    0) ;;
+    3) echo "sithcomm-test.sh: more than one \"$2\" in src/$1" >&2; exit 1 ;;
+    4) echo "sithcomm-test.sh: \"$2\" in src/$1 comes right after an #if" >&2; exit 1 ;;
+    *) echo "sithcomm-test.sh: no \"$2\" in src/$1" >&2; exit 1 ;;
+    esac
 }
 
 {
@@ -56,6 +72,15 @@ cut_out() {
     cut_out Gameplay/sithPlayer.c 'void sithPlayer_Startup('
     cut_out Dss/sithMulti.c 'int sithMulti_ProcessSyncPlayers('
 } > "$out/sithcomm-code.inc"
+
+# The test builds the shapes below and no others, so code under an #if on any
+# other macro would be tested one way only, maybe not the game's.
+other=$(grep -hE '^[ \t]*#[ \t]*(if|elif)' "$out/sithcomm-types.inc" "$out/sithcomm-code.inc" |
+        grep -vxE '[ \t]*#[ \t]*ifn?def[ \t]+(PLATFORM_WSRELAY|SITHCOMM_HEAP_MSGBUF)[ \t]*(//.*)?' || true)
+if [ -n "$other" ]; then
+    printf 'sithcomm-test.sh: an #if in the code it cuts out is not one of its shapes:\n%s\n' "$other" >&2
+    exit 1
+fi
 
 for shape in "" PLATFORM_WSRELAY SITHCOMM_HEAP_MSGBUF; do
     echo "== ${shape:-desktop}"
