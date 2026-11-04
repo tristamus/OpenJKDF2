@@ -6,7 +6,8 @@
 //
 // It sends at most IMPERIAL_XFER_RATE (1 MiB/s) as before, nothing while the
 // socket has IMPERIAL_XFER_BACKLOG (16 KiB) or more yet to send, and lets
-// maps.js send first, telling it whether the host is in a match.
+// maps.js send first, telling it whether the host is in a match. What waits
+// for a machine that left the game is dropped.
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -17,10 +18,11 @@ const source = readFileSync(new URL('../../../src/Platform/Networking/Imperial/s
 
 // The pump, its constants and its state, as the file has them.
 const defines = source.match(/^#define IMPERIAL_XFER_\w+ .*$/gm);
-const state = source.match(/^static [\w ]+ imperial_(aXferSys|nextXferAlias|xferTokens|xferTokensMs|aXferBuf|msecHeard)\b.*;.*$/gm);
+const state = source.match(/^static [\w ]+ imperial_(aXferSys|aXferSeen|msecXferGone|nextXferAlias|xferTokens|xferTokensMs|aXferBuf|msecHeard)\b.*;.*$/gm);
+const from = source.indexOf('static void imperial_XferForgetGone(');
 const at = source.indexOf('static void imperial_XferPump()');
-const pump = source.slice(at, source.indexOf('\n}\n', at) + 3);
-if (!defines || defines.length < 4 || !state || state.length < 6 || at < 0)
+const pump = source.slice(from, source.indexOf('\n}\n', at) + 3);
+if (!defines || defines.length < 4 || !state || state.length < 8 || from < 0 || at < from)
     throw new Error("couldn't find imperial_XferPump and what it uses");
 
 const harness = `
@@ -46,6 +48,16 @@ static int imperial_js_xfer_take(uint8_t* buf, int cap, int* pTo)
     return frameLen;
 }
 static int jkrelay_IsHost(void) { return 1; }
+// The machines in the game, and what maps.js was told to drop.
+static uint32_t inGame[4] = { 7 };
+static int forgot[65];
+static int jkrelay_HasPlayer(uint32_t id)
+{
+    for (int i = 0; i < 4; i++)
+        if (inGame[i] && inGame[i] == id) return 1;
+    return 0;
+}
+static void imperial_js_xfer_forget(int id) { forgot[id]++; }
 static uint32_t jkrelay_HostSystemId(void) { return 1; }
 static uint32_t jkrelay_LocalSystemId(void) { return 1; }
 
@@ -145,6 +157,24 @@ int main(void)
     imperial_bInGame = 0;
     imperial_XferPump();
     CHECK(lastInMatch == 0, "in a match out of a game");
+
+    // A joiner's machine that leaves: nothing more goes to it, within 1 s.
+    // One the server hasn't said joined yet isn't taken for gone.
+    reset(0);
+    imperial_bInGame = 1;
+    imperial_aXferSys[3] = 8;
+    memset(forgot, 0, sizeof(forgot));
+    runFor(1500, 16);
+    CHECK(imperial_aXferSys[2] == 7 && imperial_aXferSys[3] == 8 && !forgot[2] && !forgot[3], "dropped a machine still there");
+    inGame[1] = 8;
+    runFor(1500, 16);
+    inGame[0] = 0;
+    inGame[1] = 0;
+    runFor(1100, 16);
+    CHECK(forgot[2] == 1 && forgot[3] == 1, "dropped %d and %d times", forgot[2], forgot[3]);
+    CHECK(!imperial_aXferSys[2] && !imperial_aXferSys[3], "still numbered");
+    runFor(3000, 16);
+    CHECK(forgot[2] == 1 && forgot[3] == 1, "dropped again");
 
     printf(failed ? "%d failed\\n" : "all passed\\n", failed);
     return failed ? 1 : 0;

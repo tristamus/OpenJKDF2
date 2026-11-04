@@ -67,6 +67,7 @@ int jkrelay_LastRecvSeq(uint32_t* pSeq);
 void jkrelay_SetBigHandler(void (*fn)(uint32_t from, const uint8_t* p, size_t n));
 int jkrelay_SendBig(uint32_t idFrom, uint32_t idTo, const uint8_t* p, size_t n);
 int jkrelay_SendBacklog(void);
+int jkrelay_HasPlayer(uint32_t id);
 uint32_t jkrelay_LocalSystemId(void);
 uint32_t jkrelay_HostSystemId(void);
 int jkrelay_IsHost(void);
@@ -272,6 +273,8 @@ static void imperial_SessionToEntry(const dps_session* s, jkMultiEntry* e)
 #define IMPERIAL_XFER_BACKLOG (16 * 1024)
 
 static uint32_t imperial_aXferSys[65];   // [2..64]: the machine a number stands for
+static uint8_t imperial_aXferSeen[65];   // that machine was seen in the game
+static uint32_t imperial_msecXferGone = 0;  // when machines that left were last looked for
 static int imperial_nextXferAlias = 2;
 static double imperial_xferTokens = IMPERIAL_XFER_BURST;
 static uint32_t imperial_xferTokensMs = 0;
@@ -416,6 +419,7 @@ static uint32_t imperial_XferAliasOf(uint32_t sysId)
     int a = imperial_nextXferAlias;
     imperial_nextXferAlias = a >= 64 ? 2 : a + 1;
     imperial_aXferSys[a] = sysId;
+    imperial_aXferSeen[a] = 0;
     imperial_js_xfer_forget(a);
     return (uint32_t)a;
 }
@@ -430,11 +434,35 @@ static void imperial_BigFrame(uint32_t from, const uint8_t* p, size_t n)
         imperial_js_xfer_frame(1, p, (int)n);
 }
 
+// A machine that left the game (a joiner that gave up on its download) has
+// nothing more sent to it. One whose frames came before the server said it
+// joined isn't taken for gone.
+static void imperial_XferForgetGone(uint32_t now)
+{
+    if (!jkrelay_IsHost() || now - imperial_msecXferGone < 1000)
+        return;
+    imperial_msecXferGone = now;
+    for (int a = 2; a <= 64; a++)
+    {
+        if (!imperial_aXferSys[a])
+            continue;
+        if (jkrelay_HasPlayer(imperial_aXferSys[a]))
+            imperial_aXferSeen[a] = 1;
+        else if (imperial_aXferSeen[a])
+        {
+            imperial_aXferSys[a] = 0;
+            imperial_aXferSeen[a] = 0;
+            imperial_js_xfer_forget(a);
+        }
+    }
+}
+
 // Sends what maps.js queued, as fast as IMPERIAL_XFER_RATE allows, while the
 // relay's WebSocket has little waiting.
 static void imperial_XferPump()
 {
     uint32_t now = stdPlatform_GetTimeMsec();
+    imperial_XferForgetGone(now);
     imperial_js_xfer_serve(imperial_bInGame && imperial_msecHeard && now - imperial_msecHeard < 2000);
     imperial_xferTokens += (double)(now - imperial_xferTokensMs) * (IMPERIAL_XFER_RATE / 1000.0);
     if (imperial_xferTokens > IMPERIAL_XFER_BURST)
@@ -801,6 +829,7 @@ int stdComm_Imperial_OpenHost(jkMultiEntry* pEntry)
     }
     imperial_bInGame = 1;
     memset(imperial_aXferSys, 0, sizeof(imperial_aXferSys));
+    memset(imperial_aXferSeen, 0, sizeof(imperial_aXferSeen));
     imperial_js_map_host(pEntry->episodeGobName, JKRES_GOB_EXT);
     imperial_js_mod_host();
 

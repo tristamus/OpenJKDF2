@@ -2441,6 +2441,12 @@ int jkrelay_SendBacklog(void)
     if (R.sock < 0 || R.sock >= JKR_WS_MAX_SOCKS || !jkr_wsSocks[R.sock].ws) return 0;
     return jkr_js_buffered(jkr_wsSocks[R.sock].ws);
 }
+
+// Whether player id (a machine's system player too) is in the game.
+int jkrelay_HasPlayer(uint32_t id)
+{
+    return R.inSession && jkr_Find(id) != NULL;
+}
 #endif
 
 // ---------------------------------------------------------------------------
