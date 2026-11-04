@@ -369,7 +369,9 @@ LABEL_29:
         // Added: not on the Imperial Network Protocol connection. Its game list
         // carries no passwords (the entry's is always empty), so every password
         // typed would fail here; the host checks it when we join (0x88770154).
-        if (stdComm_Imperial_bActive)
+        // Nor for a game whose lobby checks passwords: its list carries none
+        // either, and the lobby turns a wrong one down when we join.
+        if (stdComm_Imperial_bActive || stdComm_WSRelay_LobbyChecksPassword(v7))
             check = 0;
 #endif
         if (check) {
@@ -423,6 +425,14 @@ LABEL_29:
                 v27 = v10 == STDCOMM_WSRELAY_NEWER
                       ? u"That game runs a newer version. Reload this page, then join again."
                       : u"That game runs an older version. Its host needs to reload the page.";
+                v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
+            }
+            // Added: the lobby checks the password, and won't for a while
+            // after too many wrong ones. Not "wrong password": it didn't
+            // check this one, which may be right.
+            else if ( v10 == STDCOMM_WSRELAY_PASSWORD_WAIT )
+            {
+                v27 = u"Too many wrong passwords for this game. Wait a minute, then try again.";
                 v11 = jkStrings_GetUniStringWithFallback("GUINET_JOINERROR");
             }
 #endif

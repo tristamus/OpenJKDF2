@@ -44,7 +44,7 @@
 // do.
 //
 // Text frames are relay control lines, binary frames are game packets:
-//   us -> relay   list <game> | host <entry> | update <entry> | join <room>
+//   us -> relay   list <game> | host <entry> | update <entry> | join <room> [<password>]
 //                 welcome <id> <entry> | leave | signal <id> <data> | ping
 //                 hello <game> <name> | rejoin <room> <id> <key>
 //                 rehost <room> <key> <entry> | turn
@@ -60,8 +60,18 @@
 // ({"d": ...}) or an ICE candidate ({"c": ...}) for signal, and the
 // RTCPeerConnection iceServers list for ice, with how many seconds its TURN
 // credentials last when it has them. lobby says what the relay can do beyond
-// that: links (signal between clients) and turn (TURN credentials). The JS
-// below handles signal, ice and lobby itself; the engine never sees them.
+// that: links (signal between clients), turn (TURN credentials) and pw (it
+// checks room passwords). The JS below handles signal, ice and lobby itself;
+// the engine never sees them.
+//
+// Room passwords: this game tells the lobby it can send them (/relay?pw=1).
+// A lobby that says pw then lists no passwords and checks the one the player
+// typed, which goes with join as the hex of its UTF-16LE units: error
+// password if it's wrong, error password wait after too many wrong ones. With
+// a lobby that doesn't, the join screen checks it against the list, as it
+// always did, and join goes without it. Which a game was listed by is noted
+// as its list comes in, so a socket that comes back meanwhile doesn't change
+// what joining it sends.
 //
 // Game packets don't need the relay once the data channel is open, so losing
 // the socket mid-game doesn't end the match. The relay holds a seat whose
@@ -116,6 +126,8 @@
 //
 // ?netold leaves out the fast lane, the switch, links between clients, TURN
 // and transfer links, so its links work as they did before them, to compare.
+// It doesn't send passwords to the lobby either, so it joins as older games
+// do.
 
 #include "stdComm_WSRelay.h"
 #include "Platform/Networking/Imperial/stdComm_Imperial.h"
@@ -174,7 +186,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                                stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0,
                                         fastSent: 0, fastRecv: 0, fastOld: 0, fastBacklog: 0 },
                                log: [], lastFrom: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
-                               seqTo: {}, seqSent: {}, seqFrom: {}, links: {}, lobbyCan: [], pending: {},
+                               seqTo: {}, seqSent: {}, seqFrom: {}, links: {}, lobbyCan: [], listPw: false, pending: {},
                                bulk: {}, bulkUse: {},
                                turn: null, turnEnds: 0, iceUntil: 0, iceAsked: false, iceAskedAt: 0, iceWaiters: [],
                                session: false, sessionNo: 0, hostTries: 0, hostRetry: null };
@@ -1127,11 +1139,17 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 return true;
             }
             /* What the lobby can do beyond the basics: links (passing link
-               setup between joiners). */
+               setup between joiners), pw (checking room passwords). */
             if (op === 'lobby') {
                 net.lobbyCan = text.split(' ').slice(1);
                 return true;
             }
+            /* Whether the lobby a list came from checks passwords, as that
+               socket's lobby line said (it comes before any list). Noted as
+               the list comes in: a socket that comes back has no lobby line
+               until its own arrives. The engine keeps it for each game in the
+               list (wsrelay_js_list_pw). ?netold didn't ask for it (pw=1). */
+            if (op === 'list') net.listPw = !Module['jkNetOld'] && net.lobbyCan.indexOf('pw') >= 0;
             /* The seat to take back if the socket drops in a game. */
             if (op === 'seat') {
                 var seat = text.split(' ');
@@ -1207,8 +1225,11 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (!url && typeof location !== 'undefined')
                 url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay';
             /* The netcode this build speaks (STDCOMM_WSRELAY_NETCODE): the
-               lobby only lists and joins games whose host speaks the same. */
-            if (url) url += (url.indexOf('?') < 0 ? '?' : '&') + 'net=' + net.netcode;
+               lobby only lists and joins games whose host speaks the same.
+               pw: this game sends the password typed with join, so a lobby
+               that checks passwords can leave them out of its list. ?netold
+               doesn't, as older games don't. */
+            if (url) url += (url.indexOf('?') < 0 ? '?' : '&') + 'net=' + net.netcode + (Module['jkNetOld'] ? "" : '&pw=1');
             if (!keepQueue) net.queue = [];
             net.lobbyCan = [];
             net.state = 0;
@@ -1301,6 +1322,31 @@ EM_JS(int, wsrelay_js_send_text, (const char* pText), {
     if (net.state !== 1) return 0;
     net.ws.send(text);
     return 1;
+});
+
+// Asks the lobby for a seat in room. Like any join, it ends the seat this
+// game had (wsrelay_js_send_text). pPassword, for a lobby that checks
+// passwords, is the one the player typed: it goes along as the hex of its
+// UTF-16LE units, 31 at most, unless it's empty.
+EM_JS(int, wsrelay_js_join, (int room, const char16_t* pPassword), {
+    var net = Module.jkNet;
+    if (!net) return 0;
+    var hex = "";
+    for (var i = 0; pPassword && i < 31; i++) {
+        var ch = HEAPU16[(pPassword >> 1) + i];
+        if (!ch) break;
+        hex += (0x100 | (ch & 0xFF)).toString(16).substring(1) + (0x100 | (ch >> 8)).toString(16).substring(1);
+    }
+    net.seat = null;
+    if (net.state !== 1) return 0;
+    net.ws.send('join ' + room + (hex ? ' ' + hex : ""));
+    return 1;
+});
+
+// Whether the lobby the list being handled came from checks passwords.
+EM_JS(int, wsrelay_js_list_pw, (), {
+    var net = Module.jkNet;
+    return net && net.listPw ? 1 : 0;
 });
 
 // Sends a game packet for player idTo over the link it takes (net.route): a
@@ -1576,7 +1622,8 @@ static int wsrelay_bHostLeft = 0;      // the relay says the host left
 static int wsrelay_bSeatLost = 0;      // the relay wouldn't give our seat back
 static uint32_t wsrelay_msecRelayLost = 0; // when the relay went in a game, 0 while it's up
 // Why the relay turned our join down: 1 for no room or anything else, 2
-// full, 3 and 4 its host speaks a newer or an older netcode.
+// full, 3 and 4 its host speaks a newer or an older netcode, 5 a wrong
+// password, 6 too many wrong ones lately.
 static int wsrelay_joinError = 0;
 static int wsrelay_room = -1;
 static uint32_t wsrelay_id = 0xFFFFFFFF;
@@ -1630,6 +1677,11 @@ static char wsrelay_aShownTails[WSRELAY_MAX_LISTED][WSRELAY_MAX_TAIL_HEX + 1];
 // (wsrelay_EntryHits): rules | reach ms << 8, or -1 if it doesn't say.
 static int wsrelay_aListHits[WSRELAY_MAX_LISTED];
 static int wsrelay_aShownHits[WSRELAY_MAX_LISTED];
+
+// Whether the lobby that listed each game checks its password when we join
+// it, as that lobby said when the list came in, not when the player joins.
+static int wsrelay_aListPw[WSRELAY_MAX_LISTED];
+static int wsrelay_aShownPw[WSRELAY_MAX_LISTED];
 
 // The hit rules an entry says its host plays by, or -1 for an older host's,
 // which plays by Classic.
@@ -1704,6 +1756,16 @@ static int wsrelay_SendText(const char* pText)
 {
     wsrelay_verbosePrintf("Relay << %.80s\n", pText);
     return wsrelay_js_send_text(pText);
+}
+
+// join, with the password typed where the lobby checks it (NULL where it
+// doesn't). The log never shows the password.
+static int wsrelay_SendJoin(int room, const char16_t* pwPassword)
+{
+    if (pwPassword && !pwPassword[0])
+        pwPassword = NULL;
+    wsrelay_verbosePrintf("Relay << join %d%s\n", room, pwPassword ? " <hidden>" : "");
+    return wsrelay_js_join(room, pwPassword);
 }
 
 // Only a host sends entries, each followed by its mod tail. Each says what
@@ -1919,6 +1981,7 @@ static void wsrelay_HandleList(char* pArgs)
 {
     char* pSave = NULL;
     int n = 0;
+    int lobbyPw = wsrelay_js_list_pw();
 
     for (char* pTok = strtok_r(pArgs, " ", &pSave); pTok; pTok = strtok_r(NULL, " ", &pSave))
     {
@@ -1940,6 +2003,7 @@ static void wsrelay_HandleList(char* pArgs)
         int reachMs = 0;
         int rules = wsrelay_EntryHits(pEntry, &reachMs);
         wsrelay_aListHits[n] = rules < 0 ? -1 : (rules | (reachMs << 8));
+        wsrelay_aListPw[n] = lobbyPw;
 
         // The join screen keeps its selection by guidInstance, so each room
         // needs its own.
@@ -2085,6 +2149,8 @@ static void wsrelay_HandleText(char* pText)
                 wsrelay_joinError = 2;
             else if (pCode && !strcmp(pCode, "version"))
                 wsrelay_joinError = (pDetail && !strcmp(pDetail, "older")) ? 4 : 3;
+            else if (pCode && !strcmp(pCode, "password"))
+                wsrelay_joinError = (pDetail && !strcmp(pDetail, "wait")) ? 6 : 5;
             else
                 wsrelay_joinError = 1;
         }
@@ -2738,8 +2804,9 @@ int stdComm_Open(int idx, char16_t* pwPassword)
 
     wsrelay_ResetSession();
     wsrelay_bJoining = 1;
-    snprintf(wsrelay_textBuf, sizeof(wsrelay_textBuf), "join %d", wsrelay_aShownRooms[idx]);
-    wsrelay_SendText(wsrelay_textBuf);
+    // A lobby that checks passwords gets the one typed; the join screen
+    // didn't check it (stdComm_WSRelay_LobbyChecksPassword).
+    wsrelay_SendJoin(wsrelay_aShownRooms[idx], wsrelay_aShownPw[idx] ? pwPassword : NULL);
 
     uint32_t until = stdPlatform_GetTimeMsec() + WSRELAY_REPLY_MS;
     while (!wsrelay_bJoined && !wsrelay_joinError && stdPlatform_GetTimeMsec() < until)
@@ -2757,6 +2824,10 @@ int stdComm_Open(int idx, char16_t* pwPassword)
         wsrelay_ResetSession();
         if (err == 3 || err == 4)
             return (err == 3) ? STDCOMM_WSRELAY_NEWER : STDCOMM_WSRELAY_OLDER;
+        if (err == 5)
+            return 0x88770154; // GUINET_WRONGPASSWORD
+        if (err == 6)
+            return STDCOMM_WSRELAY_PASSWORD_WAIT;
         return (err == 2) ? 0x8877014A : 0x80004005; // GUINET_GAMEFULL / GUINET_NOGAMECONNECT
     }
 
@@ -2985,6 +3056,7 @@ int stdComm_EnumSessions(int a, void* b)
         wsrelay_aShownRooms[i] = wsrelay_aListRooms[i];
         strcpy(wsrelay_aShownTails[i], wsrelay_aListTails[i]);
         wsrelay_aShownHits[i] = wsrelay_aListHits[i];
+        wsrelay_aShownPw[i] = wsrelay_aListPw[i];
 
         // Back from restarting into this game's mod: select it again. The join
         // screen keeps whichever entry has this guid selected.
@@ -3026,6 +3098,13 @@ int DirectPlay_IdkSessionDesc(jkMultiEntry* pEntry)
     if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
         return stdComm_Imperial_IdkSessionDesc(pEntry);
     return 1;
+}
+
+int stdComm_WSRelay_LobbyChecksPassword(int idx)
+{
+    if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
+        return 0;
+    return idx >= 0 && idx < wsrelay_numShown && wsrelay_aShownPw[idx];
 }
 
 void stdComm_WSRelay_DescribeHits(int idx, int bShort, char16_t* pOut, int maxChars)

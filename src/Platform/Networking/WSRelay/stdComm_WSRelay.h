@@ -26,8 +26,18 @@ extern "C" {
 #define STDCOMM_WSRELAY_NEWER (0x4A4B564E)
 #define STDCOMM_WSRELAY_OLDER (0x4A4B564F)
 
+// What stdComm_Open returns when the lobby wouldn't check a password for that
+// game just now, after too many wrong ones for it in the last minute.
+#define STDCOMM_WSRELAY_PASSWORD_WAIT (0x4A4B5057)
+
 void stdComm_WSRelay_Startup();
 void stdComm_WSRelay_Shutdown();
+
+// Whether the lobby checks the password of listed game idx when this game
+// joins it, as the lobby said when it listed it. Its list then carries no
+// password to check the one typed against, and stdComm_Open sends the one
+// typed instead (0x88770154 if it's wrong).
+int stdComm_WSRelay_LobbyChecksPassword(int idx);
 
 // Writes a line about the mod of listed game idx for the join screen, empty
 // if there's nothing to say.
