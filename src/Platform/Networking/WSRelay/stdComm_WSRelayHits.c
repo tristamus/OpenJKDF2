@@ -92,6 +92,7 @@
 #include "Primitives/rdVector.h"
 #include "stdPlatform.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 
 #include <math.h>
 #include <string.h>
@@ -1270,6 +1271,7 @@ static void hits_TakeTurned(int slot, WSRelayHitsIn* in)
         pShot->orient.rvec = orient.rvec;
         pShot->orient.lvec = orient.lvec;
         pShot->orient.uvec = orient.uvec;
+        sithInterp_Snap(pShot); // Added: render interpolation, drawn there at once
     }
     else
     {

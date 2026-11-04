@@ -64,6 +64,7 @@
 #include "Primitives/rdVector.h"
 #include "stdPlatform.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 
 #include <math.h>
 #include <string.h>
@@ -711,6 +712,10 @@ static void motion_Draw(SithThing* pThing, WSRelayMotionPeer* p, double now)
         if (moved > speed * (secs > 0.0 ? secs : 0.0) * 1.5 + 0.05)
             p->jumps++;
     }
+    // Added: render interpolation doesn't draw them sliding back to life or
+    // across a warp.
+    if (!p->bDrawn || pose.warp != p->lastWarp)
+        sithInterp_Snap(pThing);
     p->lastWarp = pose.warp;
     p->pose = pose;
     p->drawnPos = pThing->position;

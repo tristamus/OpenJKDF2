@@ -37,6 +37,7 @@
 #include "General/stdString.h"
 #include "stdPlatform.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 
 #ifdef TARGET_DREAMCAST
 // Added: set while a load re-runs sithOpenPostProcess() so its re-save doesn't push
@@ -389,6 +390,7 @@ skip_free_things:
 skip_dss:
     sithTime_SetGameTime(curMs);
     sithCamera_SetCurrentCamera(sithCamera_g_pCurCamera);
+    sithInterp_Reset(); // Added: nothing loaded is drawn sliding from before the load
     return 1;
 
 load_fail:

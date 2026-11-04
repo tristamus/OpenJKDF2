@@ -23,6 +23,7 @@
 #include "Devices/sithConsole.h"
 #include "Main/Main.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 
 void sithCogFunctionThing_createThingAtPos_nr_Mots(sithCog *ctx, int idk, SithThing* pThingIn);
 void sithCogFunctionThing_createThingAtPos_nr(sithCog *ctx, int idk);
@@ -358,6 +359,7 @@ void sithCogFunctionThing_JumpToFrame(sithCog *pCog)
 
         if ( !pThing->sector )
             sithThing_EnterSector(pThing, sector, 1, 0);
+        sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
     }
 }
 
@@ -704,6 +706,7 @@ void sithCogFunctionThing_SetThingPos(sithCog *pCog)
     if (pThing)
     {
         rdVector_Copy3(&pThing->position, &poppedVec);
+        sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
         if (COG_SHOULD_SYNC(pCog))
         {
             sithDSSThing_Pos(pThing, -1, 1);
@@ -733,6 +736,7 @@ void sithCogFunctionThing_SetThingPosEx(sithCog *pCog)
         sithThing_SetSector(pThing,pSector,0);
         if (pThing->moveType == SITH_MT_PHYSICS && pThing->physicsParams.flags & SITH_PF_FLOORSTICK)
             sithPhysics_FindFloor(pThing, 1);
+        sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
 
         if ( pThing == sithPlayer_g_pLocalPlayerThing )
             sithCamera_Update(sithCamera_g_pCurCamera);
@@ -1244,6 +1248,7 @@ void sithCogFunctionThing_TeleportThing(sithCog *pCog)
         sithThing_SetSector(pThing, thingTo->sector, 0);
         if (pThing->moveType == SITH_MT_PHYSICS && pThing->physicsParams.flags & SITH_PF_FLOORSTICK)
             sithPhysics_FindFloor(pThing, 1);
+        sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
 
         if ( pThing == sithPlayer_g_pLocalPlayerThing )
             sithCamera_Update(sithCamera_g_pCurCamera);
@@ -1932,6 +1937,7 @@ void sithCogFunctionThing_SetThingLook(sithCog *pCog)
     {
         rdVector_Normalize3Acc(&popped_vector3);
         rdMatrix_BuildFromLook34(&pThing->orient, &popped_vector3);
+        sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
 
         if (COG_SHOULD_SYNC(pCog))
         {
@@ -2588,6 +2594,7 @@ void sithCogFunctionThing_SetThingLookPYR(sithCog *pCog)
         rdMatrix_BuildRotate34(&tmp_mat, &pyr);
         rdVector_Normalize3Acc(&tmp_mat.lvec);
         rdMatrix_BuildFromLook34(&pThing->orient, &tmp_mat.lvec);
+        sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
         if (COG_SHOULD_SYNC(pCog)) {
             sithThing_SyncThing(pThing, 1);
         }

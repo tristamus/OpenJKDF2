@@ -14,6 +14,7 @@
 #include "Engine/rdPuppet.h"
 #include "Gameplay/sithTime.h"
 #include "Engine/sithCamera.h"
+#include "Engine/sithInterp.h"
 #include "Raster/rdCache.h"
 #include "Engine/rdPuppet.h"
 #include "Engine/rdCamera.h"
@@ -186,6 +187,10 @@ void jkPlayer_StartupVars()
     sithCvar_RegisterBool("r_enableSaberGlow",          1,                          &jkPlayer_enableSaberGlow,          CVARFLAG_LOCAL); // Added
     sithCvar_RegisterInt("r_fpslimit",                  0,                          &jkPlayer_fpslimit,                 CVARFLAG_LOCAL);
     sithCvar_RegisterBool("r_enableVsync",              1,                          &jkPlayer_enableVsync,              CVARFLAG_LOCAL);
+#ifdef SITHINTERP_ENABLED
+    // Added: draw moving things between physics steps (0 off, 1 things, 2 things and camera)
+    sithCvar_RegisterInt("r_interp",                    SITHINTERP_MODE_OFF,        &sithInterp_mode,                   CVARFLAG_LOCAL);
+#endif
     sithCvar_RegisterFlex("r_ssaaMultiple",             1.0,                        &jkPlayer_ssaaMultiple,             CVARFLAG_LOCAL);
     sithCvar_RegisterFlex("r_gamma",                    1.0,                        &jkPlayer_gamma,                    CVARFLAG_LOCAL);
     sithCvar_RegisterBool("r_bEnableJkgm",              1,                          &jkPlayer_bEnableJkgm,              CVARFLAG_LOCAL|CVARFLAG_READONLY);
@@ -235,6 +240,9 @@ void jkPlayer_ResetVars()
     jkPlayer_enableSaberGlow = 1; // Added
     jkPlayer_fpslimit = 0;
     jkPlayer_enableVsync = 1;
+#ifdef SITHINTERP_ENABLED
+    sithInterp_mode = SITHINTERP_MODE_OFF;
+#endif
     jkPlayer_ssaaMultiple = 1.0;
     jkPlayer_gamma = 1.0;
     jkPlayer_bEnableJkgm = 1;

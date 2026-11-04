@@ -98,6 +98,7 @@
 #include "Primitives/rdVector.h"
 #include "stdPlatform.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 
 #include <emscripten.h>
 #include <math.h>
@@ -891,6 +892,7 @@ static void wsrelay_TestFace(SithThing* pPlayer, SithThing* pTarget)
     rdMatrix_BuildFromLook34(&pPlayer->orient, &look);
     rdVector_Zero3(&pPlayer->orient.scale);
     rdVector_Zero3(&pPlayer->physicsParams.angularVelocity);
+    sithInterp_Snap(pPlayer); // Added: render interpolation, drawn there at once
 
     // From the eyes to the middle of the target.
     flex_t up = dir.z - pPlayer->actorParams.eyeOffset.z;
@@ -950,6 +952,7 @@ static void wsrelay_TestJumpTo(SithThing* pPlayer, SithThing* pTarget, flex_t di
     sithThing_SetSector(pPlayer, pBestSector, 0);
     sithPhysics_ResetThingMovement(pPlayer);
     sithPhysics_FindFloor(pPlayer, 1);
+    sithInterp_Snap(pPlayer); // Added: render interpolation, drawn there at once
 }
 
 static void wsrelay_TestPress(int inputFunc)

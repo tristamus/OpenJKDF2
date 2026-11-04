@@ -18,6 +18,7 @@
 #include "Main/Main.h"
 #include "Dw/dwCog.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 
 static int lastDoorOpenTime = 0;
 
@@ -187,6 +188,7 @@ void sithPlayerActions_MoveToPlayerPosition(SithThing *thing, int idx)
             thing->physicsParams.flags &= ~SITH_PF_100;
             sithPhysics_FindFloor(thing, 1);
         }
+        sithInterp_Snap(thing); // Added: render interpolation, drawn there at once
     }
 }
 

@@ -26,6 +26,7 @@
 
 #include "stdPlatform.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 
 #if defined(TARGET_TWL)
 #include <nds.h>
@@ -306,6 +307,9 @@ int jkGame_Update()
 #endif
     }
 #endif
+    // Added: render interpolation may draw things between their last two
+    // step poses from here until the HUD is drawn.
+    sithInterp_Arm();
 #if !defined(SDL2_RENDER) && !defined(TARGET_RETRO_HOMEBREW)
     if ( Video_modeStruct.b3DAccel )
 #endif
@@ -448,6 +452,7 @@ int jkGame_Update()
     if ( Video_modeStruct.b3DAccel )
         std3D_DrawOverlay();
 #endif
+    sithInterp_Disarm(); // Added
 
     // MOTS added
     /*
