@@ -823,6 +823,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 // date by the time it got there; the next one will do.
                 if (p.pos.bufferedAmount > 4096) {
                     net.stats.fastBacklog++;
+                    p.posDropped = (p.posDropped || 0) + 1;
                     return 1;
                 }
                 try {
@@ -953,11 +954,13 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
            Direct links have their own signs: game packets waiting in a data
            channel, position updates dropped behind a backlog, a map channel
            that doesn't empty, and netstats.js's round trips where it pings.
-           Without the lobby's answer, those say nothing about what goes
+           A player's own slow or jittery link shows the same signs, so those
+           of the players in the match count only where most of them show
+           them. Without the lobby's answer, they say nothing about what goes
            through the lobby (lobby). Asked at most every 250 ms, never right
            after a send, which what's waiting would count. */
         net.mapCongested = function(lobby) {
-            var m = net.mapSigns = net.mapSigns || { fastBacklog: 0, mapWaits: false };
+            var m = net.mapSigns = net.mapSigns || { mapWaits: false };
             var now = performance.now(), lp = net.lobbyPing, queued = false, seen = false;
             if (net.state === 1 && lp.got) {
                 seen = true;
@@ -965,22 +968,25 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 if (lp.rtt > lp.base + 80 || waited > lp.base + 80) queued = true;
             }
             if (net.state === 1 && !lp.sent.length) net.pingLobby();
-            var mapWaits = false;
+            var mapWaits = false, playing = 0, backed = 0;
             for (var id in net.peers) {
                 var p = net.peers[id];
                 if (!p.open) continue;
                 seen = true;
-                if (p.dc.bufferedAmount > 4096 || (p.pos && p.pos.bufferedAmount > 4096)) queued = true;
                 if (p.mc.bufferedAmount >= 65536) mapWaits = true;
                 for (var n in net.bulk[id] || {}) {
                     if (net.bulk[id][n].mc.bufferedAmount >= 65536) mapWaits = true;
                 }
+                var dropped = p.posDropped || 0, was = p.posDroppedSeen || 0;
+                p.posDroppedSeen = dropped;
+                if (!(now - net.playedAt[id] < 2000)) continue;
+                playing++;
+                if (p.dc.bufferedAmount > 4096 || (p.pos && p.pos.bufferedAmount > 4096) || dropped !== was) backed++;
             }
+            if (backed * 2 > playing) queued = true;
             // Twice running: a map channel holds up to that much just after a send.
             if (mapWaits && m.mapWaits) queued = true;
             m.mapWaits = mapWaits;
-            if (net.stats.fastBacklog !== m.fastBacklog) queued = true;
-            m.fastBacklog = net.stats.fastBacklog;
             var ns = Module.jkNetStats && Module.jkNetStats.queueMs ? Module.jkNetStats.queueMs() : null;
             if (ns !== null) {
                 seen = true;

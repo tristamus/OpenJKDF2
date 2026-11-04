@@ -1502,6 +1502,35 @@ test('a lobby that never answers ping (relay.py) says nothing about a queue, and
     assert.equal(host.net.mapCongested(false), null, 'no direct links either');
 });
 
+test('one player\'s backed-up link isn\'t a queue at the host; most of those playing showing one is', async () => {
+    const world = makeWorld();
+    const [host, ...joiners] = await room(world, [2, 3, 4, 5]);
+    const net = host.net;
+    // Players 3, 4 and 5 play; player 2 downloads.
+    const playing = world.every(() => joiners.slice(1).forEach(j => send(j, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4]))), 50);
+    await world.run(300);
+    const sample = async () => {
+        await world.run(250);
+        return net.mapCongested(false);
+    };
+    assert.equal(await sample(), false);
+    net.peers[3].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), false, 'one of three');
+    net.peers[2].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), false, 'the one downloading isn\'t playing');
+    net.peers[4].pos.bufferedAmount = 10000;
+    assert.equal(await sample(), true, 'two of three');
+    net.peers[4].pos.bufferedAmount = 0;
+    assert.equal(await sample(), false);
+    // Position updates dropped behind a backlog count for their player.
+    net.peers[4].pos.bufferedAmount = 5000;
+    send(host, 4, position(1), true);
+    net.peers[4].pos.bufferedAmount = 0;
+    assert.equal(await sample(), true);
+    assert.equal(await sample(), false, 'counted once');
+    world.cancel(playing);
+});
+
 test('a player who left, or whose number someone new has, has nothing waiting for them; a link that closes, nothing for it', async () => {
     const world = makeWorld();
     world.canLink = () => false;

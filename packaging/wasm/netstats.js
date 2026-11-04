@@ -306,7 +306,7 @@
     function newPath() {
         // sent: seq -> time, for pings not yet answered; pings: the last
         // KEEP_PINGS, {seq, t, back}.
-        return { seq: 0, sent: {}, pings: [], rtts: [], quiet: 0, nextAt: 0 };
+        return { seq: 0, sent: {}, pings: [], rtts: [], back: 0, backTold: 0, quiet: 0, nextAt: 0 };
     }
 
     function player(id) {
@@ -442,6 +442,7 @@
         if (path.sent[seq] !== sent) return;
         delete path.sent[seq];
         var t = clock.now(), rtt = t - sent;
+        path.back++;
         path.rtts.push(rtt);
         if (path.rtts.length > KEEP_RTTS) path.rtts.shift();
         if (path === p.game) p.pings.add(rtt);
@@ -1321,18 +1322,23 @@
         },
         hello: function(id, version) { if (id && id !== me.id) player(id).hello = version | 0; },
         // How much longer the last ping on a player's game path took than the
-        // shortest kept, the most of the players still heard from, in ms, or
-        // null where nothing is measured: a queue building on the way, which
-        // a host's paced map uploads slow down for (maps.js).
+        // shortest kept, in ms, as most of the players still heard from see
+        // it at least (one player's own jittery link isn't a queue on the
+        // host's): a queue building on the way, which a host's paced map
+        // uploads slow down for (maps.js). null where nothing was measured
+        // since it was last asked, so each ping counts once.
         queueMs: function() {
-            var worst = null, t = clock.now();
+            var rises = [], fresh = false, t = clock.now();
             for (var id in players) {
-                var p = players[id], r = p.game.rtts;
-                if (r.length < 2 || t - p.heard > GONE_MS) continue;
-                var d = r[r.length - 1] - Math.min.apply(null, r);
-                worst = worst === null ? d : Math.max(worst, d);
+                var g = players[id].game, r = g.rtts;
+                if (r.length < 2 || t - players[id].heard > GONE_MS) continue;
+                rises.push(r[r.length - 1] - Math.min.apply(null, r));
+                if (g.back !== g.backTold) fresh = true;
+                g.backTold = g.back;
             }
-            return worst;
+            if (!fresh) return null;
+            rises.sort(function(a, b) { return a - b; });
+            return rises[(rises.length - 1) >> 1];
         },
         hit: hit,
         motion: motion,
