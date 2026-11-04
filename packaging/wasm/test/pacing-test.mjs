@@ -18,7 +18,9 @@
 // On the Imperial Network Protocol the engine's pump (imperial_XferPump in
 // stdComm_Imperial.c, written out again below) sends from maps.js's queue
 // each frame, in pieces of 1360 bytes, at most 1 MiB/s, and with this
-// maps.js no more while the socket has 16 KiB waiting.
+// maps.js no more while the socket has 16 KiB waiting. The relay server
+// answers the request the engine times (jkrelay_AskTimed) behind everything
+// sent before it, as the lobby answers ping.
 //
 // Made-up maps, no game files.
 
@@ -92,6 +94,7 @@ const retailInstall = {
 };
 
 // One run: { mbit, K, mapBytes, path: 'relay' | 'imperial', paced, pong }.
+// pong: the lobby answers ping, or the relay server the timed request.
 // matchAt: the other player starts playing this long after the download
 // starts, not before it.
 async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 900000, matchAt = 0 }) {
@@ -202,11 +205,34 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         js.imperial_js_xfer_init(1);
         const RATE = 1024 * 1024, BURST = 64 * 1024;
         let tokens = BURST, tokensMs = clock.now();
+        // jkrelay_AskTimed and jkrelay_TimedState: the answer is taken in the
+        // engine's next frame after it comes.
+        const probe = { seq: 0, out: false, back: false, sentAt: 0, rtt: 0, base: 0, got: 0 };
+        const sendProbe = () => {
+            if (probe.out && (probe.got || clock.now() - probe.sentAt < 10000))
+                return;
+            const seq = ++probe.seq;
+            probe.out = true;
+            probe.back = false;
+            probe.sentAt = clock.now();
+            const leaves = ws.send(16 + 20);
+            if (pong)
+                clock.setTimeout(() => { if (probe.seq === seq) probe.back = true; }, leaves - clock.now() + 2 * ONE_WAY);
+        };
+        if (paced)
+            sendProbe();    // as the host's game opens
         // imperial_XferPump.
         engineFrame = () => {
             const now = clock.now();
-            if (paced)
-                js.imperial_js_xfer_serve(1);
+            if (probe.back) {
+                const rtt = now - probe.sentAt;
+                probe.out = probe.back = false;
+                probe.rtt = rtt;
+                probe.base = probe.got ? Math.min(probe.base, rtt) : rtt;
+                probe.got++;
+            }
+            if (paced && js.imperial_js_xfer_serve(1, probe.got, probe.rtt, probe.base, probe.out ? now - probe.sentAt : -1))
+                sendProbe();
             tokens = Math.min(BURST, tokens + (now - tokensMs) * RATE / 1000);
             tokensMs = now;
             while (tokens > 0) {
@@ -310,6 +336,23 @@ test('a download that starts before a match and goes on into it holds the game u
     const late = paced.waitsAt.filter(([t]) => t >= s.matchAt + 15000).map(([, w]) => w);
     assert.ok(late.length > 100);
     assert.ok(Math.max(...late) < 1000, `game packets wait ${Math.round(Math.max(...late))} ms 15 s into the match`);
+});
+
+test('on the Imperial Network Protocol the rate grows on a fast upload, as the relay server answers at once', async () => {
+    const s = { path: 'imperial', mbit: 20, mapBytes: 8000000 };
+    const paced = await run({ ...s, K, paced: true });
+    const mute = await run({ ...s, K, paced: true, pong: false });
+    console.log('    ' + describe('Imperial, 20 Mbit/s up, 8 MB', paced));
+    console.log('    ' + describe('a server that never answers', mute));
+    assert.ok(paced.ok && mute.ok);
+    assert.ok(paced.ratio < 1.02 && mute.ratio < 1.02);
+    assert.equal(paced.reasks, 0);
+    assert.equal(mute.reasks, 0);
+    assert.ok(paced.secs * 2 < mute.secs, `${paced.secs.toFixed(0)} s, ${mute.secs.toFixed(0)} s without answers`);
+    assert.ok(paced.max < 300, 'game packets wait ' + paced.max + ' ms');
+    // Without the server's answers, only what waits in the browser shows:
+    // the rate never grows.
+    assert.ok(mute.rate < 100000, 'rate ' + mute.rate);
 });
 
 test('through a lobby that never answers ping (relay.py) the rate stays where it starts', async () => {
