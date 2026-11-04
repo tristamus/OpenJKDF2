@@ -1297,7 +1297,7 @@ test('the engine logs a join without the password, and shows the lobby\'s passwo
     assert.match(sendJoin, /wsrelay_verbosePrintf\("Relay << join %d%s\\n", room, pwPassword \? " <hidden>" : ""\);/);
     assert.doesNotMatch(sendJoin, /wsrelay_SendText/, 'which logs the whole line');
     const open = body(relayC, 'stdComm_Open');
-    assert.match(open, /wsrelay_SendJoin\(wsrelay_aShownRooms\[idx\], wsrelay_aShownPw\[idx\] \? pwPassword : NULL\);/);
+    assert.match(open, /int bSendPw = wsrelay_aShownPw\[idx\] && \(jkGuiMultiplayer_aEntries\[idx\]\.sessionFlags & SESSIONFLAG_PASSWORD\);\n\s+wsrelay_SendJoin\(wsrelay_aShownRooms\[idx\], bSendPw \? pwPassword : NULL\);/);
     // error password: wrong (5), error password wait: too many wrong lately (6).
     assert.match(body(relayC, 'wsrelay_HandleText'),
                  /else if \(pCode && !strcmp\(pCode, "password"\)\)\n\s+wsrelay_joinError = \(pDetail && !strcmp\(pDetail, "wait"\)\) \? 6 : 5;/);

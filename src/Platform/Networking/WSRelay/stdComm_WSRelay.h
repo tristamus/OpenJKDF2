@@ -36,7 +36,8 @@ void stdComm_WSRelay_Shutdown();
 // Whether the lobby checks the password of listed game idx when this game
 // joins it, as the lobby said when it listed it. Its list then carries no
 // password to check the one typed against, and stdComm_Open sends the one
-// typed instead (0x88770154 if it's wrong).
+// typed instead when the game shows the password box (0x88770154 if it's
+// wrong).
 int stdComm_WSRelay_LobbyChecksPassword(int idx);
 
 // Writes a line about the mod of listed game idx for the join screen, empty

@@ -66,12 +66,14 @@
 //
 // Room passwords: this game tells the lobby it can send them (/relay?pw=1).
 // A lobby that says pw then lists no passwords and checks the one the player
-// typed, which goes with join as the hex of its UTF-16LE units: error
-// password if it's wrong, error password wait after too many wrong ones. With
-// a lobby that doesn't, the join screen checks it against the list, as it
-// always did, and join goes without it. Which a game was listed by is noted
-// as its list comes in, so a socket that comes back meanwhile doesn't change
-// what joining it sends.
+// typed, which goes with join as the hex of its UTF-16LE units, for a game
+// listed with the password box (sessionFlags 0x400) when something was
+// typed: error password if it's wrong, error password wait after too many
+// wrong ones. Any other join is bare, so what's left in the box from another
+// game stays here. With a lobby that doesn't say pw, the join screen checks
+// the password against the list, as it always did, and join goes without
+// it. Which a game was listed by is noted as its list comes in, so a socket
+// that comes back meanwhile doesn't change what joining it sends.
 //
 // Game packets don't need the relay once the data channel is open, so losing
 // the socket mid-game doesn't end the match. The relay holds a seat whose
@@ -1325,9 +1327,10 @@ EM_JS(int, wsrelay_js_send_text, (const char* pText), {
 });
 
 // Asks the lobby for a seat in room. Like any join, it ends the seat this
-// game had (wsrelay_js_send_text). pPassword, for a lobby that checks
-// passwords, is the one the player typed: it goes along as the hex of its
-// UTF-16LE units, 31 at most, unless it's empty.
+// game had (wsrelay_js_send_text). pPassword, for a game listed with the
+// password box by a lobby that checks passwords, is the one the player
+// typed: it goes along as the hex of its UTF-16LE units, 31 at most, unless
+// it's empty.
 EM_JS(int, wsrelay_js_join, (int room, const char16_t* pPassword), {
     var net = Module.jkNet;
     if (!net) return 0;
@@ -1758,8 +1761,8 @@ static int wsrelay_SendText(const char* pText)
     return wsrelay_js_send_text(pText);
 }
 
-// join, with the password typed where the lobby checks it (NULL where it
-// doesn't). The log never shows the password.
+// join, with the password typed for a game the lobby checks it for (NULL
+// for any other). The log never shows the password.
 static int wsrelay_SendJoin(int room, const char16_t* pwPassword)
 {
     if (pwPassword && !pwPassword[0])
@@ -2804,9 +2807,12 @@ int stdComm_Open(int idx, char16_t* pwPassword)
 
     wsrelay_ResetSession();
     wsrelay_bJoining = 1;
-    // A lobby that checks passwords gets the one typed; the join screen
-    // didn't check it (stdComm_WSRelay_LobbyChecksPassword).
-    wsrelay_SendJoin(wsrelay_aShownRooms[idx], wsrelay_aShownPw[idx] ? pwPassword : NULL);
+    // A lobby that checks passwords gets the one typed, for a game it listed
+    // with the password box; the join screen didn't check it
+    // (stdComm_WSRelay_LobbyChecksPassword). Not for one without: its box is
+    // hidden, and may still hold what was typed for another game.
+    int bSendPw = wsrelay_aShownPw[idx] && (jkGuiMultiplayer_aEntries[idx].sessionFlags & SESSIONFLAG_PASSWORD);
+    wsrelay_SendJoin(wsrelay_aShownRooms[idx], bSendPw ? pwPassword : NULL);
 
     uint32_t until = stdPlatform_GetTimeMsec() + WSRELAY_REPLY_MS;
     while (!wsrelay_bJoined && !wsrelay_joinError && stdPlatform_GetTimeMsec() < until)

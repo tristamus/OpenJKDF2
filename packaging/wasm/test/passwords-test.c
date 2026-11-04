@@ -1,8 +1,8 @@
 // Tests for joining a room with a password on the relay
 // (src/Platform/Networking/WSRelay/stdComm_WSRelay.c): when the lobby that
 // listed a game checks its password, the join takes the one the player
-// typed, the log never shows it, and the lobby's answers become the join
-// screen's dialogs. The tree's own list, join and reply code runs against a
+// typed for a game shown with the password box and for no other, the log
+// never shows it, and the lobby's answers become the join screen's dialogs. The tree's own list, join and reply code runs against a
 // made-up page and lobby. passwords-test.sh cuts that code out of the
 // sources and builds this file around it. From the top of the source tree:
 //
@@ -256,6 +256,13 @@ static void test_lobby_checks(void)
     CHECK(joinRoom == 3 && joinHasPassword && same16(joinPassword, u"pässwörd"), "join 3 with the password typed");
     CHECK(strstr(logText, "Relay << join 3 <hidden>\n") != NULL, "the log says <hidden>: %s", logText);
     CHECK(!strstr(logText, "p\xc3\xa4ssw") && !strstr(logText, "7000e400"), "the log has no password");
+
+    // An open game shows no password box, which may still hold what was
+    // typed for another game: that stays here.
+    r = join(1, u"p\u00e4ssw\u00f6rd", NULL);
+    CHECK(r == 0, "an open game joins: %x", r);
+    CHECK(joinRoom == 4 && !joinHasPassword, "with a bare join, whatever is left in the box");
+    CHECK(strstr(logText, "Relay << join 4\n") != NULL, "logged as a bare join: %s", logText);
 
     // The lobby's answers.
     CHECK(join(0, u"wrong", "error password") == 0x88770154, "error password: the wrong password dialog");
