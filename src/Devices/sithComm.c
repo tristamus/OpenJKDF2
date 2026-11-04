@@ -204,10 +204,18 @@ int sithComm_SendMsgToPlayer(SithMessage *pMessage, int idTo, int outstream, int
                     --sithComm_idk2;
                 }
                 idx = idx_;
-                --sithComm_idk2;
             }
-            ++sithComm_idk2;
+            // Fixed: sithComm_idk2 is the number of slots in use. It went up
+            // on every send, also one that replaced a waiting message, and
+            // down twice when an expired slot was reused above.
+            if ( !sithComm_MsgTmpBuf[idx_].netMsg.msgId )
+                ++sithComm_idk2;
             v20 = pMessage->netMsg.field_14;
+            // Kept on purpose: every reliable message goes into the same slot
+            // ([idx_], not the free [idx]), so only the newest one waits for
+            // its ack. Resending an older message after a newer one would let
+            // its old state overwrite the newer state (a player shown dead
+            // after respawning).
             _memcpy(&sithComm_MsgTmpBuf[idx_], pMessage, sizeof(SithMessage));
             if ( !v20 )
 LABEL_35:
@@ -360,6 +368,32 @@ void sithComm_ForgetSender(int idx)
     }
 }
 
+// Added: stop resending to the player who had this index. A resend picks the
+// recipient's net id when it goes out, so a player who took the index before
+// then got the last player's message.
+void sithComm_ForgetRecipient(int playerIdx)
+{
+#ifdef SITHCOMM_HEAP_MSGBUF
+    if ( !sithComm_MsgTmpBuf )
+        return;
+#endif
+    if ( playerIdx < 0 || playerIdx >= 32 )
+        return;
+
+    for (int i = 0; i < 32; i++)
+    {
+        if ( !sithComm_MsgTmpBuf[i].netMsg.msgId )
+            continue;
+
+        sithComm_MsgTmpBuf[i].netMsg.field_14 &= ~(1u << playerIdx);
+        if ( !sithComm_MsgTmpBuf[i].netMsg.field_14 )
+        {
+            _memset(&sithComm_MsgTmpBuf[i], 0, sizeof(SithMessage));
+            --sithComm_idk2;
+        }
+    }
+}
+
 void sithMessage_StopProcessMessages()
 {
     sithMessage_bStopProcessMessages = 1;
@@ -447,13 +481,19 @@ int sithComm_cogMsg_Reset(SithMessage *msg)
 
     NETMSG_IN_START(msg);
 
-    v1 = NETMSG_POPS16();
+    // Fixed: read unsigned, as msgId is. Read signed, ids from 0x8000 up
+    // never matched and were resent until they expired.
+    v1 = NETMSG_POPU16();
     playerIdx = sithPlayer_GetPlayerNum(msg->netMsg.idx);
     foundIdx = 0;
 #ifdef SITHCOMM_HEAP_MSGBUF
     if ( !sithComm_MsgTmpBuf ) // Added: no tracked messages to ack
         return 1;
 #endif
+    // Added: no message waits with id 0, so an ack for it must not free (and
+    // count off) an empty slot.
+    if ( !v1 )
+        return 1;
     for (foundIdx = 0; foundIdx < 32; foundIdx++)
     {
         if (sithComm_MsgTmpBuf[foundIdx].netMsg.msgId == v1 )
