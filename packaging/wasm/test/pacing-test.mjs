@@ -21,6 +21,12 @@
 // send waits behind the K bytes the computer and the router hold, not behind
 // the map channel's backlog in the browser.
 //
+// A joiner's tab can also be slow to take what comes on its map channel: it
+// takes so many bytes a second, all at once at each of its frames. What came
+// and wasn't taken fills the channel's window at the joiner, and then the
+// rest waits in the host's browser as the channel's bufferedAmount, not on
+// the upload.
+//
 // On the Imperial Network Protocol the engine's pump (imperial_XferPump in
 // stdComm_Imperial.c, written out again below) sends from maps.js's queue
 // each frame, in pieces of 1360 bytes, at most 1 MiB/s, and with this
@@ -111,7 +117,12 @@ const retailInstall = {
 // pong: the lobby answers ping, or the relay server the timed request.
 // matchAt: the other player starts playing this long after the download
 // starts, not before it.
-async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 900000, matchAt = 0 }) {
+// takes (direct): the joiner's tab takes this many bytes a second off its map
+// channel, at frames frameMs apart, and windowBytes of it may be on the way
+// or not taken yet. slowFor: after this long into the download it takes all
+// that came at each frame.
+async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 900000, matchAt = 0,
+                     takes = 0, frameMs = 16, windowBytes = 256 * 1024, slowFor = Infinity }) {
     const clock = makeClock();
     const C = mbit * 1e6 / 8;
     const up = uplink(clock, C, K);
@@ -138,6 +149,43 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 lastIn = Math.max(lastIn, leaves + ONE_WAY);
         }
         clock.setTimeout(() => join.jkMaps.onFrame(1, copy, path === 'relay' ? 'relay' : 'direct'), leaves - clock.now() + ONE_WAY);
+    };
+    // The joiner's map channel when its tab is slow to take what comes: what
+    // waits in the host's browser, what came and wasn't taken, and how much
+    // of the window that and what's on the way take.
+    const slowTab = () => {
+        const waiting = [], came = [];
+        let waitingBytes = 0, unread = 0, budget = 0;
+        const flush = () => {
+            while (waiting.length && unread + waiting[0].byteLength <= windowBytes) {
+                const f = waiting.shift();
+                waitingBytes -= f.byteLength;
+                unread += f.byteLength;
+                came.push([up.send(f.byteLength + FRAMING) + ONE_WAY, f]);
+            }
+        };
+        timers.push(clock.setInterval(() => {
+            budget = clock.now() - t0 >= slowFor ? Infinity : Math.min(0, budget) + takes * frameMs / 1000;
+            while (came.length && came[0][0] <= clock.now() && budget > 0) {
+                const f = came.shift()[1];
+                budget -= f.byteLength;
+                if (new Uint8Array(f)[12] === 6 && transferring)
+                    lastIn = clock.now();
+                join.jkMaps.onFrame(1, f, 'direct');
+                // The window opens again as the joiner's ack comes back.
+                clock.setTimeout(() => { unread -= f.byteLength; flush(); }, ONE_WAY);
+            }
+        }, frameMs));
+        return {
+            send(bytes) {
+                if (new Uint8Array(bytes)[12] === 6)
+                    blockBytes += bytes.byteLength - 40;
+                waiting.push(bytes);
+                waitingBytes += bytes.byteLength;
+                flush();
+            },
+            bufferedAmount: () => waitingBytes,
+        };
     };
     const gameSent = leaves => {
         if (transferring)
@@ -185,13 +233,19 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
             close() {}
         }
         // Direct links to the joiner (2) and the other player (3), as
-        // net.peer makes them: the joiner's map channel is the queue above.
+        // net.peer makes them: the joiner's map channel is the queue above,
+        // or waits for a slow tab.
+        const slow = direct && takes ? slowTab() : null;
         const channel = (id, label) => ({
             label, readyState: 'connecting', binaryType: 'blob', close() {},
-            get bufferedAmount() { return id === 2 && label === 'jk-map' ? up.visible() : 0; },
+            get bufferedAmount() {
+                return id === 2 && label === 'jk-map' ? up.visible() + (slow ? slow.bufferedAmount() : 0) : 0;
+            },
             send(data) {
                 const b = new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength);
-                if (label === 'jk-map')
+                if (label === 'jk-map' && slow)
+                    slow.send(b.slice().buffer);
+                else if (label === 'jk-map')
                     toJoiner(b.slice().buffer, up.send(b.byteLength + FRAMING));
                 else if (id === 3)
                     gameSent(up.sendAhead(b.byteLength + FRAMING));
@@ -465,6 +519,27 @@ for (const s of [
         assert.ok(paced.max < 500, 'game packets wait ' + paced.max + ' ms');
     });
 }
+
+test('over the map channel, a joiner whose tab is slow to take the map gets it at its own pace, the rate isn\'t held down for that, and the other player\'s packets don\'t wait', async () => {
+    // The joiner's tab takes 300 KB/s, on a 20 Mbit/s upload: what waits for
+    // it fills the map channel in the host's browser, not the upload.
+    const s = { path: 'direct', mbit: 20, mapBytes: 8000000, takes: 300000 };
+    const slow = await run({ ...s, K, paced: true });
+    // The same tab, which takes all that comes 10 s in: by then it has 3 MB,
+    // and the other 5 MB at the most rate, 2 MB/s, take 2.5 s.
+    const then = await run({ ...s, K, paced: true, slowFor: 10000 });
+    console.log('    ' + describe('a tab that takes 300 KB/s', slow));
+    console.log('    ' + describe('the same, then fast 10 s in', then));
+    for (const r of [slow, then]) {
+        assert.ok(r.ok);
+        assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
+        assert.equal(r.reasks, 0);
+        assert.ok(r.max < 100, 'game packets wait ' + r.max + ' ms');
+    }
+    assert.ok(slow.xfer < s.mapBytes / s.takes + 2, `${slow.xfer.toFixed(1)} s`);
+    assert.ok(slow.rate >= 1000000, 'rate ' + slow.rate);
+    assert.ok(then.xfer < 14, `${then.xfer.toFixed(1)} s`);
+});
 
 test('on the Imperial Network Protocol each answer with no queue counts once, and a queue at every look until the next', async () => {
     const clock = makeClock();

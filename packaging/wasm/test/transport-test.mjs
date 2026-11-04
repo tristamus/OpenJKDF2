@@ -1531,6 +1531,34 @@ test('one player\'s backed-up link isn\'t a queue at the host; most of those pla
     world.cancel(playing);
 });
 
+test('a map channel or transfer link that doesn\'t empty isn\'t a queue at the host, and maps.js still sends no more to it', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    const net = host.net;
+    a.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(net.bulkCount(2), 3);
+    // Player 3 plays; player 2 downloads, and its tab is slow to take it.
+    const playing = world.every(() => send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(300);
+    const sample = async () => {
+        await world.run(250);
+        return net.mapCongested(false);
+    };
+    net.peers[2].mc.bufferedAmount = 1 << 20;
+    for (const l of Object.values(net.bulk[2]))
+        l.mc.bufferedAmount = 1 << 20;
+    for (let i = 0; i < 4; i++)
+        assert.equal(await sample(), false, 'nobody else waits behind it');
+    assert.equal(net.mapBacklog(2, 'direct'), 1 << 20);
+    assert.equal(net.mapBacklog(2, 'direct2'), 1 << 20);
+    // Player 3's own link backed up still counts.
+    net.peers[3].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), true);
+    world.cancel(playing);
+});
+
 test('a player who left, or whose number someone new has, has nothing waiting for them; a link that closes, nothing for it', async () => {
     const world = makeWorld();
     world.canLink = () => false;
