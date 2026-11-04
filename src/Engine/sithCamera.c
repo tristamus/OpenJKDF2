@@ -1,10 +1,13 @@
 #include "sithCamera.h"
 
+#include <string.h>
+
 #include "World/sithSector.h"
 #include "World/sithThing.h"
 #include "World/sithWorld.h"
 #include "World/jkPlayer.h"
 #include "Engine/sithCollision.h"
+#include "Devices/sithControl.h"
 #include "Primitives/rdMath.h"
 #include "Primitives/rdVector.h"
 #include "Primitives/rdMatrix.h"
@@ -14,6 +17,7 @@
 #include "General/stdMath.h"
 #include "Dw/dwCamera.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 
 static rdVector3 sithCamera_trans = {0.0, 0.3, 0.0};
 static rdVector3 sithCamera_trans2 = {0.0, 0.2, 0.0};
@@ -98,6 +102,7 @@ int sithCamera_Open(rdCanvas *pCanvas, flex_t aspect)
     }
 #endif // DW_CAMERA
     sithCamera_Update(sithCamera_g_pCurCamera);
+    sithCamera_ResetRenderView(sithCamera_g_pCurCamera); // Added: nothing left from a closed level
     sithCamera_bOpen = 1;
     return 1;
 }
@@ -106,6 +111,7 @@ void sithCamera_Close()
 {
     if ( sithCamera_bOpen ) {
         sithCamera_bOpen = 0;
+        sithCamera_ResetRenderView(NULL); // Added: it points into the world
 
         // Added: Prevent UAF
         rdCamera_SetCanvas(&sithCamera_g_aCameras[0].rdCamera, NULL);
@@ -569,12 +575,183 @@ void sithCamera_Update(SithCamera *pCamera)
     
 }
 
+sithCameraRenderView sithCamera_g_renderView;
+uint32_t sithCamera_renderViewClamps = 0;
+
+static int sithCamera_VecsEqual(const rdVector3* a, const rdVector3* b)
+{
+    return memcmp(a, b, sizeof(rdVector3)) == 0;
+}
+
+void sithCamera_ResetRenderView(SithCamera *pCamera)
+{
+    sithCameraRenderView* pView = &sithCamera_g_renderView;
+    if (!pCamera)
+    {
+        memset(pView, 0, sizeof(*pView));
+        return;
+    }
+    rdMatrix_Copy34(&pView->orient, &pCamera->orient);
+    pView->lookPos = pCamera->lookPos;
+    pView->lookPYR = pCamera->lookPYR;
+    pView->sector = pCamera->sector;
+    pView->yawLead = 0.0;
+    pView->bLeadLocalModel = 0;
+    pView->bFocusTrue = 0;
+    // As rdCamera_Update would make it from the game camera.
+    rdMatrix_InvertOrtho34(&pView->trueView, &pCamera->orient);
+}
+
+void sithCamera_BuildRenderView(SithCamera *pCamera)
+{
+    sithCameraRenderView* pView = &sithCamera_g_renderView;
+    sithCamera_ResetRenderView(pCamera);
+
+#ifdef QOL_IMPROVEMENTS
+    SithThing* pFocus = pCamera->pPrimaryFocusThing;
+    uint32_t type = pCamera->type;
+    if (!pFocus || !pCamera->sector)
+        return;
+    if (type != 1 && type != 4 && type != 32 && type != 64 && type != 128)
+        return;
+    // From here the view follows its focus. Unless it ends up following
+    // where the focus is drawn, the focus is drawn true with it (and so is
+    // what the focus stands on), or the model would bob against the view.
+    pView->bFocusTrue = 1;
+    // A path thing's camera rides its first joint, not its placement.
+    if (type == 1 && pFocus->moveType == SITH_MT_PATH && pFocus->renderData.paJointMatrices)
+        return;
+
+    int bLocal = (pFocus == sithPlayer_g_pLocalPlayerThing);
+    int bInterp = 0;
+#ifdef SITHINTERP_ENABLED
+    bInterp = sithInterp_IsArmed()
+              && (sithInterp_mode == SITHINTERP_MODE_ALL || sithInterp_mode == SITHINTERP_MODE_IDENTITY);
+#endif
+
+    // Above 150 fps some frames get no physics step, and the player's yaw
+    // only changes in a step, so the view stopped for that frame and turned
+    // double in the next. Show the turn the mouse asked for now; the next
+    // step turns the player by the same amount. Yaw is the outermost rotation
+    // of the head angles, so turning the view about the player's own up axis
+    // matches the step's turn. In third person only with interpolation on,
+    // which turns the player's model with it.
+    flex_t lead = 0.0;
+    if (bLocal && (type == 1 || (type == 4 && bInterp)))
+        lead = sithControl_GetPendingTurn();
+#ifdef SITHINTERP_ENABLED
+    // The turn keys turn the player at a steady rate, so between steps the
+    // view is drawn turned back to where it was at the drawn time.
+    if (bLocal && bInterp && (type == 1 || type == 4))
+        lead -= (1.0 - sithInterp_GetAlpha()) * sithInterp_GetLocalKeyYaw();
+#endif
+
+    // Where the focus is drawn. The local player keeps its last step's
+    // orientation (mouse look never lags); others turn as they're drawn.
+    rdVector3 posR = pFocus->position;
+    rdMatrix34 orientR;
+    rdMatrix_Copy34(&orientR, &pFocus->orient);
+    rdVector_Zero3(&orientR.scale);
+    int bTurned = 0;
+#ifdef SITHINTERP_ENABLED
+    if (bInterp)
+    {
+        rdMatrix34 placement;
+        int bTranslateOnly = 0;
+        if (bLocal || type >= 32)
+        {
+            sithInterp_GetRenderPos(pFocus, &posR);
+        }
+        else if (sithInterp_GetRenderPlacement(pFocus, &placement, &bTranslateOnly))
+        {
+            posR = placement.scale;
+            if (!bTranslateOnly)
+            {
+                rdMatrix_Copy34(&orientR, &placement);
+                rdVector_Zero3(&orientR.scale);
+                bTurned = 1;
+            }
+        }
+    }
+#endif
+    if (lead == 0.0 && !bTurned && sithCamera_VecsEqual(&posR, &pFocus->position))
+    {
+        // These follow the focus's position only, so it can still turn as drawn.
+        if (type >= 32)
+            pView->bFocusTrue = 0;
+        return;
+    }
+
+    // D takes the focus's true placement to its drawn one, turned by the
+    // lead: T(posR) * orientR * Yaw(lead) * orient^-1 * T(-pos). The view
+    // is D * camera, so whatever rig the camera type builds around the focus
+    // moves with it.
+    rdMatrix34 D;
+    if (type >= 32)
+    {
+        rdMatrix_Identity34(&D);
+        rdVector_Sub3(&D.scale, &posR, &pFocus->position);
+    }
+    else
+    {
+        rdMatrix34 turned, trueRot, invTrue;
+        rdMatrix_Copy34(&turned, &orientR);
+        if (lead != 0.0)
+        {
+            rdVector3 yaw = { 0.0, lead, 0.0 };
+            rdMatrix_PreRotate34(&turned, &yaw);
+        }
+        rdMatrix_Copy34(&trueRot, &pFocus->orient);
+        rdVector_Zero3(&trueRot.scale);
+        rdMatrix_InvertOrtho34(&invTrue, &trueRot);
+        rdMatrix_Multiply34(&D, &turned, &invTrue);
+        rdVector3 moved;
+        rdMatrix_TransformVector34(&moved, &pFocus->position, &D);
+        rdVector_Sub3(&D.scale, &posR, &moved);
+    }
+
+    rdMatrix34 orient;
+    rdMatrix_Multiply34(&orient, &D, &pCamera->orient);
+    rdMatrix_Normalize34(&orient);
+
+    // The drawn eye must be in a sector, reached from the true one: when a
+    // wall is in the way, this frame is drawn from the true view.
+    SithSector* pSector = pCamera->sector;
+    if (!sithCamera_VecsEqual(&orient.scale, &pCamera->lookPos))
+    {
+        rdVector3 eye = orient.scale;
+        pSector = sithCollision_FindSectorInRadius(pCamera->sector, &pCamera->lookPos, &eye, 0.0);
+        if (!pSector || !sithCamera_VecsEqual(&eye, &orient.scale))
+        {
+            sithCamera_renderViewClamps++;
+            return;
+        }
+        // Known: a third-person eye swung by the turn lead, or drawn behind a
+        // boom the wall is shortening, can come nearer a wall than the 0.02
+        // the camera keeps, so a sliver at the screen's edge can miss that
+        // wall for a frame. A plane-distance test here fell back at doorways,
+        // stair risers and with the boom resting on a surface, which was
+        // worse; a sphere sweep like sithCamera_Update's would be the fix.
+    }
+
+    rdMatrix_Copy34(&pView->orient, &orient);
+    pView->lookPos = orient.scale;
+    rdMatrix_ExtractAngles34(&orient, &pView->lookPYR);
+    pView->sector = pSector;
+    pView->yawLead = lead;
+    pView->bLeadLocalModel = (bLocal && type == 4 && bInterp);
+    pView->bFocusTrue = 0;
+#endif // QOL_IMPROVEMENTS
+}
+
 void sithCamera_RenderScene()
 {
     if ( sithCamera_g_pCurCamera )
     {
         rdCamera_SetCurrent(&sithCamera_g_pCurCamera->rdCamera);
-        rdCamera_Update(&sithCamera_g_pCurCamera->orient);
+        // Added: drawn from the render view (see sithCamera_BuildRenderView).
+        sithCamera_BuildRenderView(sithCamera_g_pCurCamera);
+        rdCamera_Update(&sithCamera_g_renderView.orient);
         sithRender_Draw();
     }
 }

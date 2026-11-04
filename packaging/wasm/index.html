@@ -1994,10 +1994,10 @@
       // browser turns it down (NotSupportedError). With the box ticked, every
       // lock asks for it (the engine's and SDL's both call the canvas's
       // requestPointerLock), and the plain lock follows if the browser turns it
-      // down. The box starts ticked only in Chromium on Windows, where the
-      // jolts are and locks have asked for raw input since the box came in;
-      // the other browsers' locks were always plain, so it starts unticked
-      // there. Linux has no raw input: there, and on Windows without it, the
+      // down. The box starts ticked in Chromium on Windows, where the jolts are
+      // and locks have asked for raw input since the box came in, and for a new
+      // Firefox player on Windows (see startRawMouseForFirefox); the other
+      // browsers' locks were always plain, so it starts unticked there. Linux has no raw input: there, and on Windows without it, the
       // engine leaves out the jumps it can tell (Window_WasmIsMouseJump). macOS, Firefox and Safari don't move the
       // cursor this way. Module.jkRawMouse.warps says whether this browser
       // moves it, and .active whether the current lock is raw.
@@ -2022,6 +2022,50 @@
         var rawMouseStored = localStorage.getItem(RAW_MOUSE_SETTING);
         if (rawMouseStored) rawMouse.want = rawMouseStored === 'on';
       } catch (e) {}
+
+      // Firefox's plain lock gives mouse movement in CSS pixels, so page zoom
+      // slows mouse look: at 150% the game gets 0.68x the movement. Raw input
+      // ignores zoom, and Windows display scaling changes neither (measured in
+      // Firefox 159 and Edge 156 on Windows, 3 Nov 2026; Chromium ignores zoom
+      // in both). A page can't tell Firefox's zoom from display scaling, so it
+      // can't make up for it. So in Firefox on Windows the box starts ticked
+      // for a new player, as it does in Chromium there. A player who has
+      // played here before (characters or settings saved in this browser)
+      // keeps the plain lock, and so the feel, they had. That start is kept
+      // under RAW_MOUSE_START, so it stays once they've played; ticking or
+      // unticking the box (RAW_MOUSE_SETTING) wins over it.
+      var RAW_MOUSE_START = 'jkdf2mp-raw-mouse-start';
+      // What a player saves in this browser: mountSaves' SAVE_DIRS, one IDBFS database each.
+      var RAW_MOUSE_PLAYED = ['/jk1/player', '/mots/player', '/jk1/persist', '/mots/persist'];
+      // Where page zoom changes plain mouse look (Firefox on macOS isn't measured).
+      var rawMouseZoomed = !!rawMouseFirefox && rawMousePlatform !== 'macOS';
+      function startRawMouseForFirefox() {
+        if (rawMousePlatform !== 'Windows' || !rawMouseFirefox || rawMouseNo) return;
+        try {
+          if (localStorage.getItem(RAW_MOUSE_SETTING)) return;
+          var start = localStorage.getItem(RAW_MOUSE_START);
+        } catch (e) {
+          return;  // nowhere to keep it: plain, as before
+        }
+        if (start) {
+          rawMouse.want = start === 'on';
+          return;
+        }
+        if (typeof indexedDB === 'undefined' || !indexedDB.databases) return;
+        indexedDB.databases().then(function(dbs) {
+          var played = dbs.some(function(d) { return RAW_MOUSE_PLAYED.indexOf(d.name) >= 0; });
+          try {
+            if (localStorage.getItem(RAW_MOUSE_SETTING) || localStorage.getItem(RAW_MOUSE_START)) return;
+            localStorage.setItem(RAW_MOUSE_START, played ? 'off' : 'on');
+          } catch (e) {
+            return;
+          }
+          rawMouse.want = !played;
+          showRawMouseChoice();
+        }, function() {});
+      }
+      startRawMouseForFirefox();
+
       // The box says what mouse look does in this browser, and is greyed out
       // where it can't be raw.
       function showRawMouseChoice() {
@@ -2035,15 +2079,17 @@
              rawMouseNo === 'firefox' ? 'Needs Firefox 152 or newer: update Firefox to use it. ' :
              rawMouseNo === 'safari' ? 'Needs Safari 18.4 or newer: update macOS to use it. ' :
              'This browser turned raw mouse input down. ') +
-            'Mouse look uses ' + yours + ', acceleration included.';
+            'Mouse look uses ' + yours + ', acceleration included' +
+            (rawMouseZoomed ? ', and zooming the page in (Ctrl and +) makes it turn slower.' : '.');
           return;
         }
         rawMouseAbout.textContent = 'Ticked, mouse look ignores ' +
-          (system === 'Windows' ? "Windows' pointer speed and Enhance pointer precision" :
+          (system === 'Windows' ? "Windows' pointer speed" + (rawMouseZoomed ? ', ' : ' and ') + 'Enhance pointer precision' :
            system === 'Mac' ? "macOS's tracking speed and acceleration" : "your system's pointer speed and acceleration") +
-          (rawMouse.warps ? ", so the view can't suddenly jolt" : '') + '. Unticked, it uses ' + yours +
-          ", acceleration included. Untick it if mouse look doesn't turn, as over remote desktop or with a drawing " +
-          'tablet.';
+          (rawMouseZoomed ? ' and page zoom' : '') + (rawMouse.warps ? ", so the view can't suddenly jolt" : '') +
+          '. Unticked, it uses ' + yours + ', acceleration included' +
+          (rawMouseZoomed ? ', and zooming the page in (Ctrl and +) makes it turn slower' : '') +
+          ". Untick it if mouse look doesn't turn, as over remote desktop or with a drawing tablet.";
       }
       showRawMouseChoice();
       rawMouseOption.addEventListener('change', function() {
@@ -3806,6 +3852,14 @@
         } catch (e) {
           result.failed.push({ name: 'list', error: String((e && e.message) || e) });
         } finally {
+          // A Firefox player whose box started ticked here, as a new player,
+          // just brought over what they played with: they get the plain lock
+          // they had there (see startRawMouseForFirefox).
+          try {
+            if (result.moved.some(function(n) { return RAW_MOUSE_PLAYED.indexOf(n) >= 0; }) &&
+                storage.getItem(RAW_MOUSE_START) === 'on')
+              storage.setItem(RAW_MOUSE_START, 'off');
+          } catch (e) {}
           clearInterval(watch);
           window.removeEventListener('message', onMessage);
           try { win.postMessage({ jkdf2mpMove: 'done' }, from); } catch (e) {}

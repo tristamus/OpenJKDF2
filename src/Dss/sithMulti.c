@@ -21,6 +21,7 @@
 #include "Main/Main.h"
 #include "AI/sithAI.h"
 #include "Devices/sithComm.h"
+#include "Engine/sithInterp.h"
 #include "stdPlatform.h"
 
 #define sithMulti_infoPrintf(fmt, ...) stdPlatform_Printf(fmt, ##__VA_ARGS__)
@@ -650,6 +651,7 @@ int sithMulti_ProcessWelcome(SithMessage *pMsg)
         while ( v4 );
     }
     g_submodeFlags &= ~8u;
+    sithInterp_Reset(); // Added: render interpolation starts over with the joined world
     sithThing_LoadPostProcess();
     sithPlayer_ShowPlayer(v1, v2);
     sithPlayer_SetLocalPlayer(v1); // sets playerThingIdx and info

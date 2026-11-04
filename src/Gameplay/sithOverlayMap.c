@@ -9,6 +9,7 @@
 #include "Win95/Video.h"
 #include "stdPlatform.h"
 #include "jk.h"
+#include "Engine/sithCamera.h"
 
 int sithOverlayMap_Startup(const SithOverlayMapConfig *config)
 {
@@ -100,7 +101,7 @@ int sithOverlayMap_Draw(rdCanvas *pCanvas)
     sithOverlayMap_x1 = v12;
     v12 = (int)pCanvas->half_screen_height;
     a3.x = 0.0;
-    a3.y = -sithCamera_g_pCurCamera->lookPYR.y;
+    a3.y = -sithCamera_g_renderView.lookPYR.y;
     sithOverlayMap_y1 = v12;
     a3.z = 0.0;
     rdMatrix_BuildRotate34(&sithOverlayMap_mapOrient, &a3);

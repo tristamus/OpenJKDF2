@@ -38,6 +38,7 @@
 #include "Dss/sithDSS.h"
 #include "General/stdMath.h"
 #include "jk.h"
+#include "Engine/sithInterp.h"
 #ifdef PLATFORM_WSRELAY
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
 #endif
@@ -1033,6 +1034,7 @@ void sithThing_SetPositionAndOrient(SithThing *pThing, rdVector3 *pos, rdMatrix3
     rdVector_Copy3(&pThing->position, pos);
     rdMatrix_Copy34(&pThing->orient, pOrient);
     rdVector_Zero3(&pThing->orient.scale);
+    sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
 }
 
 // MOTS altered

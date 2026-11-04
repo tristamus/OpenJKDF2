@@ -116,6 +116,14 @@ int sithCvar_LoadVar(tSithCvar* pCvar, const char* pFpath)
     // from its openjkdf2.json) instead of putting back the registered default.
     sithCvar_UpdateValInternal(pCvar);
 
+    // Added: a cvar whose default isn't saved (CVARFLAG_UPDATABLE_DEFAULT) has
+    // no key exactly when it's at its default, so a missing key means the
+    // default, not what the game had (for a character, the last character's
+    // value). The Get below writes a missing key, so it's taken out again.
+    int bDefaultUnsaved = (pCvar->flags & CVARFLAG_UPDATABLE_DEFAULT) && pCvar->type != CVARTYPE_STR;
+    if (bDefaultUnsaved)
+        pCvar->val = pCvar->defaultVal;
+
     switch (pCvar->type) {
         case CVARTYPE_BOOL:
             pCvar->boolVal = stdJSON_GetBool(pFpath, pCvar->pName, pCvar->val);
@@ -135,6 +143,9 @@ int sithCvar_LoadVar(tSithCvar* pCvar, const char* pFpath)
         default:
             return 0;
     }
+
+    if (bDefaultUnsaved && pCvar->val == pCvar->defaultVal)
+        stdJSON_EraseKey(pFpath, pCvar->pName);
 
     sithCvar_UpdateLinkInternal(pCvar);
     return 1;

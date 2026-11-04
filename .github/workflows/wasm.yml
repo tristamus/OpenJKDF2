@@ -68,6 +68,11 @@ jobs:
       # The room list: every room opens its game's room window.
       - name: Test the room list
         run: node packaging/wasm/test/rooms-test.mjs
+      # The Raw mouse input box: how it starts in each browser (ticked for a
+      # new Firefox player on Windows) and what it says, with made-up browsers
+      # and storage.
+      - name: Test the Raw mouse input box
+        run: node packaging/wasm/test/raw-mouse-test.mjs
       # Keys: every key of a standard keyboard reaches the game, and the
       # default binds, read from the sources.
       - name: Test keys and default binds

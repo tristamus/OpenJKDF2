@@ -18,6 +18,7 @@
 #include "Gameplay/sithEvent.h"
 #include "Engine/sithRender.h"
 #include "Engine/sithCamera.h"
+#include "Engine/sithInterp.h"
 #include "World/sithSprite.h"
 #include "Engine/sithParticle.h"
 #include "Engine/sithPuppet.h"
@@ -187,6 +188,7 @@ int sithOpen()
 {
     jkPlayer_currentTickIdx = 0;
     sithRender_lastRenderTick = 1;
+    sithInterp_Reset(); // Added: render interpolation
     sithWorld_ResetRenderState(sithWorld_g_pCurrentWorld);
     sithEvent_Open();
     sithSurface_Open();
@@ -248,8 +250,11 @@ int sithUpdate()
 
     sithMain_tickStartMs = stdPlatform_GetTimeMsec(); // Added: perf analyzing
 
+    sithInterp_Disarm(); // Added: render interpolation, only for the draw
+
     if ( (g_submodeFlags & 8) != 0 )
     {
+        sithInterp_FrameNotStepped(); // Added
         sithTime_Advance();
         sithMessage_ProcessMessages();
 
@@ -353,6 +358,10 @@ int sithUpdate()
 
             for (int i = 0; i < wholeFramesToApply; i++)
             {
+                // Added: render interpolation blends each thing's pose from
+                // the top of the frame's last step to its end.
+                if (i == wholeFramesToApply - 1)
+                    sithInterp_CapturePrev();
 #ifndef ARCH_WASM
                 sithSoundMixer_Update(sithTime_g_frameTimeFlex);
 #endif
@@ -385,11 +394,15 @@ int sithUpdate()
                 // so we have to emulate the current time as well
                 sithTime_g_msecGameTime += sithTime_g_frameTime;
             }
+            if (wholeFramesToApply)
+                sithInterp_CaptureCur(); // Added
 
             sithTime_g_frameTimeFlex = tmp;
             sithTime_g_frameTime = tmp2;
             sithTime_g_fps = tmp3;
             sithTime_g_msecGameTime = tmp6;
+            // Added: where this frame's draw falls in the last step.
+            sithInterp_FrameStepped(sithTime_physicsRolloverFrames * TARGET_PHYSTICK_FPS, DELTA_PHYSTICK_FPS);
             //stdControl_updateKHz = tmp4;
             //stdControl_updateHz = tmp5;
 
@@ -410,6 +423,7 @@ int sithUpdate()
         else
 #endif
         {
+            sithInterp_FrameNotStepped(); // Added
             sithSoundMixer_Update(sithTime_g_frameTimeFlex);
             sithEvent_Process();
 
@@ -466,6 +480,10 @@ void sithDrawScene()
     jkPlayer_fovIsVertical = 0;
     jkPlayer_enableOrigAspect = 0;
 #endif
+
+    // Added: the weapon and the map read the render view even when the world
+    // isn't drawn (submode 8); then it's the camera as it is.
+    sithCamera_ResetRenderView(sithCamera_g_pCurCamera);
 
     if ( (g_submodeFlags & 8) == 0 )
     {

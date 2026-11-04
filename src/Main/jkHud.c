@@ -28,6 +28,20 @@
 #include "../jk.h"
 #include "types.h"
 #include "types_enums.h"
+#include "Engine/sithInterp.h"
+
+// Added: the force power target circle goes on the target where it's drawn
+// (render interpolation), not where its last physics step left it.
+static rdVector3 jkHud_targetDrawnPos;
+static rdVector3* jkHud_GetTargetDrawnPos()
+{
+#ifdef SITHINTERP_ENABLED
+    sithInterp_GetRenderPos(jkHud_pTargetThing, &jkHud_targetDrawnPos);
+    return &jkHud_targetDrawnPos;
+#else
+    return &jkHud_pTargetThing->position;
+#endif
+}
 
 //stdBitmap* jkHud_pTestbitmap = NULL;
 
@@ -646,7 +660,7 @@ void jkHud_Draw()
     }
 
     rdScreenPoint tmpScreenPt;
-    if ( jkHud_bHasTarget && jkHud_pTargetThing && rdPrimit3_GetScreenCoord(&jkHud_pTargetThing->position, &tmpScreenPt) )
+    if ( jkHud_bHasTarget && jkHud_pTargetThing && rdPrimit3_GetScreenCoord(jkHud_GetTargetDrawnPos(), &tmpScreenPt) )
     {
         flex_t valSin, valCos;
         a2 = sithTime_g_secGameTime * 200.0;
@@ -1251,7 +1265,7 @@ void jkHud_DrawGPU()
     }
 
     rdScreenPoint tmpScreenPt;
-    if ( jkHud_bHasTarget && jkHud_pTargetThing && rdPrimit3_GetScreenCoord(&jkHud_pTargetThing->position, &tmpScreenPt) )
+    if ( jkHud_bHasTarget && jkHud_pTargetThing && rdPrimit3_GetScreenCoord(jkHud_GetTargetDrawnPos(), &tmpScreenPt) )
     {
 #ifdef SDL2_RENDER
         // Added: the force-power target circles go into the overlay buffer too

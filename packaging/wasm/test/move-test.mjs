@@ -100,6 +100,8 @@ const seedOld = async () => {
 // Already on the new address before the move: its own map and a page setting.
 const seedNew = async () => {
     localStorage.setItem('jkdf2mp-raw-mouse', 'off');
+    // Firefox started the Raw mouse box ticked here, for a new player.
+    localStorage.setItem('jkdf2mp-raw-mouse-start', 'on');
     await new Promise((resolve, reject) => {
         const req = indexedDB.open('jkdf2mp-maps', 1);
         req.onupgradeneeded = () => {
@@ -198,6 +200,7 @@ test('everything comes over, nothing already here is changed, and the page reloa
     assert.equal(after.local['jkdf2mp-page-style'], '2001');
     assert.equal(after.local['jkdf2mp-room-view'], 'list');
     assert.equal(after.local['jkdf2mp-raw-mouse'], 'off', 'a setting already here stays');
+    assert.equal(after.local['jkdf2mp-raw-mouse-start'], 'off', 'their characters came over, so the plain lock they had');
     assert.equal(after.local['someone-else'], undefined);
     assert.equal(after.local['jkdf2mp-move-in'], 'done');
     for (const name of ['/jk1/player', '/jk1/persist', 'jkdf2mp-game-files', 'jkdf2mp-mods', 'jkdf2mp-screenshots'])

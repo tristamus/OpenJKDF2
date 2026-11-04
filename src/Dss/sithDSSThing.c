@@ -23,6 +23,7 @@
 #ifdef PLATFORM_WSRELAY
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
 #endif
+#include "Engine/sithInterp.h"
 
 void sithDSSThing_Pos(SithThing *pThing, int toID, int dpFlags)
 {
@@ -247,6 +248,7 @@ int sithDSSThing_ProcessStateUpdate(SithMessage *pMsg)
     pThing->collide = NETMSG_POPS16();
     pThing->position = NETMSG_POPVEC3();
     sithThing_SetSector(pThing, pSector, 0);
+    sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
 
     uint32_t flags = NETMSG_POPS32();
     if ( pThing->type == SITH_THING_PLAYER && (pThing->flags & SITH_TF_DEAD) && !(flags & SITH_TF_DEAD) && MOTS_ONLY_COND(pThing != sithPlayer_g_pLocalPlayerThing))
@@ -1194,6 +1196,7 @@ int sithDSSThing_ProcessFullDescription(SithMessage *pMsg)
     v11 = sithSector_GetPtrFromIdx(sectorIdx);
     if ( v11 )
         sithThing_SetSector(thing, v11, 1);
+    sithInterp_Snap(thing); // Added: render interpolation, drawn there at once
 
     thing->flags = NETMSG_POPU32();
     thing->msecLifeLeft = NETMSG_POPS32();
@@ -1721,6 +1724,7 @@ void sithDSSThing_MoveToPos(SithThing *pThing, rdVector3 *pPos, SithSector *pSec
     {
         rdVector_Copy3(&pThing->position, pPos);
         sithThing_SetSector(pThing, pSector, 0);
+        sithInterp_Snap(pThing); // Added: render interpolation, drawn there at once
     }
     else
     {
