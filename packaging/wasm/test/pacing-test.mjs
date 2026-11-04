@@ -92,7 +92,9 @@ const retailInstall = {
 };
 
 // One run: { mbit, K, mapBytes, path: 'relay' | 'imperial', paced, pong }.
-async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 900000 }) {
+// matchAt: the other player starts playing this long after the download
+// starts, not before it.
+async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 900000, matchAt = 0 }) {
     const clock = makeClock();
     const C = mbit * 1e6 / 8;
     const up = uplink(clock, C, K);
@@ -100,9 +102,10 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     const stream = gob.length + 4;
     const host = { FS: makeFS({ ...retailInstall, '/jk1/episode/ctf_pace.gob': gob }) };
     const join = { FS: makeFS({ ...retailInstall }) };
-    const waits = [];
+    const waits = [], waitsAt = [];
     const requests = [];
-    let blockBytes = 0, transferring = false;
+    let blockBytes = 0, transferring = false, t0 = Infinity;
+    const playing = () => clock.now() - t0 >= matchAt;
     const timers = [];
 
     const toJoiner = (bytes, leaves) => {
@@ -113,8 +116,10 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         clock.setTimeout(() => join.jkMaps.onFrame(1, copy, path === 'relay' ? 'relay' : 'direct'), leaves - clock.now() + ONE_WAY);
     };
     const gameSent = leaves => {
-        if (transferring)
+        if (transferring) {
             waits.push(leaves - clock.now());
+            waitsAt.push([clock.now() - t0, leaves - clock.now()]);
+        }
     };
     const env = (extra) => ({
         Module: host,
@@ -162,6 +167,8 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         const net = host.jkNet;
         // Another player, through the lobby: the host sends to it, and hears from it.
         timers.push(clock.setInterval(() => {
+            if (!playing())
+                return;
             const out = new Uint8Array(GAME_BYTES);
             new DataView(out.buffer).setUint32(4, 3, true);
             out[8] = 10;
@@ -234,7 +241,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     host.jkMaps.host('ctf_pace', 'gob');
     await new Promise(r => setTimeout(r, 200));
     await clock.run(3000);
-    const t0 = clock.now();
+    t0 = clock.now();
     transferring = true;
     join.jkMaps.fetch('ctf_pace', 'gob');
     await clock.until(() => join.jkMaps.state() !== 0, limitMs, 200);
@@ -250,7 +257,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     const r = {
         state, secs, stream, ratio: blockBytes / stream, asks: requests.length, reasks: requests.length - new Set(requests).size,
         blocks, median: at(0.5), p95: at(0.95), max: Math.round(waits[waits.length - 1]),
-        rate: paced ? host.jkMaps.uploads().rate : null,
+        rate: paced ? host.jkMaps.uploads().rate : null, waitsAt,
         ok: state === 1 && Buffer.compare(Buffer.from(join.FS.files.get('/jk1/episode/ctf_pace.gob') || []), Buffer.from(gob)) === 0,
     };
     return r;
@@ -289,6 +296,21 @@ for (const s of [
         assert.ok(paced.p95 * 4 < old.p95, `p95 wait ${paced.p95} ms, live host ${old.p95} ms`);
     });
 }
+
+test('a download that starts before a match and goes on into it holds the game up only while what went before it leaves', async () => {
+    // Before the match the host sends as fast as the socket takes it, so up
+    // to K waits where the page can't see it when the match starts (about
+    // 10 s at 1 Mbit/s). Game packets then wait for that to leave, and the
+    // rate stays low until it has, however the lobby's answer looked then.
+    const s = { path: 'relay', mbit: 1, mapBytes: 8000000, matchAt: 6000 };
+    const paced = await run({ ...s, K, paced: true });
+    console.log('    ' + describe('relay, 1 Mbit/s up, 8 MB, the match 6 s in', paced));
+    assert.ok(paced.ok);
+    assert.ok(paced.ratio < 1.25, 'sent ' + paced.ratio.toFixed(2) + 'x');
+    const late = paced.waitsAt.filter(([t]) => t >= s.matchAt + 15000).map(([, w]) => w);
+    assert.ok(late.length > 100);
+    assert.ok(Math.max(...late) < 1000, `game packets wait ${Math.round(Math.max(...late))} ms 15 s into the match`);
+});
 
 test('through a lobby that never answers ping (relay.py) the rate stays where it starts', async () => {
     const s = { path: 'relay', mbit: 1, mapBytes: 3000000 };

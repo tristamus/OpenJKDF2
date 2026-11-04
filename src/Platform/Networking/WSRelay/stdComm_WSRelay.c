@@ -1364,6 +1364,11 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 /* With game packets on WebRTC, the socket can sit idle for a whole
                    match, and proxies drop idle WebSockets. */
                 net.lobbyPing = { sent: [], rtt: 0, base: 0, got: 0 };
+                /* The shortest round trip is taken while nothing waits on the
+                   new socket: one taken later may have come behind a map
+                   upload sent before a match, and make a queue look like
+                   none (net.mapCongested). */
+                net.pingLobby();
                 keepalive = setInterval(function() { if (ws.readyState === 1 && net.ws === ws) net.pingLobby(); }, 25000);
                 net.rejoinMs = 1000;
                 var seat = net.session && net.seat;

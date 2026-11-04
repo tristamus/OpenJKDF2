@@ -1444,10 +1444,9 @@ test('the lobby\'s answer to ping shows a queue building on the way to it', asyn
     const world = makeWorld();
     const [host] = await room(world, [2]);
     const net = host.net;
-    // Nothing known yet: the first ping goes.
-    assert.equal(net.mapCongested(true), null);
-    await world.run(100);
+    // The first ping went as the socket opened, with nothing ahead of it.
     assert.equal(net.lobbyPing.got, 1);
+    assert.ok(net.lobbyPing.base < 50);
     assert.equal(net.mapCongested(true), false);
     // The answer takes long: a queue on the way.
     world.lobby.delay = 400;
@@ -1466,6 +1465,26 @@ test('the lobby\'s answer to ping shows a queue building on the way to it', asyn
     assert.equal(net.mapCongested(true), false);
     // The answer goes nowhere near the engine.
     assert.ok(!net.queue.some(d => d === 'pong'));
+});
+
+test('the shortest round trip to the lobby is taken as a socket opens, before anything waits on it', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const net = host.net;
+    // The lobby drops; the host comes back to it on a new socket.
+    net.ws.drop();
+    await world.run(3000);
+    assert.equal(net.state, 1);
+    assert.equal(net.lobbyPing.got, 1);
+    const base = net.lobbyPing.base;
+    assert.ok(base < 50, 'base ' + base);
+    // Answers that come back behind a queue later don't lower the bar for one.
+    world.lobby.delay = 2000;
+    net.mapCongested(true);
+    await world.run(2500);
+    assert.equal(net.lobbyPing.base, base);
+    assert.equal(net.mapCongested(true), true);
 });
 
 test('a lobby that never answers ping (relay.py) says nothing about a queue, and is not pinged again', async () => {

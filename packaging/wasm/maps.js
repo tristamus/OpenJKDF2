@@ -1358,7 +1358,10 @@
 
     // What may wait on the way a part goes before another goes: on the
     // lobby's or Imperial's socket in a match, outside one, and on a map
-    // channel outside a match and in one.
+    // channel outside a match and in one. Outside a match nothing else holds
+    // a part back, so a match that starts while a download goes on waits for
+    // what the computer and the router already hold to leave: some seconds
+    // on a slow upload (pacing-test.mjs), as the rate stays at its least.
     var PACE_LOW_SOCKET_MATCH = 16 * 1024;
     var PACE_LOW_SOCKET = 256 * 1024;
     var PACE_LOW_CHANNEL = 1024 * 1024;
