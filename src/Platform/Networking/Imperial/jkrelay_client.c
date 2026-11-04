@@ -119,6 +119,16 @@ EM_JS(int, jkr_js_recv, (int id, void* p, int cap), {
     return n;
 });
 
+// What a socket has yet to send: what waits for it to open, and what the
+// browser hasn't passed on yet.
+EM_JS(int, jkr_js_buffered, (int id), {
+    var s = Module.jkrWs && Module.jkrWs.socks[id];
+    if (!s) return 0;
+    var n = s.ws ? s.ws.bufferedAmount || 0 : 0;
+    for (var i = 0; i < s.out.length; i++) n += s.out[i].length;
+    return n;
+});
+
 EM_JS(void, jkr_js_close, (int id), {
     var s = Module.jkrWs && Module.jkrWs.socks[id];
     if (!s) return;
@@ -884,6 +894,80 @@ static void jkr_HandleEvent(const uint8_t* b, const uint8_t* end)
     }
 }
 
+#ifdef __EMSCRIPTEN__
+// A request the relay server answers at once (LIST), timed. Its answer comes
+// back behind everything this browser sent before it on the server's
+// WebSocket, so it shows a queue building on the way out that bufferedAmount
+// doesn't: in the computer and the router. A browser host paces its map
+// uploads in a match by it (stdComm_Imperial.c, maps.js).
+static struct
+{
+    int      ws;              // the WebSocket it was timed on
+    uint32_t seq;             // the request out, 0 if none
+    uint64_t sentMs;
+    double   rttMs, baseMs;   // the last round trip, and the shortest
+    int      got;             // answers on this WebSocket
+} jkr_timed;
+
+static int jkr_TimedWs(void)
+{
+    return R.sock >= 0 && R.sock < JKR_WS_MAX_SOCKS ? jkr_wsSocks[R.sock].ws : 0;
+}
+
+// The answer to the request out (1), or another (0).
+static int jkr_TimedAnswer(uint32_t seq)
+{
+    double rtt;
+    if (!jkr_timed.seq || seq != jkr_timed.seq) return 0;
+    rtt = (double)(jkr_NowMs() - jkr_timed.sentMs);
+    jkr_timed.seq = 0;
+    jkr_timed.rttMs = rtt;
+    if (!jkr_timed.got || rtt < jkr_timed.baseMs) jkr_timed.baseMs = rtt;
+    jkr_timed.got++;
+    return 1;
+}
+
+// Sends the request unless one is out. A server that hasn't answered one yet
+// is asked again after 10 s; once one has, an answer that doesn't come is a
+// queue that doesn't empty.
+void jkrelay_AskTimed(void)
+{
+    uint8_t pkt[JKR_HDR_SIZE + 20];
+    int ws = jkr_TimedWs();
+    uint64_t now = jkr_NowMs();
+    if (!R.inSession || !R.token || !ws) return;
+    if (jkr_timed.ws != ws)
+    {
+        memset(&jkr_timed, 0, sizeof(jkr_timed));
+        jkr_timed.ws = ws;
+    }
+    // Once answered, one each 2 s at most: the relay server isn't ours to
+    // change, and the menu asks it this every 5 s.
+    if (jkr_timed.got ? (jkr_timed.seq || now - jkr_timed.sentMs < 2000)
+                      : (jkr_timed.seq && now - jkr_timed.sentMs < 10000)) return;
+    jkr_timed.seq = ++R.nextSeq;
+    jkr_timed.sentMs = now;
+    jkr_PutHdr(pkt, JKR_LIST, jkr_timed.seq);   // the games listed, as the menu asks
+    memcpy(pkt + JKR_HDR_SIZE, R.appGuid, 16);
+    wr32(pkt + JKR_HDR_SIZE + 16, 0);
+    jkr_SendRaw(pkt, sizeof(pkt));
+}
+
+// How the requests went on this WebSocket: the answers (0: no telling yet),
+// the last round trip and the shortest, and how long the one out has waited
+// (-1: none out), in ms.
+int jkrelay_TimedState(double* pRtt, double* pBase, double* pWaited)
+{
+    *pRtt = *pBase = 0.0;
+    *pWaited = -1.0;
+    if (!jkr_timed.ws || jkr_timed.ws != jkr_TimedWs()) return 0;
+    *pRtt = jkr_timed.rttMs;
+    *pBase = jkr_timed.baseMs;
+    if (jkr_timed.seq) *pWaited = (double)(jkr_NowMs() - jkr_timed.sentMs);
+    return jkr_timed.got;
+}
+#endif
+
 static void jkr_HandlePacket(const uint8_t* p, int len)
 {
     const uint8_t* end = p + len;
@@ -898,6 +982,9 @@ static void jkr_HandlePacket(const uint8_t* p, int len)
 
     if (type >= JKR_WELCOME && type <= JKR_FAIL)
     {
+#ifdef __EMSCRIPTEN__
+        if (jkr_TimedAnswer(seq)) return;
+#endif
         if (R.resuming && seq == R.resumeSeq)
             jkr_ResumeReply(p, len);
         // Fixed: a reply bigger than R.reply (JKR_MAX_PACKET) isn't taken; R.rx
@@ -2421,6 +2508,23 @@ int jkrelay_IsHost(void)
 {
     return R.inSession && R.isHost;
 }
+
+#ifdef __EMSCRIPTEN__
+// Bytes the relay server's WebSocket has yet to send. A browser host's map
+// transfers wait while it has much (stdComm_Imperial.c), since its game
+// packets go on the same socket.
+int jkrelay_SendBacklog(void)
+{
+    if (R.sock < 0 || R.sock >= JKR_WS_MAX_SOCKS || !jkr_wsSocks[R.sock].ws) return 0;
+    return jkr_js_buffered(jkr_wsSocks[R.sock].ws);
+}
+
+// Whether player id (a machine's system player too) is in the game.
+int jkrelay_HasPlayer(uint32_t id)
+{
+    return R.inSession && jkr_Find(id) != NULL;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Hosts' admin (2026-10-29, jkrelay_proto.h): a dedicated server hosting here has

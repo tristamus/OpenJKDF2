@@ -1181,6 +1181,7 @@
 
     function withdraw(kind) {
         delete offers[kind];
+        forget(undefined, false, kind);
     }
 
     function host(name, ext) {
@@ -1340,25 +1341,319 @@
         });
     }
 
-    function sendBlock(k, o, b, to, via, part, accept) {
+    // ---- Host: what joiners ask for goes out paced.
+    //
+    // Parts wait here and go one at a time from each block (or a joiner's
+    // chunks) asked for in turn, while the way they go has little waiting in
+    // it (link().mapBacklog). Through the lobby, and on the Imperial Network
+    // Protocol, that way is the socket that also carries the host's game
+    // packets; on a direct link it's the same upload. So in a match (someone
+    // else has been heard from lately, link().mapInMatch) they also go no
+    // faster than a rate that halves when the connection shows a queue
+    // building (link().mapCongested) and grows while it says it doesn't. What
+    // waits in the browser is all a page can see, not what waits in the
+    // computer or the router, so the rate starts low and only grows on a
+    // sign that sees those. A part asked for again while it waits isn't
+    // queued twice: it goes the way of the newer request.
+
+    // What may wait on the way a part goes before another goes: on the
+    // lobby's or Imperial's socket in a match, outside one, and on a map
+    // channel outside a match and in one. Outside a match nothing else holds
+    // a part back, so a match that starts while a download goes on waits for
+    // what the computer and the router already hold to leave: some seconds
+    // on a slow upload (pacing-test.mjs), as the rate stays at its least.
+    var PACE_LOW_SOCKET_MATCH = 16 * 1024;
+    var PACE_LOW_SOCKET = 256 * 1024;
+    var PACE_LOW_CHANNEL = 1024 * 1024;
+    var PACE_LOW_CHANNEL_MATCH = 64 * 1024;
+    var PACE_MAX_QUEUED = 16 * 1024 * 1024;  // waiting for one joiner
+    // Bytes a second in a match: where it starts, at most, and what it grows
+    // by each PACE_EVERY_MS that the link says no queue is building.
+    var PACE_START = 48000;
+    var PACE_FLOOR = 24000;
+    var PACE_MAX = 2000000;
+    var PACE_STEP = 16000;
+    var PACE_EVERY_MS = 250;
+    // Joiners ask for a block again when no part of it came for
+    // CHUNK_RESEND_MS, and give up after STALL_MS without any: every block
+    // being sent gets a part at least twice that often, however low the rate.
+    var PACE_PART_MS = CHUNK_RESEND_MS / 2;
+    var PACE_TICK_MS = 10;
+    // A rate learned in one transfer is kept for the next unless it's long after.
+    var PACE_FORGET_MS = 30000;
+
+    var up = {
+        groups: new Map(), // 'to kind b<block>' or 'to kind c<size>' -> group
+        turn: [],          // their keys, in turn
+        next: 0,
+        queued: {},        // joiner -> bytes waiting for them
+        rate: PACE_START,
+        tokens: 0,
+        at: 0,             // when tokens were last added
+        sampledAt: 0,
+        // The most part bytes a turn round the groups took lately, and when.
+        need: 0, needAt: 0,
+        sentAt: 0,
+        // The longest wait between pumps lately: in a hidden tab timers run
+        // once a second at most, so a pump may have to send a second's worth.
+        pumpedAt: 0, gap: 0, gapNow: 0, gapSince: 0,
+        timer: null,
+        pumping: false,
+        // Something went in this task: what a link says is waiting includes
+        // it until the browser takes it, so the link isn't asked about a
+        // queue until the next task.
+        dirty: false,
+        sent: 0
+    };
+
+    function partBytes(g, p) {
+        return g.chunk ? Math.min(g.chunk, g.o.stream.length - p * g.chunk) : Math.min(g.cut, g.bytes.length - p);
+    }
+
+    function addGroup(key, g) {
+        g.key = key;
+        g.parts = [];
+        g.has = new Set();
+        up.groups.set(key, g);
+        up.turn.push(key);
+        return g;
+    }
+
+    function removeGroup(g) {
+        if (up.groups.get(g.key) !== g)
+            return;
+        up.groups.delete(g.key);
+        var i = up.turn.indexOf(g.key);
+        up.turn.splice(i, 1);
+        if (i < up.next)
+            up.next--;
+        for (var p of g.parts)
+            up.queued[g.to] -= partBytes(g, p);
+    }
+
+    // Puts parts p of g in the queue, unless they're there already or the
+    // joiner has too much waiting (they ask again for what doesn't come).
+    function queueParts(g, ps) {
+        for (var p of ps) {
+            if (g.has.has(p))
+                continue;
+            var n = partBytes(g, p);
+            if ((up.queued[g.to] || 0) + n > PACE_MAX_QUEUED)
+                break;
+            up.queued[g.to] = (up.queued[g.to] || 0) + n;
+            g.parts.push(p);
+            g.has.add(p);
+        }
+        // A block's parts go in order, whatever was asked for again.
+        if (!g.chunk)
+            g.parts.sort(function(x, y) { return x - y; });
+        if (!g.parts.length)
+            removeGroup(g);
+        pump();
+    }
+
+    function queueBlock(k, o, b, to, via, part, accept) {
         block(o, b, accept).then(function(r) {
             if (offers[k] !== o)
                 return;
-            var z = r.bytes;
-            for (var at = 0; at < z.length; at += part) {
-                var n = Math.min(part, z.length - at);
-                var f = frame(T_BLOCK, to, BLOCK_HEADER + n, k);
-                f.bytes.set(o.id, HEADER);
-                f.view.setUint32(HEADER + 8, b, true);
-                f.view.setUint32(HEADER + 12, z.length, true);
-                f.view.setUint32(HEADER + 16, at, true);
-                f.bytes[HEADER + 20] = r.codec;
-                f.bytes.set(z.subarray(at, at + n), HEADER + BLOCK_HEADER);
-                if (!send(to, f, via))
-                    return;
+            var net = link();
+            // A joiner takes parts of any whole number of UNITs, so on the
+            // lobby's connection they're cut at that: none goes over the
+            // lobby's 64 KiB, and game packets never wait behind a big one.
+            // On the Imperial Network Protocol, desktop joiners get the size
+            // they asked for. The least rate there is then a 64 KiB part of
+            // each block every PACE_PART_MS, about 79 KB/s for each joiner
+            // with three out: more than a 1 Mbit/s upload once two download
+            // at once, and the others' game packets then wait seconds.
+            var cut = net && net === Module.jkImperial ? part : UNIT;
+            var key = to + ' ' + k + ' b' + b;
+            var g = up.groups.get(key);
+            if (g && (g.o !== o || g.codec !== r.codec || g.bytes.length !== r.bytes.length || g.cut !== cut)) {
+                removeGroup(g);
+                g = null;
             }
+            if (!g)
+                g = addGroup(key, { to: to, kind: k, o: o, b: b, cut: cut, codec: r.codec, bytes: r.bytes, chunk: 0 });
+            g.via = via;
+            var ps = [];
+            for (var at = 0; at < r.bytes.length; at += cut)
+                ps.push(at);
+            queueParts(g, ps);
         }, function(e) {
             console.warn('OpenJKDF2: could not send block ' + b + ': ' + e);
+        });
+    }
+
+    function queueChunks(k, o, to, via, size, first, count) {
+        var key = to + ' ' + k + ' c' + size;
+        var g = up.groups.get(key);
+        if (g && g.o !== o) {
+            removeGroup(g);
+            g = null;
+        }
+        if (!g)
+            g = addGroup(key, { to: to, kind: k, o: o, cut: size, chunk: size });
+        g.via = via;
+        var ps = [];
+        for (var i = first; i < first + count && i * size < o.stream.length; i++)
+            ps.push(i);
+        queueParts(g, ps);
+    }
+
+    function partFrame(g, p) {
+        var n = partBytes(g, p);
+        if (g.chunk) {
+            var f = frame(T_CHUNK, g.to, 12 + n, g.kind);
+            f.bytes.set(g.o.id, HEADER);
+            f.view.setUint32(HEADER + 8, p, true);
+            f.bytes.set(g.o.stream.read(p * g.chunk, n), HEADER + 12);
+            return f;
+        }
+        var f = frame(T_BLOCK, g.to, BLOCK_HEADER + n, g.kind);
+        f.bytes.set(g.o.id, HEADER);
+        f.view.setUint32(HEADER + 8, g.b, true);
+        f.view.setUint32(HEADER + 12, g.bytes.length, true);
+        f.view.setUint32(HEADER + 16, p, true);
+        f.bytes[HEADER + 20] = g.codec;
+        f.bytes.set(g.bytes.subarray(p, p + n), HEADER + BLOCK_HEADER);
+        return f;
+    }
+
+    // Whether g's parts go on the socket that carries the game's packets.
+    function onSocket(net, g) {
+        return net === Module.jkImperial || g.via === 'relay' ||
+               (g.via === 'direct' && !(net && net.mapDirect && net.mapDirect(g.to)));
+    }
+
+    function hasRoom(net, g, inMatch) {
+        if (!net || !net.mapBacklog)
+            return true;
+        var low = onSocket(net, g) ? (inMatch ? PACE_LOW_SOCKET_MATCH : PACE_LOW_SOCKET)
+                                   : (inMatch ? PACE_LOW_CHANNEL_MATCH : PACE_LOW_CHANNEL);
+        return net.mapBacklog(g.to, g.via) < low;
+    }
+
+    // Sends what may go now. The network code calls it each frame and as
+    // packets come in, as well as the timer here, which a hidden tab slows.
+    function pump() {
+        if (!up.groups.size) {
+            // Idle: the next transfer starts with no burst saved up.
+            up.pumpedAt = 0;
+            return;
+        }
+        if (up.pumping)
+            return;
+        up.pumping = true;
+        try {
+            pumpNow();
+        } finally {
+            up.pumping = false;
+        }
+        if (up.groups.size && !up.timer)
+            up.timer = setTimeout(function() { up.timer = null; pump(); }, PACE_TICK_MS);
+    }
+
+    function pumpNow() {
+        var now = Date.now();
+        var net = link();
+        if (!up.pumpedAt) {
+            up.gap = up.gapNow = 0;
+            up.gapSince = up.at = now;
+            up.tokens = Math.min(up.tokens, 1);
+        } else {
+            if (now - up.gapSince > 2000) {
+                up.gap = up.gapNow;
+                up.gapNow = 0;
+                up.gapSince = now;
+            }
+            up.gapNow = Math.max(up.gapNow, Math.min(1000, now - up.pumpedAt));
+        }
+        up.pumpedAt = now;
+        var inMatch = false, lobby = false, need = 0;
+        up.groups.forEach(function(g) {
+            if (net && net.mapInMatch && net.mapInMatch(g.to))
+                inMatch = true;
+            if (onSocket(net, g))
+                lobby = true;
+            need += g.cut;
+        });
+        // Groups that finish leave the turn they finished in no shorter for
+        // the others still in it: the rate doesn't fall for that until a
+        // whole turn has gone.
+        if (need >= up.need || now - up.needAt > PACE_PART_MS) {
+            up.need = need;
+            up.needAt = now;
+        }
+        if (inMatch) {
+            // Every block (or joiner's chunks) being sent gets a part each
+            // PACE_PART_MS, the way they take turns.
+            var least = Math.max(PACE_FLOOR, up.need * 1000 / PACE_PART_MS);
+            if (now - up.sentAt > PACE_FORGET_MS)
+                up.rate = PACE_START;
+            if (now - up.sampledAt >= PACE_EVERY_MS && !up.dirty && net && net.mapCongested) {
+                var c = net.mapCongested(lobby);
+                up.sampledAt = now;
+                if (c === true)
+                    up.rate /= 2;
+                else if (c === false)
+                    up.rate += PACE_STEP;
+            }
+            up.rate = Math.min(PACE_MAX, Math.max(least, up.rate));
+            var burst = up.rate * Math.max(50, up.gap, up.gapNow) / 1000;
+            up.tokens = Math.min(burst, up.tokens + Math.max(0, now - up.at) * up.rate / 1000);
+        }
+        up.at = now;
+        // Round the blocks, a part from each that has room on its way.
+        for (var idle = 0; up.groups.size && idle < up.turn.length; ) {
+            if (inMatch && up.tokens <= 0)
+                break;
+            if (up.next >= up.turn.length)
+                up.next = 0;
+            var g = up.groups.get(up.turn[up.next]);
+            if (offers[g.kind] !== g.o) {
+                removeGroup(g);
+                continue;
+            }
+            if (!hasRoom(net, g, inMatch)) {
+                up.next++;
+                idle++;
+                continue;
+            }
+            var p = g.parts.shift();
+            g.has.delete(p);
+            var n = partBytes(g, p);
+            up.queued[g.to] -= n;
+            var f = partFrame(g, p);
+            var went = send(g.to, f, g.via);
+            if (!up.dirty) {
+                up.dirty = true;
+                Promise.resolve().then(function() { up.dirty = false; });
+            }
+            if (!went) {
+                // Its way is gone: the joiner asks again on another.
+                removeGroup(g);
+                continue;
+            }
+            idle = 0;
+            up.sent += f.buf.byteLength;
+            up.sentAt = now;
+            if (inMatch)
+                up.tokens -= f.buf.byteLength;
+            if (g.parts.length)
+                up.next++;
+            else
+                removeGroup(g);
+        }
+    }
+
+    // Drops what waits for joiner id (all of them when not given): they left,
+    // or (direct) their direct link closed, so they ask again through the
+    // lobby. kind: only what waits of that kind.
+    function forget(id, direct, kind) {
+        up.groups.forEach(function(g) {
+            if ((id === undefined || g.to === id) && !(direct && g.via === 'relay') &&
+                (kind === undefined || g.kind === kind))
+                removeGroup(g);
         });
     }
 
@@ -1384,16 +1679,7 @@
             var count = Math.min(v.getUint32(HEADER + 16, true), MAX_CHUNKS_PER_REQ);
             if (size !== CHUNK_DIRECT && size !== CHUNK_RELAY)
                 return;
-            var stream = o.stream;
-            for (var i = first; i < first + count && i * size < stream.length; i++) {
-                var part = stream.read(i * size, Math.min(size, stream.length - i * size));
-                var f = frame(T_CHUNK, from, 12 + part.length, k);
-                f.bytes.set(o.id, HEADER);
-                f.view.setUint32(HEADER + 8, i, true);
-                f.bytes.set(part, HEADER + 12);
-                if (!send(from, f, via))
-                    break;
-            }
+            queueChunks(k, o, from, via, size, first, count);
         } else if (type === T_BLOCK_REQ && data.byteLength >= HEADER + 24) {
             var k = offerFor(new Uint8Array(data, HEADER, 8));
             if (k === null)
@@ -1412,7 +1698,7 @@
             var nb = Math.ceil(o.stream.length / BLOCK_BYTES);
             var b = first;
             for (; b < first + count && b < nb; b++)
-                sendBlock(k, o, b, from, via, part, accept);
+                queueBlock(k, o, b, from, via, part, accept);
             // The next ones, squeezed while these go.
             for (var ahead = b; ahead < b + BLOCKS_AHEAD && ahead < nb && (accept & CODEC_DEFLATE); ahead++)
                 block(o, ahead, accept);
@@ -2003,6 +2289,14 @@
         onFrame: onFrame,
         host: host,
         unhost: unhost,
+        // The network code: send what may go now, and drop what waits for a
+        // player who left.
+        pump: pump,
+        forget: forget,
+        // What the uploads are doing, for tests.
+        uploads: function() {
+            return { rate: up.rate, groups: up.groups.size, queued: Object.assign({}, up.queued), sent: up.sent };
+        },
         fetch: fetchMap,
         abort: function(reason) { abort(reason, KIND_MAP); },
         state: function() { return state(KIND_MAP); },
