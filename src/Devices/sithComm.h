@@ -30,5 +30,6 @@ void sithComm_SyncWithPlayers();
 void sithComm_ClearMsgTmpBuf();
 int sithComm_cogMsg_Reset(SithMessage *msg);
 void sithComm_ForgetSender(int idx); // Added
+void sithComm_ForgetRecipient(int playerIdx); // Added
 
 #endif // _DEVICES_SITHCOMM_H

@@ -111,6 +111,12 @@ jobs:
           cc -std=c11 -O2 -Wall -Werror -o motion-test packaging/wasm/test/motion-test.c \
              src/Platform/Networking/WSRelay/stdComm_WSRelayPlayout.c -lm
           ./motion-test
+      # The resend buffer for reliable game messages, in C with the tree's
+      # own code and made-up games and network: acks for every message id,
+      # the count of messages waiting, resends and when they stop, a player
+      # index that changes hands, and how a receiver acks and drops repeats.
+      - name: Test reliable messages
+        run: sh packaging/wasm/test/sithcomm-test.sh
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build
