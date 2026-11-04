@@ -1355,6 +1355,7 @@
     // computer or the router, so the rate starts low and only grows on a
     // sign that sees those. A part asked for again while it waits isn't
     // queued twice: it goes the way of the newer request.
+
     // What may wait on the way a part goes before another goes: on the
     // lobby's or Imperial's socket in a match, outside one, and on a map
     // channel outside a match and in one.
