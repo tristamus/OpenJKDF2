@@ -66,6 +66,7 @@ void jkrelay_SetSendSeq(uint32_t seq);
 int jkrelay_LastRecvSeq(uint32_t* pSeq);
 void jkrelay_SetBigHandler(void (*fn)(uint32_t from, const uint8_t* p, size_t n));
 int jkrelay_SendBig(uint32_t idFrom, uint32_t idTo, const uint8_t* p, size_t n);
+int jkrelay_SendBacklog(void);
 uint32_t jkrelay_LocalSystemId(void);
 uint32_t jkrelay_HostSystemId(void);
 int jkrelay_IsHost(void);
@@ -258,17 +259,24 @@ static void imperial_SessionToEntry(const dps_session* s, jkMultiEntry* e)
 // frames. maps.js knows players as the lobby numbers them, the host 1 and
 // joiners 2..64, so a host gives each joiner's machine a number. maps.js puts
 // what it sends in a queue (Module.jkImperial.mapSend), which the engine
-// sends from (imperial_XferPump), at most IMPERIAL_XFER_RATE bytes a second.
+// sends from (imperial_XferPump), at most IMPERIAL_XFER_RATE bytes a second,
+// and nothing while the relay's WebSocket has IMPERIAL_XFER_BACKLOG waiting:
+// the host's game packets go on it too. maps.js paces what it puts there in a
+// match (someone was heard from in the last 2 s), by what waits in the queue
+// and the socket; the computer's and the router's queues can't be seen from
+// here, so it stays at the low rate it starts at.
 // ---------------------------------------------------------------------------
 #define IMPERIAL_XFER_RATE  (1024 * 1024)
 #define IMPERIAL_XFER_BURST (64 * 1024)
 #define IMPERIAL_XFER_MAX   (64 * 1024 + 64)
+#define IMPERIAL_XFER_BACKLOG (16 * 1024)
 
 static uint32_t imperial_aXferSys[65];   // [2..64]: the machine a number stands for
 static int imperial_nextXferAlias = 2;
 static double imperial_xferTokens = IMPERIAL_XFER_BURST;
 static uint32_t imperial_xferTokensMs = 0;
 static uint8_t imperial_aXferBuf[IMPERIAL_XFER_MAX];
+static uint32_t imperial_msecHeard = 0;  // the last game packet from another player
 
 EM_JS(void, imperial_js_xfer_init, (int bActive), {
     if (!Module.jkImperial) {
@@ -279,9 +287,42 @@ EM_JS(void, imperial_js_xfer_init, (int bActive), {
             return 'direct';
         };
         Module.jkImperial.mapDirect = function(id) { return !!Module.jkImperial.active; };
+        // What waits to go: the queue, and the relay's WebSocket.
+        Module.jkImperial.mapBacklog = function(id, via) {
+            var n = 0;
+            Module.jkImperial.out.forEach(function(f) { n += f.b.length; });
+            var socks = Module.jkrWs ? Module.jkrWs.socks : {};
+            for (var k in socks) {
+                n += socks[k].ws ? socks[k].ws.bufferedAmount || 0 : 0;
+                socks[k].out.forEach(function(d) { n += d.length; });
+            }
+            return n;
+        };
+        Module.jkImperial.mapInMatch = function(id) { return !!Module.jkImperial.inMatch; };
+        // Only what waits in the browser shows, which can say a queue is
+        // building but never that none is.
+        Module.jkImperial.mapCongested = function() {
+            return Module.jkImperial.mapBacklog() >= 16384 ? true : null;
+        };
     }
+    // Parts maps.js has waiting were numbered for the other connection.
+    if (Module.jkImperial.active !== !!bActive && Module.jkMaps && Module.jkMaps.forget) Module.jkMaps.forget();
     Module.jkImperial.active = !!bActive;
     if (!bActive) Module.jkImperial.out = [];
+});
+
+// maps.js sends what may go now (its pacing), before the engine sends from the queue.
+EM_JS(void, imperial_js_xfer_serve, (int bInMatch), {
+    if (!Module.jkImperial) return;
+    Module.jkImperial.inMatch = !!bInMatch;
+    if (Module.jkImperial.active && Module.jkMaps && Module.jkMaps.pump) Module.jkMaps.pump();
+});
+
+// Number id stands for another machine now: nothing waiting is for it.
+EM_JS(void, imperial_js_xfer_forget, (int id), {
+    if (Module.jkMaps && Module.jkMaps.forget) Module.jkMaps.forget(id);
+    var q = Module.jkImperial && Module.jkImperial.out;
+    if (q) Module.jkImperial.out = q.filter(function(f) { return f.id !== id; });
 });
 
 // The next frame maps.js queued (its size, with *pTo), 0 if it doesn't fit, -1 if none.
@@ -370,6 +411,7 @@ static uint32_t imperial_XferAliasOf(uint32_t sysId)
     int a = imperial_nextXferAlias;
     imperial_nextXferAlias = a >= 64 ? 2 : a + 1;
     imperial_aXferSys[a] = sysId;
+    imperial_js_xfer_forget(a);
     return (uint32_t)a;
 }
 
@@ -383,10 +425,12 @@ static void imperial_BigFrame(uint32_t from, const uint8_t* p, size_t n)
         imperial_js_xfer_frame(1, p, (int)n);
 }
 
-// Sends what maps.js queued, as fast as IMPERIAL_XFER_RATE allows.
+// Sends what maps.js queued, as fast as IMPERIAL_XFER_RATE allows, while the
+// relay's WebSocket has little waiting.
 static void imperial_XferPump()
 {
     uint32_t now = stdPlatform_GetTimeMsec();
+    imperial_js_xfer_serve(imperial_bInGame && imperial_msecHeard && now - imperial_msecHeard < 2000);
     imperial_xferTokens += (double)(now - imperial_xferTokensMs) * (IMPERIAL_XFER_RATE / 1000.0);
     if (imperial_xferTokens > IMPERIAL_XFER_BURST)
         imperial_xferTokens = IMPERIAL_XFER_BURST;
@@ -394,6 +438,8 @@ static void imperial_XferPump()
 
     while (imperial_xferTokens > 0)
     {
+        if (jkrelay_SendBacklog() >= IMPERIAL_XFER_BACKLOG)
+            break;
         int to = 0;
         int n = imperial_js_xfer_take(imperial_aXferBuf, sizeof(imperial_aXferBuf), &to);
         if (n < 0)
@@ -976,6 +1022,7 @@ int stdComm_Imperial_Receive(int* pIdOut, int* pMsgIdOut, int* pLenOut)
             *pLenOut = (int)size;
             *pIdOut = (int)from;
             jkrelay_LastRecvSeq(&imperial_recvSeq);
+            imperial_msecHeard = stdPlatform_GetTimeMsec();
             return 0;
         }
 

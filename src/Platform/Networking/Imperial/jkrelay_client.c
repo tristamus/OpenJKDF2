@@ -119,6 +119,16 @@ EM_JS(int, jkr_js_recv, (int id, void* p, int cap), {
     return n;
 });
 
+// What a socket has yet to send: what waits for it to open, and what the
+// browser hasn't passed on yet.
+EM_JS(int, jkr_js_buffered, (int id), {
+    var s = Module.jkrWs && Module.jkrWs.socks[id];
+    if (!s) return 0;
+    var n = s.ws ? s.ws.bufferedAmount || 0 : 0;
+    for (var i = 0; i < s.out.length; i++) n += s.out[i].length;
+    return n;
+});
+
 EM_JS(void, jkr_js_close, (int id), {
     var s = Module.jkrWs && Module.jkrWs.socks[id];
     if (!s) return;
@@ -2421,6 +2431,17 @@ int jkrelay_IsHost(void)
 {
     return R.inSession && R.isHost;
 }
+
+#ifdef __EMSCRIPTEN__
+// Bytes the relay server's WebSocket has yet to send. A browser host's map
+// transfers wait while it has much (stdComm_Imperial.c), since its game
+// packets go on the same socket.
+int jkrelay_SendBacklog(void)
+{
+    if (R.sock < 0 || R.sock >= JKR_WS_MAX_SOCKS || !jkr_wsSocks[R.sock].ws) return 0;
+    return jkr_js_buffered(jkr_wsSocks[R.sock].ws);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Hosts' admin (2026-10-29, jkrelay_proto.h): a dedicated server hosting here has
