@@ -250,6 +250,32 @@ test('a queue on the way, for a host\'s paced map uploads: each ping counts once
     assert.ok(host.ns.queueMs() > 100, 'two of three');
 });
 
+test('what the host\'s page was too busy to read in time isn\'t a queue on the way, and a queue past that still shows', () => {
+    const { world, host } = match({ oneWay: 20 });
+    world.run(10000);
+    host.ns.queueMs();
+    // From now on the host's page takes what comes a while late (slow
+    // frames), and its frames say how late it may have (Module.jkHeld, from
+    // stdComm_WSRelay.c's wsrelay_js_frame): 300 ms.
+    let late = 300;
+    const inbound = host.ns.inbound;
+    host.ns.inbound = (...a) => world.later(() => inbound(...a), late);
+    host.Module.jkHeld = { from: t => t - 300 };
+    world.run(1100);
+    near(host.ns.queueMs(), 0, 0.5, 'held, not queued');
+    // Without the frames' word it would look like one.
+    host.Module.jkHeld = null;
+    world.run(1100);
+    near(host.ns.queueMs(), 300, 0.5, 'unknown');
+    // 200 ms more than the page held it: a queue.
+    host.Module.jkHeld = { from: t => t - 300 };
+    late = 500;
+    world.run(2000);
+    host.ns.queueMs();
+    world.run(1000);
+    near(host.ns.queueMs(), 200, 0.5, 'queued');
+});
+
 test('a game without netstats.js is pinged less once it never answers', () => {
     const world = makeWorld();
     const host = makeGame(world, { id: 1, isHost: true });

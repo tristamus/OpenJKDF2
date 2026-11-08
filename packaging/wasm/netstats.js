@@ -306,7 +306,7 @@
     function newPath() {
         // sent: seq -> time, for pings not yet answered; pings: the last
         // KEEP_PINGS, {seq, t, back}.
-        return { seq: 0, sent: {}, pings: [], rtts: [], back: 0, backTold: 0, quiet: 0, nextAt: 0 };
+        return { seq: 0, sent: {}, pings: [], rtts: [], held: 0, back: 0, backTold: 0, quiet: 0, nextAt: 0 };
     }
 
     function player(id) {
@@ -444,6 +444,11 @@
         var t = clock.now(), rtt = t - sent;
         path.back++;
         path.rtts.push(rtt);
+        // How much of it the host's page may have been too busy to read the
+        // answer (stdComm_WSRelay.c's Module.jkHeld): a slow frame isn't a
+        // queue on the way (queueMs).
+        var h = Module.jkHeld, from = h && h.from ? h.from(t) : t;
+        path.held = rtt - Math.max(0, Math.min(rtt, from - sent));
         if (path.rtts.length > KEEP_RTTS) path.rtts.shift();
         if (path === p.game) p.pings.add(rtt);
         path.quiet = 0;
@@ -1325,14 +1330,16 @@
         // shortest kept, in ms, as most of the players still heard from see
         // it at least (one player's own jittery link isn't a queue on the
         // host's): a queue building on the way, which a host's paced map
-        // uploads slow down for (maps.js). null where nothing was measured
-        // since it was last asked, so each ping counts once.
+        // uploads slow down for (maps.js). Less what this page may have held
+        // up the last answer (gotPong), so never more than it was on the way.
+        // null where nothing was measured since it was last asked, so each
+        // ping counts once.
         queueMs: function() {
             var rises = [], fresh = false, t = clock.now();
             for (var id in players) {
                 var g = players[id].game, r = g.rtts;
                 if (r.length < 2 || t - players[id].heard > GONE_MS) continue;
-                rises.push(r[r.length - 1] - Math.min.apply(null, r));
+                rises.push(r[r.length - 1] - g.held - Math.min.apply(null, r));
                 if (g.back !== g.backTold) fresh = true;
                 g.backTold = g.back;
             }
