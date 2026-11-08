@@ -173,7 +173,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         net = Module.jkNet = { state: 2, queue: [], ws: null, peers: {}, isHost: false, ice: null, netcode: netcode,
                                stats: { dcSent: 0, dcRecv: 0, wsSent: 0, wsRecv: 0, wsSkipped: 0,
                                         fastSent: 0, fastRecv: 0, fastOld: 0, fastBacklog: 0 },
-                               log: [], lastFrom: {}, playedAt: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
+                               log: [], lastFrom: {}, playedAt: {}, sentPlayAt: {}, seat: null, entry: "", rejoinMs: 1000, relayPosAt: {},
                                seqTo: {}, seqSent: {}, seqFrom: {}, links: {}, lobbyCan: [], pending: {},
                                bulk: {}, bulkUse: {},
                                turn: null, turnEnds: 0, iceUntil: 0, iceAsked: false, iceAskedAt: 0, iceWaiters: [],
@@ -921,15 +921,25 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             return net.state === 1 ? net.ws.bufferedAmount || 0 : 0;
         };
 
-        /* A host is in a match while anyone but player id (who downloads,
-           and sends no game packets meanwhile) sent a game packet in the
-           last 2 s. Uploads to id then go paced, so they don't hold up the
-           others' game. */
+        /* A host is in a match while a player other than id (who
+           downloads, and sends no game packets meanwhile) plays: a game
+           packet came from them in the last 2 s, or one came in the last
+           minute and the host's game still sends them its own (it does each
+           frame while they're in it, net.sentPlayAt). A tab that stalls goes
+           quiet for seconds, and the uploads went at once meanwhile
+           (pacing-test.mjs); the host's game sends to it until it drops the
+           player, and 10 s covers a frame of the host's own that long, after
+           which the first look comes before the frame's sends. A joiner that
+           downloads before anyone plays gets nothing from the host's game,
+           which doesn't know it yet: its uploads still go at once. Uploads to
+           id go paced in a match, so they don't hold up the others' game. */
         net.mapInMatch = function(id) {
             if (!net.isHost) return false;
             var now = performance.now();
             for (var k in net.playedAt) {
-                if (+k !== id && now - net.playedAt[k] < 2000) return true;
+                if (+k === id) continue;
+                var heard = now - net.playedAt[k];
+                if (heard < 2000 || (heard < 60000 && now - net.sentPlayAt[k] < 10000)) return true;
             }
             return false;
         };
@@ -1495,6 +1505,8 @@ EM_JS(int, wsrelay_js_send_text, (const char* pText), {
 EM_JS(int, wsrelay_js_send_packet, (const void* pData, int len, int idTo, int ownPos), {
     var net = Module.jkNet;
     if (!net) return 0;
+    // The host's game sends to the players in it (net.mapInMatch).
+    if (net.isHost && idTo > 1) net.sentPlayAt[idTo] = performance.now();
     return net.sendPacket(HEAPU8.slice(pData, pData + len), net.route(idTo), ownPos ? net.nextSeq(idTo) : undefined);
 });
 
@@ -1509,6 +1521,7 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     net.isHost = !!isHost;
     net.lastFrom = {};
     net.playedAt = {};
+    net.sentPlayAt = {};
     net.relayPosAt = {};
     net.seqTo = {};
     net.seqSent = {};

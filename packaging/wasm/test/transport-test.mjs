@@ -1455,6 +1455,50 @@ test('in a match the host turns down new transfer links, and takes them before o
     assert.equal(host.net.bulkCount(), 3, 'taken once the match is quiet');
 });
 
+test('a player whose tab stalls still counts as playing while the host\'s game sends to them', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    // Player 3 plays and the host's game sends to them; player 2 downloads.
+    let quiet = false;
+    const hears = world.every(() => quiet || send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    let sends = world.every(() => send(host, 3, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(300);
+    assert.ok(host.net.mapInMatch(2));
+    // Their tab stalls for 12 s: still in a match all along.
+    quiet = true;
+    for (let i = 0; i < 24; i++) {
+        await world.run(500);
+        assert.ok(host.net.mapInMatch(2), 'not in a match ' + (i + 1) * 500 + ' ms into it');
+    }
+    quiet = false;
+    await world.run(300);
+    // The host's game drops them and sends them nothing: out of the match
+    // 10 s on.
+    world.cancel(sends);
+    quiet = true;
+    await world.run(9500);
+    assert.ok(host.net.mapInMatch(2));
+    await world.run(600);
+    assert.ok(!host.net.mapInMatch(2));
+    // Sent to but not heard from for a minute (10.1 s of it gone): not
+    // playing.
+    sends = world.every(() => send(host, 3, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(49000);
+    assert.ok(host.net.mapInMatch(2));
+    await world.run(1000);
+    assert.ok(!host.net.mapInMatch(2));
+    // The host's game sending to the one downloading doesn't count for their
+    // own download, though they played before; it does for another's.
+    world.cancel(sends);
+    world.cancel(hears);
+    send(a, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4]));
+    sends = world.every(() => send(host, 2, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(10500);
+    assert.ok(!host.net.mapInMatch(2));
+    assert.ok(host.net.mapInMatch(3));
+    world.cancel(sends);
+});
+
 test('links set up as players join don\'t count as a match: two joining at once both get transfer links', async () => {
     const world = makeWorld();
     const [host, a, b] = await room(world, [2, 3]);

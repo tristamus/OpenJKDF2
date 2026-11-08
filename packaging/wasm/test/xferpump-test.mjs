@@ -27,11 +27,11 @@ const source = readFileSync(new URL('../../../src/Platform/Networking/Imperial/s
 
 // The pump, its constants and its state, as the file has them.
 const defines = source.match(/^#define IMPERIAL_XFER_\w+ .*$/gm);
-const state = source.match(/^static [\w ]+ imperial_(aXferSys|aXferSeen|msecXferGone|nextXferAlias|xferTokens|xferTokensMs|aXferBuf|msecHeard)\b.*;.*$/gm);
+const state = source.match(/^static [\w ]+ imperial_(aXferSys|aXferSeen|msecXferGone|nextXferAlias|xferTokens|xferTokensMs|aXferBuf|msecHeard|msecSent)\b.*;.*$/gm);
 const from = source.indexOf('static void imperial_XferForgetGone(');
 const at = source.indexOf('static void imperial_XferPump()');
 const pump = source.slice(from, source.indexOf('\n}\n', at) + 3);
-if (!defines || defines.length < 5 || !state || state.length < 8 || from < 0 || at < from)
+if (!defines || defines.length < 5 || !state || state.length < 9 || from < 0 || at < from)
     throw new Error("couldn't find imperial_XferPump and what it uses");
 
 const harness = `
@@ -176,7 +176,7 @@ int main(void)
     // maps.js hears whether the host is in a match: a game packet from
     // another player in the last 2 s, in a game.
     reset(0);
-    imperial_msecHeard = 0;
+    imperial_msecHeard = imperial_msecSent = 0;
     imperial_XferPump();
     CHECK(lastInMatch == 0, "in a match before hearing anyone");
     imperial_msecHeard = simMs;
@@ -186,6 +186,22 @@ int main(void)
     simMs += 2;
     imperial_XferPump();
     CHECK(lastInMatch == 0, "in a match 2001 ms after a packet");
+    // Or one in the last minute, while this game still sends its own to the
+    // others: a player whose tab stalls goes quiet for seconds.
+    imperial_msecSent = simMs;
+    simMs += 8000;
+    imperial_XferPump();
+    CHECK(lastInMatch == 1, "not in a match 10 s after a packet, with the game sending 8 s ago");
+    imperial_msecSent = simMs - 10001;
+    imperial_XferPump();
+    CHECK(lastInMatch == 0, "in a match with the game sending to no one for 10 s");
+    imperial_msecHeard = simMs - 60001;
+    imperial_msecSent = simMs;
+    imperial_XferPump();
+    CHECK(lastInMatch == 0, "in a match a minute after the last packet");
+    imperial_msecHeard = 0;
+    imperial_XferPump();
+    CHECK(lastInMatch == 0, "in a match with the game sending, before hearing anyone");
     imperial_msecHeard = simMs;
     imperial_bInGame = 0;
     imperial_XferPump();

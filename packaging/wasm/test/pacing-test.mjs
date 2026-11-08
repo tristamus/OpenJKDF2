@@ -858,6 +858,31 @@ test('through the lobby at 2 Mbit/s up, the host\'s page busy 3 s as the first a
     assert.ok(busy.xfer < fast.xfer * 1.25, `${busy.xfer.toFixed(1)} s, ${fast.xfer.toFixed(1)} s`);
 });
 
+// The other player's tab stalls 10 s, 10 s into the download: it sends
+// nothing, the host's game goes on sending to it. The upload stays paced,
+// and the game packets to it then wait no longer than before.
+const QUIET = { quietAt: 10000, quietFor: 10000 };
+const quietMax = r => Math.round(Math.max(...r.waitsAt.filter(([t]) => t >= QUIET.quietAt && t < QUIET.quietAt + QUIET.quietFor + 5000).map(([, w]) => w)));
+for (const s of [
+    { path: 'relay', mbit: 1, mapBytes: 8000000 },
+    { path: 'relay', mbit: 2, mapBytes: 8000000 },
+    { path: 'direct', mbit: 5, mapBytes: 8000000 },
+]) {
+    const what = nameSlow(s) + ', the other player silent 10 s';
+    test(what + ': still a match, so the upload stays paced', async () => {
+        const paced = await run({ ...s, ...QUIET, K, paced: true });
+        const old = await run({ ...s, ...QUIET, K, paced: false, limitMs: 300000 });
+        console.log('    paced     ' + describe(what, paced) + `; max wait while silent and 5 s on ${quietMax(paced)} ms`);
+        console.log('    live host ' + describe(what, old) + `; max wait while silent and 5 s on ${quietMax(old)} ms`);
+        assert.ok(paced.ok);
+        assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+        assert.equal(paced.reasks, 0);
+        assert.ok(quietMax(paced) < 1000, 'game packets wait ' + quietMax(paced) + ' ms while silent');
+        assert.ok(quietMax(paced) * 4 < quietMax(old), `${quietMax(paced)} ms, live host ${quietMax(old)} ms`);
+        assert.ok(paced.max < 1000, 'game packets wait ' + paced.max + ' ms');
+    });
+}
+
 let failed = 0;
 for (const t of tests) {
     try {
