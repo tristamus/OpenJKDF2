@@ -50,7 +50,11 @@
 // With hostEveryMs, the frames start that many ms apart instead, and the page
 // waits for nothing between them (a 30 Hz display, the FPS limit, a hidden
 // tab's timer): what comes in during one is taken right after it, and
-// between them at once.
+// between them at once. With hostBlockMs, the page stays busy that long
+// after each frame, its own message taken first: what comes in meanwhile
+// waits for the end of it, as in headless Chromium on a loaded machine,
+// where the host page's timer ran late 129 s of 143 while its game's
+// frames ran 4 ms (median) and waited 74 ms for the next refresh.
 // Without hostFrameMs, nothing waits for the page, and the engine's frame
 // comes every 16 ms.
 //
@@ -100,22 +104,24 @@ function bindJs(fns, env) {
 // page takes it; post(fn), a message it posted to itself. frameStarts(fn,
 // timers) runs fn at the start of each of the game's frames. The page is busy
 // for busyFor ms first (a level loading), and its frames are F ms from slowAt
-// on, 16 ms before (the menus), every ms apart if given, else back to back.
-function hostPage(clock, F, slowAt = 0, busyFor = 0, every = 0) {
+// on, 16 ms before (the menus), every ms apart if given, else back to back,
+// and the page busy block ms after each.
+function hostPage(clock, F, slowAt = 0, busyFor = 0, every = 0, block = 0) {
     const start = clock.now(), busyUntil = start + busyFor;
-    const period = every || F + 1, T0 = start + Math.max(slowAt, busyFor);
-    // The frame t falls in, [start, end], or null between frames.
+    const period = every || F + block + 1, T0 = start + Math.max(slowAt, busyFor);
+    // The frame t falls in, or the time the page is busy after it: [start,
+    // end of the busy time, end of the frame], or null between frames.
     const frameAt = t => {
         if (t < busyUntil)
-            return [start, busyUntil];
+            return [start, busyUntil, busyUntil];
         if (!F || t < T0)
             return null;
         const s = T0 + Math.floor((t - T0) / period) * period;
-        return t < s + F ? [s, s + F] : null;
+        return t < s + F + block ? [s, s + F + block, s + F] : null;
     };
     // Read after the frame after the one it came in, or at 16 ms, or with
     // time between them, its own.
-    const hops = F > 16 && !every ? 1 : 0;
+    const hops = F > 16 && !every && !block ? 1 : 0;
     const page = {
         deliver(fn) {
             const now = clock.now(), f = frameAt(now);
@@ -125,7 +131,7 @@ function hostPage(clock, F, slowAt = 0, busyFor = 0, every = 0) {
         },
         post(fn) {
             const now = clock.now(), f = frameAt(now);
-            clock.setTimeout(fn, f ? f[1] - now : 0);
+            clock.setTimeout(fn, f ? (now < f[2] ? f[2] : f[1]) - now : 0);
         },
         frameStarts(fn, timers) {
             timers.push(clock.setInterval(() => {
@@ -207,7 +213,8 @@ const retailInstall = {
 // channel, at frames frameMs apart, and windowBytes of it may be on the way
 // or not taken yet. slowFor: after this long into the download it takes all
 // that came at each frame.
-// hostFrameMs, hostSlowAt, hostEveryMs: the host's page is slow (see the top);
+// hostFrameMs, hostSlowAt, hostEveryMs, hostBlockMs: the host's page is slow
+// (see the top);
 // hostBusyFor: it's busy that long first, as the lobby's or the relay server's
 // first answers come.
 // quietAt, quietFor (through the lobby or directly): the other player sends
@@ -215,9 +222,9 @@ const retailInstall = {
 // the host's game goes on sending to it.
 async function run({ mbit, K, mapBytes, path, paced, pong = true, lost = [], limitMs = 900000, matchAt = 0,
                      takes = 0, frameMs = 16, windowBytes = 256 * 1024, slowFor = Infinity,
-                     hostFrameMs = 0, hostSlowAt = 0, hostBusyFor = 0, hostEveryMs = 0, quietAt = Infinity, quietFor = 0 }) {
+                     hostFrameMs = 0, hostSlowAt = 0, hostBusyFor = 0, hostEveryMs = 0, hostBlockMs = 0, quietAt = Infinity, quietFor = 0 }) {
     const clock = makeClock();
-    const page = hostPage(clock, hostFrameMs, hostSlowAt, hostBusyFor, hostEveryMs);
+    const page = hostPage(clock, hostFrameMs, hostSlowAt, hostBusyFor, hostEveryMs, hostBlockMs);
     const C = mbit * 1e6 / 8;
     const up = uplink(clock, C, K);
     const gob = makeGob([{ name: 'episode.jk', bytes: randomBytes(1000) }, { name: 'big.jkl', bytes: randomBytes(mapBytes) }]);
@@ -721,7 +728,7 @@ for (const s of [
     });
 }
 
-test('on the Imperial Network Protocol at 3.5-4.5 Mbit/s up, and at 2 Mbit/s with the host\'s frames 30 a second: game packets wait under 600 ms', async () => {
+test('on the Imperial Network Protocol at 3.5-4.5 Mbit/s up, and at 2 Mbit/s with the host\'s frames 30 a second: game packets wait under 600 ms (1 s at 30 frames a second)', async () => {
     // The relay server answers every 2 s at most: a rate that doubled at
     // each answer went from just under such an upload to twice it, and what
     // it sent over waited in the computer and the router until the next
@@ -739,7 +746,9 @@ test('on the Imperial Network Protocol at 3.5-4.5 Mbit/s up, and at 2 Mbit/s wit
         assert.ok(r.ok);
         assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
         assert.equal(r.reasks, 0);
-        assert.ok(r.max < 600, `${what}: game packets wait ${r.max} ms`);
+        // At 30 frames a second up to two frames of a queue are taken for
+        // the page's (see the test with the page busy between frames).
+        assert.ok(r.max < (s.hostFrameMs ? 1000 : 600), `${what}: game packets wait ${r.max} ms`);
     }
 });
 
@@ -942,23 +951,31 @@ test('through the lobby at 2 Mbit/s up, the host\'s frames 16 and 33 ms: the que
     }
 });
 
-test('through the lobby, the host\'s frames short but far apart (a 30 Hz display, the FPS limit): the queue seen as at full speed', async () => {
-    // Answers that came between frames were read at once: none of it is
-    // taken off as the page's (judged by the time between frames' ends,
-    // 60-100 ms was at 30 frames a second, and game packets waited up to
-    // 669 ms at 5 Mbit/s, 1264 ms at 2 Mbit/s and 10 frames a second).
-    for (const [mbit, F, every] of [[5, 3, 33], [2, 5, 100]]) {
-        const s = { path: 'relay', mbit, mapBytes: 8000000 };
+test('the host\'s frames short, the page busy 150 ms after each (as headless Chromium on a loaded machine): what it held isn\'t taken for a queue', async () => {
+    // Its game's frames ran a few ms and the page waited for the next
+    // refresh, busy meanwhile, so the answers came late with nothing on the
+    // way. Taking off only what came in during the frames themselves, as
+    // 1567b38 did for frames short but far apart (a 30 Hz display, the FPS
+    // limit, where between frames the page reads what comes at once), said
+    // a queue at nearly every look: the upload went at the least rate, the
+    // map took 332 s here, 193 s in Chromium, not 9 and 26. So a frame's
+    // answers count as held since the frame two before ended, and frames
+    // short and far apart on an idle page take off up to that much of a
+    // queue (pacing-test: game packets wait p95 355 ms, max 669 at 5 Mbit/s
+    // and 30 frames a second, 101 and 331 at full speed).
+    for (const path of ['relay', 'direct', 'imperial']) {
+        const s = { path, mbit: 20, mapBytes: 8000000 };
         const fast = await run({ ...s, K, paced: true });
-        const r = await run({ ...s, K, paced: true, hostFrameMs: F, hostEveryMs: every, hostSlowAt: 1000 });
-        console.log('    ' + describe(`${mbit} Mbit/s, full speed`, fast));
-        console.log('    ' + describe(`${mbit} Mbit/s, frames of ${F} ms every ${every} ms`, r));
+        const r = await run({ ...s, K, paced: true, hostFrameMs: 4, hostBlockMs: 150, hostSlowAt: 1000 });
+        const what = `${path}, 20 Mbit/s up, 8 MB`;
+        console.log('    ' + describe(what + ', full speed', fast));
+        console.log('    ' + describe(what + ', frames of 4 ms, the page busy 150 ms after each', r) + `; a queue said at ${r.looks.yes} of ${r.looks.yes + r.looks.no + r.looks.none} looks`);
         assert.ok(r.ok);
         assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
         assert.equal(r.reasks, 0);
-        assert.ok(r.looks.yes > 0);
-        assert.ok(r.p95 < fast.p95 * 1.5, `p95 wait ${r.p95} ms, ${fast.p95} ms at full speed`);
-        assert.ok(r.max < 500, 'game packets wait ' + r.max + ' ms');
+        assert.ok(r.looks.yes <= 2, 'a queue said at ' + r.looks.yes + ' looks');
+        assert.ok(r.xfer < fast.xfer * 1.5 + 2, `${r.xfer.toFixed(1)} s, ${fast.xfer.toFixed(1)} s at full speed`);
+        assert.ok(r.max < 1000, 'game packets wait ' + r.max + ' ms');
     }
 });
 

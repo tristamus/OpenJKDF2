@@ -1629,30 +1629,27 @@ EM_JS(void, wsrelay_js_map_unhost, (), {
 // at 16 ms right after it, but Chrome runs the next frame first when the
 // refresh is already due, and a message that came during a frame of 33 or
 // 400 ms was read after the frame after it, before the page took its own
-// (measured): the page takes what came in the order it came. So of a message
-// read at t, after the last frame noted as started by then (Module.jkHeld.from):
-// - read after the page took that frame's own message, it came after the
-//   frame's start was noted, and was held up no longer than the frame ran;
-//   between frames the page reads what comes at once.
-// - read before that, it came before the frame's start was noted: during the
-//   frame before, if that one ran long and this one came right after it (no
-//   more than 20 ms on), as when the refresh is already due, so no sooner
-//   than that one's start; otherwise at this frame's start, as far as the
-//   page can tell (a frame is noted at its first step, after only its timers
-//   and the player's input).
-// One not read by t hadn't come by then either. Up to 20 ms isn't taken off
-// at all, as before frames were noted (the 80 ms the pacing takes for a
-// queue allows for it): at 60 frames a second that's a whole frame at each
-// answer, mostly more than the page held it up, and in pacing-test.mjs's
-// model game packets waited up to 400 ms, not 270. So frames that run 20 ms
-// or less take nothing off, however far apart they come (a 30 Hz display,
-// the FPS limit, a hidden tab's timer). Judged by the time from one frame's
-// end to the next's, frames of 3 ms 30 a second took 60-100 ms off answers
-// the page had read as they came, and a queue that long went unseen. A frame
-// that doesn't call this, or starts before the page took the last one's
-// message, counts as part of the one before, which only takes off less.
-// Nothing is taken off without MessageChannel, nor once no frame was noted
-// for a second (out of a match): what holds the page up then isn't known.
+// (measured). So a message read by t, after the last frame noted as started
+// by then, came no sooner than that frame's start if the frame before was
+// short (no more than 20 ms after the one before ended), and otherwise no
+// sooner than the end of the frame two before (Module.jkHeld.from). One not
+// read by t hadn't come by then either. Taken off a round trip, that can be
+// more than the page held it up by: frames that run briefly but come far
+// apart (a 30 Hz display, the FPS limit) on a page that reads what comes
+// between them at once take off up to the time since the frame two before
+// ended. But between frames the page is often busy, waiting for the next
+// refresh: in headless Chromium on a loaded machine the frames ran 4 ms
+// (median) while the page's timer ran late for 129 s of 143, and counting
+// only what came in during the frames themselves said a queue at nearly
+// every look, and the upload went at the least rate. Up to 20 ms
+// isn't taken off at all, as before frames were noted (the 80 ms the pacing
+// takes for a queue allows for it): at 60 frames a second that's a whole
+// frame at each answer, mostly more than the page held it up, and in
+// pacing-test.mjs's model game packets waited up to 400 ms, not 270. A frame that
+// doesn't call this, or starts before the page took the last one's message,
+// counts as part of the one before, which only takes off less. Nothing is
+// taken off without MessageChannel, nor once no frame was noted for a second
+// (out of a match): what holds the page up then isn't known.
 EM_JS(void, wsrelay_js_frame, (), {
     var h = Module.jkHeld;
     if (!h) {
@@ -1667,14 +1664,9 @@ EM_JS(void, wsrelay_js_frame, (), {
                 var f = h.frames[i];
                 if (f.start > t) continue;
                 if (f.end && t - f.end > 1000) return t;
-                var from;
-                if (f.end && t > f.end) {
-                    from = Math.max(f.start, t - (f.end - f.start));
-                } else {
-                    if (i < 1) break;
-                    var prev = h.frames[i - 1];
-                    from = prev.end - prev.start > 20 && f.start - prev.end <= 20 ? prev.start : f.start;
-                }
+                if (i < 2) break;
+                var two = h.frames[i - 2].end, one = h.frames[i - 1].end;
+                var from = one - two <= 20 ? Math.min(f.start, one + 20) : two;
                 return t - from <= 20 ? t : from;
             }
             return -Infinity;

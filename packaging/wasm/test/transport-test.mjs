@@ -464,19 +464,16 @@ function message(n) {
 // (wsrelay_js_frame) and then look() runs, as the map pump does. What comes
 // on the lobby's socket during one is taken after the frame after it, as
 // Chrome does with frames of 33 ms and more, and a message the page posts to
-// itself right after its own frame. With every, the frames start every that
-// many ms instead, and the page waits for nothing between them (a 30 Hz
-// display, the FPS limit, a hidden tab's timer): what comes during one is
-// taken right after it, and between them at once. Returns what stops it.
-function slowFrames(world, game, F, look = () => {}, every = 0) {
-    const period = every || F + 1, T0 = world.now();
+// itself right after its own frame. Returns what stops it.
+function slowFrames(world, game, F, look = () => {}) {
+    const period = F + 1, T0 = world.now();
     const inFrame = t => (t - T0) % period < F;
     const frameEnd = t => T0 + Math.floor((t - T0) / period) * period + F;
     const ws = game.net.ws, deliver = ws.deliver;
     ws.deliver = function(data) {
         const now = world.now();
         if (!inFrame(now)) return deliver.call(ws, data);
-        world.later(() => deliver.call(ws, data), frameEnd(now) + (every ? 0 : period) - now);
+        world.later(() => deliver.call(ws, data), frameEnd(now) + period - now);
     };
     game.post = fn => world.later(fn, inFrame(world.now()) ? frameEnd(world.now()) - world.now() : 0);
     const frame = () => {
@@ -1650,7 +1647,9 @@ test('a slow page\'s frames as the network code notes them: what a message read 
     const game = makeGame(world, { id: 1 });
     let posted = [];
     game.post = fn => posted.push(fn);
-    // A frame noted at s that runs to e, the page's own message taken then.
+    const at = t => { while (world.now() < t) world.run(0); };
+    // A frame from s to e: noted at its start, the page's own message taken
+    // after it.
     const frame = (s, e) => {
         world.later(() => game.js.wsrelay_js_frame(), s - world.now());
         return world.run(s - world.now()).then(() => world.run(e - s)).then(() => {
@@ -1660,103 +1659,29 @@ test('a slow page\'s frames as the network code notes them: what a message read 
     return (async () => {
         const t0 = world.now();
         await frame(t0, t0 + 400);
-        const h = game.Module.jkHeld;
-        // Read after the page took a frame's own message: came during it at
-        // the soonest, and was held up no longer than it ran, though read
-        // 30 ms after it.
-        assert.equal(h.from(t0 + 400.5), t0 + 0.5);
-        assert.equal(h.from(t0 + 430), t0 + 30);
-        // Read before that, what came before it isn't known from one frame.
-        assert.equal(h.from(t0 + 399.5), -Infinity, 'one frame tells nothing of the one before');
         await frame(t0 + 401, t0 + 801);
+        const h = game.Module.jkHeld;
+        assert.equal(h.from(t0 + 802), -Infinity, 'two frames tell nothing');
         await frame(t0 + 802, t0 + 1202);
-        // Read after the third ran, before the page took its own message:
-        // came during the second at the soonest, as the third came right
-        // after it.
-        assert.equal(h.from(t0 + 1201.5), t0 + 401);
+        // Read after the third, before the page took its own message: came
+        // no sooner than the first ended.
+        assert.equal(h.from(t0 + 1202.5), t0 + 400);
         // In the fourth, as the map pump looks: the same for one not read.
         await frame(t0 + 1203, t0 + 1603);
-        assert.equal(h.from(t0 + 1203), t0 + 802);
+        assert.equal(h.from(t0 + 1203), t0 + 801);
         // 16 ms frames: what's read after one came during it at the soonest,
-        // or during the one before if read before the page took its own
-        // message, but no more than 20 ms is taken off.
+        // but no more than 20 ms is taken off.
         let t = t0 + 1604;
         for (let i = 0; i < 4; i++, t += 17)
             await frame(t, t + 16);
         assert.equal(h.from(t - 0.5), t - 0.5);
-        assert.equal(h.from(t - 1.5), t - 1.5);
-        assert.equal(h.from(t), t, 'as the map pump looks');
-        // Frames of 3 ms, 30 a second (a 30 Hz display, the FPS limit): what
-        // came between them was read at once, and nothing is taken off, read
-        // after a frame or between them, or as the map pump looks in the next.
-        t += 100;
-        for (let i = 0; i < 4; i++, t += 33)
-            await frame(t, t + 3);
-        t -= 33;
-        for (const at of [t + 3, t + 4, t + 20, t + 32, t + 2.5])
-            assert.equal(h.from(at), at, 'read ' + (at - t) + ' ms after the frame started');
-        await frame(t + 33, t + 36);
-        assert.equal(h.from(t + 33), t + 33, 'as the map pump looks');
-        // A hidden tab's timer, a frame of 3 ms each second: the same.
-        t += 1000;
-        for (let i = 0; i < 4; i++, t += 990)
-            await frame(t, t + 3);
-        t -= 990;
-        for (const at of [t + 3, t + 500, t + 989])
-            assert.equal(h.from(at), at);
-        // Frames of 40 ms every 100: no more than a frame is taken off a
-        // message read after one, and nothing as the map pump looks in the
-        // next, which came 60 ms after.
-        t += 2000;
-        for (let i = 0; i < 4; i++, t += 100)
-            await frame(t, t + 40);
-        t -= 100;
-        assert.equal(h.from(t + 40.5), t + 0.5);
-        assert.equal(h.from(t + 70), t + 30);
-        await frame(t + 100, t + 140);
-        assert.equal(h.from(t + 100), t + 100, 'as the map pump looks');
-        assert.equal(h.from(t + 139.5), t + 100, 'read before the page took the next one\'s message');
-        // A frame whose start was noted late in it, after short ones: what
-        // was read after the page took its message came after it was noted.
-        t += 200;
-        for (let i = 0; i < 4; i++, t += 17)
-            await frame(t, t + 16);
+        // A frame whose start was noted late in it takes 20 ms off at most
+        // after the short one before.
         await frame(t + 30, t + 46);
-        assert.equal(h.from(t + 47), t + 47);
+        assert.equal(h.from(t + 47), t - 1 + 20);
         // No frame noted for over a second: nothing taken off.
         assert.equal(h.from(t + 46 + 1001), t + 46 + 1001);
     })();
-});
-
-test('answers to a page whose short frames come far apart, read as they came, aren\'t taken as held up: a queue of 150 ms is said', async () => {
-    const world = makeWorld();
-    world.canLink = () => false;
-    const [host] = await room(world, [2]);
-    const net = host.net;
-    const base = net.lobbyPing.base;
-    assert.ok(base < 50);
-    // Frames of 3 ms, every 33 ms (30 a second), 100 ms and 990 ms (a hidden
-    // tab's timer): no queue, none said; then 150 ms more each round trip,
-    // said within as many looks as at 60 frames a second.
-    for (const every of [33, 100, 990]) {
-        // Back to no queue, and answered so (the last answer stands till the
-        // next).
-        world.lobby.delay = 20;
-        for (let i = 0; i < 12; i++) {
-            net.mapCongested(true);
-            await world.run(250);
-        }
-        const said = [];
-        const stop = slowFrames(world, host, 3, () => said.push(net.mapCongested(true)), every);
-        await world.run(every * 30);
-        assert.ok(!said.includes(true), 'said a queue at frames ' + every + ' ms apart');
-        said.length = 0;
-        world.lobby.delay = 20 + 150;
-        await world.run(Math.max(500, every * 6));
-        assert.ok(said.includes(true), 'no queue said at frames ' + every + ' ms apart: ' + net.mapWhy);
-        assert.ok(net.lobbyPing.low > base + 140, 'at least ' + Math.round(net.lobbyPing.low) + ' ms on the way');
-        stop();
-    }
 });
 
 test('a lobby that never answers ping (relay.py) says nothing about a queue, and is not pinged again', async () => {
