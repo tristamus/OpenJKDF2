@@ -1364,6 +1364,13 @@
     // a part back, so a match that starts while a download goes on waits for
     // what the computer and the router already hold to leave: some seconds
     // on a slow upload (pacing-test.mjs), as the rate stays at its least.
+    // In a match a map channel may also have what one pump may send at the
+    // rate (up.burst) waiting: what waits in its buffer holds up no one
+    // else's packets, which go on connections of their own, and at 2-3
+    // frames a second 64 KiB a pump held a fast upload to a few hundred KB/s
+    // whatever the rate, where the computer and the router hold little of
+    // the channel's (pacing-test.mjs). It waits only while the upload is
+    // slower than the rate, which the rate soon halves for.
     var PACE_LOW_SOCKET_MATCH = 16 * 1024;
     var PACE_LOW_SOCKET = 256 * 1024;
     var PACE_LOW_CHANNEL = 1024 * 1024;
@@ -1409,6 +1416,7 @@
         rate: PACE_START,
         slow: true,        // no queue seen since the rate started over
         tokens: 0,
+        burst: 0,          // the most tokens may come to
         at: 0,             // when tokens were last added
         sampledAt: 0,
         changedAt: 0,      // when the rate last grew or halved
@@ -1555,7 +1563,7 @@
         if (!net || !net.mapBacklog)
             return true;
         var low = onSocket(net, g) ? (inMatch ? PACE_LOW_SOCKET_MATCH : PACE_LOW_SOCKET)
-                                   : (inMatch ? PACE_LOW_CHANNEL_MATCH : PACE_LOW_CHANNEL);
+                                   : (inMatch ? Math.max(PACE_LOW_CHANNEL_MATCH, up.burst) : PACE_LOW_CHANNEL);
         return net.mapBacklog(g.to, g.via) < low;
     }
 
@@ -1639,8 +1647,8 @@
                 }
             }
             up.rate = Math.min(PACE_MAX, Math.max(least, up.rate));
-            var burst = up.rate * Math.max(50, up.gap, up.gapNow) / 1000;
-            up.tokens = Math.min(burst, up.tokens + Math.max(0, now - up.at) * up.rate / 1000);
+            up.burst = up.rate * Math.max(50, up.gap, up.gapNow) / 1000;
+            up.tokens = Math.min(up.burst, up.tokens + Math.max(0, now - up.at) * up.rate / 1000);
         }
         noteRate(net, now, inMatch);
         up.paced = inMatch;

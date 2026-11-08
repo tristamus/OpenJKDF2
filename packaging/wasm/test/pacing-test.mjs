@@ -817,6 +817,23 @@ for (const s of [
     });
 }
 
+test('over the map channel at 20 Mbit/s up, a 25 MB map, the host\'s frames 400 ms, with only 64 KiB of the channel\'s held where the page can\'t see it: a frame sends what the rate allows', async () => {
+    // What the computer and the router hold of a data channel's may be
+    // little (its window), and the rest waits in the browser: no more than
+    // 64 KiB of that a pump held the download to about 2.5 times that a
+    // second (72 s), however high the rate.
+    const s = { path: 'direct', mbit: 20, mapBytes: 25000000, ...SLOW };
+    const paced = await run({ ...s, K: 64 * 1024, paced: true });
+    const old = await run({ ...s, K: 64 * 1024, paced: false });
+    console.log('    paced     ' + describe(nameSlow(s), paced));
+    console.log('    live host ' + describe(nameSlow(s), old));
+    assert.ok(paced.ok);
+    assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+    assert.equal(paced.reasks, 0);
+    assert.ok(paced.xfer < old.xfer * 2.5 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+    assert.ok(paced.max <= old.max, `game packets wait ${paced.max} ms, live host ${old.max} ms`);
+});
+
 test('on the Imperial Network Protocol at 2 Mbit/s up, the host\'s frames 400 ms: the map comes sooner than from the live host, sent once', async () => {
     const s = { path: 'imperial', mbit: 2, mapBytes: 8000000, ...SLOW };
     const paced = await run({ ...s, K, paced: true });
