@@ -691,18 +691,21 @@ test('blocks lost when the link changes are asked for again', async () => {
     const g = makeGame({
         hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
         joinFiles: { ...retailInstall },
+        // The direct link goes down partway, with the first three parts on it
+        // lost; the rest comes through the relay. (It went down 20 ms in, which
+        // on a busy computer could be before the host had its map ready and
+        // anything went on it.)
         drop: f => {
             if (f.to !== 'join' || f.bytes[12] !== 6 || f.via !== 'direct' || dropped >= 3)
                 return false;
-            dropped++;
+            if (++dropped === 3)
+                g.link.direct = false;
             return true;
         },
     });
     g.host.jkMaps.host('ctf_test', 'gob');
     await hostReady(g.host);
     g.join.jkMaps.fetch('ctf_test', 'gob');
-    // The direct link goes down partway; the rest comes through the relay.
-    setTimeout(() => { g.link.direct = false; }, 20);
     assert.equal(await waitState(g.join), 1);
     assert.equal(dropped, 3);
     assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
@@ -804,9 +807,26 @@ function bigMap(n) {
 }
 
 async function hostOn(clock, g, name) {
-    g.host.jkMaps.host(name, 'gob');
-    // Hashing the map takes real time.
-    await new Promise(r => setTimeout(r, 200));
+    // Hashing the map takes real time, not the made-up clock's: until it's
+    // done the host has nothing to send, and a joiner that asked meanwhile
+    // waits for it on the made-up clock. A fixed 200 ms wasn't always enough
+    // for a 20 MB map on a busy computer (or now and then on an idle one),
+    // and a test that times the download or asks for blocks at once failed.
+    const log = console.log;
+    let ready = false;
+    console.log = (...a) => {
+        if (String(a[0]).startsWith('OpenJKDF2: ready to send map ' + name + '.gob '))
+            ready = true;
+        log(...a);
+    };
+    try {
+        g.host.jkMaps.host(name, 'gob');
+        for (let i = 0; !ready && i < 3000; i++)
+            await new Promise(r => setTimeout(r, 10));
+    } finally {
+        console.log = log;
+    }
+    assert.ok(ready, 'the host never got ' + name + ' ready');
 }
 
 // Joiner id's requests, made up: blocks first..first+count-1 with parts of
@@ -950,7 +970,11 @@ test('outside a match a paced host sends as fast as its links take it', async ()
     g.tab(2).jkMaps.fetch('ctf_fast', 'gob');
     assert.ok(await clock.until(() => g.tab(2).jkMaps.state() !== 0, 60000, 10));
     assert.equal(g.tab(2).jkMaps.state(), 1);
-    assert.ok(clock.now() - t0 < 2000, (clock.now() - t0) + ' ms');
+    // When the host sent the last part, not when the joiner says it has the
+    // map: checking and installing it take real time, and the made-up clock
+    // runs on meanwhile, more so on a busy machine (3.5-5 s seen under load).
+    const last = Math.max(...blockParts(g.log, 2).map(f => f.t));
+    assert.ok(last - t0 < 2000, (last - t0) + ' ms');
 });
 
 test('a block asked for again on another lane goes that way, and no part of it twice', async () => {
