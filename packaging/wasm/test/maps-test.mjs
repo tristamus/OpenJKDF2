@@ -1005,6 +1005,53 @@ test('the network log: a line as each paced upload starts, and "unpaced" only fo
     assert.equal(unpaced().length, n + 1, g.link.notes.join('\n'));
 });
 
+test('the network log: a link that stalls keeps its lines, an upload 15 s after the last starts anew, one never paced says nothing', async () => {
+    const clock = makeClock();
+    const { gob } = bigMap(1500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_stall.gob': gob },
+                        [2, 3, 4].map(id => ({ id, direct: true })));
+    let looks = 0;
+    g.host.jkNet.mapCongested = () => looks++ % 6 === 5;
+    await hostOn(clock, g, 'ctf_stall');
+    const done = id => g.tab(id).jkMaps.state() !== 0;
+    const paced = () => g.link.notes.filter(l => /^map upload paced at/.test(l));
+    const unpaced = () => g.link.notes.filter(l => /unpaced/.test(l));
+    // In a match, nothing goes for 13 s while parts wait (a link that
+    // stalled): the same upload, so no line as if one started, and not a
+    // line at every pump.
+    g.tab(2).jkMaps.fetch('ctf_stall', 'gob');
+    await clock.run(1000);
+    const before = paced().length;
+    g.link.backlog = () => 1e9;
+    await clock.run(13000);
+    g.link.backlog = () => 0;
+    const stalled = paced().slice(before);
+    assert.ok(stalled.length <= 2 && stalled.every(l => /\(was/.test(l)), stalled.length + ' lines:\n' + stalled.join('\n'));
+    assert.ok(await clock.until(() => done(2), 600000, 10), 'joiner 2');
+    assert.equal(g.tab(2).jkMaps.state(), 1);
+    // Still in the match, 15 s with nothing to send: the next upload gets
+    // one first line, though its first pumps may send nothing.
+    await clock.run(15000);
+    const t = paced().length;
+    g.tab(3).jkMaps.fetch('ctf_stall', 'gob');
+    assert.ok(await clock.until(() => done(3), 600000, 10), 'joiner 3');
+    assert.equal(g.tab(3).jkMaps.state(), 1);
+    const firsts = paced().slice(t).filter(l => !/\(was/.test(l));
+    assert.ok(paced().length > t && firsts.length === 1 && firsts[0] === paced()[t], g.link.notes.slice(-12).join('\n'));
+    // The match ends, and the engine pumps while nothing waits, as it does
+    // each frame. A download within 10 s was never paced: nothing says it
+    // goes unpaced.
+    g.link.inMatch = false;
+    g.host.jkMaps.pump();
+    await clock.run(1000);
+    g.host.jkMaps.pump();
+    const n = unpaced().length;
+    g.tab(4).jkMaps.fetch('ctf_stall', 'gob');
+    assert.ok(await clock.until(() => done(4), 600000, 10), 'joiner 4');
+    assert.equal(g.tab(4).jkMaps.state(), 1);
+    assert.equal(unpaced().length, n, g.link.notes.slice(-6).join('\n'));
+});
+
 test('outside a match a paced host sends as fast as its links take it', async () => {
     const clock = makeClock();
     const { gob } = bigMap(3500000);

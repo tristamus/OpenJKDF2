@@ -1452,6 +1452,8 @@
         // the line before).
         looks: [0, 0, 0], whys: ['', '', ''], notedRate: 0, notedAt: 0, notedLow: 0, notedHigh: 0,
         bandLow: 0, bandHigh: 0,
+        // Nothing waited since the last line: the next upload may be another.
+        emptied: false,
         // The map channels parts went on (wayOf), by joiner and way.
         ways: {}
     };
@@ -1473,6 +1475,8 @@
         if (up.groups.get(g.key) !== g)
             return;
         up.groups.delete(g.key);
+        if (!up.groups.size)
+            up.emptied = true;
         var i = up.turn.indexOf(g.key);
         up.turn.splice(i, 1);
         if (i < up.next)
@@ -1752,16 +1756,22 @@
     // player's saved log shows what the pacing did: as it starts, every
     // PACE_NOTE_MS, sooner when the rate moved PACE_NOTE_MOVE times since the
     // last line and out of the range before it, and when an upload that was
-    // paced goes on unpaced (not one after nothing went for PACE_NOTE_MS,
-    // which starts anew). The rate, the least and the most since the last
-    // line, what the looks at the link since then said and why (numbers
-    // only: round trips, what waits), and what waits here and on the way.
+    // paced goes on unpaced (not one that starts PACE_NOTE_MS or more after
+    // the last finished, which starts anew). The rate, the least and the
+    // most since the last line, what the looks at the link since then said
+    // and why (numbers only: round trips, what waits), and what waits here
+    // and on the way.
     function noteRate(net, now, inMatch) {
         var log = Module.jkNet;
         // An upload after none for a while is another, with its own lines.
-        if (up.sentAt && now - up.sentAt > PACE_NOTE_MS) {
-            up.notedRate = 0;
-            up.looks = [0, 0, 0];
+        // Parts that waited all that time (a link that stalled) are the same
+        // upload, which keeps a line each PACE_NOTE_MS.
+        if (up.emptied) {
+            up.emptied = false;
+            if (up.sentAt && now - up.sentAt > PACE_NOTE_MS) {
+                up.notedRate = 0;
+                up.looks = [0, 0, 0];
+            }
         }
         var was = up.notedRate, since = now - up.notedAt;
         if (!inMatch) {
