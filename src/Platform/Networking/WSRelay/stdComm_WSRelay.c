@@ -958,13 +958,19 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
            match count only where most of them show them. Without the lobby's
            answer, they say nothing about what goes through the lobby (lobby).
            Asked at most every 250 ms, never right after a send, which what's
-           waiting would count. */
+           waiting would count. net.mapWhy: which sign said so, or how the
+           lobby's answers come, for the network log (maps.js). */
         net.mapCongested = function(lobby) {
-            var now = performance.now(), lp = net.lobbyPing, queued = false, seen = false;
+            var now = performance.now(), lp = net.lobbyPing, queued = false, seen = false, why = [], lobbyWhy = '';
             if (net.state === 1 && lp.got) {
                 seen = true;
                 var waited = lp.sent.length ? now - lp.sent[0] : 0;
-                if (lp.rtt > lp.base + 80 || waited > lp.base + 80) queued = true;
+                lobbyWhy = 'lobby round trip ' + Math.round(lp.rtt) + ' ms (shortest ' + Math.round(lp.base) + ')' +
+                           (waited > lp.base + 80 ? ', the next out ' + Math.round(waited) + ' ms' : '');
+                if (lp.rtt > lp.base + 80 || waited > lp.base + 80) {
+                    queued = true;
+                    why.push(lobbyWhy);
+                }
             }
             if (net.state === 1 && !lp.sent.length) net.pingLobby();
             var playing = 0, backed = 0;
@@ -982,12 +988,19 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 playing++;
                 if (p.dc.bufferedAmount > 4096 || (p.pos && p.pos.bufferedAmount > 4096) || dropped !== was) backed++;
             }
-            if (backed * 2 > playing) queued = true;
+            if (backed * 2 > playing) {
+                queued = true;
+                why.push(backed + ' of ' + playing + ' players\' links backed up');
+            }
             var ns = Module.jkNetStats && Module.jkNetStats.queueMs ? Module.jkNetStats.queueMs() : null;
             if (ns !== null) {
                 seen = true;
-                if (ns > 100) queued = true;
+                if (ns > 100) {
+                    queued = true;
+                    why.push('netstats round trips ' + Math.round(ns) + ' ms over the shortest');
+                }
             }
+            net.mapWhy = why.length ? why.join('; ') : lobbyWhy;
             if (queued) return true;
             if (lobby && !lp.got) return null;
             return seen ? false : null;

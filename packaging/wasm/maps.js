@@ -1395,6 +1395,11 @@
     var PACE_TICK_MS = 10;
     // A rate learned in one transfer is kept for the next unless it's long after.
     var PACE_FORGET_MS = 30000;
+    // The network log gets a line on a paced upload this often, and sooner
+    // (no sooner than PACE_NOTE_SOON_MS after the last) when the rate is
+    // twice or half what the last line said.
+    var PACE_NOTE_MS = 10000;
+    var PACE_NOTE_SOON_MS = 2000;
 
     var up = {
         groups: new Map(), // 'to kind b<block>' or 'to kind c<size>' -> group
@@ -1420,7 +1425,11 @@
         // it until the browser takes it, so the link isn't asked about a
         // queue until the next task.
         dirty: false,
-        sent: 0
+        sent: 0,
+        // For the network log (noteRate): the looks at the link since its
+        // last line that said a queue, none, and no telling, and why the last
+        // of each said so; the rate it last said, and when.
+        looks: [0, 0, 0], whys: ['', '', ''], notedRate: 0, notedAt: 0
     };
 
     function partBytes(g, p) {
@@ -1616,6 +1625,9 @@
             if (now - up.sampledAt >= PACE_EVERY_MS && !up.dirty && net && net.mapCongested) {
                 var c = net.mapCongested(lobby);
                 up.sampledAt = now;
+                var said = c === true ? 0 : c === false ? 1 : 2;
+                up.looks[said]++;
+                up.whys[said] = net.mapWhy || '';
                 if (c === true) {
                     up.rate /= 2;
                     up.slow = false;
@@ -1630,6 +1642,7 @@
             var burst = up.rate * Math.max(50, up.gap, up.gapNow) / 1000;
             up.tokens = Math.min(burst, up.tokens + Math.max(0, now - up.at) * up.rate / 1000);
         }
+        noteRate(net, now, inMatch);
         up.paced = inMatch;
         up.at = now;
         // Round the blocks, a part from each that has room on its way.
@@ -1673,6 +1686,49 @@
             else
                 removeGroup(g);
         }
+    }
+
+    // A line in the network log (Module.jkNet.note) on a paced upload, so a
+    // player's saved log shows what the pacing did: as it starts, every
+    // PACE_NOTE_MS, sooner when the rate doubled or halved since the last
+    // line, and when it goes unpaced again. The rate, what the looks at the
+    // link since the last line said and why (numbers only: round trips, what
+    // waits), and what waits here and on the way.
+    function noteRate(net, now, inMatch) {
+        var log = Module.jkNet;
+        var was = up.notedRate, since = now - up.notedAt;
+        if (!inMatch) {
+            if (was && log && log.note)
+                log.note('map upload: nobody else is playing now, so it goes unpaced');
+            up.notedRate = 0;
+            up.looks = [0, 0, 0];
+            return;
+        }
+        if (was && since < PACE_NOTE_MS && (since < PACE_NOTE_SOON_MS || (up.rate < was * 2 && up.rate > was / 2)))
+            return;
+        var said = up.looks.map(function(n, i) {
+            return n + [' a queue', ' no queue', ' no telling'][i] + (n && up.whys[i] ? ' (' + up.whys[i] + ')' : '');
+        });
+        up.notedRate = up.rate;
+        up.notedAt = now;
+        up.looks = [0, 0, 0];
+        if (!log || !log.note)
+            return;
+        var kb = function(n) { return Math.round(n / 1000); };
+        var queued = 0, joiners = 0, onWay = 0;
+        for (var id in up.queued) {
+            if (up.queued[id] > 0) {
+                queued += up.queued[id];
+                joiners++;
+            }
+        }
+        up.groups.forEach(function(g) {
+            if (net && net.mapBacklog)
+                onWay = Math.max(onWay, net.mapBacklog(g.to, g.via));
+        });
+        log.note('map upload paced at ' + kb(up.rate) + ' KB/s' + (was ? ' (was ' + kb(was) + ')' : '') +
+                 '; the link since the last line: ' + said.join(', ') + '; ' + kb(queued) + ' KB waiting for ' +
+                 joiners + ' joiner(s), ' + kb(onWay) + ' KB on the way');
     }
 
     // Drops what waits for joiner id (all of them when not given): they left,

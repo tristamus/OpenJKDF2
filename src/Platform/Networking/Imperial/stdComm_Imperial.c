@@ -318,13 +318,22 @@ EM_JS(void, imperial_js_xfer_init, (int bActive), {
         // frame). The engine sends one when it's asked for, but once the
         // server has answered, no sooner than 2 s after the last. A queue
         // stands until the next answer; no queue is said once for each
-        // answer, as maps.js grows the rate each time it's said.
+        // answer, as maps.js grows the rate each time it's said. mapWhy: why,
+        // for the network log.
         Module.jkImperial.mapCongested = function() {
             var m = Module.jkImperial, pr = m.probe;
             if (!pr || !pr.got || pr.waited < 0) m.wantProbe = true;
-            if (m.sockBacklog() >= 16384) return true;
-            if (!pr || !pr.got) return null;
+            if (m.sockBacklog() >= 16384) {
+                m.mapWhy = m.sockBacklog() + ' bytes waiting in the socket';
+                return true;
+            }
+            if (!pr || !pr.got) {
+                m.mapWhy = 'no answer from the relay server yet';
+                return null;
+            }
             var waited = pr.waited < 0 ? 0 : pr.waited + performance.now() - pr.at;
+            m.mapWhy = 'relay server round trip ' + Math.round(pr.rtt) + ' ms (shortest ' + Math.round(pr.base) + ')' +
+                       (waited > pr.base + 80 ? ', the next out ' + Math.round(waited) + ' ms' : '');
             if (pr.rtt > pr.base + 80 || waited > pr.base + 80) return true;
             if (pr.got === m.said) return null;
             m.said = pr.got;
