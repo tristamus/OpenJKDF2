@@ -1410,9 +1410,14 @@
     var PACE_FORGET_MS = 30000;
     // The network log gets a line on a paced upload this often, and sooner
     // (no sooner than PACE_NOTE_SOON_MS after the last) when the rate is
-    // twice or half what the last line said.
+    // PACE_NOTE_MOVE times or a PACE_NOTE_MOVE-th what the last line said
+    // and out of the range it went over before that line. The rate halves
+    // at each queue and grows back: at twice or half a line came every 2-3 s
+    // on a slow upload, and a long one's lines pushed the start of the
+    // session out of the 1000 the log keeps. Each line says the range.
     var PACE_NOTE_MS = 10000;
     var PACE_NOTE_SOON_MS = 2000;
+    var PACE_NOTE_MOVE = 4;
 
     var up = {
         groups: new Map(), // 'to kind b<block>' or 'to kind c<size>' -> group
@@ -1443,7 +1448,10 @@
         // For the network log (noteRate): the looks at the link since its
         // last line that said a queue, none, and no telling, and why the last
         // of each said so; the rate it last said, and when.
-        looks: [0, 0, 0], whys: ['', '', ''], notedRate: 0, notedAt: 0,
+        // The least and the most rate since that line, and before it (from
+        // the line before).
+        looks: [0, 0, 0], whys: ['', '', ''], notedRate: 0, notedAt: 0, notedLow: 0, notedHigh: 0,
+        bandLow: 0, bandHigh: 0,
         // The map channels parts went on (wayOf), by joiner and way.
         ways: {}
     };
@@ -1742,26 +1750,40 @@
 
     // A line in the network log (Module.jkNet.note) on a paced upload, so a
     // player's saved log shows what the pacing did: as it starts, every
-    // PACE_NOTE_MS, sooner when the rate doubled or halved since the last
-    // line, and when it goes unpaced again. The rate, what the looks at the
-    // link since the last line said and why (numbers only: round trips, what
-    // waits), and what waits here and on the way.
+    // PACE_NOTE_MS, sooner when the rate moved PACE_NOTE_MOVE times since the
+    // last line and out of the range before it, and when an upload that was
+    // paced goes on unpaced (not one after nothing went for PACE_NOTE_MS,
+    // which starts anew). The rate, the least and the most since the last
+    // line, what the looks at the link since then said and why (numbers
+    // only: round trips, what waits), and what waits here and on the way.
     function noteRate(net, now, inMatch) {
         var log = Module.jkNet;
+        // An upload after none for a while is another, with its own lines.
+        if (up.sentAt && now - up.sentAt > PACE_NOTE_MS) {
+            up.notedRate = 0;
+            up.looks = [0, 0, 0];
+        }
         var was = up.notedRate, since = now - up.notedAt;
         if (!inMatch) {
-            if (was && log && log.note)
+            if (was && up.paced && log && log.note)
                 log.note('map upload: nobody else is playing now, so it goes unpaced');
             up.notedRate = 0;
             up.looks = [0, 0, 0];
             return;
         }
-        if (was && since < PACE_NOTE_MS && (since < PACE_NOTE_SOON_MS || (up.rate < was * 2 && up.rate > was / 2)))
+        up.notedLow = was ? Math.min(up.notedLow, up.rate) : up.rate;
+        up.notedHigh = was ? Math.max(up.notedHigh, up.rate) : up.rate;
+        var moved = (up.rate >= was * PACE_NOTE_MOVE || up.rate <= was / PACE_NOTE_MOVE) &&
+                    (up.rate > up.bandHigh || up.rate < up.bandLow);
+        if (was && since < PACE_NOTE_MS && (since < PACE_NOTE_SOON_MS || !moved))
             return;
+        var low = up.notedLow, high = up.notedHigh;
+        up.bandLow = low;
+        up.bandHigh = high;
         var said = up.looks.map(function(n, i) {
             return n + [' a queue', ' no queue', ' no telling'][i] + (n && up.whys[i] ? ' (' + up.whys[i] + ')' : '');
         });
-        up.notedRate = up.rate;
+        up.notedRate = up.notedLow = up.notedHigh = up.rate;
         up.notedAt = now;
         up.looks = [0, 0, 0];
         if (!log || !log.note)
@@ -1778,7 +1800,7 @@
             if (net && net.mapBacklog)
                 onWay = Math.max(onWay, net.mapBacklog(g.to, g.via));
         });
-        log.note('map upload paced at ' + kb(up.rate) + ' KB/s' + (was ? ' (was ' + kb(was) + ')' : '') +
+        log.note('map upload paced at ' + kb(up.rate) + ' KB/s' + (was ? ' (was ' + kb(was) + ', ' + kb(low) + '-' + kb(high) + ' since)' : '') +
                  '; the link since the last line: ' + said.join(', ') + '; ' + kb(queued) + ' KB waiting for ' +
                  joiners + ' joiner(s), ' + kb(onWay) + ' KB on the way');
     }

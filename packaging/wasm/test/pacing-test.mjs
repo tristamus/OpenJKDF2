@@ -802,18 +802,23 @@ test('through a lobby that never answers ping (relay.py) the rate stays where it
     assert.equal(paced.rate, 48000);
 });
 
-test('the network log says what the paced rate is and why, at most every few seconds', async () => {
-    const r = await run({ path: 'relay', mbit: 2, mapBytes: 8000000, K, paced: true });
-    console.log('    ' + r.notes.length + ' lines in ' + r.xfer.toFixed(0) + ' s, the first and the last:');
-    console.log('      ' + r.notes[0]);
-    console.log('      ' + r.notes[r.notes.length - 1]);
-    assert.ok(r.ok);
-    assert.ok(r.notes.length >= Math.floor(r.xfer / 10), r.notes.length + ' lines');
-    assert.ok(r.notes.length <= r.xfer / 2 + 1, r.notes.length + ' lines');
-    assert.ok(!/ \(was /.test(r.notes[0]), r.notes[0]);
-    for (const l of r.notes)
-        assert.match(l, /^[\d:.]+ map upload paced at \d+ KB\/s( \(was \d+\))?; the link since the last line: \d+ a queue( \(.*\))?, \d+ no queue( \(.*\))?, \d+ no telling( \(.*\))?; \d+ KB waiting for \d+ joiner\(s\), \d+ KB on the way$/);
-    assert.ok(r.notes.some(l => /: [1-9]\d* a queue \(lobby round trip \d+ ms, at least \d+ of it on the way \(shortest \d+\)/.test(l)), 'never said why');
+test('the network log says what the paced rate is and why, every 10 s or so', async () => {
+    // At 1 Mbit/s the rate halves at each queue and grows back: a line each
+    // time it halved came every 2-3 s (43 in 107 s), and a long upload's
+    // lines pushed the start of the session out of the log.
+    for (const mbit of [2, 1]) {
+        const r = await run({ path: 'relay', mbit, mapBytes: 8000000, K, paced: true });
+        console.log(`    ${mbit} Mbit/s: ${r.notes.length} lines in ${r.xfer.toFixed(0)} s, the first and the last:`);
+        console.log('      ' + r.notes[0]);
+        console.log('      ' + r.notes[r.notes.length - 1]);
+        assert.ok(r.ok);
+        assert.ok(r.notes.length >= Math.floor(r.xfer / 10), r.notes.length + ' lines');
+        assert.ok(r.notes.length <= r.xfer / 10 + 4, r.notes.length + ' lines');
+        assert.ok(!/ \(was /.test(r.notes[0]), r.notes[0]);
+        for (const l of r.notes)
+            assert.match(l, /^[\d:.]+ map upload paced at \d+ KB\/s( \(was \d+, \d+-\d+ since\))?; the link since the last line: \d+ a queue( \(.*\))?, \d+ no queue( \(.*\))?, \d+ no telling( \(.*\))?; \d+ KB waiting for \d+ joiner\(s\), \d+ KB on the way$/);
+        assert.ok(r.notes.some(l => /: [1-9]\d* a queue \(lobby round trip \d+ ms, at least \d+ of it on the way \(shortest \d+\)/.test(l)), 'never said why');
+    }
 });
 
 // The host's page slow (a busy computer, a weak one): the lobby's and the

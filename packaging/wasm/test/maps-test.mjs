@@ -731,9 +731,10 @@ const UNIT = 16384;
 // joiners: [{ id, src, direct, lanes }]. link.inMatch, link.congested and
 // link.backlog(id, via) are what the host's link says; imperial: the host's
 // link is the Imperial Network Protocol's, whose parts keep their size.
+// link.notes: the lines the host's network log got.
 function pacedGame(clock, hostFiles, joiners, { imperial = false } = {}) {
     const log = [];
-    const link = { inMatch: true, congested: true, backlog: () => 0, overCap: 0, delay: 5 };
+    const link = { inMatch: true, congested: true, backlog: () => 0, overCap: 0, delay: 5, notes: [] };
     const host = { FS: makeFS(hostFiles) };
     const tabs = new Map();
     const deliver = (to, from, bytes, via) => {
@@ -764,6 +765,7 @@ function pacedGame(clock, hostFiles, joiners, { imperial = false } = {}) {
         mapBacklog: (id, via) => link.backlog(id, via),
         mapInMatch: () => link.inMatch,
         mapCongested: () => link.congested,
+        note: text => link.notes.push(text),
     };
     if (imperial) {
         host.jkImperial = Object.assign(hostNet, { active: true });
@@ -959,6 +961,48 @@ test('on the Imperial Network Protocol the rate grows once for each answer, and 
     assert.ok(near(at(5), least + 16000), 'after the queue ' + at(5));
     assert.ok(near(at(6), at(5) + 64000), 'the next answer ' + at(6));
     assert.ok(near(at(8), at(6) + 64000), 'after no news ' + at(8));
+});
+
+test('the network log: a line as each paced upload starts, and "unpaced" only for one that was paced', async () => {
+    const clock = makeClock();
+    const { gob } = bigMap(1500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_note.gob': gob },
+                        [2, 3, 4, 5].map(id => ({ id, direct: true })));
+    let looks = 0;
+    g.host.jkNet.mapCongested = () => looks++ % 6 === 5;
+    await hostOn(clock, g, 'ctf_note');
+    const fetch = async id => {
+        g.tab(id).jkMaps.fetch('ctf_note', 'gob');
+        assert.ok(await clock.until(() => g.tab(id).jkMaps.state() !== 0, 600000, 10), 'joiner ' + id);
+        assert.equal(g.tab(id).jkMaps.state(), 1);
+    };
+    const paced = () => g.link.notes.filter(l => /^map upload paced at/.test(l));
+    const unpaced = () => g.link.notes.filter(l => /unpaced/.test(l));
+    // In a match: its first line, then one each 10 s or so, though the rate
+    // halves at every sixth look.
+    await fetch(2);
+    const t = paced().length;
+    assert.ok(t >= 1 && !/\(was/.test(paced()[0]), g.link.notes.join('\n'));
+    // After the match, another joiner's download before anyone plays: it
+    // was never paced, so nothing says it goes unpaced now.
+    g.link.inMatch = false;
+    await clock.run(60000);
+    await fetch(3);
+    assert.equal(unpaced().length, 0, g.link.notes.join('\n'));
+    assert.equal(paced().length, t);
+    // A match again, a few seconds on: the next paced upload gets its own
+    // first line.
+    g.link.inMatch = true;
+    await clock.run(2000);
+    await fetch(4);
+    assert.ok(paced().length > t && !/\(was/.test(paced()[t]), g.link.notes.join('\n'));
+    // One paced while it starts that goes on as the match ends says so.
+    const n = unpaced().length;
+    g.tab(5).jkMaps.fetch('ctf_note', 'gob');
+    await clock.run(300);
+    g.link.inMatch = false;
+    assert.ok(await clock.until(() => g.tab(5).jkMaps.state() !== 0, 600000, 10));
+    assert.equal(unpaced().length, n + 1, g.link.notes.join('\n'));
 });
 
 test('outside a match a paced host sends as fast as its links take it', async () => {
