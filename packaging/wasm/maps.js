@@ -1364,14 +1364,24 @@
     // a part back, so a match that starts while a download goes on waits for
     // what the computer and the router already hold to leave: some seconds
     // on a slow upload (pacing-test.mjs), as the rate stays at its least.
+    // In a match a map channel may also have what one pump may send at the
+    // rate (up.burst) waiting: what waits in its buffer holds up no one
+    // else's packets, which go on connections of their own, and at 2-3
+    // frames a second 64 KiB a pump held a fast upload to a few hundred KB/s
+    // whatever the rate, where the computer and the router hold little of
+    // the channel's (pacing-test.mjs). But no more than the channel took in
+    // PACE_PART_MS / 2 lately (wayOf): a joiner's tab or downlink slow to take
+    // the map holds it in the host's buffer, which nothing halves the rate
+    // for, and a block asked for then waited behind 1-2 MB of the ones
+    // before, more than CHUNK_RESEND_MS, so it was asked for and sent again.
     var PACE_LOW_SOCKET_MATCH = 16 * 1024;
     var PACE_LOW_SOCKET = 256 * 1024;
     var PACE_LOW_CHANNEL = 1024 * 1024;
     var PACE_LOW_CHANNEL_MATCH = 64 * 1024;
     var PACE_MAX_QUEUED = 16 * 1024 * 1024;  // waiting for one joiner
     // Bytes a second in a match: where it starts, at most, and what it grows
-    // by each PACE_EVERY_MS that the link says no queue is building: times
-    // PACE_GROW until it first says there is one, PACE_STEP after.
+    // by each time the link says no queue is building: times PACE_GROW until
+    // it first says there is one, PACE_STEP for each PACE_EVERY_MS after.
     var PACE_START = 48000;
     var PACE_FLOOR = 24000;
     var PACE_MAX = 2000000;
@@ -1380,14 +1390,17 @@
     // waited up to 720 ms in pacing-test.mjs's model, against 450 ms.
     var PACE_GROW = 1.25;
     var PACE_EVERY_MS = 250;
-    // A link that says so less often grows for the time since the rate last
-    // changed, up to PACE_SAID_MS of it, and in slow start by PACE_GROW_MOST
-    // at most: nothing says how the new rate does until its next answer, and
-    // a queue it starts builds until then. The Imperial relay server answers
-    // every 2 s at most, so the rate there grows half as fast as through the
-    // lobby; twice that, and game packets wait a second on a 2 Mbit/s upload.
+    // A link that says so less often grows by steps for the time since the
+    // rate last changed, up to PACE_SAID_MS of it, but in slow start by
+    // PACE_GROW each time all the same: nothing says how the new rate does
+    // until the next answer, and a queue it starts builds until then. The
+    // Imperial relay server answers every 2 s at most, so there a rate that
+    // doubled at each answer went from just under the upload to twice it,
+    // and game packets waited 1-2 s on 3.5-4.5 Mbit/s uploads in
+    // pacing-test.mjs's model (half again: up to 1.1 s at 6 Mbit/s); now
+    // 0.5 s at most. A fast upload then takes about 28 s to reach 1 MiB/s,
+    // all the Imperial pump sends (an 8 MB map 22 s, not 13).
     var PACE_SAID_MS = 1000;
-    var PACE_GROW_MOST = 2;
     // Joiners ask for a block again when no part of it came for
     // CHUNK_RESEND_MS, and give up after STALL_MS without any: every block
     // being sent gets a part at least twice that often, however low the rate.
@@ -1395,6 +1408,16 @@
     var PACE_TICK_MS = 10;
     // A rate learned in one transfer is kept for the next unless it's long after.
     var PACE_FORGET_MS = 30000;
+    // The network log gets a line on a paced upload this often, and sooner
+    // (no sooner than PACE_NOTE_SOON_MS after the last) when the rate is
+    // PACE_NOTE_MOVE times or a PACE_NOTE_MOVE-th what the last line said
+    // and out of the range it went over before that line. The rate halves
+    // at each queue and grows back: at twice or half a line came every 2-3 s
+    // on a slow upload, and a long one's lines pushed the start of the
+    // session out of the 1000 the log keeps. Each line says the range.
+    var PACE_NOTE_MS = 10000;
+    var PACE_NOTE_SOON_MS = 2000;
+    var PACE_NOTE_MOVE = 4;
 
     var up = {
         groups: new Map(), // 'to kind b<block>' or 'to kind c<size>' -> group
@@ -1404,6 +1427,7 @@
         rate: PACE_START,
         slow: true,        // no queue seen since the rate started over
         tokens: 0,
+        burst: 0,          // the most tokens may come to
         at: 0,             // when tokens were last added
         sampledAt: 0,
         changedAt: 0,      // when the rate last grew or halved
@@ -1420,7 +1444,16 @@
         // it until the browser takes it, so the link isn't asked about a
         // queue until the next task.
         dirty: false,
-        sent: 0
+        sent: 0,
+        // For the network log (noteRate): the looks at the link since its
+        // last line that said a queue, none, and no telling, and why the last
+        // of each said so; the rate it last said, and when.
+        // The least and the most rate since that line, and before it (from
+        // the line before).
+        looks: [0, 0, 0], whys: ['', '', ''], notedRate: 0, notedAt: 0, notedLow: 0, notedHigh: 0,
+        bandLow: 0, bandHigh: 0,
+        // The map channels parts went on (wayOf), by joiner and way.
+        ways: {}
     };
 
     function partBytes(g, p) {
@@ -1542,11 +1575,36 @@
                (g.via === 'direct' && !(net && net.mapDirect && net.mapDirect(g.to)));
     }
 
-    function hasRoom(net, g, inMatch) {
+    // A map channel g's parts go on, and how fast it took them lately (bytes
+    // a second): what waited on it after the last pump that sent on it, less
+    // what waits now, once a pump. While something waited on it all along,
+    // that's how fast the joiner takes the map; one that emptied may take it
+    // faster, and keeps the most it was seen to.
+    function wayOf(net, g, now) {
+        var key = g.to + ' ' + g.via, w = up.ways[key];
+        if (!w)
+            w = up.ways[key] = { to: g.to, via: g.via, left: 0, at: 0, takes: 0, seen: 0 };
+        if (w.seen !== now) {
+            var b = net.mapBacklog(g.to, g.via);
+            if (w.at && now > w.at) {
+                var took = Math.max(0, w.left - b) * 1000 / (now - w.at);
+                w.takes = b > 0 ? took : Math.max(took, w.takes);
+            }
+            w.seen = now;
+        }
+        return w;
+    }
+
+    function hasRoom(net, g, inMatch, now) {
         if (!net || !net.mapBacklog)
             return true;
-        var low = onSocket(net, g) ? (inMatch ? PACE_LOW_SOCKET_MATCH : PACE_LOW_SOCKET)
-                                   : (inMatch ? PACE_LOW_CHANNEL_MATCH : PACE_LOW_CHANNEL);
+        var low;
+        if (onSocket(net, g)) {
+            low = inMatch ? PACE_LOW_SOCKET_MATCH : PACE_LOW_SOCKET;
+        } else {
+            var w = wayOf(net, g, now);
+            low = inMatch ? Math.max(PACE_LOW_CHANNEL_MATCH, Math.min(up.burst, w.takes * PACE_PART_MS / 2000)) : PACE_LOW_CHANNEL;
+        }
         return net.mapBacklog(g.to, g.via) < low;
     }
 
@@ -1554,8 +1612,10 @@
     // packets come in, as well as the timer here, which a hidden tab slows.
     function pump() {
         if (!up.groups.size) {
-            // Idle: the next transfer starts with no burst saved up.
+            // Idle: the next transfer starts with no burst saved up, nor
+            // what its channels took.
             up.pumpedAt = 0;
+            up.ways = {};
             return;
         }
         if (up.pumping)
@@ -1616,20 +1676,24 @@
             if (now - up.sampledAt >= PACE_EVERY_MS && !up.dirty && net && net.mapCongested) {
                 var c = net.mapCongested(lobby);
                 up.sampledAt = now;
+                var said = c === true ? 0 : c === false ? 1 : 2;
+                up.looks[said]++;
+                up.whys[said] = net.mapWhy || '';
                 if (c === true) {
                     up.rate /= 2;
                     up.slow = false;
                     up.changedAt = now;
                 } else if (c === false) {
                     var k = Math.max(1, Math.floor(Math.min(PACE_SAID_MS, now - up.changedAt) / PACE_EVERY_MS));
-                    up.rate = up.slow ? up.rate * Math.min(PACE_GROW_MOST, Math.pow(PACE_GROW, k)) : up.rate + PACE_STEP * k;
+                    up.rate = up.slow ? up.rate * PACE_GROW : up.rate + PACE_STEP * k;
                     up.changedAt = now;
                 }
             }
             up.rate = Math.min(PACE_MAX, Math.max(least, up.rate));
-            var burst = up.rate * Math.max(50, up.gap, up.gapNow) / 1000;
-            up.tokens = Math.min(burst, up.tokens + Math.max(0, now - up.at) * up.rate / 1000);
+            up.burst = up.rate * Math.max(50, up.gap, up.gapNow) / 1000;
+            up.tokens = Math.min(up.burst, up.tokens + Math.max(0, now - up.at) * up.rate / 1000);
         }
+        noteRate(net, now, inMatch);
         up.paced = inMatch;
         up.at = now;
         // Round the blocks, a part from each that has room on its way.
@@ -1643,7 +1707,7 @@
                 removeGroup(g);
                 continue;
             }
-            if (!hasRoom(net, g, inMatch)) {
+            if (!hasRoom(net, g, inMatch, now)) {
                 up.next++;
                 idle++;
                 continue;
@@ -1673,6 +1737,72 @@
             else
                 removeGroup(g);
         }
+        // What waits now on each channel looked at, for what it takes by the
+        // next pump (wayOf).
+        for (var key in up.ways) {
+            var w = up.ways[key];
+            if (w.seen === now) {
+                w.left = net.mapBacklog(w.to, w.via);
+                w.at = now;
+            }
+        }
+    }
+
+    // A line in the network log (Module.jkNet.note) on a paced upload, so a
+    // player's saved log shows what the pacing did: as it starts, every
+    // PACE_NOTE_MS, sooner when the rate moved PACE_NOTE_MOVE times since the
+    // last line and out of the range before it, and when an upload that was
+    // paced goes on unpaced (not one after nothing went for PACE_NOTE_MS,
+    // which starts anew). The rate, the least and the most since the last
+    // line, what the looks at the link since then said and why (numbers
+    // only: round trips, what waits), and what waits here and on the way.
+    function noteRate(net, now, inMatch) {
+        var log = Module.jkNet;
+        // An upload after none for a while is another, with its own lines.
+        if (up.sentAt && now - up.sentAt > PACE_NOTE_MS) {
+            up.notedRate = 0;
+            up.looks = [0, 0, 0];
+        }
+        var was = up.notedRate, since = now - up.notedAt;
+        if (!inMatch) {
+            if (was && up.paced && log && log.note)
+                log.note('map upload: nobody else is playing now, so it goes unpaced');
+            up.notedRate = 0;
+            up.looks = [0, 0, 0];
+            return;
+        }
+        up.notedLow = was ? Math.min(up.notedLow, up.rate) : up.rate;
+        up.notedHigh = was ? Math.max(up.notedHigh, up.rate) : up.rate;
+        var moved = (up.rate >= was * PACE_NOTE_MOVE || up.rate <= was / PACE_NOTE_MOVE) &&
+                    (up.rate > up.bandHigh || up.rate < up.bandLow);
+        if (was && since < PACE_NOTE_MS && (since < PACE_NOTE_SOON_MS || !moved))
+            return;
+        var low = up.notedLow, high = up.notedHigh;
+        up.bandLow = low;
+        up.bandHigh = high;
+        var said = up.looks.map(function(n, i) {
+            return n + [' a queue', ' no queue', ' no telling'][i] + (n && up.whys[i] ? ' (' + up.whys[i] + ')' : '');
+        });
+        up.notedRate = up.notedLow = up.notedHigh = up.rate;
+        up.notedAt = now;
+        up.looks = [0, 0, 0];
+        if (!log || !log.note)
+            return;
+        var kb = function(n) { return Math.round(n / 1000); };
+        var queued = 0, joiners = 0, onWay = 0;
+        for (var id in up.queued) {
+            if (up.queued[id] > 0) {
+                queued += up.queued[id];
+                joiners++;
+            }
+        }
+        up.groups.forEach(function(g) {
+            if (net && net.mapBacklog)
+                onWay = Math.max(onWay, net.mapBacklog(g.to, g.via));
+        });
+        log.note('map upload paced at ' + kb(up.rate) + ' KB/s' + (was ? ' (was ' + kb(was) + ', ' + kb(low) + '-' + kb(high) + ' since)' : '') +
+                 '; the link since the last line: ' + said.join(', ') + '; ' + kb(queued) + ' KB waiting for ' +
+                 joiners + ' joiner(s), ' + kb(onWay) + ' KB on the way');
     }
 
     // Drops what waits for joiner id (all of them when not given): they left,

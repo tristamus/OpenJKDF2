@@ -33,7 +33,30 @@
 // maps.js no more while the socket has 16 KiB waiting. The relay server
 // answers the request the engine times (jkrelay_AskTimed) behind everything
 // sent before it, as the lobby answers ping; once it has answered one, the
-// engine sends the next no sooner than 2 s after the last.
+// engine sends the next no sooner than 2 s after the last, and one out 10 s
+// is taken as lost.
+//
+// The host's page can be slow too (hostFrameMs): its game's frames then run
+// back to back, 1 ms apart, and nothing else runs on the page during one.
+// What comes in while one runs (the lobby's or the relay server's answer, a
+// packet, a joiner's request) and a timer due then are taken only after the
+// frame after it, as Chrome takes a WebSocket's message that comes during a
+// long frame driven by requestAnimationFrame (measured with frames of 33 and
+// 400 ms: read 2 frames on; at 16 ms after its own frame, as here); a message
+// the page posts to itself (MessageChannel) is taken right after the frame it
+// was posted in. The engine's own calls (the map pump, the Imperial pump)
+// come at the start of each frame. The frames are that slow from hostSlowAt
+// on, and 16 ms before: the menus, where the lobby's first answers come.
+// With hostEveryMs, the frames start that many ms apart instead, and the page
+// waits for nothing between them (a 30 Hz display, the FPS limit, a hidden
+// tab's timer): what comes in during one is taken right after it, and
+// between them at once. With hostBlockMs, the page stays busy that long
+// after each frame, its own message taken first: what comes in meanwhile
+// waits for the end of it, as in headless Chromium on a loaded machine,
+// where the host page's timer ran late 129 s of 143 while its game's
+// frames ran 4 ms (median) and waited 74 ms for the next refresh.
+// Without hostFrameMs, nothing waits for the page, and the engine's frame
+// comes every 16 ms.
 //
 // Made-up maps, no game files.
 
@@ -45,6 +68,11 @@ import { makeGob, makeFS, makeClock } from './helpers.mjs';
 const read = path => readFileSync(new URL('../../../' + path, import.meta.url), 'utf8');
 const relayC = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.c');
 const imperialC = read('src/Platform/Networking/Imperial/stdComm_Imperial.c');
+// Whether the relay client times the server's answer from when the page took
+// it in (jkr_wsRecvAtMs), not from when the engine read it, a frame on.
+const answerStamped = /jkr_wsRecvAtMs/.test(read('src/Platform/Networking/Imperial/jkrelay_client.c'));
+// How many answers a host's pump asks for whether maps.js does or not.
+const timedFirst = +((/#define IMPERIAL_XFER_TIMED_FIRST \((\d+)\)/.exec(imperialC) || [])[1] || 0);
 const newMaps = read('packaging/wasm/maps.js');
 const oldMaps = read('packaging/wasm/test/fixtures/maps-503d826.js');
 
@@ -70,6 +98,68 @@ function bindJs(fns, env) {
         out[name] = (...args) => f(...Object.values(env), ...args);
     }
     return out;
+}
+
+// The host's page (see the top): deliver(fn) runs what came in now, when the
+// page takes it; post(fn), a message it posted to itself. frameStarts(fn,
+// timers) runs fn at the start of each of the game's frames. The page is busy
+// for busyFor ms first (a level loading), and its frames are F ms from slowAt
+// on, 16 ms before (the menus), every ms apart if given, else back to back,
+// and the page busy block ms after each.
+function hostPage(clock, F, slowAt = 0, busyFor = 0, every = 0, block = 0) {
+    const start = clock.now(), busyUntil = start + busyFor;
+    const period = every || F + block + 1, T0 = start + Math.max(slowAt, busyFor);
+    // The frame t falls in, or the time the page is busy after it: [start,
+    // end of the busy time, end of the frame], or null between frames.
+    const frameAt = t => {
+        if (t < busyUntil)
+            return [start, busyUntil, busyUntil];
+        if (!F || t < T0)
+            return null;
+        const s = T0 + Math.floor((t - T0) / period) * period;
+        return t < s + F + block ? [s, s + F + block, s + F] : null;
+    };
+    // Read after the frame after the one it came in, or at 16 ms, or with
+    // time between them, its own.
+    const hops = F > 16 && !every && !block ? 1 : 0;
+    const page = {
+        deliver(fn) {
+            const now = clock.now(), f = frameAt(now);
+            if (!f)
+                return fn();
+            clock.setTimeout(fn, f[1] - now + (f[0] >= T0 ? hops * period : 0));
+        },
+        post(fn) {
+            const now = clock.now(), f = frameAt(now);
+            clock.setTimeout(fn, f ? (now < f[2] ? f[2] : f[1]) - now : 0);
+        },
+        frameStarts(fn, timers) {
+            timers.push(clock.setInterval(() => {
+                const t = clock.now();
+                if (t >= busyUntil && (!F || t < T0))
+                    fn();
+            }, 16));
+            if (F)
+                timers.push(clock.setTimeout(() => { fn(); timers.push(clock.setInterval(fn, period)); }, Math.max(0, T0 - clock.now())));
+        },
+        clock,
+    };
+    if (!F && !busyFor)
+        return page;
+    // Timers on the page wait for it as what comes in does.
+    const live = new Map();
+    let seq = 0;
+    page.clock = {
+        ...clock,
+        setTimeout(fn, ms) {
+            const id = ++seq;
+            live.set(id, true);
+            clock.setTimeout(() => page.deliver(() => { if (live.delete(id)) fn(); }), ms);
+            return id;
+        },
+        clearTimeout(id) { live.delete(id); },
+    };
+    return page;
 }
 
 function loadMaps(clock, src, Module) {
@@ -115,15 +205,26 @@ const retailInstall = {
 
 // One run: { mbit, K, mapBytes, path: 'relay' | 'direct' | 'imperial', paced, pong }.
 // pong: the lobby answers ping, or the relay server the timed request.
+// lost (Imperial): the relay server's answers to these timed requests
+// (counted from 1) don't come.
 // matchAt: the other player starts playing this long after the download
 // starts, not before it.
 // takes (direct): the joiner's tab takes this many bytes a second off its map
 // channel, at frames frameMs apart, and windowBytes of it may be on the way
 // or not taken yet. slowFor: after this long into the download it takes all
 // that came at each frame.
-async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 900000, matchAt = 0,
-                     takes = 0, frameMs = 16, windowBytes = 256 * 1024, slowFor = Infinity }) {
+// hostFrameMs, hostSlowAt, hostEveryMs, hostBlockMs: the host's page is slow
+// (see the top);
+// hostBusyFor: it's busy that long first, as the lobby's or the relay server's
+// first answers come.
+// quietAt, quietFor (through the lobby or directly): the other player sends
+// nothing from quietAt into the download for quietFor (its tab stalls), while
+// the host's game goes on sending to it.
+async function run({ mbit, K, mapBytes, path, paced, pong = true, lost = [], limitMs = 900000, matchAt = 0,
+                     takes = 0, frameMs = 16, windowBytes = 256 * 1024, slowFor = Infinity,
+                     hostFrameMs = 0, hostSlowAt = 0, hostBusyFor = 0, hostEveryMs = 0, hostBlockMs = 0, quietAt = Infinity, quietFor = 0 }) {
     const clock = makeClock();
+    const page = hostPage(clock, hostFrameMs, hostSlowAt, hostBusyFor, hostEveryMs, hostBlockMs);
     const C = mbit * 1e6 / 8;
     const up = uplink(clock, C, K);
     const gob = makeGob([{ name: 'episode.jk', bytes: randomBytes(1000) }, { name: 'big.jkl', bytes: randomBytes(mapBytes) }]);
@@ -134,10 +235,14 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     // On Imperial, the relay server's answers the engine took, and the times
     // the link told maps.js there was no queue, in the transfer.
     let answers = 0, clear = 0;
+    // What the link told maps.js at each look in the transfer: a queue, none,
+    // no telling.
+    const looks = { yes: 0, no: 0, none: 0 };
     const requests = [];
     // lastIn: when the joiner had the last part that came.
     let blockBytes = 0, transferring = false, t0 = Infinity, lastIn = 0;
     const playing = () => clock.now() - t0 >= matchAt;
+    const quiet = () => clock.now() - t0 >= quietAt && clock.now() - t0 < quietAt + quietFor;
     const timers = [];
 
     const toJoiner = (bytes, leaves) => {
@@ -191,9 +296,19 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         if (transferring)
             waitsAt.push([clock.now() - t0, leaves - clock.now()]);
     };
+    // A message the host's page posts to itself.
+    class MessageChannel {
+        constructor() {
+            const port1 = { onmessage: null };
+            this.port1 = port1;
+            this.port2 = { postMessage: data => page.post(() => port1.onmessage && port1.onmessage({ data })) };
+        }
+    }
+    const HEAPU8 = new Uint8Array(1 << 16);
     const env = (extra) => ({
         Module: host,
-        HEAPU8: new Uint8Array(1 << 16), HEAPU16: new Uint16Array(1 << 15), HEAP32: new Int32Array(1 << 14),
+        HEAPU8, HEAPU16: new Uint16Array(1 << 15), HEAP32: new Int32Array(1 << 14),
+        MessageChannel,
         UTF8ToString: () => '', stringToUTF8: () => 0, lengthBytesUTF8: () => 0,
         performance: clock.performance,
         setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
@@ -221,7 +336,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 const leaves = direct ? up.sendAhead(n) : up.send(n);
                 if (text) {
                     if (data === 'ping' && pong)
-                        clock.setTimeout(() => this.onmessage({ data: 'pong' }), leaves - clock.now() + 2 * ONE_WAY);
+                        clock.setTimeout(() => page.deliver(() => this.onmessage({ data: 'pong' })), leaves - clock.now() + 2 * ONE_WAY);
                     return;
                 }
                 const b = new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength);
@@ -274,25 +389,34 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 p.dc.onopen();
             }
         }
-        // Another player, through the lobby or directly: the host sends to
-        // it, and hears from it.
+        // Another player, through the lobby or directly: the host's game
+        // sends to it (DirectPlay_Send), and hears from it.
         timers.push(clock.setInterval(() => {
             if (!playing())
                 return;
-            const out = new Uint8Array(GAME_BYTES);
-            new DataView(out.buffer).setUint32(4, 3, true);
-            out[8] = 10;
-            net.sendNow(out, 3);
+            HEAPU8.fill(0, 0, GAME_BYTES);
+            new DataView(HEAPU8.buffer).setUint32(4, 3, true);
+            HEAPU8[8] = 10;
+            js.wsrelay_js_send_packet(0, GAME_BYTES, 3, 0);
+            if (quiet())
+                return;
             const inbound = new Uint8Array(GAME_BYTES);
             new DataView(inbound.buffer).setUint32(0, 3, true);
             inbound[8] = 10;
-            if (direct)
-                net.peers[3].dc.onmessage({ data: inbound.buffer });
-            else
-                ws.onmessage({ data: inbound.buffer });
-            net.queue = [];
+            page.deliver(() => {
+                if (direct)
+                    net.peers[3].dc.onmessage({ data: inbound.buffer });
+                else
+                    ws.onmessage({ data: inbound.buffer });
+                net.queue = [];
+            });
         }, 1000 / GAME_HZ));
-        engineFrame = () => js.wsrelay_js_map_pump();
+        // DirectPlay_Receive, at the start of each of the host's frames.
+        engineFrame = () => {
+            if (js.wsrelay_js_frame)
+                js.wsrelay_js_frame();
+            js.wsrelay_js_map_pump();
+        };
         join.jkNet = {
             mapDirect: () => direct, rtcEnabled: () => direct,
             mapSend(id, bytes) {
@@ -300,7 +424,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 new DataView(copy).setUint32(0, 2, true);   // the lobby stamps the sender
                 if (new Uint8Array(copy)[12] === 5)
                     requests.push(new DataView(copy).getUint32(24, true));
-                clock.setTimeout(() => direct ? net.peers[2].mc.onmessage({ data: copy }) : ws.onmessage({ data: copy }), 2 * ONE_WAY);
+                clock.setTimeout(() => page.deliver(() => direct ? net.peers[2].mc.onmessage({ data: copy }) : ws.onmessage({ data: copy })), 2 * ONE_WAY);
                 return direct ? 'direct' : 'relay';
             },
         };
@@ -312,6 +436,9 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         };
         host.jkrWs = { next: 2, socks: { 1: { ws, out: [], q: [] } } };
         const js = bindJs(IMPERIAL_JS, env({}));
+        // The page's note of the host's frames, which the Imperial pump makes
+        // (stdComm_WSRelay_Frame).
+        const frameJs = RELAY_JS.wsrelay_js_frame ? bindJs({ wsrelay_js_frame: RELAY_JS.wsrelay_js_frame }, env({})) : null;
         js.imperial_js_xfer_init(1);
         const said = host.jkImperial.mapCongested;
         host.jkImperial.mapCongested = (...a) => {
@@ -322,38 +449,43 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         };
         const RATE = 1024 * 1024, BURST = 64 * 1024;
         let tokens = BURST, tokensMs = clock.now();
-        // jkrelay_AskTimed and jkrelay_TimedState: the answer is taken in the
-        // engine's next frame after it comes.
-        const probe = { seq: 0, out: false, back: false, sentAt: 0, rtt: 0, base: 0, got: 0 };
+        // jkrelay_AskTimed and jkrelay_TimedState: the page takes the answer
+        // in (at, and it waits in the socket's queue), and the engine reads it
+        // in its next frame, timed to then or (answerStamped) to at.
+        const probe = { seq: 0, out: false, back: false, sentAt: 0, at: 0, rtt: 0, base: 0, got: 0, sent: 0 };
+        const unread = host.jkrWs.socks[1].q;
         const sendProbe = () => {
-            if (probe.got ? probe.out || clock.now() - probe.sentAt < 2000
-                          : probe.out && clock.now() - probe.sentAt < 10000)
+            if (probe.out ? clock.now() - probe.sentAt < 10000
+                          : probe.got && clock.now() - probe.sentAt < 2000)
                 return;
             if (transferring)
                 probesAt.push(clock.now());
             const seq = ++probe.seq;
+            probe.sent++;
             probe.out = true;
             probe.back = false;
             probe.sentAt = clock.now();
             const leaves = ws.send(16 + 20);
-            if (pong)
-                clock.setTimeout(() => { if (probe.seq === seq) probe.back = true; }, leaves - clock.now() + 2 * ONE_WAY);
+            if (pong && !lost.includes(seq))
+                clock.setTimeout(() => page.deliver(() => {
+                    if (probe.seq === seq) {
+                        probe.back = true;
+                        probe.at = clock.now();
+                        const d = new Uint8Array(20);
+                        d.at = probe.at;
+                        unread.push(d);
+                    }
+                }), leaves - clock.now() + 2 * ONE_WAY);
         };
         if (paced)
             sendProbe();    // as the host's game opens
         // imperial_XferPump.
-        engineFrame = () => {
+        const xferPump = () => {
             const now = clock.now();
-            if (probe.back) {
-                const rtt = now - probe.sentAt;
-                probe.out = probe.back = false;
-                probe.rtt = rtt;
-                probe.base = probe.got ? Math.min(probe.base, rtt) : rtt;
-                probe.got++;
-                if (transferring)
-                    answers++;
-            }
-            if (paced && js.imperial_js_xfer_serve(1, probe.got, probe.rtt, probe.base, probe.out ? now - probe.sentAt : -1))
+            if (frameJs)
+                frameJs.wsrelay_js_frame();
+            if (paced && (js.imperial_js_xfer_serve(1, probe.got, probe.rtt, probe.base, probe.out ? now - probe.sentAt : -1, probe.at) ||
+                          probe.sent < timedFirst))
                 sendProbe();
             tokens = Math.min(BURST, tokens + (now - tokensMs) * RATE / 1000);
             tokensMs = now;
@@ -370,6 +502,29 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 toJoiner(f.b.slice().buffer, leaves);
             }
         };
+        // jkrelay_Receive's jkr_Pump: the engine reads what the page took in.
+        const readSocket = () => {
+            unread.length = 0;
+            if (!probe.back)
+                return;
+            const rtt = (answerStamped ? probe.at : clock.now()) - probe.sentAt;
+            probe.out = probe.back = false;
+            probe.rtt = rtt;
+            probe.base = probe.got ? Math.min(probe.base, rtt) : rtt;
+            probe.got++;
+            if (transferring)
+                answers++;
+        };
+        // stdComm_Imperial_Receive pumps first each time it's called: in a
+        // frame, the first comes before the engine reads the socket, so it
+        // knows nothing yet of an answer the page took in since the last
+        // frame; the next, once a game packet was read (one comes most frames
+        // in a match), knows of it.
+        engineFrame = () => {
+            xferPump();
+            readSocket();
+            xferPump();
+        };
         timers.push(clock.setInterval(() => gameSent(ws.send(GAME_BYTES + 32)), 1000 / GAME_HZ));
         join.jkImperial = {
             active: true, mapDirect: () => true,
@@ -377,23 +532,49 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 const copy = bytes.slice(0);
                 if (new Uint8Array(copy)[12] === 5)
                     requests.push(new DataView(copy).getUint32(24, true));
-                clock.setTimeout(() => host.jkMaps.onFrame(2, copy, 'direct'), 2 * ONE_WAY);
+                clock.setTimeout(() => page.deliver(() => host.jkMaps.onFrame(2, copy, 'direct')), 2 * ONE_WAY);
                 return 'direct';
             },
         };
     }
-    loadMaps(clock, paced ? newMaps : oldMaps, host);
+    loadMaps(page.clock, paced ? newMaps : oldMaps, host);
     loadMaps(clock, oldMaps, join);
-    timers.push(clock.setInterval(engineFrame, 16));
+    page.frameStarts(engineFrame, timers);
+    const link = host.jkNet || host.jkImperial;
+    const ask = link.mapCongested;
+    link.mapCongested = (...a) => {
+        const c = ask(...a);
+        if (transferring)
+            looks[c === true ? 'yes' : c === false ? 'no' : 'none']++;
+        return c;
+    };
 
-    host.jkMaps.host('ctf_pace', 'gob');
-    await new Promise(r => setTimeout(r, 200));
-    await clock.run(3000);
+    // The host gets the map ready (hashing it takes real time, not the
+    // model's) before anyone asks for it: a joiner that waited for that on
+    // the model's clock could give up on a busy computer.
+    const log = console.log;
+    let ready = false;
+    console.log = (...a) => String(a[0]).includes('ready to send map') ? (ready = true) : log(...a);
+    try {
+        host.jkMaps.host('ctf_pace', 'gob');
+        for (let i = 0; !ready && i < 1500; i++)
+            await new Promise(r => setTimeout(r, 20));
+    } finally {
+        console.log = log;
+    }
+    assert.ok(ready, 'the host never got the map ready');
+    await clock.run(6000);
     t0 = clock.now();
     transferring = true;
     join.jkMaps.fetch('ctf_pace', 'gob');
     await clock.until(() => join.jkMaps.state() !== 0, limitMs, 200);
     transferring = false;
+    // The joiner's checks after the last part take real time too, which a
+    // busy computer can make longer than until() gives them.
+    for (let i = 0; join.jkMaps.state() === 0 && lastIn > t0 && i < 1000; i++) {
+        await clock.run(10);
+        await new Promise(r => setTimeout(r, 10));
+    }
     const secs = (clock.now() - t0) / 1000;
     const state = join.jkMaps.state();
     if (state === 0)
@@ -409,7 +590,8 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     const r = {
         state, secs, xfer, stream, ratio: blockBytes / stream, asks: requests.length, reasks: requests.length - new Set(requests).size,
         blocks, median: at(0.5), p95: at(0.95), max: Math.round(waits[waits.length - 1]),
-        rate: paced ? host.jkMaps.uploads().rate : null, waitsAt, probesAt, answers, clear,
+        rate: paced ? host.jkMaps.uploads().rate : null, waitsAt, probesAt, answers, clear, looks,
+        notes: ((host.jkNet && host.jkNet.log) || []).filter(l => / map upload/.test(l)),
         ok: state === 1 && Buffer.compare(Buffer.from(join.FS.files.get('/jk1/episode/ctf_pace.gob') || []), Buffer.from(gob)) === 0,
     };
     return r;
@@ -423,6 +605,9 @@ function describe(name, r) {
            (r.rate !== null ? `; rate at the end ${(r.rate / 1000).toFixed(0)} KB/s` : '') +
            (r.probesAt.length ? `; ${r.probesAt.length} timed request(s) to the relay server` : '');
 }
+
+// How long a map takes at what the joiner's tab takes.
+const mapSecs = s => s.mapBytes / s.takes;
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -498,6 +683,26 @@ test('on the Imperial Network Protocol the rate grows on a fast upload, as the r
     }
 });
 
+test('on the Imperial Network Protocol, an answer from the relay server that never comes: the upload doesn\'t stay at the least rate', async () => {
+    // The 5th request's answer lost (the server dropped it, or the page did
+    // at its cap): taken as lost 10 s on, and another goes. Before, the wait
+    // grew for good, and the upload went at the least rate to the end:
+    // 113 s, where it takes 32 s.
+    const s = { path: 'imperial', mbit: 5, mapBytes: 8000000 };
+    const paced = await run({ ...s, K, paced: true });
+    const lost = await run({ ...s, K, paced: true, lost: [5] });
+    console.log('    ' + describe('Imperial, 5 Mbit/s up, 8 MB', paced));
+    console.log('    ' + describe('the 5th answer lost', lost));
+    assert.ok(paced.ok && lost.ok);
+    assert.ok(lost.ratio < 1.02);
+    assert.equal(lost.reasks, 0);
+    assert.ok(lost.xfer < paced.xfer * 1.25 + 2, `${lost.xfer.toFixed(1)} s, ${paced.xfer.toFixed(1)} s with every answer`);
+    assert.ok(lost.rate > 100000, 'rate at the end ' + lost.rate);
+    assert.ok(lost.max < 1000, 'game packets wait ' + lost.max + ' ms');
+    const gaps = lost.probesAt.slice(1).map((t, i) => t - lost.probesAt[i]);
+    assert.ok(Math.min(...gaps) >= 2000 && Math.max(...gaps) < 12000, `timed requests ${Math.min(...gaps)}-${Math.max(...gaps)} ms apart`);
+});
+
 for (const s of [
     { path: 'relay', mbit: 20, mapBytes: 8000000 },
     { path: 'direct', mbit: 20, mapBytes: 8000000 },
@@ -507,7 +712,10 @@ for (const s of [
 ]) {
     const what = `${{ relay: 'through the lobby', direct: 'over the map channel', imperial: 'on the Imperial Network Protocol' }[s.path]} ` +
                  `at ${s.mbit} Mbit/s up, a ${s.mapBytes / 1e6} MB map`;
-    test(what + ': the rate soon uses a fast upload, and the map takes at most twice as long as from the live host and 2 s', async () => {
+    // On the Imperial Network Protocol, three times: the rate grows a quarter
+    // at each of the relay server's answers, which come 2 s apart.
+    const most = s.path === 'imperial' ? 3 : 2;
+    test(what + `: the rate soon uses a fast upload, and the map takes at most ${most === 2 ? 'twice' : 'three times'} as long as from the live host and 2 s`, async () => {
         const paced = await run({ ...s, K, paced: true });
         const old = await run({ ...s, K, paced: false });
         console.log('    paced     ' + describe(what, paced));
@@ -515,10 +723,34 @@ for (const s of [
         assert.ok(paced.ok && old.ok);
         assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
         assert.equal(paced.reasks, 0);
-        assert.ok(paced.xfer < old.xfer * 2 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+        assert.ok(paced.xfer < old.xfer * most + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
         assert.ok(paced.max < 500, 'game packets wait ' + paced.max + ' ms');
     });
 }
+
+test('on the Imperial Network Protocol at 3.5-4.5 Mbit/s up, and at 2 Mbit/s with the host\'s frames 30 a second: game packets wait under 600 ms (1 s at 30 frames a second)', async () => {
+    // The relay server answers every 2 s at most: a rate that doubled at
+    // each answer went from just under such an upload to twice it, and what
+    // it sent over waited in the computer and the router until the next
+    // answer, 1-2 s.
+    for (const s of [
+        { mbit: 3.5, mapBytes: 3000000 },
+        { mbit: 3.5, mapBytes: 8000000 },
+        { mbit: 4, mapBytes: 8000000 },
+        { mbit: 4.5, mapBytes: 8000000 },
+        { mbit: 2, mapBytes: 8000000, hostFrameMs: 3, hostEveryMs: 33, hostSlowAt: 1000 },
+    ]) {
+        const what = `Imperial, ${s.mbit} Mbit/s up, ${s.mapBytes / 1e6} MB` + (s.hostFrameMs ? ', frames 30 a second' : '');
+        const r = await run({ ...s, path: 'imperial', K, paced: true });
+        console.log('    ' + describe(what, r));
+        assert.ok(r.ok);
+        assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
+        assert.equal(r.reasks, 0);
+        // At 30 frames a second up to two frames of a queue are taken for
+        // the page's (see the test with the page busy between frames).
+        assert.ok(r.max < (s.hostFrameMs ? 1000 : 600), `${what}: game packets wait ${r.max} ms`);
+    }
+});
 
 test('over the map channel, a joiner whose tab is slow to take the map gets it at its own pace, the rate isn\'t held down for that, and the other player\'s packets don\'t wait', async () => {
     // The joiner's tab takes 300 KB/s, on a 20 Mbit/s upload: what waits for
@@ -541,6 +773,22 @@ test('over the map channel, a joiner whose tab is slow to take the map gets it a
     assert.ok(then.xfer < 14, `${then.xfer.toFixed(1)} s`);
 });
 
+test('over the map channel, a joiner whose tab takes 100-150 KB/s, the host\'s frames 400 ms and 1 s: blocks aren\'t asked for again', async () => {
+    // The upload is fast, so the rate goes to its most, and a pump's worth
+    // at it is 0.8-2 MB: what may wait on the channel in a match is no more
+    // than it took lately in PACE_PART_MS / 2, or a block asked for waited
+    // behind the ones before longer than the joiner waits for a part.
+    for (const [F, takes] of [[400, 100000], [400, 150000], [1000, 150000]]) {
+        const s = { path: 'direct', mbit: 20, mapBytes: 8000000, takes, hostFrameMs: F, hostSlowAt: 1000 };
+        const r = await run({ ...s, K, paced: true });
+        console.log('    ' + describe(`frames of ${F} ms, the tab takes ${takes / 1000} KB/s`, r));
+        assert.ok(r.ok);
+        assert.equal(r.reasks, 0, `frames of ${F} ms, ${takes / 1000} KB/s: ${r.reasks} block(s) asked for again`);
+        assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
+        assert.ok(r.xfer < mapSecs(s) * 1.25, `${r.xfer.toFixed(1)} s, at the tab's own pace ${mapSecs(s).toFixed(1)} s`);
+    }
+});
+
 test('on the Imperial Network Protocol each answer with no queue counts once, and a queue at every look until the next', async () => {
     const clock = makeClock();
     const host = {};
@@ -549,7 +797,7 @@ test('on the Imperial Network Protocol each answer with no queue counts once, an
     const js = bindJs(IMPERIAL_JS, { Module: host, performance: clock.performance, HEAPU8: new Uint8Array(16), HEAP32: new Int32Array(4) });
     js.imperial_js_xfer_init(1);
     const m = host.jkImperial;
-    const serve = (got, rtt, waited) => js.imperial_js_xfer_serve(1, got, rtt, 50, waited);
+    const serve = (got, rtt, waited) => js.imperial_js_xfer_serve(1, got, rtt, 50, waited, clock.now());
     const looks = n => Array.from({ length: n }, () => m.mapCongested());
     serve(0, 0, -1);
     assert.deepEqual(looks(2), [null, null]);
@@ -586,6 +834,186 @@ test('through a lobby that never answers ping (relay.py) the rate stays where it
     assert.equal(paced.reasks, 0);
     assert.equal(paced.rate, 48000);
 });
+
+test('the network log says what the paced rate is and why, every 10 s or so', async () => {
+    // At 1 Mbit/s the rate halves at each queue and grows back: a line each
+    // time it halved came every 2-3 s (43 in 107 s), and a long upload's
+    // lines pushed the start of the session out of the log.
+    for (const mbit of [2, 1]) {
+        const r = await run({ path: 'relay', mbit, mapBytes: 8000000, K, paced: true });
+        console.log(`    ${mbit} Mbit/s: ${r.notes.length} lines in ${r.xfer.toFixed(0)} s, the first and the last:`);
+        console.log('      ' + r.notes[0]);
+        console.log('      ' + r.notes[r.notes.length - 1]);
+        assert.ok(r.ok);
+        assert.ok(r.notes.length >= Math.floor(r.xfer / 10), r.notes.length + ' lines');
+        assert.ok(r.notes.length <= r.xfer / 10 + 4, r.notes.length + ' lines');
+        assert.ok(!/ \(was /.test(r.notes[0]), r.notes[0]);
+        for (const l of r.notes)
+            assert.match(l, /^[\d:.]+ map upload paced at \d+ KB\/s( \(was \d+, \d+-\d+ since\))?; the link since the last line: \d+ a queue( \(.*\))?, \d+ no queue( \(.*\))?, \d+ no telling( \(.*\))?; \d+ KB waiting for \d+ joiner\(s\), \d+ KB on the way$/);
+        assert.ok(r.notes.some(l => /: [1-9]\d* a queue \(lobby round trip \d+ ms, at least \d+ of it on the way \(shortest \d+\)/.test(l)), 'never said why');
+    }
+});
+
+// The host's page slow (a busy computer, a weak one): the lobby's and the
+// relay server's answers wait for its frames before the page takes them, as
+// a queue's would. Frames of 400 ms from 1 s on, after the first answers.
+const SLOW = { hostFrameMs: 400, hostSlowAt: 1000 };
+const nameSlow = s => `${{ relay: 'through the lobby', direct: 'over the map channel', imperial: 'on the Imperial Network Protocol' }[s.path]} ` +
+                      `at ${s.mbit} Mbit/s up, a ${s.mapBytes / 1e6} MB map`;
+
+for (const s of [
+    { path: 'relay', mbit: 20, mapBytes: 8000000 },
+    { path: 'direct', mbit: 20, mapBytes: 25000000 },
+    { path: 'imperial', mbit: 20, mapBytes: 8000000 },
+]) {
+    const what = nameSlow(s) + ', the host\'s frames 400 ms';
+    test(what + ': answers late for the page aren\'t taken for a queue, and the map comes about as soon as from the live host', async () => {
+        const paced = await run({ ...s, ...SLOW, K, paced: true });
+        const old = await run({ ...s, ...SLOW, K, paced: false });
+        console.log('    paced     ' + describe(what, paced) + `; a queue said at ${paced.looks.yes} of ${paced.looks.yes + paced.looks.no + paced.looks.none} looks`);
+        console.log('    live host ' + describe(what, old));
+        assert.ok(paced.ok);
+        assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+        assert.equal(paced.reasks, 0);
+        assert.equal(paced.looks.yes, 0, 'a queue said at ' + paced.looks.yes + ' looks');
+        // At 2.5 frames a second the Imperial pump sends 64 KiB a frame at
+        // most, about 160 KB/s, however fast the upload.
+        assert.ok(paced.xfer < old.xfer * 2.5 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+        assert.ok(paced.max < 1000, 'game packets wait ' + paced.max + ' ms');
+    });
+}
+
+for (const s of [
+    { path: 'relay', mbit: 2, mapBytes: 8000000 },
+    { path: 'direct', mbit: 5, mapBytes: 8000000 },
+]) {
+    const what = nameSlow(s) + ', the host\'s frames 400 ms';
+    test(what + ': a queue on the upload is still seen, and game packets wait less than with the live host', async () => {
+        const paced = await run({ ...s, ...SLOW, K, paced: true });
+        const old = await run({ ...s, ...SLOW, K, paced: false });
+        console.log('    paced     ' + describe(what, paced) + `; a queue said at ${paced.looks.yes} of ${paced.looks.yes + paced.looks.no + paced.looks.none} looks`);
+        console.log('    live host ' + describe(what, old));
+        assert.ok(paced.ok);
+        assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+        assert.equal(paced.reasks, 0);
+        assert.ok(paced.looks.yes > 0, 'a queue never said');
+        assert.ok(paced.xfer < old.xfer * 2 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+        assert.ok(paced.p95 < old.p95, `p95 wait ${paced.p95} ms, live host ${old.p95} ms`);
+        if (s.path === 'relay')
+            assert.ok(paced.p95 * 2 < old.p95 && paced.max < old.max, `p95 wait ${paced.p95} ms, live host ${old.p95} ms`);
+    });
+}
+
+test('over the map channel at 20 Mbit/s up, a 25 MB map, the host\'s frames 400 ms, with only 64 KiB of the channel\'s held where the page can\'t see it: a frame sends what the rate allows', async () => {
+    // What the computer and the router hold of a data channel's may be
+    // little (its window), and the rest waits in the browser: no more than
+    // 64 KiB of that a pump held the download to about 2.5 times that a
+    // second (72 s), however high the rate.
+    const s = { path: 'direct', mbit: 20, mapBytes: 25000000, ...SLOW };
+    const paced = await run({ ...s, K: 64 * 1024, paced: true });
+    const old = await run({ ...s, K: 64 * 1024, paced: false });
+    console.log('    paced     ' + describe(nameSlow(s), paced));
+    console.log('    live host ' + describe(nameSlow(s), old));
+    assert.ok(paced.ok);
+    assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+    assert.equal(paced.reasks, 0);
+    assert.ok(paced.xfer < old.xfer * 2.5 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+    assert.ok(paced.max <= old.max, `game packets wait ${paced.max} ms, live host ${old.max} ms`);
+});
+
+test('on the Imperial Network Protocol at 2 Mbit/s up, the host\'s frames 400 ms: the map comes sooner than from the live host, sent once', async () => {
+    const s = { path: 'imperial', mbit: 2, mapBytes: 8000000, ...SLOW };
+    const paced = await run({ ...s, K, paced: true });
+    const old = await run({ ...s, K, paced: false });
+    console.log('    paced     ' + describe(nameSlow(s), paced));
+    console.log('    live host ' + describe(nameSlow(s), old));
+    assert.ok(paced.ok);
+    assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+    assert.equal(paced.reasks, 0);
+    assert.ok(paced.xfer < old.xfer, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+    assert.ok(paced.max < 1000, 'game packets wait ' + paced.max + ' ms');
+});
+
+test('through the lobby at 2 Mbit/s up, the host\'s frames 16 and 33 ms: the queue seen as at full speed', async () => {
+    const s = { path: 'relay', mbit: 2, mapBytes: 8000000 };
+    const fast = await run({ ...s, K, paced: true });
+    console.log('    ' + describe('full speed', fast));
+    for (const [F, slowAt] of [[16, 0], [33, 1000]]) {
+        const r = await run({ ...s, K, paced: true, hostFrameMs: F, hostSlowAt: slowAt });
+        console.log('    ' + describe(`frames of ${F} ms`, r));
+        assert.ok(r.ok);
+        assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
+        assert.equal(r.reasks, 0);
+        assert.ok(r.looks.yes > 0);
+        assert.ok(r.xfer < fast.xfer * 1.25, `${r.xfer.toFixed(1)} s, ${fast.xfer.toFixed(1)} s at full speed`);
+        assert.ok(r.p95 < fast.p95 * 2, `p95 wait ${r.p95} ms, ${fast.p95} ms at full speed`);
+        assert.ok(r.max < 1000, 'game packets wait ' + r.max + ' ms');
+    }
+});
+
+test('the host\'s frames short, the page busy 150 ms after each (as headless Chromium on a loaded machine): what it held isn\'t taken for a queue', async () => {
+    // Its game's frames ran a few ms and the page waited for the next
+    // refresh, busy meanwhile, so the answers came late with nothing on the
+    // way. Taking off only what came in during the frames themselves, as
+    // 1567b38 did for frames short but far apart (a 30 Hz display, the FPS
+    // limit, where between frames the page reads what comes at once), said
+    // a queue at nearly every look: the upload went at the least rate, the
+    // map took 332 s here, 193 s in Chromium, not 9 and 26. So a frame's
+    // answers count as held since the frame two before ended, and frames
+    // short and far apart on an idle page take off up to that much of a
+    // queue (pacing-test: game packets wait p95 355 ms, max 669 at 5 Mbit/s
+    // and 30 frames a second, 101 and 331 at full speed).
+    for (const path of ['relay', 'direct', 'imperial']) {
+        const s = { path, mbit: 20, mapBytes: 8000000 };
+        const fast = await run({ ...s, K, paced: true });
+        const r = await run({ ...s, K, paced: true, hostFrameMs: 4, hostBlockMs: 150, hostSlowAt: 1000 });
+        const what = `${path}, 20 Mbit/s up, 8 MB`;
+        console.log('    ' + describe(what + ', full speed', fast));
+        console.log('    ' + describe(what + ', frames of 4 ms, the page busy 150 ms after each', r) + `; a queue said at ${r.looks.yes} of ${r.looks.yes + r.looks.no + r.looks.none} looks`);
+        assert.ok(r.ok);
+        assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
+        assert.equal(r.reasks, 0);
+        assert.ok(r.looks.yes <= 2, 'a queue said at ' + r.looks.yes + ' looks');
+        assert.ok(r.xfer < fast.xfer * 1.5 + 2, `${r.xfer.toFixed(1)} s, ${fast.xfer.toFixed(1)} s at full speed`);
+        assert.ok(r.max < 1000, 'game packets wait ' + r.max + ' ms');
+    }
+});
+
+test('through the lobby at 2 Mbit/s up, the host\'s page busy 3 s as the first answers come: the shortest round trip isn\'t taken from them', async () => {
+    const s = { path: 'relay', mbit: 2, mapBytes: 8000000 };
+    const fast = await run({ ...s, K, paced: true });
+    const busy = await run({ ...s, K, paced: true, hostBusyFor: 3000 });
+    console.log('    ' + describe('busy 3 s first', busy));
+    assert.ok(busy.ok);
+    assert.ok(busy.looks.yes > 0);
+    assert.ok(busy.p95 < fast.p95 * 1.5, `p95 wait ${busy.p95} ms, ${fast.p95} ms`);
+    assert.ok(busy.xfer < fast.xfer * 1.25, `${busy.xfer.toFixed(1)} s, ${fast.xfer.toFixed(1)} s`);
+});
+
+// The other player's tab stalls 10 s, 10 s into the download: it sends
+// nothing, the host's game goes on sending to it. The upload stays paced,
+// and the game packets to it then wait no longer than before.
+const QUIET = { quietAt: 10000, quietFor: 10000 };
+const quietMax = r => Math.round(Math.max(...r.waitsAt.filter(([t]) => t >= QUIET.quietAt && t < QUIET.quietAt + QUIET.quietFor + 5000).map(([, w]) => w)));
+for (const s of [
+    { path: 'relay', mbit: 1, mapBytes: 8000000 },
+    { path: 'relay', mbit: 2, mapBytes: 8000000 },
+    { path: 'direct', mbit: 5, mapBytes: 8000000 },
+]) {
+    const what = nameSlow(s) + ', the other player silent 10 s';
+    test(what + ': still a match, so the upload stays paced', async () => {
+        const paced = await run({ ...s, ...QUIET, K, paced: true });
+        const old = await run({ ...s, ...QUIET, K, paced: false, limitMs: 300000 });
+        console.log('    paced     ' + describe(what, paced) + `; max wait while silent and 5 s on ${quietMax(paced)} ms`);
+        console.log('    live host ' + describe(what, old) + `; max wait while silent and 5 s on ${quietMax(old)} ms`);
+        assert.ok(paced.ok);
+        assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+        assert.equal(paced.reasks, 0);
+        assert.ok(quietMax(paced) < 1000, 'game packets wait ' + quietMax(paced) + ' ms while silent');
+        assert.ok(quietMax(paced) * 4 < quietMax(old), `${quietMax(paced)} ms, live host ${quietMax(old)} ms`);
+        assert.ok(paced.max < 1000, 'game packets wait ' + paced.max + ' ms');
+    });
+}
 
 let failed = 0;
 for (const t of tests) {

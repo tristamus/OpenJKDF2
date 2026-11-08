@@ -97,6 +97,9 @@ int stdComm_WSRelay_RecvSeq(uint32_t* pSeq);
 // stdComm_WSRelay_Now's clock (ms), or -1 if it doesn't know.
 double stdComm_WSRelay_SeqSentAt(int toId, uint32_t seq);
 double stdComm_WSRelay_Now();
+// Added: the engine is in one of its frames now (wsrelay_js_frame), for
+// the Imperial Network Protocol's pump.
+void stdComm_WSRelay_Frame();
 
 // Whether the rules' messages need sithComm's resends (1): the links under
 // the lobby's games resend and keep order themselves, but the Imperial
