@@ -1635,7 +1635,11 @@ EM_JS(void, wsrelay_js_map_unhost, (), {
 // sooner than the end of the frame two before (Module.jkHeld.from). One not
 // read by t hadn't come by then either. Taken off a round trip, that's never
 // more than it was held up by, but for 20 ms at most: a short frame read only
-// after the next, or a frame whose start was noted late in it. A frame that
+// after the next, or a frame whose start was noted late in it. Up to 20 ms
+// isn't taken off at all, as before frames were noted (the 80 ms the pacing
+// takes for a queue allows for it): at 60 frames a second that's a whole
+// frame at each answer, mostly more than the page held it up, and in
+// pacing-test.mjs's model game packets waited up to 400 ms, not 270. A frame that
 // doesn't call this, or starts before the page took the last one's message,
 // counts as part of the one before, which only takes off less. Nothing is
 // taken off without MessageChannel, nor once no frame was noted for a second
@@ -1656,7 +1660,8 @@ EM_JS(void, wsrelay_js_frame, (), {
                 if (f.end && t - f.end > 1000) return t;
                 if (i < 2) break;
                 var two = h.frames[i - 2].end, one = h.frames[i - 1].end;
-                return one - two <= 20 ? Math.min(f.start, one + 20) : two;
+                var from = one - two <= 20 ? Math.min(f.start, one + 20) : two;
+                return t - from <= 20 ? t : from;
             }
             return -Infinity;
         };

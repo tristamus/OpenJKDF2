@@ -1669,11 +1669,12 @@ test('a slow page\'s frames as the network code notes them: what a message read 
         // In the fourth, as the map pump looks: the same for one not read.
         await frame(t0 + 1203, t0 + 1603);
         assert.equal(h.from(t0 + 1203), t0 + 801);
-        // 16 ms frames: what's read after one came during it at the soonest.
+        // 16 ms frames: what's read after one came during it at the soonest,
+        // but no more than 20 ms is taken off.
         let t = t0 + 1604;
         for (let i = 0; i < 4; i++, t += 17)
             await frame(t, t + 16);
-        assert.equal(h.from(t - 0.5), t - 17);
+        assert.equal(h.from(t - 0.5), t - 0.5);
         // A frame whose start was noted late in it takes 20 ms off at most
         // after the short one before.
         await frame(t + 30, t + 46);
