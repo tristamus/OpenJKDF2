@@ -35,6 +35,20 @@
 // sent before it, as the lobby answers ping; once it has answered one, the
 // engine sends the next no sooner than 2 s after the last.
 //
+// The host's page can be slow too (hostFrameMs): its game's frames then run
+// back to back, 1 ms apart, and nothing else runs on the page during one.
+// What comes in while one runs (the lobby's or the relay server's answer, a
+// packet, a joiner's request) and a timer due then are taken only after the
+// frame after it, as Chrome takes a WebSocket's message that comes during a
+// long frame driven by requestAnimationFrame (measured with frames of 33 and
+// 400 ms: read 2 frames on; at 16 ms after its own frame, as here); a message
+// the page posts to itself (MessageChannel) is taken right after the frame it
+// was posted in. The engine's own calls (the map pump, the Imperial pump)
+// come at the start of each frame. The frames are that slow from hostSlowAt
+// on, and 16 ms before: the menus, where the lobby's first answers come.
+// Without hostFrameMs, nothing waits for the page, and the engine's frame
+// comes every 16 ms.
+//
 // Made-up maps, no game files.
 
 import { readFileSync } from 'node:fs';
@@ -45,6 +59,11 @@ import { makeGob, makeFS, makeClock } from './helpers.mjs';
 const read = path => readFileSync(new URL('../../../' + path, import.meta.url), 'utf8');
 const relayC = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.c');
 const imperialC = read('src/Platform/Networking/Imperial/stdComm_Imperial.c');
+// Whether the relay client times the server's answer from when the page took
+// it in (jkr_wsRecvAtMs), not from when the engine read it, a frame on.
+const answerStamped = /jkr_wsRecvAtMs/.test(read('src/Platform/Networking/Imperial/jkrelay_client.c'));
+// How many answers a host's pump asks for whether maps.js does or not.
+const timedFirst = +((/#define IMPERIAL_XFER_TIMED_FIRST \((\d+)\)/.exec(imperialC) || [])[1] || 0);
 const newMaps = read('packaging/wasm/maps.js');
 const oldMaps = read('packaging/wasm/test/fixtures/maps-503d826.js');
 
@@ -70,6 +89,65 @@ function bindJs(fns, env) {
         out[name] = (...args) => f(...Object.values(env), ...args);
     }
     return out;
+}
+
+// The host's page (see the top): deliver(fn) runs what came in now, when the
+// page takes it; post(fn), a message it posted to itself. frameStarts(fn,
+// timers) runs fn at the start of each of the game's frames. The page is busy
+// for busyFor ms first (a level loading), and its frames are F ms from slowAt
+// on, 16 ms before (the menus).
+function hostPage(clock, F, slowAt = 0, busyFor = 0) {
+    const start = clock.now(), busyUntil = start + busyFor;
+    const period = F + 1, T0 = start + Math.max(slowAt, busyFor);
+    // The frame t falls in, [start, end], or null between frames.
+    const frameAt = t => {
+        if (t < busyUntil)
+            return [start, busyUntil];
+        if (!F || t < T0)
+            return null;
+        const s = T0 + Math.floor((t - T0) / period) * period;
+        return t < s + F ? [s, s + F] : null;
+    };
+    // Read after the frame after the one it came in, or at 16 ms its own.
+    const hops = F > 16 ? 1 : 0;
+    const page = {
+        deliver(fn) {
+            const now = clock.now(), f = frameAt(now);
+            if (!f)
+                return fn();
+            clock.setTimeout(fn, f[1] - now + (f[0] >= T0 ? hops * period : 0));
+        },
+        post(fn) {
+            const now = clock.now(), f = frameAt(now);
+            clock.setTimeout(fn, f ? f[1] - now : 0);
+        },
+        frameStarts(fn, timers) {
+            timers.push(clock.setInterval(() => {
+                const t = clock.now();
+                if (t >= busyUntil && (!F || t < T0))
+                    fn();
+            }, 16));
+            if (F)
+                timers.push(clock.setTimeout(() => { fn(); timers.push(clock.setInterval(fn, period)); }, Math.max(0, T0 - clock.now())));
+        },
+        clock,
+    };
+    if (!F && !busyFor)
+        return page;
+    // Timers on the page wait for it as what comes in does.
+    const live = new Map();
+    let seq = 0;
+    page.clock = {
+        ...clock,
+        setTimeout(fn, ms) {
+            const id = ++seq;
+            live.set(id, true);
+            clock.setTimeout(() => page.deliver(() => { if (live.delete(id)) fn(); }), ms);
+            return id;
+        },
+        clearTimeout(id) { live.delete(id); },
+    };
+    return page;
 }
 
 function loadMaps(clock, src, Module) {
@@ -121,9 +199,17 @@ const retailInstall = {
 // channel, at frames frameMs apart, and windowBytes of it may be on the way
 // or not taken yet. slowFor: after this long into the download it takes all
 // that came at each frame.
+// hostFrameMs, hostSlowAt: the host's page is slow (see the top);
+// hostBusyFor: it's busy that long first, as the lobby's or the relay server's
+// first answers come.
+// quietAt, quietFor (through the lobby or directly): the other player sends
+// nothing from quietAt into the download for quietFor (its tab stalls), while
+// the host's game goes on sending to it.
 async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 900000, matchAt = 0,
-                     takes = 0, frameMs = 16, windowBytes = 256 * 1024, slowFor = Infinity }) {
+                     takes = 0, frameMs = 16, windowBytes = 256 * 1024, slowFor = Infinity,
+                     hostFrameMs = 0, hostSlowAt = 0, hostBusyFor = 0, quietAt = Infinity, quietFor = 0 }) {
     const clock = makeClock();
+    const page = hostPage(clock, hostFrameMs, hostSlowAt, hostBusyFor);
     const C = mbit * 1e6 / 8;
     const up = uplink(clock, C, K);
     const gob = makeGob([{ name: 'episode.jk', bytes: randomBytes(1000) }, { name: 'big.jkl', bytes: randomBytes(mapBytes) }]);
@@ -134,10 +220,14 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     // On Imperial, the relay server's answers the engine took, and the times
     // the link told maps.js there was no queue, in the transfer.
     let answers = 0, clear = 0;
+    // What the link told maps.js at each look in the transfer: a queue, none,
+    // no telling.
+    const looks = { yes: 0, no: 0, none: 0 };
     const requests = [];
     // lastIn: when the joiner had the last part that came.
     let blockBytes = 0, transferring = false, t0 = Infinity, lastIn = 0;
     const playing = () => clock.now() - t0 >= matchAt;
+    const quiet = () => clock.now() - t0 >= quietAt && clock.now() - t0 < quietAt + quietFor;
     const timers = [];
 
     const toJoiner = (bytes, leaves) => {
@@ -191,9 +281,19 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         if (transferring)
             waitsAt.push([clock.now() - t0, leaves - clock.now()]);
     };
+    // A message the host's page posts to itself.
+    class MessageChannel {
+        constructor() {
+            const port1 = { onmessage: null };
+            this.port1 = port1;
+            this.port2 = { postMessage: data => page.post(() => port1.onmessage && port1.onmessage({ data })) };
+        }
+    }
+    const HEAPU8 = new Uint8Array(1 << 16);
     const env = (extra) => ({
         Module: host,
-        HEAPU8: new Uint8Array(1 << 16), HEAPU16: new Uint16Array(1 << 15), HEAP32: new Int32Array(1 << 14),
+        HEAPU8, HEAPU16: new Uint16Array(1 << 15), HEAP32: new Int32Array(1 << 14),
+        MessageChannel,
         UTF8ToString: () => '', stringToUTF8: () => 0, lengthBytesUTF8: () => 0,
         performance: clock.performance,
         setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
@@ -221,7 +321,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 const leaves = direct ? up.sendAhead(n) : up.send(n);
                 if (text) {
                     if (data === 'ping' && pong)
-                        clock.setTimeout(() => this.onmessage({ data: 'pong' }), leaves - clock.now() + 2 * ONE_WAY);
+                        clock.setTimeout(() => page.deliver(() => this.onmessage({ data: 'pong' })), leaves - clock.now() + 2 * ONE_WAY);
                     return;
                 }
                 const b = new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength);
@@ -274,25 +374,34 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 p.dc.onopen();
             }
         }
-        // Another player, through the lobby or directly: the host sends to
-        // it, and hears from it.
+        // Another player, through the lobby or directly: the host's game
+        // sends to it (DirectPlay_Send), and hears from it.
         timers.push(clock.setInterval(() => {
             if (!playing())
                 return;
-            const out = new Uint8Array(GAME_BYTES);
-            new DataView(out.buffer).setUint32(4, 3, true);
-            out[8] = 10;
-            net.sendNow(out, 3);
+            HEAPU8.fill(0, 0, GAME_BYTES);
+            new DataView(HEAPU8.buffer).setUint32(4, 3, true);
+            HEAPU8[8] = 10;
+            js.wsrelay_js_send_packet(0, GAME_BYTES, 3, 0);
+            if (quiet())
+                return;
             const inbound = new Uint8Array(GAME_BYTES);
             new DataView(inbound.buffer).setUint32(0, 3, true);
             inbound[8] = 10;
-            if (direct)
-                net.peers[3].dc.onmessage({ data: inbound.buffer });
-            else
-                ws.onmessage({ data: inbound.buffer });
-            net.queue = [];
+            page.deliver(() => {
+                if (direct)
+                    net.peers[3].dc.onmessage({ data: inbound.buffer });
+                else
+                    ws.onmessage({ data: inbound.buffer });
+                net.queue = [];
+            });
         }, 1000 / GAME_HZ));
-        engineFrame = () => js.wsrelay_js_map_pump();
+        // DirectPlay_Receive, at the start of each of the host's frames.
+        engineFrame = () => {
+            if (js.wsrelay_js_frame)
+                js.wsrelay_js_frame();
+            js.wsrelay_js_map_pump();
+        };
         join.jkNet = {
             mapDirect: () => direct, rtcEnabled: () => direct,
             mapSend(id, bytes) {
@@ -300,7 +409,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 new DataView(copy).setUint32(0, 2, true);   // the lobby stamps the sender
                 if (new Uint8Array(copy)[12] === 5)
                     requests.push(new DataView(copy).getUint32(24, true));
-                clock.setTimeout(() => direct ? net.peers[2].mc.onmessage({ data: copy }) : ws.onmessage({ data: copy }), 2 * ONE_WAY);
+                clock.setTimeout(() => page.deliver(() => direct ? net.peers[2].mc.onmessage({ data: copy }) : ws.onmessage({ data: copy })), 2 * ONE_WAY);
                 return direct ? 'direct' : 'relay';
             },
         };
@@ -312,6 +421,9 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         };
         host.jkrWs = { next: 2, socks: { 1: { ws, out: [], q: [] } } };
         const js = bindJs(IMPERIAL_JS, env({}));
+        // The page's note of the host's frames, which the Imperial pump makes
+        // (stdComm_WSRelay_Frame).
+        const frameJs = RELAY_JS.wsrelay_js_frame ? bindJs({ wsrelay_js_frame: RELAY_JS.wsrelay_js_frame }, env({})) : null;
         js.imperial_js_xfer_init(1);
         const said = host.jkImperial.mapCongested;
         host.jkImperial.mapCongested = (...a) => {
@@ -322,9 +434,11 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         };
         const RATE = 1024 * 1024, BURST = 64 * 1024;
         let tokens = BURST, tokensMs = clock.now();
-        // jkrelay_AskTimed and jkrelay_TimedState: the answer is taken in the
-        // engine's next frame after it comes.
-        const probe = { seq: 0, out: false, back: false, sentAt: 0, rtt: 0, base: 0, got: 0 };
+        // jkrelay_AskTimed and jkrelay_TimedState: the page takes the answer
+        // in (at, and it waits in the socket's queue), and the engine reads it
+        // in its next frame, timed to then or (answerStamped) to at.
+        const probe = { seq: 0, out: false, back: false, sentAt: 0, at: 0, rtt: 0, base: 0, got: 0 };
+        const unread = host.jkrWs.socks[1].q;
         const sendProbe = () => {
             if (probe.got ? probe.out || clock.now() - probe.sentAt < 2000
                           : probe.out && clock.now() - probe.sentAt < 10000)
@@ -337,23 +451,25 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
             probe.sentAt = clock.now();
             const leaves = ws.send(16 + 20);
             if (pong)
-                clock.setTimeout(() => { if (probe.seq === seq) probe.back = true; }, leaves - clock.now() + 2 * ONE_WAY);
+                clock.setTimeout(() => page.deliver(() => {
+                    if (probe.seq === seq) {
+                        probe.back = true;
+                        probe.at = clock.now();
+                        const d = new Uint8Array(20);
+                        d.at = probe.at;
+                        unread.push(d);
+                    }
+                }), leaves - clock.now() + 2 * ONE_WAY);
         };
         if (paced)
             sendProbe();    // as the host's game opens
         // imperial_XferPump.
-        engineFrame = () => {
+        const xferPump = () => {
             const now = clock.now();
-            if (probe.back) {
-                const rtt = now - probe.sentAt;
-                probe.out = probe.back = false;
-                probe.rtt = rtt;
-                probe.base = probe.got ? Math.min(probe.base, rtt) : rtt;
-                probe.got++;
-                if (transferring)
-                    answers++;
-            }
-            if (paced && js.imperial_js_xfer_serve(1, probe.got, probe.rtt, probe.base, probe.out ? now - probe.sentAt : -1))
+            if (frameJs)
+                frameJs.wsrelay_js_frame();
+            if (paced && (js.imperial_js_xfer_serve(1, probe.got, probe.rtt, probe.base, probe.out ? now - probe.sentAt : -1, probe.at) ||
+                          probe.got < timedFirst))
                 sendProbe();
             tokens = Math.min(BURST, tokens + (now - tokensMs) * RATE / 1000);
             tokensMs = now;
@@ -370,6 +486,29 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 toJoiner(f.b.slice().buffer, leaves);
             }
         };
+        // jkrelay_Receive's jkr_Pump: the engine reads what the page took in.
+        const readSocket = () => {
+            unread.length = 0;
+            if (!probe.back)
+                return;
+            const rtt = (answerStamped ? probe.at : clock.now()) - probe.sentAt;
+            probe.out = probe.back = false;
+            probe.rtt = rtt;
+            probe.base = probe.got ? Math.min(probe.base, rtt) : rtt;
+            probe.got++;
+            if (transferring)
+                answers++;
+        };
+        // stdComm_Imperial_Receive pumps first each time it's called: in a
+        // frame, the first comes before the engine reads the socket, so it
+        // knows nothing yet of an answer the page took in since the last
+        // frame; the next, once a game packet was read (one comes most frames
+        // in a match), knows of it.
+        engineFrame = () => {
+            xferPump();
+            readSocket();
+            xferPump();
+        };
         timers.push(clock.setInterval(() => gameSent(ws.send(GAME_BYTES + 32)), 1000 / GAME_HZ));
         join.jkImperial = {
             active: true, mapDirect: () => true,
@@ -377,23 +516,49 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
                 const copy = bytes.slice(0);
                 if (new Uint8Array(copy)[12] === 5)
                     requests.push(new DataView(copy).getUint32(24, true));
-                clock.setTimeout(() => host.jkMaps.onFrame(2, copy, 'direct'), 2 * ONE_WAY);
+                clock.setTimeout(() => page.deliver(() => host.jkMaps.onFrame(2, copy, 'direct')), 2 * ONE_WAY);
                 return 'direct';
             },
         };
     }
-    loadMaps(clock, paced ? newMaps : oldMaps, host);
+    loadMaps(page.clock, paced ? newMaps : oldMaps, host);
     loadMaps(clock, oldMaps, join);
-    timers.push(clock.setInterval(engineFrame, 16));
+    page.frameStarts(engineFrame, timers);
+    const link = host.jkNet || host.jkImperial;
+    const ask = link.mapCongested;
+    link.mapCongested = (...a) => {
+        const c = ask(...a);
+        if (transferring)
+            looks[c === true ? 'yes' : c === false ? 'no' : 'none']++;
+        return c;
+    };
 
-    host.jkMaps.host('ctf_pace', 'gob');
-    await new Promise(r => setTimeout(r, 200));
-    await clock.run(3000);
+    // The host gets the map ready (hashing it takes real time, not the
+    // model's) before anyone asks for it: a joiner that waited for that on
+    // the model's clock could give up on a busy computer.
+    const log = console.log;
+    let ready = false;
+    console.log = (...a) => String(a[0]).includes('ready to send map') ? (ready = true) : log(...a);
+    try {
+        host.jkMaps.host('ctf_pace', 'gob');
+        for (let i = 0; !ready && i < 1500; i++)
+            await new Promise(r => setTimeout(r, 20));
+    } finally {
+        console.log = log;
+    }
+    assert.ok(ready, 'the host never got the map ready');
+    await clock.run(6000);
     t0 = clock.now();
     transferring = true;
     join.jkMaps.fetch('ctf_pace', 'gob');
     await clock.until(() => join.jkMaps.state() !== 0, limitMs, 200);
     transferring = false;
+    // The joiner's checks after the last part take real time too, which a
+    // busy computer can make longer than until() gives them.
+    for (let i = 0; join.jkMaps.state() === 0 && lastIn > t0 && i < 1000; i++) {
+        await clock.run(10);
+        await new Promise(r => setTimeout(r, 10));
+    }
     const secs = (clock.now() - t0) / 1000;
     const state = join.jkMaps.state();
     if (state === 0)
@@ -409,7 +574,8 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
     const r = {
         state, secs, xfer, stream, ratio: blockBytes / stream, asks: requests.length, reasks: requests.length - new Set(requests).size,
         blocks, median: at(0.5), p95: at(0.95), max: Math.round(waits[waits.length - 1]),
-        rate: paced ? host.jkMaps.uploads().rate : null, waitsAt, probesAt, answers, clear,
+        rate: paced ? host.jkMaps.uploads().rate : null, waitsAt, probesAt, answers, clear, looks,
+        notes: ((host.jkNet && host.jkNet.log) || []).filter(l => / map upload/.test(l)),
         ok: state === 1 && Buffer.compare(Buffer.from(join.FS.files.get('/jk1/episode/ctf_pace.gob') || []), Buffer.from(gob)) === 0,
     };
     return r;
@@ -549,7 +715,7 @@ test('on the Imperial Network Protocol each answer with no queue counts once, an
     const js = bindJs(IMPERIAL_JS, { Module: host, performance: clock.performance, HEAPU8: new Uint8Array(16), HEAP32: new Int32Array(4) });
     js.imperial_js_xfer_init(1);
     const m = host.jkImperial;
-    const serve = (got, rtt, waited) => js.imperial_js_xfer_serve(1, got, rtt, 50, waited);
+    const serve = (got, rtt, waited) => js.imperial_js_xfer_serve(1, got, rtt, 50, waited, clock.now());
     const looks = n => Array.from({ length: n }, () => m.mapCongested());
     serve(0, 0, -1);
     assert.deepEqual(looks(2), [null, null]);
