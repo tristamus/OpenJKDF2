@@ -69,6 +69,7 @@ int jkrelay_SendBig(uint32_t idFrom, uint32_t idTo, const uint8_t* p, size_t n);
 int jkrelay_SendBacklog(void);
 int jkrelay_HasPlayer(uint32_t id);
 void jkrelay_AskTimed(void);
+int jkrelay_TimedAsked(void);
 int jkrelay_TimedState(double* pRtt, double* pBase, double* pWaited, double* pAt);
 uint32_t jkrelay_LocalSystemId(void);
 uint32_t jkrelay_HostSystemId(void);
@@ -271,7 +272,9 @@ static void imperial_SessionToEntry(const dps_session* s, jkMultiEntry* e)
 // it shows the computer's and the router's queues, which the browser can't.
 // From a server that never answers, the rate stays at the low one it starts at.
 // A host asks it IMPERIAL_XFER_TIMED_FIRST times as its game starts, before
-// anyone downloads, for the shortest.
+// anyone downloads, for the shortest; then only when maps.js wants it, so a
+// server that never answers isn't asked every 10 s for as long as the game is
+// hosted.
 // ---------------------------------------------------------------------------
 #define IMPERIAL_XFER_RATE  (1024 * 1024)
 #define IMPERIAL_XFER_BURST (64 * 1024)
@@ -550,7 +553,7 @@ static void imperial_XferPump()
     double rtt, base, waited, at;
     int got = jkrelay_TimedState(&rtt, &base, &waited, &at);
     if (imperial_js_xfer_serve(imperial_XferInMatch(now), got, rtt, base, waited, at) ||
-        (jkrelay_IsHost() && got < IMPERIAL_XFER_TIMED_FIRST))
+        (jkrelay_IsHost() && jkrelay_TimedAsked() < IMPERIAL_XFER_TIMED_FIRST))
         jkrelay_AskTimed();
     imperial_xferTokens += (double)(now - imperial_xferTokensMs) * (IMPERIAL_XFER_RATE / 1000.0);
     if (imperial_xferTokens > IMPERIAL_XFER_BURST)

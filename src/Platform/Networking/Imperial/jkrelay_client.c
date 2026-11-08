@@ -927,6 +927,7 @@ static struct
     double   rttMs, baseMs;   // the last round trip, and the shortest
     double   atMs;            // when the page took the last answer in
     int      got;             // answers on this WebSocket
+    int      sent;            // requests sent on it
 } jkr_timed;
 
 static int jkr_TimedWs(void)
@@ -970,12 +971,19 @@ void jkrelay_AskTimed(void)
     if (jkr_timed.seq ? now - jkr_timed.sentMs < 10000
                       : (jkr_timed.got && now - jkr_timed.sentMs < 2000)) return;
     jkr_timed.seq = ++R.nextSeq;
+    jkr_timed.sent++;
     jkr_timed.sentMs = now;
     jkr_timed.sentAt = emscripten_get_now();
     jkr_PutHdr(pkt, JKR_LIST, jkr_timed.seq);   // the games listed, as the menu asks
     memcpy(pkt + JKR_HDR_SIZE, R.appGuid, 16);
     wr32(pkt + JKR_HDR_SIZE + 16, 0);
     jkr_SendRaw(pkt, sizeof(pkt));
+}
+
+// The requests sent on this WebSocket.
+int jkrelay_TimedAsked(void)
+{
+    return jkr_timed.ws && jkr_timed.ws == jkr_TimedWs() ? jkr_timed.sent : 0;
 }
 
 // How the requests went on this WebSocket: the answers (0: no telling yet),

@@ -8,7 +8,7 @@
 // socket has IMPERIAL_XFER_BACKLOG (16 KiB) or more yet to send, and lets
 // maps.js send first, telling it whether the host is in a match and how the
 // relay server's answers to a timed request came, and sends one when maps.js
-// asks, or until IMPERIAL_XFER_TIMED_FIRST have come. It notes each frame for
+// asks, or until IMPERIAL_XFER_TIMED_FIRST have gone. It notes each frame for
 // the page (stdComm_WSRelay_Frame). What waits for a machine that left the
 // game is dropped.
 //
@@ -46,7 +46,7 @@ static int imperial_bInGame = 1;
 
 // maps.js: frames of frameLen bytes waiting for joiner 2.
 static int queued = 0, frameLen = 16 + 24 + 64 * 1024;
-static int serves = 0, lastInMatch = -1, takesSinceServe = 0, wantProbe = 0, probes = 0, lastGot = -1, timedGot = 3;
+static int serves = 0, lastInMatch = -1, takesSinceServe = 0, wantProbe = 0, probes = 0, lastGot = -1, timedGot = 3, timedAsked = 3;
 static double lastRtt, lastBase, lastWaited, lastAt;
 static int imperial_js_xfer_serve(int bInMatch, int got, double rtt, double base, double waited, double answeredAt)
 {
@@ -61,6 +61,7 @@ static int imperial_js_xfer_serve(int bInMatch, int got, double rtt, double base
     return wantProbe;
 }
 static void jkrelay_AskTimed(void) { probes++; }
+static int jkrelay_TimedAsked(void) { return timedAsked; }
 static int jkrelay_TimedState(double* pRtt, double* pBase, double* pWaited, double* pAt)
 {
     *pRtt = 120;
@@ -224,15 +225,19 @@ int main(void)
     imperial_XferPump();
     wantProbe = 0;
     CHECK(probes == 1, "timed %d when asked", probes);
-    // A host has IMPERIAL_XFER_TIMED_FIRST answers come as its game starts,
-    // whether maps.js asks or not, for the shortest.
-    timedGot = IMPERIAL_XFER_TIMED_FIRST - 1;
+    // A host has IMPERIAL_XFER_TIMED_FIRST requests go as its game starts,
+    // whether maps.js asks or not, for the shortest; then only when maps.js
+    // asks, answered or not: a server that never answers isn't asked every
+    // 10 s for as long as the game is hosted.
+    timedGot = 0;
+    timedAsked = IMPERIAL_XFER_TIMED_FIRST - 1;
     probes = 0;
     imperial_XferPump();
-    CHECK(probes == 1, "timed %d with %d answers", probes, timedGot);
-    timedGot = IMPERIAL_XFER_TIMED_FIRST;
-    imperial_XferPump();
-    CHECK(probes == 1, "timed %d more with %d answers", probes - 1, timedGot);
+    CHECK(probes == 1, "timed %d with %d sent", probes, timedAsked);
+    timedAsked = IMPERIAL_XFER_TIMED_FIRST;
+    for (int i = 0; i < 100; i++)
+        imperial_XferPump();
+    CHECK(probes == 1, "timed %d more with %d sent, none answered", probes - 1, timedAsked);
     timedGot = 3;
 
     // A joiner's machine that leaves: nothing more goes to it, within 1 s.
@@ -352,18 +357,20 @@ int main(void)
     nowMs += 20;
     CHECK(answer(104), "didn't take its answer");
     CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 3 && rtt == 60 && base == 50 && waited < 0, "%.0f %.0f %.0f", rtt, base, waited);
+    CHECK(jkrelay_TimedAsked() == 4, "%d sent", jkrelay_TimedAsked());
 
     // Another connection: nothing known; a server that never answers is
     // asked again every 10 s.
     jkr_wsSocks[1].ws = 5;
     CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 0, "known on another connection");
+    CHECK(jkrelay_TimedAsked() == 0, "%d sent on another connection", jkrelay_TimedAsked());
     jkrelay_AskTimed();
     nowMs += 9000;
     jkrelay_AskTimed();
     CHECK(sends == 5, "sent %d", sends);
     nowMs += 1000;
     jkrelay_AskTimed();
-    CHECK(sends == 6, "sent %d", sends);
+    CHECK(sends == 6 && jkrelay_TimedAsked() == 2, "sent %d", sends);
 
     // Asked for each frame, answered within 50 ms: one each 2 s, where the
     // menu asks every 5 s.

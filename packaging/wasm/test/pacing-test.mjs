@@ -445,7 +445,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, lost = [], lim
         // jkrelay_AskTimed and jkrelay_TimedState: the page takes the answer
         // in (at, and it waits in the socket's queue), and the engine reads it
         // in its next frame, timed to then or (answerStamped) to at.
-        const probe = { seq: 0, out: false, back: false, sentAt: 0, at: 0, rtt: 0, base: 0, got: 0 };
+        const probe = { seq: 0, out: false, back: false, sentAt: 0, at: 0, rtt: 0, base: 0, got: 0, sent: 0 };
         const unread = host.jkrWs.socks[1].q;
         const sendProbe = () => {
             if (probe.out ? clock.now() - probe.sentAt < 10000
@@ -454,6 +454,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, lost = [], lim
             if (transferring)
                 probesAt.push(clock.now());
             const seq = ++probe.seq;
+            probe.sent++;
             probe.out = true;
             probe.back = false;
             probe.sentAt = clock.now();
@@ -477,7 +478,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, lost = [], lim
             if (frameJs)
                 frameJs.wsrelay_js_frame();
             if (paced && (js.imperial_js_xfer_serve(1, probe.got, probe.rtt, probe.base, probe.out ? now - probe.sentAt : -1, probe.at) ||
-                          probe.got < timedFirst))
+                          probe.sent < timedFirst))
                 sendProbe();
             tokens = Math.min(BURST, tokens + (now - tokensMs) * RATE / 1000);
             tokensMs = now;
