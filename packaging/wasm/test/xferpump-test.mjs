@@ -14,9 +14,9 @@
 //
 // Then that request on its own (jkrelay_AskTimed in jkrelay_client.c), with a
 // made-up connection: one at a time, its round trip (to when the page took
-// the answer in) and the shortest, asked again only while the server hasn't
-// answered one, and once it has, no sooner than 2 s after the last however
-// often it's asked for.
+// the answer in) and the shortest, asked again after 10 s while one is out
+// (not answered, or lost), and once the server has answered, no sooner than
+// 2 s after the last however often it's asked for.
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -333,14 +333,25 @@ int main(void)
     answer(102);
     CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 2 && rtt == 900 && base == 50, "%.0f %.0f", rtt, base);
 
-    // Once the server has answered, one that doesn't come back isn't sent again.
+    // Once the server has answered, one that doesn't come back is taken as
+    // lost after 10 s, and another goes; the lost one's answer, if it comes
+    // late, isn't taken for it.
     nowMs += 1100;
     jkrelay_AskTimed();
-    CHECK(sends == 3, "sent %d", sends);
-    nowMs += 20000;
+    CHECK(sends == 3 && lastSeq == 103, "sent %d", sends);
+    nowMs += 9999;
     jkrelay_AskTimed();
-    CHECK(sends == 3, "sent %d", sends);
-    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 2 && waited == 20000, "waited %.0f", waited);
+    CHECK(sends == 3, "sent %d within 10 s", sends);
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 2 && waited == 9999, "waited %.0f", waited);
+    nowMs += 1;
+    jkrelay_AskTimed();
+    CHECK(sends == 4 && lastSeq == 104, "sent %d at 10 s", sends);
+    nowMs += 40;
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 2 && waited == 40, "waited %.0f", waited);
+    CHECK(!answer(103), "took the lost one's answer");
+    nowMs += 20;
+    CHECK(answer(104), "didn't take its answer");
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 3 && rtt == 60 && base == 50 && waited < 0, "%.0f %.0f %.0f", rtt, base, waited);
 
     // Another connection: nothing known; a server that never answers is
     // asked again every 10 s.
@@ -349,10 +360,10 @@ int main(void)
     jkrelay_AskTimed();
     nowMs += 9000;
     jkrelay_AskTimed();
-    CHECK(sends == 4, "sent %d", sends);
+    CHECK(sends == 5, "sent %d", sends);
     nowMs += 1000;
     jkrelay_AskTimed();
-    CHECK(sends == 5, "sent %d", sends);
+    CHECK(sends == 6, "sent %d", sends);
 
     // Asked for each frame, answered within 50 ms: one each 2 s, where the
     // menu asks every 5 s.

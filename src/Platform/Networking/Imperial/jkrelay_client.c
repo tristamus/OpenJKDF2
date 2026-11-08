@@ -949,9 +949,11 @@ static int jkr_TimedAnswer(uint32_t seq)
     return 1;
 }
 
-// Sends the request unless one is out. A server that hasn't answered one yet
-// is asked again after 10 s; once one has, an answer that doesn't come is a
-// queue that doesn't empty.
+// Sends the request unless one is out. One out 10 s is taken as lost, and
+// another goes: a server that hasn't answered one yet is asked every 10 s,
+// and one that has but drops one (or the page did, at its cap) isn't left
+// with a wait that grows for good, which would pace every later upload on
+// this connection at the least rate.
 void jkrelay_AskTimed(void)
 {
     uint8_t pkt[JKR_HDR_SIZE + 20];
@@ -965,8 +967,8 @@ void jkrelay_AskTimed(void)
     }
     // Once answered, one each 2 s at most: the relay server isn't ours to
     // change, and the menu asks it this every 5 s.
-    if (jkr_timed.got ? (jkr_timed.seq || now - jkr_timed.sentMs < 2000)
-                      : (jkr_timed.seq && now - jkr_timed.sentMs < 10000)) return;
+    if (jkr_timed.seq ? now - jkr_timed.sentMs < 10000
+                      : (jkr_timed.got && now - jkr_timed.sentMs < 2000)) return;
     jkr_timed.seq = ++R.nextSeq;
     jkr_timed.sentMs = now;
     jkr_timed.sentAt = emscripten_get_now();

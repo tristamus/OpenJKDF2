@@ -33,7 +33,8 @@
 // maps.js no more while the socket has 16 KiB waiting. The relay server
 // answers the request the engine times (jkrelay_AskTimed) behind everything
 // sent before it, as the lobby answers ping; once it has answered one, the
-// engine sends the next no sooner than 2 s after the last.
+// engine sends the next no sooner than 2 s after the last, and one out 10 s
+// is taken as lost.
 //
 // The host's page can be slow too (hostFrameMs): its game's frames then run
 // back to back, 1 ms apart, and nothing else runs on the page during one.
@@ -198,6 +199,8 @@ const retailInstall = {
 
 // One run: { mbit, K, mapBytes, path: 'relay' | 'direct' | 'imperial', paced, pong }.
 // pong: the lobby answers ping, or the relay server the timed request.
+// lost (Imperial): the relay server's answers to these timed requests
+// (counted from 1) don't come.
 // matchAt: the other player starts playing this long after the download
 // starts, not before it.
 // takes (direct): the joiner's tab takes this many bytes a second off its map
@@ -210,7 +213,7 @@ const retailInstall = {
 // quietAt, quietFor (through the lobby or directly): the other player sends
 // nothing from quietAt into the download for quietFor (its tab stalls), while
 // the host's game goes on sending to it.
-async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 900000, matchAt = 0,
+async function run({ mbit, K, mapBytes, path, paced, pong = true, lost = [], limitMs = 900000, matchAt = 0,
                      takes = 0, frameMs = 16, windowBytes = 256 * 1024, slowFor = Infinity,
                      hostFrameMs = 0, hostSlowAt = 0, hostBusyFor = 0, hostEveryMs = 0, quietAt = Infinity, quietFor = 0 }) {
     const clock = makeClock();
@@ -445,8 +448,8 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
         const probe = { seq: 0, out: false, back: false, sentAt: 0, at: 0, rtt: 0, base: 0, got: 0 };
         const unread = host.jkrWs.socks[1].q;
         const sendProbe = () => {
-            if (probe.got ? probe.out || clock.now() - probe.sentAt < 2000
-                          : probe.out && clock.now() - probe.sentAt < 10000)
+            if (probe.out ? clock.now() - probe.sentAt < 10000
+                          : probe.got && clock.now() - probe.sentAt < 2000)
                 return;
             if (transferring)
                 probesAt.push(clock.now());
@@ -455,7 +458,7 @@ async function run({ mbit, K, mapBytes, path, paced, pong = true, limitMs = 9000
             probe.back = false;
             probe.sentAt = clock.now();
             const leaves = ws.send(16 + 20);
-            if (pong)
+            if (pong && !lost.includes(seq))
                 clock.setTimeout(() => page.deliver(() => {
                     if (probe.seq === seq) {
                         probe.back = true;
@@ -670,6 +673,26 @@ test('on the Imperial Network Protocol the rate grows on a fast upload, as the r
         assert.ok(r.probesAt.length >= 2 && Math.min(...gaps) >= every, `timed requests ${Math.min(...gaps)} ms apart`);
         assert.ok(r.probesAt.length <= r.secs * 1000 / every + 1, `${r.probesAt.length} timed requests in ${r.secs.toFixed(0)} s`);
     }
+});
+
+test('on the Imperial Network Protocol, an answer from the relay server that never comes: the upload doesn\'t stay at the least rate', async () => {
+    // The 5th request's answer lost (the server dropped it, or the page did
+    // at its cap): taken as lost 10 s on, and another goes. Before, the wait
+    // grew for good, and the upload went at the least rate to the end:
+    // 113 s, where it takes 32 s.
+    const s = { path: 'imperial', mbit: 5, mapBytes: 8000000 };
+    const paced = await run({ ...s, K, paced: true });
+    const lost = await run({ ...s, K, paced: true, lost: [5] });
+    console.log('    ' + describe('Imperial, 5 Mbit/s up, 8 MB', paced));
+    console.log('    ' + describe('the 5th answer lost', lost));
+    assert.ok(paced.ok && lost.ok);
+    assert.ok(lost.ratio < 1.02);
+    assert.equal(lost.reasks, 0);
+    assert.ok(lost.xfer < paced.xfer * 1.25 + 2, `${lost.xfer.toFixed(1)} s, ${paced.xfer.toFixed(1)} s with every answer`);
+    assert.ok(lost.rate > 100000, 'rate at the end ' + lost.rate);
+    assert.ok(lost.max < 1000, 'game packets wait ' + lost.max + ' ms');
+    const gaps = lost.probesAt.slice(1).map((t, i) => t - lost.probesAt[i]);
+    assert.ok(Math.min(...gaps) >= 2000 && Math.max(...gaps) < 12000, `timed requests ${Math.min(...gaps)}-${Math.max(...gaps)} ms apart`);
 });
 
 for (const s of [

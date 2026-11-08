@@ -321,13 +321,15 @@ EM_JS(void, imperial_js_xfer_init, (int bActive), {
         // waits in the browser says so at once. Until the server has answered,
         // there's no telling (the queue only waits for the engine's next
         // frame). The engine sends one when it's asked for, but once the
-        // server has answered, no sooner than 2 s after the last. A queue
-        // stands until the next answer; no queue is said once for each
-        // answer, as maps.js grows the rate each time it's said. mapWhy: why,
-        // for the network log.
+        // server has answered, no sooner than 2 s after the last, and one out
+        // 10 s is taken as lost. A queue stands until the next answer; no
+        // queue is said once for each answer, as maps.js grows the rate each
+        // time it's said. mapWhy: why, for the network log.
         Module.jkImperial.mapCongested = function() {
             var m = Module.jkImperial, pr = m.probe;
-            if (!pr || !pr.got || pr.waited < 0) m.wantProbe = true;
+            // Another once the one out has come, or is lost (10 s,
+            // jkrelay_AskTimed).
+            if (!pr || !pr.got || pr.waited < 0 || pr.waited >= 10000) m.wantProbe = true;
             if (m.sockBacklog() >= 16384) {
                 m.mapWhy = m.sockBacklog() + ' bytes waiting in the socket';
                 return true;
