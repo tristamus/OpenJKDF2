@@ -595,6 +595,9 @@ function describe(name, r) {
            (r.probesAt.length ? `; ${r.probesAt.length} timed request(s) to the relay server` : '');
 }
 
+// How long a map takes at what the joiner's tab takes.
+const mapSecs = s => s.mapBytes / s.takes;
+
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
@@ -735,6 +738,22 @@ test('over the map channel, a joiner whose tab is slow to take the map gets it a
     assert.ok(slow.xfer < s.mapBytes / s.takes + 2, `${slow.xfer.toFixed(1)} s`);
     assert.ok(slow.rate >= 1000000, 'rate ' + slow.rate);
     assert.ok(then.xfer < 14, `${then.xfer.toFixed(1)} s`);
+});
+
+test('over the map channel, a joiner whose tab takes 100-150 KB/s, the host\'s frames 400 ms and 1 s: blocks aren\'t asked for again', async () => {
+    // The upload is fast, so the rate goes to its most, and a pump's worth
+    // at it is 0.8-2 MB: what may wait on the channel in a match is no more
+    // than it took lately in PACE_PART_MS / 2, or a block asked for waited
+    // behind the ones before longer than the joiner waits for a part.
+    for (const [F, takes] of [[400, 100000], [400, 150000], [1000, 150000]]) {
+        const s = { path: 'direct', mbit: 20, mapBytes: 8000000, takes, hostFrameMs: F, hostSlowAt: 1000 };
+        const r = await run({ ...s, K, paced: true });
+        console.log('    ' + describe(`frames of ${F} ms, the tab takes ${takes / 1000} KB/s`, r));
+        assert.ok(r.ok);
+        assert.equal(r.reasks, 0, `frames of ${F} ms, ${takes / 1000} KB/s: ${r.reasks} block(s) asked for again`);
+        assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
+        assert.ok(r.xfer < mapSecs(s) * 1.25, `${r.xfer.toFixed(1)} s, at the tab's own pace ${mapSecs(s).toFixed(1)} s`);
+    }
 });
 
 test('on the Imperial Network Protocol each answer with no queue counts once, and a queue at every look until the next', async () => {

@@ -1369,8 +1369,11 @@
     // else's packets, which go on connections of their own, and at 2-3
     // frames a second 64 KiB a pump held a fast upload to a few hundred KB/s
     // whatever the rate, where the computer and the router hold little of
-    // the channel's (pacing-test.mjs). It waits only while the upload is
-    // slower than the rate, which the rate soon halves for.
+    // the channel's (pacing-test.mjs). But no more than the channel took in
+    // PACE_PART_MS / 2 lately (wayOf): a joiner's tab or downlink slow to take
+    // the map holds it in the host's buffer, which nothing halves the rate
+    // for, and a block asked for then waited behind 1-2 MB of the ones
+    // before, more than CHUNK_RESEND_MS, so it was asked for and sent again.
     var PACE_LOW_SOCKET_MATCH = 16 * 1024;
     var PACE_LOW_SOCKET = 256 * 1024;
     var PACE_LOW_CHANNEL = 1024 * 1024;
@@ -1440,7 +1443,9 @@
         // For the network log (noteRate): the looks at the link since its
         // last line that said a queue, none, and no telling, and why the last
         // of each said so; the rate it last said, and when.
-        looks: [0, 0, 0], whys: ['', '', ''], notedRate: 0, notedAt: 0
+        looks: [0, 0, 0], whys: ['', '', ''], notedRate: 0, notedAt: 0,
+        // The map channels parts went on (wayOf), by joiner and way.
+        ways: {}
     };
 
     function partBytes(g, p) {
@@ -1562,11 +1567,36 @@
                (g.via === 'direct' && !(net && net.mapDirect && net.mapDirect(g.to)));
     }
 
-    function hasRoom(net, g, inMatch) {
+    // A map channel g's parts go on, and how fast it took them lately (bytes
+    // a second): what waited on it after the last pump that sent on it, less
+    // what waits now, once a pump. While something waited on it all along,
+    // that's how fast the joiner takes the map; one that emptied may take it
+    // faster, and keeps the most it was seen to.
+    function wayOf(net, g, now) {
+        var key = g.to + ' ' + g.via, w = up.ways[key];
+        if (!w)
+            w = up.ways[key] = { to: g.to, via: g.via, left: 0, at: 0, takes: 0, seen: 0 };
+        if (w.seen !== now) {
+            var b = net.mapBacklog(g.to, g.via);
+            if (w.at && now > w.at) {
+                var took = Math.max(0, w.left - b) * 1000 / (now - w.at);
+                w.takes = b > 0 ? took : Math.max(took, w.takes);
+            }
+            w.seen = now;
+        }
+        return w;
+    }
+
+    function hasRoom(net, g, inMatch, now) {
         if (!net || !net.mapBacklog)
             return true;
-        var low = onSocket(net, g) ? (inMatch ? PACE_LOW_SOCKET_MATCH : PACE_LOW_SOCKET)
-                                   : (inMatch ? Math.max(PACE_LOW_CHANNEL_MATCH, up.burst) : PACE_LOW_CHANNEL);
+        var low;
+        if (onSocket(net, g)) {
+            low = inMatch ? PACE_LOW_SOCKET_MATCH : PACE_LOW_SOCKET;
+        } else {
+            var w = wayOf(net, g, now);
+            low = inMatch ? Math.max(PACE_LOW_CHANNEL_MATCH, Math.min(up.burst, w.takes * PACE_PART_MS / 2000)) : PACE_LOW_CHANNEL;
+        }
         return net.mapBacklog(g.to, g.via) < low;
     }
 
@@ -1574,8 +1604,10 @@
     // packets come in, as well as the timer here, which a hidden tab slows.
     function pump() {
         if (!up.groups.size) {
-            // Idle: the next transfer starts with no burst saved up.
+            // Idle: the next transfer starts with no burst saved up, nor
+            // what its channels took.
             up.pumpedAt = 0;
+            up.ways = {};
             return;
         }
         if (up.pumping)
@@ -1667,7 +1699,7 @@
                 removeGroup(g);
                 continue;
             }
-            if (!hasRoom(net, g, inMatch)) {
+            if (!hasRoom(net, g, inMatch, now)) {
                 up.next++;
                 idle++;
                 continue;
@@ -1696,6 +1728,15 @@
                 up.next++;
             else
                 removeGroup(g);
+        }
+        // What waits now on each channel looked at, for what it takes by the
+        // next pump (wayOf).
+        for (var key in up.ways) {
+            var w = up.ways[key];
+            if (w.seen === now) {
+                w.left = net.mapBacklog(w.to, w.via);
+                w.at = now;
+            }
         }
     }
 
