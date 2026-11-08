@@ -8,12 +8,15 @@
 // socket has IMPERIAL_XFER_BACKLOG (16 KiB) or more yet to send, and lets
 // maps.js send first, telling it whether the host is in a match and how the
 // relay server's answers to a timed request came, and sends one when maps.js
-// asks. What waits for a machine that left the game is dropped.
+// asks, or until IMPERIAL_XFER_TIMED_FIRST have come. It notes each frame for
+// the page (stdComm_WSRelay_Frame). What waits for a machine that left the
+// game is dropped.
 //
 // Then that request on its own (jkrelay_AskTimed in jkrelay_client.c), with a
-// made-up connection: one at a time, its round trip and the shortest, asked
-// again only while the server hasn't answered one, and once it has, no
-// sooner than 2 s after the last however often it's asked for.
+// made-up connection: one at a time, its round trip (to when the page took
+// the answer in) and the shortest, asked again only while the server hasn't
+// answered one, and once it has, no sooner than 2 s after the last however
+// often it's asked for.
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -28,7 +31,7 @@ const state = source.match(/^static [\w ]+ imperial_(aXferSys|aXferSeen|msecXfer
 const from = source.indexOf('static void imperial_XferForgetGone(');
 const at = source.indexOf('static void imperial_XferPump()');
 const pump = source.slice(from, source.indexOf('\n}\n', at) + 3);
-if (!defines || defines.length < 4 || !state || state.length < 8 || from < 0 || at < from)
+if (!defines || defines.length < 5 || !state || state.length < 8 || from < 0 || at < from)
     throw new Error("couldn't find imperial_XferPump and what it uses");
 
 const harness = `
@@ -43,9 +46,9 @@ static int imperial_bInGame = 1;
 
 // maps.js: frames of frameLen bytes waiting for joiner 2.
 static int queued = 0, frameLen = 16 + 24 + 64 * 1024;
-static int serves = 0, lastInMatch = -1, takesSinceServe = 0, wantProbe = 0, probes = 0, lastGot = -1;
-static double lastRtt, lastBase, lastWaited;
-static int imperial_js_xfer_serve(int bInMatch, int got, double rtt, double base, double waited)
+static int serves = 0, lastInMatch = -1, takesSinceServe = 0, wantProbe = 0, probes = 0, lastGot = -1, timedGot = 3;
+static double lastRtt, lastBase, lastWaited, lastAt;
+static int imperial_js_xfer_serve(int bInMatch, int got, double rtt, double base, double waited, double answeredAt)
 {
     serves++;
     lastInMatch = bInMatch;
@@ -54,16 +57,21 @@ static int imperial_js_xfer_serve(int bInMatch, int got, double rtt, double base
     lastRtt = rtt;
     lastBase = base;
     lastWaited = waited;
+    lastAt = answeredAt;
     return wantProbe;
 }
 static void jkrelay_AskTimed(void) { probes++; }
-static int jkrelay_TimedState(double* pRtt, double* pBase, double* pWaited)
+static int jkrelay_TimedState(double* pRtt, double* pBase, double* pWaited, double* pAt)
 {
     *pRtt = 120;
     *pBase = 40;
     *pWaited = 300;
-    return 3;
+    *pAt = 777;
+    return timedGot;
 }
+// The page's note of each frame (stdComm_WSRelay.c).
+static int framesNoted = 0;
+static void stdComm_WSRelay_Frame(void) { framesNoted++; }
 static int imperial_js_xfer_take(uint8_t* buf, int cap, int* pTo)
 {
     takesSinceServe++;
@@ -182,18 +190,34 @@ int main(void)
     imperial_bInGame = 0;
     imperial_XferPump();
     CHECK(lastInMatch == 0, "in a match out of a game");
+    imperial_bInGame = 1;
+    // Each pump notes the frame for the page, first.
+    framesNoted = 0;
+    imperial_XferPump();
+    CHECK(framesNoted == 1, "noted %d frames in one pump", framesNoted);
 
     // maps.js gets how the relay server's answers came, and a request is
     // timed when it asks for one, not otherwise.
     reset(0);
     probes = 0;
     imperial_XferPump();
-    CHECK(lastGot == 3 && lastRtt == 120 && lastBase == 40 && lastWaited == 300, "told %d %.0f %.0f %.0f", lastGot, lastRtt, lastBase, lastWaited);
+    CHECK(lastGot == 3 && lastRtt == 120 && lastBase == 40 && lastWaited == 300 && lastAt == 777,
+          "told %d %.0f %.0f %.0f %.0f", lastGot, lastRtt, lastBase, lastWaited, lastAt);
     CHECK(probes == 0, "timed %d unasked", probes);
     wantProbe = 1;
     imperial_XferPump();
     wantProbe = 0;
     CHECK(probes == 1, "timed %d when asked", probes);
+    // A host has IMPERIAL_XFER_TIMED_FIRST answers come as its game starts,
+    // whether maps.js asks or not, for the shortest.
+    timedGot = IMPERIAL_XFER_TIMED_FIRST - 1;
+    probes = 0;
+    imperial_XferPump();
+    CHECK(probes == 1, "timed %d with %d answers", probes, timedGot);
+    timedGot = IMPERIAL_XFER_TIMED_FIRST;
+    imperial_XferPump();
+    CHECK(probes == 1, "timed %d more with %d answers", probes - 1, timedGot);
+    timedGot = 3;
 
     // A joiner's machine that leaves: nothing more goes to it, within 1 s.
     // One the server hasn't said joined yet isn't taken for gone.
@@ -241,6 +265,12 @@ static struct { int sock, inSession; uint32_t token, nextSeq; uint8_t appGuid[16
 static struct { int used, ws; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
 static uint64_t nowMs = 5000;
 static uint64_t jkr_NowMs(void) { return nowMs; }
+// The page's clock, and when the page took in what was read last: as it's
+// read here unless a check says otherwise.
+static double emscripten_get_now(void) { return (double)nowMs; }
+static double jkr_wsRecvAtMs = 0.0;
+static int jkr_TimedAnswer(uint32_t seq);
+static int answer(uint32_t seq) { jkr_wsRecvAtMs = (double)nowMs; return jkr_TimedAnswer(seq); }
 static void wr32(uint8_t* p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
 static uint8_t lastType;
 static uint32_t lastSeq;
@@ -256,36 +286,36 @@ static int failed = 0;
 
 int main(void)
 {
-    double rtt, base, waited;
+    double rtt, base, waited, at;
     R.sock = 1; R.inSession = 1; R.token = 9; R.nextSeq = 100;
     jkr_wsSocks[1].ws = 4;
-    CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 0 && waited < 0, "known before any");
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 0 && waited < 0, "known before any");
 
     // One at a time: a LIST, as the menu sends.
     jkrelay_AskTimed();
     jkrelay_AskTimed();
     CHECK(sends == 1 && lastType == JKR_LIST && lastSeq == 101 && lastLen == JKR_HDR_SIZE + 20, "sent %d, type %d, seq %u", sends, lastType, lastSeq);
     nowMs += 30;
-    CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 0 && waited == 30, "waited %.0f", waited);
-    CHECK(!jkr_TimedAnswer(100), "took another answer");
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 0 && waited == 30, "waited %.0f", waited);
+    CHECK(!answer(100), "took another answer");
     nowMs += 20;
-    CHECK(jkr_TimedAnswer(101), "didn't take its answer");
-    CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 1 && rtt == 50 && base == 50 && waited < 0, "%.0f %.0f %.0f", rtt, base, waited);
+    CHECK(answer(101), "didn't take its answer");
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 1 && rtt == 50 && base == 50 && waited < 0, "%.0f %.0f %.0f", rtt, base, waited);
 
     // Answered: the next goes 2 s after the last went, not before.
     jkrelay_AskTimed();
     nowMs += 1949;
     jkrelay_AskTimed();
-    CHECK(sends == 1 && jkrelay_TimedState(&rtt, &base, &waited) == 1 && waited < 0, "sent %d within 2 s", sends);
+    CHECK(sends == 1 && jkrelay_TimedState(&rtt, &base, &waited, &at) == 1 && waited < 0, "sent %d within 2 s", sends);
     nowMs += 1;
     jkrelay_AskTimed();
     CHECK(sends == 2 && lastSeq == 102, "sent %d at 2 s", sends);
 
     // Behind a queue: longer than the shortest, which stays.
     nowMs += 900;
-    CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 1 && waited == 900, "waited %.0f", waited);
-    jkr_TimedAnswer(102);
-    CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 2 && rtt == 900 && base == 50, "%.0f %.0f", rtt, base);
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 1 && waited == 900, "waited %.0f", waited);
+    answer(102);
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 2 && rtt == 900 && base == 50, "%.0f %.0f", rtt, base);
 
     // Once the server has answered, one that doesn't come back isn't sent again.
     nowMs += 1100;
@@ -294,12 +324,12 @@ int main(void)
     nowMs += 20000;
     jkrelay_AskTimed();
     CHECK(sends == 3, "sent %d", sends);
-    CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 2 && waited == 20000, "waited %.0f", waited);
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 2 && waited == 20000, "waited %.0f", waited);
 
     // Another connection: nothing known; a server that never answers is
     // asked again every 10 s.
     jkr_wsSocks[1].ws = 5;
-    CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 0, "known on another connection");
+    CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 0, "known on another connection");
     jkrelay_AskTimed();
     nowMs += 9000;
     jkrelay_AskTimed();
@@ -320,7 +350,7 @@ int main(void)
             if (lastSeq != answered && nowMs - sentAt >= 50)
             {
                 answered = lastSeq;
-                jkr_TimedAnswer(lastSeq);
+                answer(lastSeq);
             }
             int before = sends;
             jkrelay_AskTimed();
@@ -335,7 +365,20 @@ int main(void)
         printf("    asked for each frame for 60 s: %d sent, %llu to %llu ms apart\\n", sends - first, (unsigned long long)shortest, (unsigned long long)longest);
         CHECK(sends - first == 30, "sent %d in 60 s", sends - first);
         CHECK(shortest >= 2000 && longest <= 2016, "%llu to %llu ms apart", (unsigned long long)shortest, (unsigned long long)longest);
-        CHECK(jkrelay_TimedState(&rtt, &base, &waited) == 30 && rtt == 64 && base == 64, "%.0f %.0f", rtt, base);
+        CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 30 && rtt == 64 && base == 64, "%.0f %.0f", rtt, base);
+    }
+
+    // An answer the page took in before the engine read it, a frame or two
+    // on: timed to when the page took it, which the state gives too.
+    jkr_wsSocks[1].ws = 7;
+    {
+        double sentAt = (double)nowMs;
+        jkrelay_AskTimed();
+        nowMs += 300;
+        jkr_wsRecvAtMs = sentAt + 45;
+        CHECK(jkr_TimedAnswer(lastSeq), "didn't take its answer");
+        CHECK(jkrelay_TimedState(&rtt, &base, &waited, &at) == 1 && rtt == 45 && base == 45 && at == sentAt + 45 && waited < 0,
+              "%.0f %.0f %.0f %.0f", rtt, base, at - sentAt, waited);
     }
 
     // Not in a game: nothing.

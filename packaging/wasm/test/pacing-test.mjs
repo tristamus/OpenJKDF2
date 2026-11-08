@@ -777,6 +777,7 @@ const nameSlow = s => `${{ relay: 'through the lobby', direct: 'over the map cha
 for (const s of [
     { path: 'relay', mbit: 20, mapBytes: 8000000 },
     { path: 'direct', mbit: 20, mapBytes: 25000000 },
+    { path: 'imperial', mbit: 20, mapBytes: 8000000 },
 ]) {
     const what = nameSlow(s) + ', the host\'s frames 400 ms';
     test(what + ': answers late for the page aren\'t taken for a queue, and the map comes about as soon as from the live host', async () => {
@@ -788,6 +789,8 @@ for (const s of [
         assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
         assert.equal(paced.reasks, 0);
         assert.equal(paced.looks.yes, 0, 'a queue said at ' + paced.looks.yes + ' looks');
+        // At 2.5 frames a second the Imperial pump sends 64 KiB a frame at
+        // most, about 160 KB/s, however fast the upload.
         assert.ok(paced.xfer < old.xfer * 2.5 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
         assert.ok(paced.max < 1000, 'game packets wait ' + paced.max + ' ms');
     });
@@ -813,6 +816,19 @@ for (const s of [
             assert.ok(paced.p95 * 2 < old.p95 && paced.max < old.max, `p95 wait ${paced.p95} ms, live host ${old.p95} ms`);
     });
 }
+
+test('on the Imperial Network Protocol at 2 Mbit/s up, the host\'s frames 400 ms: the map comes sooner than from the live host, sent once', async () => {
+    const s = { path: 'imperial', mbit: 2, mapBytes: 8000000, ...SLOW };
+    const paced = await run({ ...s, K, paced: true });
+    const old = await run({ ...s, K, paced: false });
+    console.log('    paced     ' + describe(nameSlow(s), paced));
+    console.log('    live host ' + describe(nameSlow(s), old));
+    assert.ok(paced.ok);
+    assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+    assert.equal(paced.reasks, 0);
+    assert.ok(paced.xfer < old.xfer, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+    assert.ok(paced.max < 1000, 'game packets wait ' + paced.max + ' ms');
+});
 
 test('through the lobby at 2 Mbit/s up, the host\'s frames 16 and 33 ms: the queue seen as at full speed', async () => {
     const s = { path: 'relay', mbit: 2, mapBytes: 8000000 };
