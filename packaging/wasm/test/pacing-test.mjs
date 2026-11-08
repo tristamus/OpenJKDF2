@@ -764,7 +764,82 @@ test('the network log says what the paced rate is and why, at most every few sec
     assert.ok(!/ \(was /.test(r.notes[0]), r.notes[0]);
     for (const l of r.notes)
         assert.match(l, /^[\d:.]+ map upload paced at \d+ KB\/s( \(was \d+\))?; the link since the last line: \d+ a queue( \(.*\))?, \d+ no queue( \(.*\))?, \d+ no telling( \(.*\))?; \d+ KB waiting for \d+ joiner\(s\), \d+ KB on the way$/);
-    assert.ok(r.notes.some(l => /: [1-9]\d* a queue \(lobby round trip \d+ ms \(shortest \d+\)/.test(l)), 'never said why');
+    assert.ok(r.notes.some(l => /: [1-9]\d* a queue \(lobby round trip \d+ ms, at least \d+ of it on the way \(shortest \d+\)/.test(l)), 'never said why');
+});
+
+// The host's page slow (a busy computer, a weak one): the lobby's and the
+// relay server's answers wait for its frames before the page takes them, as
+// a queue's would. Frames of 400 ms from 1 s on, after the first answers.
+const SLOW = { hostFrameMs: 400, hostSlowAt: 1000 };
+const nameSlow = s => `${{ relay: 'through the lobby', direct: 'over the map channel', imperial: 'on the Imperial Network Protocol' }[s.path]} ` +
+                      `at ${s.mbit} Mbit/s up, a ${s.mapBytes / 1e6} MB map`;
+
+for (const s of [
+    { path: 'relay', mbit: 20, mapBytes: 8000000 },
+    { path: 'direct', mbit: 20, mapBytes: 25000000 },
+]) {
+    const what = nameSlow(s) + ', the host\'s frames 400 ms';
+    test(what + ': answers late for the page aren\'t taken for a queue, and the map comes about as soon as from the live host', async () => {
+        const paced = await run({ ...s, ...SLOW, K, paced: true });
+        const old = await run({ ...s, ...SLOW, K, paced: false });
+        console.log('    paced     ' + describe(what, paced) + `; a queue said at ${paced.looks.yes} of ${paced.looks.yes + paced.looks.no + paced.looks.none} looks`);
+        console.log('    live host ' + describe(what, old));
+        assert.ok(paced.ok);
+        assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+        assert.equal(paced.reasks, 0);
+        assert.equal(paced.looks.yes, 0, 'a queue said at ' + paced.looks.yes + ' looks');
+        assert.ok(paced.xfer < old.xfer * 2.5 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+        assert.ok(paced.max < 1000, 'game packets wait ' + paced.max + ' ms');
+    });
+}
+
+for (const s of [
+    { path: 'relay', mbit: 2, mapBytes: 8000000 },
+    { path: 'direct', mbit: 5, mapBytes: 8000000 },
+]) {
+    const what = nameSlow(s) + ', the host\'s frames 400 ms';
+    test(what + ': a queue on the upload is still seen, and game packets wait less than with the live host', async () => {
+        const paced = await run({ ...s, ...SLOW, K, paced: true });
+        const old = await run({ ...s, ...SLOW, K, paced: false });
+        console.log('    paced     ' + describe(what, paced) + `; a queue said at ${paced.looks.yes} of ${paced.looks.yes + paced.looks.no + paced.looks.none} looks`);
+        console.log('    live host ' + describe(what, old));
+        assert.ok(paced.ok);
+        assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
+        assert.equal(paced.reasks, 0);
+        assert.ok(paced.looks.yes > 0, 'a queue never said');
+        assert.ok(paced.xfer < old.xfer * 2 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+        assert.ok(paced.p95 < old.p95, `p95 wait ${paced.p95} ms, live host ${old.p95} ms`);
+        if (s.path === 'relay')
+            assert.ok(paced.p95 * 2 < old.p95 && paced.max < old.max, `p95 wait ${paced.p95} ms, live host ${old.p95} ms`);
+    });
+}
+
+test('through the lobby at 2 Mbit/s up, the host\'s frames 16 and 33 ms: the queue seen as at full speed', async () => {
+    const s = { path: 'relay', mbit: 2, mapBytes: 8000000 };
+    const fast = await run({ ...s, K, paced: true });
+    console.log('    ' + describe('full speed', fast));
+    for (const [F, slowAt] of [[16, 0], [33, 1000]]) {
+        const r = await run({ ...s, K, paced: true, hostFrameMs: F, hostSlowAt: slowAt });
+        console.log('    ' + describe(`frames of ${F} ms`, r));
+        assert.ok(r.ok);
+        assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
+        assert.equal(r.reasks, 0);
+        assert.ok(r.looks.yes > 0);
+        assert.ok(r.xfer < fast.xfer * 1.25, `${r.xfer.toFixed(1)} s, ${fast.xfer.toFixed(1)} s at full speed`);
+        assert.ok(r.p95 < fast.p95 * 2, `p95 wait ${r.p95} ms, ${fast.p95} ms at full speed`);
+        assert.ok(r.max < 1000, 'game packets wait ' + r.max + ' ms');
+    }
+});
+
+test('through the lobby at 2 Mbit/s up, the host\'s page busy 3 s as the first answers come: the shortest round trip isn\'t taken from them', async () => {
+    const s = { path: 'relay', mbit: 2, mapBytes: 8000000 };
+    const fast = await run({ ...s, K, paced: true });
+    const busy = await run({ ...s, K, paced: true, hostBusyFor: 3000 });
+    console.log('    ' + describe('busy 3 s first', busy));
+    assert.ok(busy.ok);
+    assert.ok(busy.looks.yes > 0);
+    assert.ok(busy.p95 < fast.p95 * 1.5, `p95 wait ${busy.p95} ms, ${fast.p95} ms`);
+    assert.ok(busy.xfer < fast.xfer * 1.25, `${busy.xfer.toFixed(1)} s, ${fast.xfer.toFixed(1)} s`);
 });
 
 let failed = 0;

@@ -958,16 +958,20 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
            match count only where most of them show them. Without the lobby's
            answer, they say nothing about what goes through the lobby (lobby).
            Asked at most every 250 ms, never right after a send, which what's
-           waiting would count. net.mapWhy: which sign said so, or how the
+           waiting would count. Of the answer's round trip and of the wait
+           for the one out, only what the page can't have held up counts
+           (net.heldFrom), against the shortest round trip as it was read: a
+           page at 2 fps took answers up to a second late, which looked like
+           a queue at every look. net.mapWhy: which sign said so, or how the
            lobby's answers come, for the network log (maps.js). */
         net.mapCongested = function(lobby) {
             var now = performance.now(), lp = net.lobbyPing, queued = false, seen = false, why = [], lobbyWhy = '';
             if (net.state === 1 && lp.got) {
                 seen = true;
-                var waited = lp.sent.length ? now - lp.sent[0] : 0;
-                lobbyWhy = 'lobby round trip ' + Math.round(lp.rtt) + ' ms (shortest ' + Math.round(lp.base) + ')' +
-                           (waited > lp.base + 80 ? ', the next out ' + Math.round(waited) + ' ms' : '');
-                if (lp.rtt > lp.base + 80 || waited > lp.base + 80) {
+                var waited = lp.sent.length ? net.heldFrom(now) - lp.sent[0] : 0;
+                lobbyWhy = 'lobby round trip ' + Math.round(lp.rtt) + ' ms, at least ' + Math.round(lp.low) + ' of it on the way (shortest ' +
+                           Math.round(lp.base) + ')' + (waited > lp.base + 80 ? ', the next out at least ' + Math.round(waited) + ' ms' : '');
+                if (lp.low > lp.base + 80 || waited > lp.base + 80) {
                     queued = true;
                     why.push(lobbyWhy);
                 }
@@ -1007,8 +1011,14 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         };
 
         /* The lobby's ping and its answer: the times the pings not yet
-           answered went, the last round trip and the shortest. */
-        net.lobbyPing = { sent: [], rtt: 0, base: 0, got: 0 };
+           answered went, the last round trip, the shortest, and the least
+           the connection took for the last (low: the rest the page may have
+           held it up, net.heldFrom), and how many more to send as each
+           answer comes (net.pingBase). */
+        net.newLobbyPing = function() {
+            net.lobbyPing = { sent: [], rtt: 0, base: 0, low: 0, got: 0, more: 0 };
+        };
+        net.newLobbyPing();
         net.pingLobby = function() {
             var lp = net.lobbyPing;
             if (net.state !== 1) return;
@@ -1021,10 +1031,30 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         net.onPong = function() {
             var lp = net.lobbyPing;
             if (!lp.sent.length) return;
-            var rtt = performance.now() - lp.sent.shift();
+            var now = performance.now(), sent = lp.sent.shift(), rtt = now - sent;
             lp.base = lp.got ? Math.min(lp.base, rtt) : rtt;
             lp.rtt = rtt;
+            lp.low = Math.max(0, Math.min(rtt, net.heldFrom(now) - sent));
             lp.got++;
+            if (lp.more > 0 && !lp.sent.length) {
+                lp.more--;
+                net.pingLobby();
+            }
+        };
+        /* The shortest round trip is the shortest of a few, each sent as the
+           last comes back: an answer the page was too busy to take for a
+           while (starting up, a level loading, a slow frame) looks as long
+           as a queue would, and as the shortest it would hide one that long. */
+        net.pingBase = function() {
+            net.lobbyPing.more = 3;
+            if (!net.lobbyPing.sent.length) net.pingLobby();
+        };
+        /* The earliest an answer read at t came to the page, or one not read
+           by t hasn't come yet, as far as the host's game frames tell
+           (wsrelay_js_frame); t itself without them. */
+        net.heldFrom = function(t) {
+            var h = Module.jkHeld;
+            return h ? h.from(t) : t;
         };
 
         /* maps.js sends what waits for joiners now. */
@@ -1378,12 +1408,12 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 net.sayHello();
                 /* With game packets on WebRTC, the socket can sit idle for a whole
                    match, and proxies drop idle WebSockets. */
-                net.lobbyPing = { sent: [], rtt: 0, base: 0, got: 0 };
+                net.newLobbyPing();
                 /* The shortest round trip is taken while nothing waits on the
                    new socket: one taken later may have come behind a map
                    upload sent before a match, and make a queue look like
                    none (net.mapCongested). */
-                net.pingLobby();
+                net.pingBase();
                 keepalive = setInterval(function() { if (ws.readyState === 1 && net.ws === ws) net.pingLobby(); }, 25000);
                 net.rejoinMs = 1000;
                 var seat = net.session && net.seat;
@@ -1492,6 +1522,9 @@ EM_JS(void, wsrelay_js_rtc_begin, (int isHost), {
     if (Module.jkNetStats) Module.jkNetStats.start(isHost);
     net.note((isHost ? 'hosting' : 'joined') + ' room ' + (net.seat ? net.seat.room + ' as player ' + net.seat.id : '(no seat from the relay)'));
     if (!isHost && net.rtcEnabled()) net.hostOffer();
+    /* A host's map uploads go by the lobby's round trips (net.mapCongested):
+       the shortest again as its game starts, before anyone downloads. */
+    if (isHost) net.pingBase();
 });
 
 EM_JS(void, wsrelay_js_rtc_end, (), {
@@ -1572,6 +1605,56 @@ EM_JS(void, wsrelay_js_map_unhost, (), {
 
 // Map and mod parts waiting for joiners go out paced (maps.js). The engine's
 // frames keep them going in a hidden tab, whose timers barely run.
+// Added: when the host's game frames start and end, as near as the page can
+// tell, so what an answer from the lobby or the relay server was held up by
+// them isn't taken for a queue on the connection (net.mapCongested,
+// Module.jkImperial.mapCongested). The engine calls this in each frame
+// (stdComm_WSRelay_Frame), near its start: the first call notes the time and
+// posts the page a message, which the page takes right after the frame, so
+// the time it does is the frame's end. A WebSocket's message that comes
+// during a frame driven by requestAnimationFrame is read only once it's over:
+// at 16 ms right after it, but Chrome runs the next frame first when the
+// refresh is already due, and a message that came during a frame of 33 or
+// 400 ms was read after the frame after it, before the page took its own
+// (measured). So a message read by t, after the last frame noted as started
+// by then, came no sooner than that frame's start if the frame before was
+// short (no more than 20 ms after the one before ended), and otherwise no
+// sooner than the end of the frame two before (Module.jkHeld.from). One not
+// read by t hadn't come by then either. Taken off a round trip, that's never
+// more than it was held up by, but for 20 ms at most: a short frame read only
+// after the next, or a frame whose start was noted late in it. A frame that
+// doesn't call this, or starts before the page took the last one's message,
+// counts as part of the one before, which only takes off less. Nothing is
+// taken off without MessageChannel, nor once no frame was noted for a second
+// (out of a match): what holds the page up then isn't known.
+EM_JS(void, wsrelay_js_frame, (), {
+    var h = Module.jkHeld;
+    if (!h) {
+        if (typeof MessageChannel === 'undefined') return;
+        var ch = new MessageChannel();
+        h = Module.jkHeld = { frames: [], port: ch.port2 };
+        ch.port1.onmessage = function() {
+            h.frames[h.frames.length - 1].end = performance.now();
+        };
+        h.from = function(t) {
+            for (var i = h.frames.length - 1; i >= 0; i--) {
+                var f = h.frames[i];
+                if (f.start > t) continue;
+                if (f.end && t - f.end > 1000) return t;
+                if (i < 2) break;
+                var two = h.frames[i - 2].end, one = h.frames[i - 1].end;
+                return one - two <= 20 ? Math.min(f.start, one + 20) : two;
+            }
+            return -Infinity;
+        };
+    }
+    var last = h.frames[h.frames.length - 1];
+    if (last && !last.end) return;
+    h.frames.push({ start: performance.now(), end: 0 });
+    if (h.frames.length > 16) h.frames.shift();
+    h.port.postMessage(0);
+});
+
 EM_JS(void, wsrelay_js_map_pump, (), {
     if (Module.jkNet) Module.jkNet.pumpMaps();
 });
@@ -2469,6 +2552,11 @@ double stdComm_WSRelay_Now()
     return wsrelay_js_now();
 }
 
+void stdComm_WSRelay_Frame()
+{
+    wsrelay_js_frame();
+}
+
 void stdComm_WSRelay_SyncClock(int netId, int bOn)
 {
     // Added: netstats.js pings over the lobby's links; the Imperial Network
@@ -2735,6 +2823,7 @@ int DirectPlay_Receive(int *pIdOut, int *pMsgIdOut, int *pLenOut)
     if (stdComm_bIsServer)
     {
         wsrelay_CheckLeftPending();
+        wsrelay_js_frame();
         wsrelay_js_map_pump();
     }
 
