@@ -678,7 +678,10 @@ for (const s of [
 ]) {
     const what = `${{ relay: 'through the lobby', direct: 'over the map channel', imperial: 'on the Imperial Network Protocol' }[s.path]} ` +
                  `at ${s.mbit} Mbit/s up, a ${s.mapBytes / 1e6} MB map`;
-    test(what + ': the rate soon uses a fast upload, and the map takes at most twice as long as from the live host and 2 s', async () => {
+    // On the Imperial Network Protocol, three times: the rate grows a quarter
+    // at each of the relay server's answers, which come 2 s apart.
+    const most = s.path === 'imperial' ? 3 : 2;
+    test(what + `: the rate soon uses a fast upload, and the map takes at most ${most === 2 ? 'twice' : 'three times'} as long as from the live host and 2 s`, async () => {
         const paced = await run({ ...s, K, paced: true });
         const old = await run({ ...s, K, paced: false });
         console.log('    paced     ' + describe(what, paced));
@@ -686,10 +689,32 @@ for (const s of [
         assert.ok(paced.ok && old.ok);
         assert.ok(paced.ratio < 1.02, 'sent ' + paced.ratio.toFixed(2) + 'x');
         assert.equal(paced.reasks, 0);
-        assert.ok(paced.xfer < old.xfer * 2 + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
+        assert.ok(paced.xfer < old.xfer * most + 2, `${paced.xfer.toFixed(1)} s, live host ${old.xfer.toFixed(1)} s`);
         assert.ok(paced.max < 500, 'game packets wait ' + paced.max + ' ms');
     });
 }
+
+test('on the Imperial Network Protocol at 3.5-4.5 Mbit/s up, and at 2 Mbit/s with the host\'s frames 30 a second: game packets wait under 600 ms', async () => {
+    // The relay server answers every 2 s at most: a rate that doubled at
+    // each answer went from just under such an upload to twice it, and what
+    // it sent over waited in the computer and the router until the next
+    // answer, 1-2 s.
+    for (const s of [
+        { mbit: 3.5, mapBytes: 3000000 },
+        { mbit: 3.5, mapBytes: 8000000 },
+        { mbit: 4, mapBytes: 8000000 },
+        { mbit: 4.5, mapBytes: 8000000 },
+        { mbit: 2, mapBytes: 8000000, hostFrameMs: 3, hostEveryMs: 33, hostSlowAt: 1000 },
+    ]) {
+        const what = `Imperial, ${s.mbit} Mbit/s up, ${s.mapBytes / 1e6} MB` + (s.hostFrameMs ? ', frames 30 a second' : '');
+        const r = await run({ ...s, path: 'imperial', K, paced: true });
+        console.log('    ' + describe(what, r));
+        assert.ok(r.ok);
+        assert.ok(r.ratio < 1.02, 'sent ' + r.ratio.toFixed(2) + 'x');
+        assert.equal(r.reasks, 0);
+        assert.ok(r.max < 600, `${what}: game packets wait ${r.max} ms`);
+    }
+});
 
 test('over the map channel, a joiner whose tab is slow to take the map gets it at its own pace, the rate isn\'t held down for that, and the other player\'s packets don\'t wait', async () => {
     // The joiner's tab takes 300 KB/s, on a 20 Mbit/s upload: what waits for

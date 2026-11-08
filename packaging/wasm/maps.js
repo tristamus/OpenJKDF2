@@ -1377,8 +1377,8 @@
     var PACE_LOW_CHANNEL_MATCH = 64 * 1024;
     var PACE_MAX_QUEUED = 16 * 1024 * 1024;  // waiting for one joiner
     // Bytes a second in a match: where it starts, at most, and what it grows
-    // by each PACE_EVERY_MS that the link says no queue is building: times
-    // PACE_GROW until it first says there is one, PACE_STEP after.
+    // by each time the link says no queue is building: times PACE_GROW until
+    // it first says there is one, PACE_STEP for each PACE_EVERY_MS after.
     var PACE_START = 48000;
     var PACE_FLOOR = 24000;
     var PACE_MAX = 2000000;
@@ -1387,14 +1387,17 @@
     // waited up to 720 ms in pacing-test.mjs's model, against 450 ms.
     var PACE_GROW = 1.25;
     var PACE_EVERY_MS = 250;
-    // A link that says so less often grows for the time since the rate last
-    // changed, up to PACE_SAID_MS of it, and in slow start by PACE_GROW_MOST
-    // at most: nothing says how the new rate does until its next answer, and
-    // a queue it starts builds until then. The Imperial relay server answers
-    // every 2 s at most, so the rate there grows half as fast as through the
-    // lobby; twice that, and game packets wait a second on a 2 Mbit/s upload.
+    // A link that says so less often grows by steps for the time since the
+    // rate last changed, up to PACE_SAID_MS of it, but in slow start by
+    // PACE_GROW each time all the same: nothing says how the new rate does
+    // until the next answer, and a queue it starts builds until then. The
+    // Imperial relay server answers every 2 s at most, so there a rate that
+    // doubled at each answer went from just under the upload to twice it,
+    // and game packets waited 1-2 s on 3.5-4.5 Mbit/s uploads in
+    // pacing-test.mjs's model (half again: up to 1.1 s at 6 Mbit/s); now
+    // 0.5 s at most. A fast upload then takes about 28 s to reach 1 MiB/s,
+    // all the Imperial pump sends (an 8 MB map 22 s, not 13).
     var PACE_SAID_MS = 1000;
-    var PACE_GROW_MOST = 2;
     // Joiners ask for a block again when no part of it came for
     // CHUNK_RESEND_MS, and give up after STALL_MS without any: every block
     // being sent gets a part at least twice that often, however low the rate.
@@ -1642,7 +1645,7 @@
                     up.changedAt = now;
                 } else if (c === false) {
                     var k = Math.max(1, Math.floor(Math.min(PACE_SAID_MS, now - up.changedAt) / PACE_EVERY_MS));
-                    up.rate = up.slow ? up.rate * Math.min(PACE_GROW_MOST, Math.pow(PACE_GROW, k)) : up.rate + PACE_STEP * k;
+                    up.rate = up.slow ? up.rate * PACE_GROW : up.rate + PACE_STEP * k;
                     up.changedAt = now;
                 }
             }

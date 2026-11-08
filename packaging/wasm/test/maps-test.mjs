@@ -949,8 +949,9 @@ test('on the Imperial Network Protocol the rate grows once for each answer, and 
         if (says[i] !== true)
             assert.ok(r.slice(i * 8 + 1, i * 8 + 9).every(x => x === at(i)), `answer ${i}: ` + r.slice(i * 8, i * 8 + 9).join(' '));
     }
-    // Slow start: twice as fast for each answer, not for each look.
-    assert.ok(near(at(2), 2 * at(1)) && near(at(3), 2 * at(2)), [at(1), at(2), at(3)].join(' '));
+    // Slow start: a quarter for each answer, as for each look through the
+    // lobby, not for the 2 s since the last.
+    assert.ok(near(at(2), 1.25 * at(1)) && near(at(3), 1.25 * at(2)), [at(1), at(2), at(3)].join(' '));
     // The queue halves it down to the least by its last look. Then 16 KB/s
     // for the one look since, and 64 KB/s for each answer 2 s on, also after
     // one that said nothing.
