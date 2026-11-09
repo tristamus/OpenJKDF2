@@ -1884,8 +1884,9 @@
       }
 
       // Timed once, when the page opens, in Edge only. The game folder prompt
-      // shows the notice too once the test is done. Until then the page shows
-      // what the last test said. Like the graphics check, logged if it fails.
+      // shows the notice too. Until the test is done, the page and the prompt
+      // show what the last test said. Like the graphics check, logged if it
+      // fails.
       var jitRatio = null;
       try {
         if (!browserProblem() && browserKind() === 'edge') {
@@ -3779,7 +3780,7 @@
         if (!problem && !phoneNote() && !(navigator.connection && navigator.connection.saveData)) prefetchEngine();
         showPickerResult(problem || phoneNote() || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
-        showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio);
+        showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio !== null ? jitRatio : jitLastSlow());
         showPrivacyNote(document.getElementById('picker-privacy'), !problem && privacyOn);
         if (!picker.open) picker.showModal();
         chooseButton.focus();

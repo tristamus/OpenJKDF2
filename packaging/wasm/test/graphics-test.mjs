@@ -582,7 +582,8 @@ test("a throw in the start of Edge's test is logged, and the rest of the page st
     assert.equal(w.run('jitRatio'), null);
     w.run(pickerNotices);
     assert.equal(w.els['picker-gfx'].hidden, false);
-    assert.equal(w.els['picker-jit'].hidden, true);
+    // The test didn't run: the prompt shows what the last one said, as the page does.
+    assert.equal(w.els['picker-jit'].hidden, false);
     assert.equal(w.errors.length, 1);
 });
 
@@ -595,6 +596,41 @@ test('with nothing wrong, the script after the notices logs no error', async () 
     assert.equal(w.els['gfx-notice'].hidden, false);
     assert.equal(w.els['jit-notice'].hidden, false);
     assert.equal(w.stored['jkdf2mp-jit-slow'], '13.5');
+});
+
+test("the folder prompt shows what the last test said until this visit's answers, then what this one says", async () => {
+    // Slow last time, fast now: the prompt opened before the answer shows
+    // the notice, as the page above it does, and opened after it doesn't.
+    let w = noticesWindow({ stored: { 'jkdf2mp-jit-slow': '13.5' }, ratio: 0.8 });
+    w.run(noticesScript);
+    assert.equal(w.run('jitRatio'), null, 'no answer yet');
+    assert.equal(w.els['jit-notice'].hidden, false);
+    w.run(pickerNotices);
+    assert.equal(w.els['picker-jit'].hidden, false, 'what the last test said');
+    await settle();
+    assert.equal(w.run('jitRatio'), 0.8);
+    assert.equal(w.els['jit-notice'].hidden, true);
+    w.run(pickerNotices);
+    assert.equal(w.els['picker-jit'].hidden, true, 'what this one says');
+    assert.deepEqual(w.errors, []);
+
+    // Nothing kept from last time: nothing until the test says slow.
+    w = noticesWindow({ ratio: 13.5 });
+    w.run(noticesScript);
+    w.run(pickerNotices);
+    assert.equal(w.els['picker-jit'].hidden, true);
+    await settle();
+    w.run(pickerNotices);
+    assert.equal(w.els['picker-jit'].hidden, false);
+
+    // Slow last time, and this test couldn't say: still what the last one said.
+    w = noticesWindow({ stored: { 'jkdf2mp-jit-slow': '13.5' }, ratio: 'oops' });
+    w.run(noticesScript);
+    await settle();
+    assert.equal(w.run('jitRatio'), null);
+    w.run(pickerNotices);
+    assert.equal(w.els['picker-jit'].hidden, false);
+    assert.equal(w.els['jit-notice'].hidden, false);
 });
 
 let failed = 0;
