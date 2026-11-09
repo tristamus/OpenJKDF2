@@ -222,7 +222,8 @@ and check it with `node packaging/wasm/test/jspi-check.mjs <build folder>` (add
 `--reach "$(em-config BINARYEN_ROOT)/bin/wasm-dis"` to also check the engine's other entry points,
 as CI does). Without
 `wasm_out/jspi/`, the page falls back to the Asyncify engine. If the JSPI engine downloads but
-can't start in a tab, reloading that tab gets the Asyncify engine.
+can't start in a tab (other than for want of memory), or stops with a SuspendError, reloading that
+tab gets the Asyncify engine (unless the address has `?engine=jspi`).
 
 Browsers can't open UDP sockets, so multiplayer (`src/Platform/Networking/WSRelay`) finds games
 and sets up connections through a WebSocket server, then sends game packets over WebRTC data

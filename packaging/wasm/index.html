@@ -1912,6 +1912,7 @@
         var engineFailed = sessionStorage.getItem(ENGINE_FAILED);
         if (ENGINE === 'jspi' && !/[?&]engine=jspi(&|$)/.test(window.location.search) && engineFailed) {
           ENGINE = 'asyncify';
+          engineFailed = String(engineFailed).replace(/\.$/, '');
           console.log("OpenJKDF2: the JSPI engine didn't work in this tab before (" + engineFailed +
                       '); loading the Asyncify engine');
           engineLog.push("The JSPI engine didn't work in this tab before (" + engineFailed + '); loading the Asyncify engine');
@@ -2004,9 +2005,16 @@
         // The page loads the Asyncify engine when this tab is reloaded
         // (ENGINE_FAILED), but not for the browser turning down the memory,
         // which the Asyncify engine needs as well.
+        // (Only the browser saying it has no memory: a crash's "memory access
+        // out of bounds" isn't that.)
+        var noMemory = /out of memory|could(n't| not) allocate|cannot allocate|allocation failed|enlarge memory/i.test(why);
         var otherEngine = false;
-        if (ENGINE === 'jspi' && ((!engineRunning && !/memory/i.test(why)) || /SuspendError/.test(why + ' ' + (error && error.name))))
-          try { sessionStorage.setItem(ENGINE_FAILED, why); otherEngine = true; } catch (e) {}
+        if (ENGINE === 'jspi' && ((!engineRunning && !noMemory) || /SuspendError/.test(why + ' ' + (error && error.name))))
+          try {
+            sessionStorage.setItem(ENGINE_FAILED, why);
+            // ?engine=jspi keeps the JSPI engine on a reload.
+            otherEngine = !/[?&]engine=jspi(&|$)/.test(window.location.search);
+          } catch (e) {}
         leaveGuard = false;
         spinnerElement.style.display = 'none';
         progressElement.hidden = true;
@@ -2020,7 +2028,7 @@
           ? why + (otherEngine ? '\n\nReload the page to play on: the game then starts with its other engine, which ' +
                                  'works in every browser.' : '') +
             '\n\nPress F12 and open Console for details. Click anywhere else to hide this.'
-          : /memory/i.test(why)
+          : noMemory
           ? "The browser couldn't give the game the memory it needs. Close other tabs and programs, then " +
             'reload the page.\n\nThe browser said: ' + why
           : "Its files didn't download or start properly. That can happen on a flaky connection or while " +

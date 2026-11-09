@@ -26,11 +26,11 @@ function storage(items = {}) {
 }
 
 // The page's error handling, with the parts of the page it uses made up.
-function page({ ENGINE = 'asyncify', sessionStorage = storage() } = {}) {
+function page({ ENGINE = 'asyncify', sessionStorage = storage(), search = '' } = {}) {
     const listeners = {}, shown = [], logged = [];
     const element = () => ({ style: {}, hidden: false, textContent: '' });
     const env = {
-        window: { addEventListener: (type, fn) => { listeners[type] = fn; } },
+        window: { addEventListener: (type, fn) => { listeners[type] = fn; }, location: { search } },
         Module: { printErr: () => {}, setStatus: () => {} },
         engineLog: [],
         spinnerElement: element(), progressElement: element(), statusElement: element(),
@@ -213,6 +213,26 @@ test("a tab where the JSPI engine couldn't start, or hit a SuspendError, gets th
     page({ ENGINE: 'jspi', sessionStorage: memory }).env.Module.onAbort(
         'RangeError: WebAssembly.instantiate(): Out of memory: Cannot allocate Wasm memory for new instance');
     assert.deepEqual(memory.items, {});
+    // A crash before the start that names memory is the JSPI engine's still, and not the browser's memory.
+    const oob = storage();
+    const o = page({ ENGINE: 'jspi', sessionStorage: oob });
+    o.env.Module.onAbort('RuntimeError: memory access out of bounds');
+    assert.equal(oob.items[FAILED], 'RuntimeError: memory access out of bounds');
+    assert.doesNotMatch(o.shown[0].text, /couldn't give the game the memory/);
+    // V8's other words for it (WebAssembly.Memory()).
+    const mem2 = storage();
+    page({ ENGINE: 'jspi', sessionStorage: mem2 }).env.Module.onAbort('RangeError: WebAssembly.Memory(): could not allocate memory');
+    assert.deepEqual(mem2.items, {});
+    const mem3 = storage();
+    page({ ENGINE: 'jspi', sessionStorage: mem3 }).env.Module.onAbort('RangeError: Array buffer allocation failed');
+    assert.deepEqual(mem3.items, {});
+    // ?engine=jspi keeps the JSPI engine on a reload, so the box doesn't say the other engine comes.
+    const asked = storage();
+    const a = page({ ENGINE: 'jspi', sessionStorage: asked, search: '?engine=jspi' });
+    a.env.Module.onRuntimeInitialized();
+    a.rejection(e);
+    assert.match(asked.items[FAILED], /SuspendError/);
+    assert.doesNotMatch(a.shown[0].text, /Reload the page to play on/);
     const asyncify = storage();
     page({ ENGINE: 'asyncify', sessionStorage: asyncify }).env.Module.onAbort('both async and sync fetching of the wasm failed');
     assert.deepEqual(asyncify.items, {});
