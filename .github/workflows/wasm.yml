@@ -74,6 +74,9 @@ jobs:
       # made-up browser.
       - name: Test the graphics acceleration and enhanced security notices
         run: node packaging/wasm/test/graphics-test.mjs
+      # The tab's icon: in the page, in the page's colors.
+      - name: Test the tab's icon
+        run: node packaging/wasm/test/icon-test.mjs
       # The engine failing to start or stopping: only its own errors show the
       # box with Reload, with made-up errors from the engine and elsewhere.
       - name: Test the engine's error box
