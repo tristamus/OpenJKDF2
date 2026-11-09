@@ -205,6 +205,28 @@ test("the JSPI engine's script didn't download: the Asyncify engine loads withou
     assert.equal('instantiateWasm' in p.Module, false);
 });
 
+// Whether the folder prompt (openPicker) starts the early download, by its
+// lines as the page has them, with a made-up browser.
+const pickerEarly = cut('        // Whoever opens this wants to play', '        showPickerResult(');
+function opensEarly({ problem = '', phone = '', saveData, gfxCheck = { state: 'ok', renderer: 'ANGLE (NVIDIA)' } } = {}) {
+    let asked = 0;
+    const navigator = saveData === undefined ? {} : { connection: { saveData } };
+    new Function('problem', 'phoneNote', 'navigator', 'gfxCheck', 'prefetchEngine', pickerEarly)(
+        problem, () => phone, navigator, gfxCheck, () => { asked++; });
+    return asked === 1;
+}
+
+test('the folder prompt starts the early download, except where the game is unlikely to start', () => {
+    assert.equal(opensEarly(), true);
+    assert.equal(opensEarly({ gfxCheck: { state: 'software', renderer: 'Google SwiftShader' } }), true, 'drawn without the graphics card');
+    assert.equal(opensEarly({ gfxCheck: null }), true, 'graphics not checked (the check broke)');
+    assert.equal(opensEarly({ saveData: false }), true);
+    assert.equal(opensEarly({ gfxCheck: { state: 'none', renderer: '' } }), false, 'no WebGL 2');
+    assert.equal(opensEarly({ saveData: true }), false, 'Save-Data');
+    assert.equal(opensEarly({ phone: 'On a phone...' }), false, 'a phone or tablet');
+    assert.equal(opensEarly({ problem: 'This browser is too old' }), false, "a browser that can't run it");
+});
+
 test('the engine looks for its wasm where ENGINE_FILES says', () => {
     for (const [ENGINE, url] of [['jspi', 'https://jediknight.zone/jspi/openjkdf2.wasm'], ['asyncify', 'https://jediknight.zone/openjkdf2.wasm']]) {
         const p = page({ ENGINE });

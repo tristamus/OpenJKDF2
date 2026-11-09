@@ -3776,8 +3776,11 @@
         var problem = browserProblem();
         // Whoever opens this wants to play: the engine starts downloading
         // (prefetchEngine). Not on a phone or tablet, where most who tap Play
-        // don't have what the game needs, nor with the browser saving data.
-        if (!problem && !phoneNote() && !(navigator.connection && navigator.connection.saveData)) prefetchEngine();
+        // don't have what the game needs, nor with the browser saving data,
+        // nor when the browser can't draw WebGL 2 now (the prompt's notice
+        // says the game needs it). Those get it once they pick their folder.
+        if (!problem && !phoneNote() && !(navigator.connection && navigator.connection.saveData) &&
+            !(gfxCheck && gfxCheck.state === 'none')) prefetchEngine();
         showPickerResult(problem || phoneNote() || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
         showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio !== null ? jitRatio : jitLastSlow());
