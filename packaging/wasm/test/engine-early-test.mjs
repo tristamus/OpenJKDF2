@@ -216,6 +216,9 @@ test("the JSPI engine's script didn't download: the Asyncify engine loads withou
     assert.equal(p.engine(), 'asyncify');
     assert.deepEqual(p.env.scripts.map(s => s.src), ['jspi/openjkdf2.js', 'openjkdf2.js']);
     assert.equal('instantiateWasm' in p.Module, false);
+    // Nor is the JSPI wasm kept, compiled, for the rest of the tab.
+    assert.equal(p.early().failed, true);
+    assert.equal('module' in p.early(), false);
 });
 
 // Whether the folder prompt (openPicker) starts the early download, by its

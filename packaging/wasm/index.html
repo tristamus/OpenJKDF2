@@ -3626,6 +3626,9 @@
         var early = earlyEngine && earlyEngine.kind === ENGINE && !earlyEngine.failed ? earlyEngine : null;
         if (early) Module.instantiateWasm = function(imports, receive) { return earlyWasm(early, imports, receive); };
         else delete Module.instantiateWasm;
+        // The other engine's compiled wasm (the JSPI engine's, when its
+        // script didn't download) isn't kept for the rest of the tab.
+        if (earlyEngine && earlyEngine.kind !== ENGINE) earlyEngine = { kind: earlyEngine.kind, failed: true };
         var engine = document.createElement('script');
         engine.src = src;
         engine.onerror = function() {
