@@ -1419,11 +1419,12 @@
          digits of its SHA-256) so they can be kept for good, and the same
          names in ROOM_PICTURES (head). The page fetches both once it has
          loaded and the browser is idle (askRoomPicturesWhenIdle); before
-         that, or with Save-Data, the browser fetches one when its room
-         window first opens. Nar Shaddaa's is bitmap 201 in the
-         Zone client's jedi.dll (ZoneA502.exe), 610x300, as lossless WebP
-         (cwebp -lossless), drawn half again as big (915x450) so it fills
-         more of the window, its cut scaled with it. Sith: Asteroid's is a
+         that, with Save-Data, or once a game is starting, the browser
+         fetches one when its room window first opens. Nar Shaddaa's is
+         bitmap 201 in the Zone client's jedi.dll (ZoneA502.exe), 610x300,
+         as lossless WebP (cwebp -lossless), drawn half again as big
+         (915x450) so it fills more of the window, its cut scaled with it.
+         Sith: Asteroid's is a
          640x480 Mysteries of the Sith screenshot, the JPEG as it came. It's
          taller than Nar Shaddaa's was and Mara Jade crouches right of its
          middle, so its cut runs from its top right corner to the bottom edge
@@ -3779,6 +3780,9 @@
         modChoice.hidden = true;
         problemReload.hidden = true;
         picker.onclick = null;
+        // The room pictures keep out of the engine's way (in the rooms'
+        // script, below).
+        if (typeof stopRoomPictures === 'function') stopRoomPictures();
         var problem = browserProblem();
         // Whoever opens this wants to play: the engine starts downloading
         // (prefetchEngine). Not on a phone or tablet, where most who tap Play
@@ -6923,13 +6927,28 @@
       // both pictures are fetched at low priority, so a room's first window
       // shows its picture at once, as when they came with the page. Not with
       // the browser's data saver on (Save-Data): then only a room pointed at
-      // or opened asks for its picture.
+      // or opened asks for its picture. Nor once a game is starting.
       function askRoomPicturesWhenIdle() {
         if (typeof ROOM_PICTURES !== 'object' || (navigator.connection && navigator.connection.saveData)) return;
         var whenIdle = typeof requestIdleCallback === 'function' ? requestIdleCallback :
             function(fn) { setTimeout(fn, 1000); };
         whenIdle(function() {
+          if (roomPicturesStopped) return;
           Object.keys(ROOM_PICTURES).forEach(function(key) { askRoomPicture(key, 'low'); });
+        });
+      }
+      // Once a game is starting (openPicker), the connection is the
+      // engine's: the idle fetch doesn't start, and a picture still on its
+      // way is let go (taking an image's src away stops its download). Its
+      // room asks for it again when pointed at, and its window when it
+      // opens.
+      var roomPicturesStopped = false;
+      function stopRoomPictures() {
+        roomPicturesStopped = true;
+        Object.keys(roomPicturesAsked).forEach(function(key) {
+          if (roomPicturesAsked[key].complete) return;
+          roomPicturesAsked[key].removeAttribute('src');
+          delete roomPicturesAsked[key];
         });
       }
       if (document.readyState === 'complete') askRoomPicturesWhenIdle();

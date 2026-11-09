@@ -255,11 +255,24 @@ test("a link to a room window asks for that room's picture with the page, and no
 // The room buttons' wiring and the pictures' idle fetch, as the page has
 // them, in a made-up page that is still loading (or has loaded), with or
 // without Save-Data and requestIdleCallback. Nothing runs by itself: the
-// test fires the load event, the idle callback and the timers.
+// test fires the load event, the idle callback and the timers, says which
+// pictures have come (arrived), and starts a game (stop: what openPicker
+// calls).
 function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {}) {
     const code = cut('      var roomPicturesAsked = {};', "      if (typeof ResizeObserver === 'function') {");
-    const asked = [];
-    class Image { set src(v) { asked.push({ src: v, priority: this.fetchPriority }); } }
+    const asked = [], images = [], dropped = [];
+    // An image is complete once it has come or failed (or has no src), and
+    // taking its src away stops its download.
+    class Image {
+        constructor() { this.complete = true; images.push(this); }
+        set src(v) { this.url = v; this.complete = false; asked.push({ src: v, priority: this.fetchPriority }); }
+        removeAttribute(name) {
+            assert.equal(name, 'src');
+            if (!this.complete) dropped.push(this.url);
+            this.complete = true;
+        }
+    }
+    const arrived = src => images.filter(i => i.url === src).forEach(i => { i.complete = true; });
     const els = roomButtons().map(b => ({ dataset: b.dataset, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; } }));
     const document = { querySelectorAll: () => els, readyState };
     const loads = [], idles = [], timers = [];
@@ -267,11 +280,13 @@ function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {
     const navigator = saveData === undefined ? {} : { connection: { saveData } };
     const requestIdleCallback = idle ? fn => idles.push(fn) : undefined;
     const setTimeout = (fn, ms) => timers.push({ fn, ms });
-    new Function('document', 'openRoom', 'Image', 'ROOM_PICTURES', 'window', 'navigator', 'requestIdleCallback', 'setTimeout', code)(
+    const stop = new Function('document', 'openRoom', 'Image', 'ROOM_PICTURES', 'window', 'navigator', 'requestIdleCallback',
+                              'setTimeout', code + '\nreturn stopRoomPictures;')(
         document, () => {}, Image, pictures, window, navigator, requestIdleCallback, setTimeout);
     const run = list => list.splice(0).forEach(f => (f.fn || f)());
-    return { els, asked, loads, idles, timers, srcs: () => asked.map(a => a.src),
-             load: () => run(loads), idle: () => run(idles), timer: () => run(timers) };
+    return { els, asked, loads, idles, timers, dropped, arrived, stop, srcs: () => asked.map(a => a.src),
+             load: () => run(loads), idle: () => run(idles), timer: () => run(timers),
+             point: key => els.find(e => (e.dataset.room || e.dataset.opensRoom) === key).listeners.pointerenter() };
 }
 
 test("pointing at a room, tabbing to it or touching it asks for its picture once", () => {
@@ -338,6 +353,62 @@ test('with Save-Data on, only a room pointed at asks for its picture', () => {
     assert.equal(w.asked.length, 0);
     w.els.find(e => (e.dataset.room || e.dataset.opensRoom) === 'nar-shaddaa').listeners.pointerenter();
     assert.deepEqual(w.srcs(), [pictures['nar-shaddaa']]);
+});
+
+test("once a game is starting, the idle fetch doesn't start, and pictures on their way are let go", () => {
+    // The folder prompt opens before the page has loaded: nothing after.
+    let w = roomPictureWiring();
+    w.stop();
+    w.load();
+    w.idle();
+    assert.deepEqual(w.asked, []);
+    // After the load event, before the browser is idle (also with no
+    // requestIdleCallback): nothing.
+    w = roomPictureWiring();
+    w.load();
+    w.stop();
+    w.idle();
+    assert.deepEqual(w.asked, []);
+    w = roomPictureWiring({ idle: false });
+    w.load();
+    w.stop();
+    w.timer();
+    assert.deepEqual(w.asked, []);
+
+    // While the idle fetch is on its way: what hasn't come yet is let go,
+    // what has is kept.
+    w = roomPictureWiring();
+    w.load();
+    w.idle();
+    assert.equal(w.asked.length, 2);
+    w.arrived(pictures['nar-shaddaa']);
+    w.stop();
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid']]);
+    // Pointed at again (the prompt closed without a game): the one let go
+    // is asked for again, at the usual priority; the one that came isn't.
+    w.point('sith-asteroid');
+    w.point('nar-shaddaa');
+    assert.deepEqual(w.asked.slice(2), [{ src: pictures['sith-asteroid'], priority: undefined }]);
+    // A second prompt lets go of what's on its way again, and only that.
+    w.stop();
+    w.stop();
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid'], pictures['sith-asteroid']]);
+
+    // A picture asked for by pointing at its room is let go the same way.
+    w = roomPictureWiring({ readyState: 'complete' });
+    w.point('nar-shaddaa');
+    w.stop();
+    w.idle();
+    assert.deepEqual(w.dropped, [pictures['nar-shaddaa']]);
+    assert.equal(w.asked.length, 1, 'and the idle fetch then asks for nothing');
+});
+
+test('the folder prompt stops the pictures each time it opens', () => {
+    // At the top level of openPicker, not under a condition; the rooms'
+    // script, which defines it, comes after the prompt's.
+    assert.ok(cut('      function openPicker(', '      function closePicker(')
+        .includes("\n        if (typeof stopRoomPictures === 'function') stopRoomPictures();\n"), 'openPicker calls it');
+    assert.ok(html.indexOf('      function stopRoomPictures() {') > html.indexOf('      function openPicker('));
 });
 
 let failed = 0;
