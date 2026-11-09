@@ -227,6 +227,55 @@ test('jitter, and loss on the channel that never resends', () => {
     assert.ok(rowOf(join, 1).ping >= 40, 'the game\'s channel resends, so it never loses one');
 });
 
+test('a queue on the way, for a host\'s paced map uploads: each ping counts once, and one player\'s jitter isn\'t one', () => {
+    const { world, host } = match({ oneWay: 20 });
+    world.run(10000);
+    host.ns.queueMs();
+    world.run(1100);
+    near(host.ns.queueMs(), 0, 0.5, 'no rise');
+    assert.equal(host.ns.queueMs(), null, 'the same ping again');
+    // Two more players, one on a jittery link: its last ping took 150 ms
+    // more than its shortest.
+    const others = host.ns.lib.players();
+    for (const [id, last] of [[3, 190], [4, 45]]) {
+        host.ns.take(id, position({ id }, host).buffer, 'direct');
+        Object.assign(others[id].game, { rtts: [40, 42, last], back: 3 });
+    }
+    world.run(10);
+    assert.ok(host.ns.queueMs() < 100, 'one of three');
+    assert.equal(host.ns.queueMs(), null);
+    // Most of them see it: a queue at the host.
+    Object.assign(others[4].game, { rtts: [40, 42, 170], back: 4 });
+    world.run(10);
+    assert.ok(host.ns.queueMs() > 100, 'two of three');
+});
+
+test('what the host\'s page was too busy to read in time isn\'t a queue on the way, and a queue past that still shows', () => {
+    const { world, host } = match({ oneWay: 20 });
+    world.run(10000);
+    host.ns.queueMs();
+    // From now on the host's page takes what comes a while late (slow
+    // frames), and its frames say how late it may have (Module.jkHeld, from
+    // stdComm_WSRelay.c's wsrelay_js_frame): 300 ms.
+    let late = 300;
+    const inbound = host.ns.inbound;
+    host.ns.inbound = (...a) => world.later(() => inbound(...a), late);
+    host.Module.jkHeld = { from: t => t - 300 };
+    world.run(1100);
+    near(host.ns.queueMs(), 0, 0.5, 'held, not queued');
+    // Without the frames' word it would look like one.
+    host.Module.jkHeld = null;
+    world.run(1100);
+    near(host.ns.queueMs(), 300, 0.5, 'unknown');
+    // 200 ms more than the page held it: a queue.
+    host.Module.jkHeld = { from: t => t - 300 };
+    late = 500;
+    world.run(2000);
+    host.ns.queueMs();
+    world.run(1000);
+    near(host.ns.queueMs(), 200, 0.5, 'queued');
+});
+
 test('a game without netstats.js is pinged less once it never answers', () => {
     const world = makeWorld();
     const host = makeGame(world, { id: 1, isHost: true });

@@ -82,6 +82,9 @@ static void jkr_WsUrlFor(const char* server, char* url, size_t cap)
         snprintf(url, cap, "wss://%s/imperial", server);
 }
 static struct { int used, ws; struct sockaddr_in peer; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
+// When what jkr_WsRecvFrom read last came to the page (performance.now()): the
+// engine reads it at its next frame's first step, a frame or more later.
+static double jkr_wsRecvAtMs = 0.0;
 
 EM_JS(int, jkr_js_open, (const char* url), {
     var u = UTF8ToString(url);
@@ -93,7 +96,12 @@ EM_JS(int, jkr_js_open, (const char* url), {
     s.ws.onopen = function() { for (var i = 0; i < s.out.length; i++) s.ws.send(s.out[i]); s.out = []; };
     // Changed: what isn't read yet is capped, as a UDP socket's buffer is (a server
     // flooding us drops packets instead of filling the tab's memory).
-    s.ws.onmessage = function(ev) { if (ev.data instanceof ArrayBuffer && s.q.length < 4096) s.q.push(new Uint8Array(ev.data)); };
+    s.ws.onmessage = function(ev) {
+        if (!(ev.data instanceof ArrayBuffer) || s.q.length >= 4096) return;
+        var d = new Uint8Array(ev.data);
+        d.at = performance.now();
+        s.q.push(d);
+    };
     s.ws.onclose = function() { s.closed = true; };
     s.ws.onerror = function() { s.closed = true; };
     Module.jkrWs.socks[id] = s;
@@ -116,6 +124,23 @@ EM_JS(int, jkr_js_recv, (int id, void* p, int cap), {
     var d = s.q.shift();
     var n = Math.min(d.length, cap);
     HEAPU8.set(d.subarray(0, n), p);
+    s.readAt = d.at;
+    return n;
+});
+
+// When what jkr_js_recv read last came to the page.
+EM_JS(double, jkr_js_recv_at, (int id), {
+    var s = Module.jkrWs && Module.jkrWs.socks[id];
+    return s && s.readAt ? s.readAt : performance.now();
+});
+
+// What a socket has yet to send: what waits for it to open, and what the
+// browser hasn't passed on yet.
+EM_JS(int, jkr_js_buffered, (int id), {
+    var s = Module.jkrWs && Module.jkrWs.socks[id];
+    if (!s) return 0;
+    var n = s.ws ? s.ws.bufferedAmount || 0 : 0;
+    for (var i = 0; i < s.out.length; i++) n += s.out[i].length;
     return n;
 });
 
@@ -176,6 +201,7 @@ static int jkr_WsRecvFrom(int sk, void* p, int cap, struct sockaddr_in* from)
     int n;
     if (sk < 0 || sk >= JKR_WS_MAX_SOCKS || !jkr_wsSocks[sk].ws) return -1;
     n = jkr_js_recv(jkr_wsSocks[sk].ws, p, cap);
+    if (n >= 0) jkr_wsRecvAtMs = jkr_js_recv_at(jkr_wsSocks[sk].ws);
     if (n >= 0 && from) *from = jkr_wsSocks[sk].peer;
     return n;
 }
@@ -884,6 +910,98 @@ static void jkr_HandleEvent(const uint8_t* b, const uint8_t* end)
     }
 }
 
+#ifdef __EMSCRIPTEN__
+// A request the relay server answers at once (LIST), timed. Its answer comes
+// back behind everything this browser sent before it on the server's
+// WebSocket, so it shows a queue building on the way out that bufferedAmount
+// doesn't: in the computer and the router. A browser host paces its map
+// uploads in a match by it (stdComm_Imperial.c, maps.js). Timed on the page's
+// clock (performance.now()), from when it went to when the page took its
+// answer in (jkr_wsRecvAtMs), not to when the engine read it.
+static struct
+{
+    int      ws;              // the WebSocket it was timed on
+    uint32_t seq;             // the request out, 0 if none
+    uint64_t sentMs;
+    double   sentAt;          // the same, on the page's clock
+    double   rttMs, baseMs;   // the last round trip, and the shortest
+    double   atMs;            // when the page took the last answer in
+    int      got;             // answers on this WebSocket
+    int      sent;            // requests sent on it
+} jkr_timed;
+
+static int jkr_TimedWs(void)
+{
+    return R.sock >= 0 && R.sock < JKR_WS_MAX_SOCKS ? jkr_wsSocks[R.sock].ws : 0;
+}
+
+// The answer to the request out (1), or another (0).
+static int jkr_TimedAnswer(uint32_t seq)
+{
+    double rtt;
+    if (!jkr_timed.seq || seq != jkr_timed.seq) return 0;
+    rtt = jkr_wsRecvAtMs - jkr_timed.sentAt;
+    if (rtt < 0) rtt = 0;
+    jkr_timed.seq = 0;
+    jkr_timed.rttMs = rtt;
+    jkr_timed.atMs = jkr_wsRecvAtMs;
+    if (!jkr_timed.got || rtt < jkr_timed.baseMs) jkr_timed.baseMs = rtt;
+    jkr_timed.got++;
+    return 1;
+}
+
+// Sends the request unless one is out. One out 10 s is taken as lost, and
+// another goes: a server that hasn't answered one yet is asked every 10 s,
+// and one that has but drops one (or the page did, at its cap) isn't left
+// with a wait that grows for good, which would pace every later upload on
+// this connection at the least rate.
+void jkrelay_AskTimed(void)
+{
+    uint8_t pkt[JKR_HDR_SIZE + 20];
+    int ws = jkr_TimedWs();
+    uint64_t now = jkr_NowMs();
+    if (!R.inSession || !R.token || !ws) return;
+    if (jkr_timed.ws != ws)
+    {
+        memset(&jkr_timed, 0, sizeof(jkr_timed));
+        jkr_timed.ws = ws;
+    }
+    // Once answered, one each 2 s at most: the relay server isn't ours to
+    // change, and the menu asks it this every 5 s.
+    if (jkr_timed.seq ? now - jkr_timed.sentMs < 10000
+                      : (jkr_timed.got && now - jkr_timed.sentMs < 2000)) return;
+    jkr_timed.seq = ++R.nextSeq;
+    jkr_timed.sent++;
+    jkr_timed.sentMs = now;
+    jkr_timed.sentAt = emscripten_get_now();
+    jkr_PutHdr(pkt, JKR_LIST, jkr_timed.seq);   // the games listed, as the menu asks
+    memcpy(pkt + JKR_HDR_SIZE, R.appGuid, 16);
+    wr32(pkt + JKR_HDR_SIZE + 16, 0);
+    jkr_SendRaw(pkt, sizeof(pkt));
+}
+
+// The requests sent on this WebSocket.
+int jkrelay_TimedAsked(void)
+{
+    return jkr_timed.ws && jkr_timed.ws == jkr_TimedWs() ? jkr_timed.sent : 0;
+}
+
+// How the requests went on this WebSocket: the answers (0: no telling yet),
+// the last round trip and the shortest, how long the one out has waited (-1:
+// none out), in ms, and when the page took the last answer in.
+int jkrelay_TimedState(double* pRtt, double* pBase, double* pWaited, double* pAt)
+{
+    *pRtt = *pBase = *pAt = 0.0;
+    *pWaited = -1.0;
+    if (!jkr_timed.ws || jkr_timed.ws != jkr_TimedWs()) return 0;
+    *pRtt = jkr_timed.rttMs;
+    *pBase = jkr_timed.baseMs;
+    *pAt = jkr_timed.atMs;
+    if (jkr_timed.seq) *pWaited = emscripten_get_now() - jkr_timed.sentAt;
+    return jkr_timed.got;
+}
+#endif
+
 static void jkr_HandlePacket(const uint8_t* p, int len)
 {
     const uint8_t* end = p + len;
@@ -898,6 +1016,9 @@ static void jkr_HandlePacket(const uint8_t* p, int len)
 
     if (type >= JKR_WELCOME && type <= JKR_FAIL)
     {
+#ifdef __EMSCRIPTEN__
+        if (jkr_TimedAnswer(seq)) return;
+#endif
         if (R.resuming && seq == R.resumeSeq)
             jkr_ResumeReply(p, len);
         // Fixed: a reply bigger than R.reply (JKR_MAX_PACKET) isn't taken; R.rx
@@ -2421,6 +2542,23 @@ int jkrelay_IsHost(void)
 {
     return R.inSession && R.isHost;
 }
+
+#ifdef __EMSCRIPTEN__
+// Bytes the relay server's WebSocket has yet to send. A browser host's map
+// transfers wait while it has much (stdComm_Imperial.c), since its game
+// packets go on the same socket.
+int jkrelay_SendBacklog(void)
+{
+    if (R.sock < 0 || R.sock >= JKR_WS_MAX_SOCKS || !jkr_wsSocks[R.sock].ws) return 0;
+    return jkr_js_buffered(jkr_wsSocks[R.sock].ws);
+}
+
+// Whether player id (a machine's system player too) is in the game.
+int jkrelay_HasPlayer(uint32_t id)
+{
+    return R.inSession && jkr_Find(id) != NULL;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Hosts' admin (2026-10-29, jkrelay_proto.h): a dedicated server hosting here has

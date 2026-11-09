@@ -105,6 +105,8 @@ function makeLobby(world) {
         signals: [],
         asked: [],             // who asked for TURN credentials: [id, when]
         relayed: 0,
+        pong: true,            // answers ping, as lobby.js does without waking up (relay.py doesn't)
+        tooBig: 0,             // messages over its 64 KiB, for which lobby.js closes the socket
         accept(ws) {
             conns.set(ws, { room: 0, id: 0 });
         },
@@ -127,6 +129,14 @@ function makeLobby(world) {
         },
         receive(ws, data) {
             const c = conns.get(ws), r = rooms.get(c.room);
+            if ((typeof data === 'string' ? data.length : data.byteLength) > 64 * 1024) {
+                lobby.tooBig++;
+                return;
+            }
+            if (data === 'ping') {
+                if (lobby.pong) lobby.send(ws, 'pong');
+                return;
+            }
             if (typeof data === 'string') {
                 const [op, to, blob] = data.split(' ');
                 if (op !== 'signal' && op !== 'ping') lobby.said.push(data);
@@ -378,6 +388,15 @@ function makeGame(world, { id, old = false, netsim, relayUrl = 'ws://lobby/relay
         window: undefined, location: undefined,
         // The match summary goes with sendBeacon.
         navigator: { sendBeacon: (url, body) => game.beacons.push({ url, body: JSON.parse(body) }) > 0 }, fetch: undefined,
+        // A message the page posts to itself, taken when game.post says
+        // (slowFrames), or at once.
+        MessageChannel: class {
+            constructor() {
+                const port1 = { onmessage: null };
+                this.port1 = port1;
+                this.port2 = { postMessage: data => (game.post || (fn => world.later(fn, 0)))(() => port1.onmessage && port1.onmessage({ data })) };
+            }
+        },
     };
     game.js = {};
     for (const [name, fn] of Object.entries(EM_JS)) {
@@ -445,6 +464,36 @@ function message(n) {
 
 // A host and joiners in room 1, in a match. ids: the joiners'. Each joiner
 // offers the host a link as it starts (wsrelay_js_rtc_begin).
+// The game's page runs frames F ms long from now on, back to back (1 ms
+// apart), as a slow computer's does: the engine notes each as it starts
+// (wsrelay_js_frame) and then look() runs, as the map pump does. What comes
+// on the lobby's socket during one is taken after the frame after it, as
+// Chrome does with frames of 33 ms and more, and a message the page posts to
+// itself right after its own frame. Returns what stops it.
+function slowFrames(world, game, F, look = () => {}) {
+    const period = F + 1, T0 = world.now();
+    const inFrame = t => (t - T0) % period < F;
+    const frameEnd = t => T0 + Math.floor((t - T0) / period) * period + F;
+    const ws = game.net.ws, deliver = ws.deliver;
+    ws.deliver = function(data) {
+        const now = world.now();
+        if (!inFrame(now)) return deliver.call(ws, data);
+        world.later(() => deliver.call(ws, data), frameEnd(now) + period - now);
+    };
+    game.post = fn => world.later(fn, inFrame(world.now()) ? frameEnd(world.now()) - world.now() : 0);
+    const frame = () => {
+        game.js.wsrelay_js_frame();
+        look();
+    };
+    frame();
+    const id = world.every(frame, period);
+    return () => {
+        world.cancel(id);
+        ws.deliver = deliver;
+        game.post = null;
+    };
+}
+
 async function room(world, joiners, { hostOld = false } = {}) {
     const host = makeGame(world, { id: 1, old: hostOld });
     host.isHost = true;
@@ -1498,6 +1547,383 @@ test('the host takes 12 transfer links at most at once, and a joiner it turned d
     assert.equal(joiners[0].net.mapLanes(1).length, 1);
     assert.equal(joiners[4].net.mapLanes(1).length, 4);
     assert.equal(host.net.bulkCount(), 12);
+});
+
+// ---- Map and mod uploads (maps.js paces them; these are the ways it asks
+// about).
+
+test('a map frame over the lobby\'s 64 KiB never goes to it, whichever way it was meant for', async () => {
+    const world = makeWorld();
+    const [host, join] = await room(world, [2]);
+    echoMaps(host, join);
+    const frame = n => {
+        const b = new ArrayBuffer(n);
+        new DataView(b).setUint32(4, 2, true);
+        return b;
+    };
+    // A block's part cut for the map channel (64 KiB and its headers), and
+    // the channel closes before it goes.
+    const relayed = world.lobby.relayed;
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'direct'), 'direct');
+    host.net.peers[2].mc.end();
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'direct'), null);
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 65536), 'relay'), null);
+    assert.equal(host.net.mapSend(2, frame(16 + 24 + 16384), 'direct'), 'relay');
+    assert.equal(host.net.mapSend(2, frame(65536), 'relay'), 'relay');
+    await world.run(100);
+    assert.equal(world.lobby.tooBig, 0);
+    assert.equal(world.lobby.relayed, relayed + 2);
+    assert.equal(join.maps.length, 1);
+});
+
+test('in a match the host turns down new transfer links, and takes them before one', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    await world.run(2000);
+    assert.ok(!host.net.mapInMatch(2), 'nobody heard from for 2 s');
+    // Player 3 plays; player 2 is downloading.
+    const playing = world.every(() => send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(200);
+    assert.ok(host.net.mapInMatch(2) && !host.net.mapInMatch(3));
+    a.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(), 0);
+    assert.deepEqual(a.net.mapLanes(1), ['direct']);
+    world.cancel(playing);
+    await world.run(32000);
+    a.net.mapLanes(1);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(), 3, 'taken once the match is quiet');
+});
+
+test('a player whose tab stalls still counts as playing while the host\'s game sends to them', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    // Player 3 plays and the host's game sends to them; player 2 downloads.
+    let quiet = false;
+    const hears = world.every(() => quiet || send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    let sends = world.every(() => send(host, 3, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(300);
+    assert.ok(host.net.mapInMatch(2));
+    // Their tab stalls for 12 s: still in a match all along.
+    quiet = true;
+    for (let i = 0; i < 24; i++) {
+        await world.run(500);
+        assert.ok(host.net.mapInMatch(2), 'not in a match ' + (i + 1) * 500 + ' ms into it');
+    }
+    quiet = false;
+    await world.run(300);
+    // The host's game drops them and sends them nothing: out of the match
+    // 10 s on.
+    world.cancel(sends);
+    quiet = true;
+    await world.run(9500);
+    assert.ok(host.net.mapInMatch(2));
+    await world.run(600);
+    assert.ok(!host.net.mapInMatch(2));
+    // Sent to but not heard from for a minute (10.1 s of it gone): not
+    // playing.
+    sends = world.every(() => send(host, 3, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(49000);
+    assert.ok(host.net.mapInMatch(2));
+    await world.run(1000);
+    assert.ok(!host.net.mapInMatch(2));
+    // The host's game sending to the one downloading doesn't count for their
+    // own download, though they played before; it does for another's.
+    world.cancel(sends);
+    world.cancel(hears);
+    send(a, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4]));
+    sends = world.every(() => send(host, 2, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(10500);
+    assert.ok(!host.net.mapInMatch(2));
+    assert.ok(host.net.mapInMatch(3));
+    world.cancel(sends);
+});
+
+test('links set up as players join don\'t count as a match: two joining at once both get transfer links', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    // Both just linked up (their link frames went through the lobby), and
+    // neither plays yet.
+    assert.ok(!host.net.mapInMatch(2) && !host.net.mapInMatch(3));
+    a.net.mapBulk(1, true);
+    b.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(host.net.bulkCount(2), 3);
+    assert.equal(host.net.bulkCount(3), 3);
+    assert.equal(a.net.mapLanes(1).length, 4);
+    // A netstats.js frame isn't a game packet either.
+    const ns = new Uint8Array(16);
+    ns.set([0x4A, 0x4E, 0, 0], 0);
+    send(b, 1, ns);
+    await world.run(100);
+    assert.ok(!host.net.mapInMatch(2));
+    send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4]));
+    await world.run(100);
+    assert.ok(host.net.mapInMatch(2), 'player 3 plays');
+});
+
+test('the lobby\'s answer to ping shows a queue building on the way to it', async () => {
+    const world = makeWorld();
+    const [host] = await room(world, [2]);
+    const net = host.net;
+    // The first pings went as the socket opened, with nothing ahead of them,
+    // each as the last came back: four of them.
+    assert.equal(net.lobbyPing.got, 4);
+    assert.ok(net.lobbyPing.base < 50);
+    assert.equal(net.mapCongested(true), false);
+    // The answer takes long: a queue on the way.
+    world.lobby.delay = 400;
+    await world.run(300);
+    net.mapCongested(true);
+    await world.run(200);
+    assert.equal(net.mapCongested(true), true, 'still waiting for it');
+    await world.run(300);
+    assert.ok(net.lobbyPing.rtt >= 400);
+    assert.equal(net.mapCongested(true), true);
+    // Back to quick: the ping already out still comes back late.
+    world.lobby.delay = 20;
+    await world.run(500);
+    assert.equal(net.mapCongested(true), true);
+    await world.run(100);
+    assert.equal(net.mapCongested(true), false);
+    // The answer goes nowhere near the engine.
+    assert.ok(!net.queue.some(d => d === 'pong'));
+});
+
+test('the shortest round trip to the lobby is taken as a socket opens, before anything waits on it', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const net = host.net;
+    // The lobby drops; the host comes back to it on a new socket.
+    net.ws.drop();
+    await world.run(3000);
+    assert.equal(net.state, 1);
+    assert.equal(net.lobbyPing.got, 4);
+    const base = net.lobbyPing.base;
+    assert.ok(base < 50, 'base ' + base);
+    // Answers that come back behind a queue later don't lower the bar for one.
+    world.lobby.delay = 2000;
+    net.mapCongested(true);
+    await world.run(2500);
+    assert.equal(net.lobbyPing.base, base);
+    assert.equal(net.mapCongested(true), true);
+});
+
+test('the shortest round trip to the lobby is the least of four, so one the page held up doesn\'t set it', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    // The first answer is late (the page was busy, a level loading), the
+    // rest aren't.
+    world.lobby.delay = 3000;
+    const host = makeGame(world, { id: 1 });
+    host.isHost = true;
+    await world.run(5);
+    world.lobby.delay = 20;
+    await world.run(4000);
+    const lp = host.net.lobbyPing;
+    assert.equal(lp.got, 4);
+    assert.ok(lp.base < 50, 'shortest ' + lp.base);
+    // A host's game starts: four more, still the least.
+    world.lobby.seat(host.net.ws, 1, 1);
+    host.js.wsrelay_js_rtc_begin(1);
+    await world.run(1000);
+    assert.equal(lp.got, 8);
+    assert.ok(lp.base < 50);
+    assert.equal(host.net.mapCongested(true), false);
+});
+
+test('answers a slow page held up for its frames aren\'t a queue; one seconds long is, and 150 ms at 60 frames a second', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const net = host.net;
+    const base = net.lobbyPing.base;
+    assert.ok(base < 50);
+    // Frames of 400 ms: every answer is read two frames on, about 800 ms
+    // after its ping went, for a round trip of 40.
+    const said = [];
+    let stop = slowFrames(world, host, 400, () => said.push(net.mapCongested(true)));
+    await world.run(15000);
+    assert.ok(net.lobbyPing.rtt > 700, 'answers read ' + net.lobbyPing.rtt + ' ms after their ping');
+    assert.ok(net.lobbyPing.got > 10);
+    assert.deepEqual([...new Set(said)], [false], 'said ' + said.filter(c => c).length + ' times there was a queue');
+    assert.equal(net.lobbyPing.base, base, 'the shortest stays');
+    assert.ok(/at least/.test(net.mapWhy), net.mapWhy);
+    // A queue of 1.5 s on the way: said, while the answer waits and once
+    // it's in, though up to two frames of it may have been the page's.
+    said.length = 0;
+    world.lobby.delay = 1500;
+    await world.run(8000);
+    assert.ok(said.includes(true), 'never said');
+    assert.ok(net.lobbyPing.low > 1500 - 2 * 401, 'at least ' + net.lobbyPing.low);
+    assert.equal(net.mapCongested(true), true);
+    assert.ok(/^lobby round trip \d+ ms, at least (\d+) of it on the way \(shortest \d+\)/.test(net.mapWhy) && +RegExp.$1 > 600, net.mapWhy);
+    stop();
+    world.lobby.delay = 20;
+    await world.run(5000);
+    // Frames of 33 ms: no queue, none said.
+    said.length = 0;
+    stop = slowFrames(world, host, 33, () => said.push(net.mapCongested(true)));
+    await world.run(5000);
+    assert.ok(net.lobbyPing.rtt > 60, 'read ' + net.lobbyPing.rtt + ' ms after');
+    assert.ok(!said.includes(true), 'said a queue at 33 ms frames');
+    stop();
+    // 60 frames a second: a queue of 150 ms is said within half a second.
+    said.length = 0;
+    stop = slowFrames(world, host, 16, () => said.push(net.mapCongested(true)));
+    await world.run(1000);
+    assert.ok(!said.includes(true));
+    said.length = 0;
+    world.lobby.delay = 20 + 75;
+    await world.run(500);
+    assert.ok(said.includes(true), 'not said in 500 ms');
+    stop();
+});
+
+test('a slow page\'s frames as the network code notes them: what a message read then waited for at most', () => {
+    const world = makeWorld();
+    const game = makeGame(world, { id: 1 });
+    let posted = [];
+    game.post = fn => posted.push(fn);
+    const at = t => { while (world.now() < t) world.run(0); };
+    // A frame from s to e: noted at its start, the page's own message taken
+    // after it.
+    const frame = (s, e) => {
+        world.later(() => game.js.wsrelay_js_frame(), s - world.now());
+        return world.run(s - world.now()).then(() => world.run(e - s)).then(() => {
+            posted.splice(0).forEach(fn => fn());
+        });
+    };
+    return (async () => {
+        const t0 = world.now();
+        await frame(t0, t0 + 400);
+        await frame(t0 + 401, t0 + 801);
+        const h = game.Module.jkHeld;
+        assert.equal(h.from(t0 + 802), -Infinity, 'two frames tell nothing');
+        await frame(t0 + 802, t0 + 1202);
+        // Read after the third, before the page took its own message: came
+        // no sooner than the first ended.
+        assert.equal(h.from(t0 + 1202.5), t0 + 400);
+        // In the fourth, as the map pump looks: the same for one not read.
+        await frame(t0 + 1203, t0 + 1603);
+        assert.equal(h.from(t0 + 1203), t0 + 801);
+        // 16 ms frames: what's read after one came during it at the soonest,
+        // but no more than 20 ms is taken off.
+        let t = t0 + 1604;
+        for (let i = 0; i < 4; i++, t += 17)
+            await frame(t, t + 16);
+        assert.equal(h.from(t - 0.5), t - 0.5);
+        // A frame whose start was noted late in it takes 20 ms off at most
+        // after the short one before.
+        await frame(t + 30, t + 46);
+        assert.equal(h.from(t + 47), t - 1 + 20);
+        // No frame noted for over a second: nothing taken off.
+        assert.equal(h.from(t + 46 + 1001), t + 46 + 1001);
+    })();
+});
+
+test('a lobby that never answers ping (relay.py) says nothing about a queue, and is not pinged again', async () => {
+    const world = makeWorld();
+    world.lobby.pong = false;
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const pings = () => host.net.lobbyPing.sent.length;
+    for (let i = 0; i < 20; i++) {
+        assert.equal(host.net.mapCongested(true), null);
+        await world.run(250);
+    }
+    assert.equal(pings(), 1);
+    // Direct links alone have their own signs.
+    assert.equal(host.net.mapCongested(false), null, 'no direct links either');
+});
+
+test('one player\'s backed-up link isn\'t a queue at the host; most of those playing showing one is', async () => {
+    const world = makeWorld();
+    const [host, ...joiners] = await room(world, [2, 3, 4, 5]);
+    const net = host.net;
+    // Players 3, 4 and 5 play; player 2 downloads.
+    const playing = world.every(() => joiners.slice(1).forEach(j => send(j, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4]))), 50);
+    await world.run(300);
+    const sample = async () => {
+        await world.run(250);
+        return net.mapCongested(false);
+    };
+    assert.equal(await sample(), false);
+    net.peers[3].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), false, 'one of three');
+    net.peers[2].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), false, 'the one downloading isn\'t playing');
+    net.peers[4].pos.bufferedAmount = 10000;
+    assert.equal(await sample(), true, 'two of three');
+    net.peers[4].pos.bufferedAmount = 0;
+    assert.equal(await sample(), false);
+    // Position updates dropped behind a backlog count for their player.
+    net.peers[4].pos.bufferedAmount = 5000;
+    send(host, 4, position(1), true);
+    net.peers[4].pos.bufferedAmount = 0;
+    assert.equal(await sample(), true);
+    assert.equal(await sample(), false, 'counted once');
+    world.cancel(playing);
+});
+
+test('a map channel or transfer link that doesn\'t empty isn\'t a queue at the host, and maps.js still sends no more to it', async () => {
+    const world = makeWorld();
+    const [host, a, b] = await room(world, [2, 3]);
+    echoMaps(host, a, b);
+    const net = host.net;
+    a.net.mapBulk(1, true);
+    await world.run(1000);
+    assert.equal(net.bulkCount(2), 3);
+    // Player 3 plays; player 2 downloads, and its tab is slow to take it.
+    const playing = world.every(() => send(b, 1, new Uint8Array([5, 0, 0, 0, 1, 2, 3, 4])), 50);
+    await world.run(300);
+    const sample = async () => {
+        await world.run(250);
+        return net.mapCongested(false);
+    };
+    net.peers[2].mc.bufferedAmount = 1 << 20;
+    for (const l of Object.values(net.bulk[2]))
+        l.mc.bufferedAmount = 1 << 20;
+    for (let i = 0; i < 4; i++)
+        assert.equal(await sample(), false, 'nobody else waits behind it');
+    assert.equal(net.mapBacklog(2, 'direct'), 1 << 20);
+    assert.equal(net.mapBacklog(2, 'direct2'), 1 << 20);
+    // Player 3's own link backed up still counts.
+    net.peers[3].dc.bufferedAmount = 10000;
+    assert.equal(await sample(), true);
+    world.cancel(playing);
+});
+
+test('a player who left, or whose number someone new has, has nothing waiting for them; a link that closes, nothing for it', async () => {
+    const world = makeWorld();
+    world.canLink = () => false;
+    const [host] = await room(world, [2]);
+    const forgot = [];
+    let pumps = 0;
+    host.Module.jkMaps = { isFrame: () => false, onFrame() {}, forget: (...a) => forgot.push(a), pump: () => pumps++ };
+    host.net.ws.deliver('peer-left 2');
+    host.net.ws.deliver('peer-joined 4');
+    await world.run(10);
+    assert.deepEqual(forgot, [[2], [4]]);
+    world.canLink = () => true;
+    const join = makeGame(world, { id: 5 });
+    await world.run(5);
+    world.lobby.seat(join.net.ws, 1, 5);
+    await world.run(50);
+    join.js.wsrelay_js_rtc_begin(0);
+    await world.run(1000);
+    assert.ok(host.net.peers[5] && host.net.peers[5].open);
+    forgot.length = 0;
+    host.net.closePeer(5);
+    assert.deepEqual(forgot, [[5, true]]);
+    // The engine's frames and packets coming in send what may go.
+    pumps = 0;
+    host.js.wsrelay_js_map_pump();
+    assert.equal(pumps, 1);
 });
 
 let failed = 0;

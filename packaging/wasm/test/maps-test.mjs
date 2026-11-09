@@ -10,10 +10,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { makeGob, sha, contains, makeFS } from './helpers.mjs';
+import { makeGob, sha, contains, makeFS, makeClock } from './helpers.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, '..', 'maps.js'), 'utf8');
+// maps.js as the live build (cloudflare-89, commit 503d826) has it: joiners
+// with it, which can't be updated, have to keep getting maps from new hosts.
+const oldSource = readFileSync(join(here, 'fixtures', 'maps-503d826.js'), 'utf8');
 
 function loadMaps(Module) {
     new Function('Module', source)(Module);
@@ -435,10 +438,11 @@ test('a joiner without the map gets it straight from the host', async () => {
         assert.ok(!contains(f.bytes, retailA) && !contains(f.bytes, retailB), 'retail bytes sent');
         assert.equal(f.via, 'direct');
     }
-    // Random bytes don't get smaller, so the one block goes as it is.
+    // Random bytes don't get smaller, so the one block goes as it is, in
+    // parts of 16 KiB whatever size was asked for.
     const stream = customMap.length - 8000 + 4 + 80;
     assert.equal(framesTo(g.log, 'join', 4).length, 0);
-    assert.equal(framesTo(g.log, 'join', 6).length, Math.ceil(stream / 65536));
+    assert.equal(framesTo(g.log, 'join', 6).length, Math.ceil(stream / 16384));
     assert.equal(framesTo(g.log, 'host', 5).length, 1);
 });
 
@@ -464,7 +468,7 @@ test('through the relay, frames stay under its cap', async () => {
     const blocks = Math.ceil(stream / 1048576);
     let parts = 0;
     for (let b = 0; b < blocks; b++)
-        parts += Math.ceil(Math.min(1048576, stream - b * 1048576) / (48 * 1024));
+        parts += Math.ceil(Math.min(1048576, stream - b * 1048576) / 16384);
     assert.equal(framesTo(g.log, 'join', 6).length, parts);
     const requests = framesTo(g.log, 'host', 5).length + framesTo(g.log, 'host', 1).length;
     console.log(`    ${big.length} byte map over the relay: ${parts} block parts, ${requests} requests`);
@@ -687,22 +691,523 @@ test('blocks lost when the link changes are asked for again', async () => {
     const g = makeGame({
         hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
         joinFiles: { ...retailInstall },
+        // The direct link goes down partway, with the first three parts on it
+        // lost; the rest comes through the relay. (It went down 20 ms in, which
+        // on a busy computer could be before the host had its map ready and
+        // anything went on it.)
         drop: f => {
             if (f.to !== 'join' || f.bytes[12] !== 6 || f.via !== 'direct' || dropped >= 3)
                 return false;
-            dropped++;
+            if (++dropped === 3)
+                g.link.direct = false;
             return true;
         },
     });
     g.host.jkMaps.host('ctf_test', 'gob');
     await hostReady(g.host);
     g.join.jkMaps.fetch('ctf_test', 'gob');
-    // The direct link goes down partway; the rest comes through the relay.
-    setTimeout(() => { g.link.direct = false; }, 20);
     assert.equal(await waitState(g.join), 1);
     assert.equal(dropped, 3);
     assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
     assert.ok(g.log.some(f => f.via === 'relay'));
+});
+
+// ---- A host sending paced, on a made-up clock.
+
+// maps.js (src) in a tab whose clock is clock's. Joiners here can't unsqueeze
+// (no DecompressionStream), so blocks go as they are and only hashing takes
+// real time.
+function loadOn(clock, src, Module) {
+    new Function('Module', 'setTimeout', 'clearTimeout', 'Date', 'DecompressionStream', src)(
+        Module, clock.setTimeout, clock.clearTimeout, clock.Date, undefined);
+    return Module.jkMaps;
+}
+
+const UNIT = 16384;
+
+// A host and joiners on the lobby's connection, as stdComm_WSRelay.c's net
+// has it: 'direct' goes on the map channel while it's up, else through the
+// lobby, which never gets a frame over 64 KiB (overCap counts any tried).
+// joiners: [{ id, src, direct, lanes }]. link.inMatch, link.congested and
+// link.backlog(id, via) are what the host's link says; imperial: the host's
+// link is the Imperial Network Protocol's, whose parts keep their size.
+// link.notes: the lines the host's network log got.
+function pacedGame(clock, hostFiles, joiners, { imperial = false } = {}) {
+    const log = [];
+    const link = { inMatch: true, congested: true, backlog: () => 0, overCap: 0, delay: 5, notes: [] };
+    const host = { FS: makeFS(hostFiles) };
+    const tabs = new Map();
+    const deliver = (to, from, bytes, via) => {
+        const copy = bytes.slice(0);
+        const b = new Uint8Array(copy), v = new DataView(copy);
+        log.push({ t: clock.now(), to, from, via, type: b[12], len: copy.byteLength,
+                   block: b[12] === 6 || b[12] === 4 ? v.getUint32(24, true) : null,
+                   at: b[12] === 6 ? v.getUint32(32, true) : null, bytes: b[12] === 6 ? null : b });
+        clock.setTimeout(() => (to === 1 ? host : tabs.get(to).tab).jkMaps.onFrame(from, copy, via), link.delay);
+    };
+    const hostNet = {
+        mapDirect: id => !!(tabs.get(id) && tabs.get(id).direct),
+        mapSend(id, bytes, via) {
+            const j = tabs.get(id);
+            let used = via;
+            if (imperial) {
+                used = 'direct';
+            } else if (!/^direct[1-9]$/.test(via) || !(j.lanes || []).includes(via)) {
+                used = via !== 'relay' && j.direct ? 'direct' : 'relay';
+                if (used === 'relay' && bytes.byteLength > 65536) {
+                    link.overCap++;
+                    return null;
+                }
+            }
+            deliver(id, 1, bytes, used);
+            return used;
+        },
+        mapBacklog: (id, via) => link.backlog(id, via),
+        mapInMatch: () => link.inMatch,
+        mapCongested: () => link.congested,
+        note: text => link.notes.push(text),
+    };
+    if (imperial) {
+        host.jkImperial = Object.assign(hostNet, { active: true });
+    } else {
+        host.jkNet = hostNet;
+    }
+    loadOn(clock, source, host);
+    for (const j of joiners) {
+        const tab = { FS: makeFS({ ...retailInstall }) };
+        const t = { ...j, tab };
+        const net = {
+            mapDirect: () => t.direct,
+            rtcEnabled: () => t.direct,
+            mapSend(id, bytes, via) {
+                const used = imperial ? 'direct' : via === 'relay' || !t.direct ? 'relay' : (t.lanes || []).includes(via) ? via : 'direct';
+                deliver(1, j.id, bytes, used);
+                return used;
+            },
+        };
+        if (j.lanes) {
+            net.mapLanes = () => (t.direct ? t.lanes : []);
+            net.mapBulk = () => {};
+        }
+        if (imperial)
+            tab.jkImperial = Object.assign(net, { active: true });
+        else
+            tab.jkNet = net;
+        loadOn(clock, j.src || oldSource, tab);
+        tabs.set(j.id, t);
+    }
+    return { host, tabs, link, log, tab: id => tabs.get(id).tab };
+}
+
+const blockReqs = (log, from) => log.filter(f => f.to === 1 && f.from === from && f.type === 5);
+const blockParts = (log, to) => log.filter(f => f.from === 1 && f.to === to && f.type === 6);
+
+// A map of n random bytes (they don't squeeze) and its stream's size.
+function bigMap(n) {
+    const gob = makeGob([{ name: 'episode.jk', bytes: randomBytes(1000) }, { name: 'big.jkl', bytes: randomBytes(n) }]);
+    return { gob, stream: gob.length + 4 };
+}
+
+async function hostOn(clock, g, name) {
+    // Hashing the map takes real time, not the made-up clock's: until it's
+    // done the host has nothing to send, and a joiner that asked meanwhile
+    // waits for it on the made-up clock. A fixed 200 ms wasn't always enough
+    // for a 20 MB map on a busy computer (or now and then on an idle one),
+    // and a test that times the download or asks for blocks at once failed.
+    const log = console.log;
+    let ready = false;
+    console.log = (...a) => {
+        if (String(a[0]).startsWith('OpenJKDF2: ready to send map ' + name + '.gob '))
+            ready = true;
+        log(...a);
+    };
+    try {
+        g.host.jkMaps.host(name, 'gob');
+        for (let i = 0; !ready && i < 3000; i++)
+            await new Promise(r => setTimeout(r, 10));
+    } finally {
+        console.log = log;
+    }
+    assert.ok(ready, 'the host never got ' + name + ' ready');
+}
+
+// Joiner id's requests, made up: blocks first..first+count-1 with parts of
+// part, or chunks.
+function blockRequest(id8, first, count, part) {
+    const f = new Uint8Array(16 + 24);
+    const v = new DataView(f.buffer);
+    f.set([0x4A, 0x4B, 0x4D, 0x54], 8);
+    f[12] = 5; f[13] = 1;
+    f.set(id8, 16);
+    v.setUint32(24, first, true);
+    v.setUint32(28, count, true);
+    v.setUint32(32, part, true);
+    return f.buffer;
+}
+
+function chunkRequest(id8, size, first, count) {
+    const f = new Uint8Array(16 + 20);
+    const v = new DataView(f.buffer);
+    f.set([0x4A, 0x4B, 0x4D, 0x54], 8);
+    f[12] = 3; f[13] = 1;
+    f.set(id8, 16);
+    v.setUint32(24, size, true);
+    v.setUint32(28, first, true);
+    v.setUint32(32, count, true);
+    return f.buffer;
+}
+
+const idOfGob = gob => Buffer.from(sha(gob).slice(0, 16), 'hex');
+
+// A map whose stream is 3 MiB exactly: joiners that start together finish
+// their blocks in the same turn.
+const MAP_3MIB = 3 * 1048576 - 4 - 1000 - 288;
+
+for (const [what, joiners, mapBytes = 3500000] of [
+    ['through the lobby (two blocks out)', [{ id: 2, direct: false }]],
+    ['over the map channel (three blocks out)', [{ id: 2, direct: true }]],
+    ['to two joiners at once', [{ id: 2, direct: true }, { id: 3, direct: true }]],
+    ['to four joiners at once, whose blocks end together', [2, 3, 4, 5].map(id => ({ id, direct: true })), MAP_3MIB],
+]) {
+    test('in a match, an old joiner gets a paced host\'s map ' + what + ' in 16 KiB parts, asking for no block twice', async () => {
+        const clock = makeClock();
+        const { gob, stream } = bigMap(mapBytes);
+        const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_pace.gob': gob }, joiners);
+        await hostOn(clock, g, 'ctf_pace');
+        const t0 = clock.now();
+        for (const j of joiners)
+            g.tab(j.id).jkMaps.fetch('ctf_pace', 'gob');
+        // The link always says a queue is building, so the rate stays at the
+        // least that keeps every block coming.
+        assert.ok(await clock.until(() => joiners.every(j => g.tab(j.id).jkMaps.state() !== 0), 600000), 'still busy');
+        const secs = (clock.now() - t0) / 1000;
+        const blocks = Math.ceil(stream / 1048576);
+        for (const j of joiners) {
+            assert.equal(g.tab(j.id).jkMaps.state(), 1);
+            assert.deepEqual(Buffer.from(g.tab(j.id).FS.files.get('/jk1/episode/ctf_pace.gob')), Buffer.from(gob));
+            const parts = blockParts(g.log, j.id);
+            assert.ok(parts.every(f => f.len - 40 <= UNIT && f.at % UNIT === 0), 'a part over 16 KiB');
+            assert.equal(parts.reduce((n, f) => n + f.len - 40, 0), stream, 'bytes sent');
+            assert.equal(blockReqs(g.log, j.id).length, blocks, 'a block asked for again');
+            // A part of each block at least every 2.5 s (the joiner asks
+            // again after 5 s), however many finish at once.
+            const last = {};
+            for (const f of parts) {
+                if (last[f.block] !== undefined)
+                    assert.ok(f.t - last[f.block] < 2600, `block ${f.block} waited ${f.t - last[f.block]} ms`);
+                last[f.block] = f.t;
+            }
+        }
+        assert.equal(g.link.overCap, 0);
+        const rate = g.host.jkMaps.uploads().rate;
+        console.log(`    ${joiners.length} joiner(s), ${(stream / 1e6).toFixed(1)} MB each, in ${secs.toFixed(0)} s at ${(rate / 1000).toFixed(1)} KB/s`);
+        assert.ok(rate <= Math.max(24000, joiners.length * 3 * UNIT * 1000 / 2500) + 1, 'rate ' + rate);
+    });
+}
+
+// The paced rate at each look at the link (every 250 ms), as the link says
+// says[i] at its ith answer. Through the lobby an answer comes at every
+// look; from the Imperial relay server at every 8th (2 s), with no news in
+// between, but a queue it showed stands until the next.
+async function rateLooks(imperial, says) {
+    const clock = makeClock();
+    const { gob } = bigMap(20000000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_rate.gob': gob }, [{ id: 2, direct: true }], { imperial });
+    const every = imperial ? 8 : 1;
+    const rates = [];
+    g.host[imperial ? 'jkImperial' : 'jkNet'].mapCongested = () => {
+        const n = rates.length, c = says[Math.floor(n / every)];
+        rates.push(g.host.jkMaps.uploads().rate);
+        return c === true || n % every === 0 ? c : null;
+    };
+    await hostOn(clock, g, 'ctf_rate');
+    g.tab(2).jkMaps.fetch('ctf_rate', 'gob');
+    assert.ok(await clock.until(() => rates.length > says.length * every, 60000, 10));
+    assert.equal(g.tab(2).jkMaps.state(), 0, 'the map came before the looks ended');
+    g.tab(2).jkMaps.abort('cancelled');
+    return rates;
+}
+
+const near = (a, b) => Math.abs(a - b) < 1;
+
+test('in a match the rate grows by a quarter a look until a queue shows, then halves and grows a step at a time', async () => {
+    const says = [...Array(18).fill(false), true, false, false, null, null, false];
+    const r = await rateLooks(false, says);
+    assert.equal(r[0], 48000);
+    for (let i = 0; i < 17; i++)
+        assert.ok(near(r[i + 1], Math.min(2e6, r[i] * 1.25)), `look ${i}: ${r[i]} then ${r[i + 1]}`);
+    assert.equal(r[18], 2e6);
+    assert.ok(near(r[19], 1e6) && near(r[20], 1016000) && near(r[21], 1032000), r.slice(18, 22).join(' '));
+    // No news holds it; the next clear look grows it for the time since.
+    assert.ok(near(r[22], 1032000) && near(r[23], 1032000) && near(r[24], 1080000), r.slice(21, 25).join(' '));
+});
+
+test('on the Imperial Network Protocol the rate grows once for each answer, and a queue halves it at every look till the next', async () => {
+    const says = [false, false, false, false, true, false, false, null, false];
+    const r = await rateLooks(true, says);
+    const least = 3 * 65536 * 1000 / 2500;
+    const at = i => r[i * 8 + 1];   // just after the ith answer
+    for (let i = 0; i < says.length; i++) {
+        if (says[i] !== true)
+            assert.ok(r.slice(i * 8 + 1, i * 8 + 9).every(x => x === at(i)), `answer ${i}: ` + r.slice(i * 8, i * 8 + 9).join(' '));
+    }
+    // Slow start: a quarter for each answer, as for each look through the
+    // lobby, not for the 2 s since the last.
+    assert.ok(near(at(2), 1.25 * at(1)) && near(at(3), 1.25 * at(2)), [at(1), at(2), at(3)].join(' '));
+    // The queue halves it down to the least by its last look. Then 16 KB/s
+    // for the one look since, and 64 KB/s for each answer 2 s on, also after
+    // one that said nothing.
+    assert.ok(near(r[40], least), r.slice(32, 41).join(' '));
+    assert.ok(near(at(5), least + 16000), 'after the queue ' + at(5));
+    assert.ok(near(at(6), at(5) + 64000), 'the next answer ' + at(6));
+    assert.ok(near(at(8), at(6) + 64000), 'after no news ' + at(8));
+});
+
+test('the network log: a line as each paced upload starts, and "unpaced" only for one that was paced', async () => {
+    const clock = makeClock();
+    const { gob } = bigMap(1500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_note.gob': gob },
+                        [2, 3, 4, 5].map(id => ({ id, direct: true })));
+    let looks = 0;
+    g.host.jkNet.mapCongested = () => looks++ % 6 === 5;
+    await hostOn(clock, g, 'ctf_note');
+    const fetch = async id => {
+        g.tab(id).jkMaps.fetch('ctf_note', 'gob');
+        assert.ok(await clock.until(() => g.tab(id).jkMaps.state() !== 0, 600000, 10), 'joiner ' + id);
+        assert.equal(g.tab(id).jkMaps.state(), 1);
+    };
+    const paced = () => g.link.notes.filter(l => /^map upload paced at/.test(l));
+    const unpaced = () => g.link.notes.filter(l => /unpaced/.test(l));
+    // In a match: its first line, then one each 10 s or so, though the rate
+    // halves at every sixth look.
+    await fetch(2);
+    const t = paced().length;
+    assert.ok(t >= 1 && !/\(was/.test(paced()[0]), g.link.notes.join('\n'));
+    // After the match, another joiner's download before anyone plays: it
+    // was never paced, so nothing says it goes unpaced now.
+    g.link.inMatch = false;
+    await clock.run(60000);
+    await fetch(3);
+    assert.equal(unpaced().length, 0, g.link.notes.join('\n'));
+    assert.equal(paced().length, t);
+    // A match again, a few seconds on: the next paced upload gets its own
+    // first line.
+    g.link.inMatch = true;
+    await clock.run(2000);
+    await fetch(4);
+    assert.ok(paced().length > t && !/\(was/.test(paced()[t]), g.link.notes.join('\n'));
+    // One paced while it starts that goes on as the match ends says so.
+    const n = unpaced().length;
+    g.tab(5).jkMaps.fetch('ctf_note', 'gob');
+    await clock.run(300);
+    g.link.inMatch = false;
+    assert.ok(await clock.until(() => g.tab(5).jkMaps.state() !== 0, 600000, 10));
+    assert.equal(unpaced().length, n + 1, g.link.notes.join('\n'));
+});
+
+test('the network log: a link that stalls keeps its lines, an upload 15 s after the last starts anew, one never paced says nothing', async () => {
+    const clock = makeClock();
+    const { gob } = bigMap(1500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_stall.gob': gob },
+                        [2, 3, 4].map(id => ({ id, direct: true })));
+    let looks = 0;
+    g.host.jkNet.mapCongested = () => looks++ % 6 === 5;
+    await hostOn(clock, g, 'ctf_stall');
+    const done = id => g.tab(id).jkMaps.state() !== 0;
+    const paced = () => g.link.notes.filter(l => /^map upload paced at/.test(l));
+    const unpaced = () => g.link.notes.filter(l => /unpaced/.test(l));
+    // In a match, nothing goes for 13 s while parts wait (a link that
+    // stalled): the same upload, so no line as if one started, and not a
+    // line at every pump.
+    g.tab(2).jkMaps.fetch('ctf_stall', 'gob');
+    await clock.run(1000);
+    const before = paced().length;
+    g.link.backlog = () => 1e9;
+    await clock.run(13000);
+    g.link.backlog = () => 0;
+    const stalled = paced().slice(before);
+    assert.ok(stalled.length <= 2 && stalled.every(l => /\(was/.test(l)), stalled.length + ' lines:\n' + stalled.join('\n'));
+    assert.ok(await clock.until(() => done(2), 600000, 10), 'joiner 2');
+    assert.equal(g.tab(2).jkMaps.state(), 1);
+    // Still in the match, 15 s with nothing to send: the next upload gets
+    // one first line, though its first pumps may send nothing.
+    await clock.run(15000);
+    const t = paced().length;
+    g.tab(3).jkMaps.fetch('ctf_stall', 'gob');
+    assert.ok(await clock.until(() => done(3), 600000, 10), 'joiner 3');
+    assert.equal(g.tab(3).jkMaps.state(), 1);
+    const firsts = paced().slice(t).filter(l => !/\(was/.test(l));
+    assert.ok(paced().length > t && firsts.length === 1 && firsts[0] === paced()[t], g.link.notes.slice(-12).join('\n'));
+    // The match ends, and the engine pumps while nothing waits, as it does
+    // each frame. A download within 10 s was never paced: nothing says it
+    // goes unpaced.
+    g.link.inMatch = false;
+    g.host.jkMaps.pump();
+    await clock.run(1000);
+    g.host.jkMaps.pump();
+    const n = unpaced().length;
+    g.tab(4).jkMaps.fetch('ctf_stall', 'gob');
+    assert.ok(await clock.until(() => done(4), 600000, 10), 'joiner 4');
+    assert.equal(g.tab(4).jkMaps.state(), 1);
+    assert.equal(unpaced().length, n, g.link.notes.slice(-6).join('\n'));
+});
+
+test('outside a match a paced host sends as fast as its links take it', async () => {
+    const clock = makeClock();
+    const { gob } = bigMap(3500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_fast.gob': gob }, [{ id: 2, direct: true }]);
+    g.link.inMatch = false;
+    await hostOn(clock, g, 'ctf_fast');
+    const t0 = clock.now();
+    g.tab(2).jkMaps.fetch('ctf_fast', 'gob');
+    assert.ok(await clock.until(() => g.tab(2).jkMaps.state() !== 0, 60000, 10));
+    assert.equal(g.tab(2).jkMaps.state(), 1);
+    // When the host sent the last part, not when the joiner says it has the
+    // map: checking and installing it take real time, and the made-up clock
+    // runs on meanwhile, more so on a busy machine (3.5-5 s seen under load).
+    const last = Math.max(...blockParts(g.log, 2).map(f => f.t));
+    assert.ok(last - t0 < 2000, (last - t0) + ' ms');
+});
+
+test('a block asked for again on another lane goes that way, and no part of it twice', async () => {
+    const clock = makeClock();
+    const { gob, stream } = bigMap(2500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_lane.gob': gob }, [{ id: 2, direct: true, lanes: ['direct', 'direct1'] }]);
+    await hostOn(clock, g, 'ctf_lane');
+    const id8 = idOfGob(gob);
+    // The map channel takes nothing (its link stalled).
+    g.link.backlog = (id, via) => (via === 'direct' ? 1e9 : 0);
+    for (const b of [0, 1, 2])
+        g.host.jkMaps.onFrame(2, blockRequest(id8, b, 1, 65536), 'direct');
+    await clock.run(2000);
+    assert.equal(blockParts(g.log, 2).length, 0);
+    const queued = g.host.jkMaps.uploads().queued[2];
+    assert.equal(queued, stream);
+    // Asked again, on the transfer link.
+    for (const b of [0, 1, 2])
+        g.host.jkMaps.onFrame(2, blockRequest(id8, b, 1, 65536), 'direct1');
+    await clock.run(1);
+    // Not queued again, and parts start going the new way at once.
+    assert.ok(g.host.jkMaps.uploads().queued[2] <= queued);
+    assert.ok(await clock.until(() => g.host.jkMaps.uploads().groups === 0, 600000));
+    const parts = blockParts(g.log, 2);
+    assert.equal(parts.reduce((n, f) => n + f.len - 40, 0), stream);
+    assert.equal(new Set(parts.map(f => f.block + ' ' + f.at)).size, parts.length, 'a part sent twice');
+    assert.ok(parts.every(f => f.via === 'direct1'));
+});
+
+test('chunks asked for while they wait are queued once, and go in turn with blocks', async () => {
+    const clock = makeClock();
+    const { gob, stream } = bigMap(1500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_chunk.gob': gob }, [{ id: 2, direct: false }, { id: 3, direct: false }]);
+    await hostOn(clock, g, 'ctf_chunk');
+    const id8 = idOfGob(gob);
+    g.link.backlog = () => 1e9;
+    g.host.jkMaps.onFrame(2, chunkRequest(id8, 49152, 0, 10), 'relay');
+    g.host.jkMaps.onFrame(2, chunkRequest(id8, 49152, 0, 10), 'relay');
+    g.host.jkMaps.onFrame(2, chunkRequest(id8, 49152, 5, 10), 'relay');
+    g.host.jkMaps.onFrame(3, blockRequest(id8, 0, 1, 49152), 'relay');
+    await clock.run(100);
+    assert.equal(g.host.jkMaps.uploads().queued[2], 15 * 49152);
+    assert.equal(g.host.jkMaps.uploads().groups, 2);
+    g.link.backlog = () => 0;
+    assert.ok(await clock.until(() => g.host.jkMaps.uploads().groups === 0, 600000));
+    const chunks = g.log.filter(f => f.from === 1 && f.to === 2 && f.type === 4);
+    assert.deepEqual(chunks.map(f => f.block), [...Array(15).keys()]);
+    assert.ok(chunks.every(f => f.len === 16 + 12 + 49152 && f.via === 'relay'));
+    // Turn about: player 3's block didn't wait for all of player 2's chunks.
+    const firstPart = g.log.findIndex(f => f.to === 3 && f.type === 6);
+    const lastChunk = g.log.findLastIndex(f => f.to === 2 && f.type === 4);
+    assert.ok(firstPart < lastChunk);
+    assert.ok(stream > 15 * 49152);
+});
+
+test('a part cut for the map channel never goes through the lobby when the channel closes', async () => {
+    const clock = makeClock();
+    const { gob } = bigMap(2500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_cap.gob': gob }, [{ id: 2, direct: true }]);
+    g.link.inMatch = false;
+    await hostOn(clock, g, 'ctf_cap');
+    const id8 = idOfGob(gob);
+    g.link.backlog = () => 1e9;
+    g.host.jkMaps.onFrame(2, blockRequest(id8, 0, 2, 65536), 'direct');
+    await clock.run(100);
+    // The map channel closes with the parts still waiting: they go through
+    // the lobby, none over its 64 KiB.
+    g.tabs.get(2).direct = false;
+    g.link.backlog = () => 0;
+    assert.ok(await clock.until(() => g.host.jkMaps.uploads().groups === 0, 60000));
+    const parts = blockParts(g.log, 2);
+    assert.equal(parts.length, 2 * 1048576 / UNIT);
+    assert.ok(parts.every(f => f.via === 'relay' && f.len <= 65536));
+    assert.equal(g.link.overCap, 0);
+});
+
+test('what waits for a player who left is dropped, and one joiner can\'t have more than 16 MiB waiting', async () => {
+    const clock = makeClock();
+    const { gob } = bigMap(20000000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_cap.gob': gob }, [{ id: 2, direct: true }, { id: 3, direct: true }]);
+    await hostOn(clock, g, 'ctf_cap');
+    const id8 = idOfGob(gob);
+    g.link.backlog = () => 1e9;
+    // A made-up client asking for every block at once.
+    for (let b = 0; b < 20; b += 4)
+        g.host.jkMaps.onFrame(2, blockRequest(id8, b, 4, 65536), 'direct');
+    g.host.jkMaps.onFrame(3, blockRequest(id8, 0, 2, 65536), 'direct');
+    g.host.jkMaps.onFrame(3, blockRequest(id8, 2, 1, 49152), 'relay');
+    await clock.run(100);
+    let up = g.host.jkMaps.uploads();
+    assert.equal(up.queued[2], 16 * 1048576);
+    assert.equal(up.queued[3], 3 * 1048576);
+    g.host.jkMaps.forget(2);
+    // Player 3's link closed: what went that way is dropped, not what goes
+    // through the lobby.
+    g.host.jkMaps.forget(3, true);
+    up = g.host.jkMaps.uploads();
+    assert.equal(up.queued[2], 0);
+    assert.equal(up.queued[3], 1048576);
+    assert.equal(up.groups, 1);
+    g.link.backlog = () => 0;
+    assert.ok(await clock.until(() => g.host.jkMaps.uploads().groups === 0, 600000));
+    assert.equal(blockParts(g.log, 2).length, 0);
+    assert.ok(blockParts(g.log, 3).every(f => f.block === 2 && f.via === 'relay'));
+    // And when the host stops offering it.
+    g.link.backlog = () => 1e9;
+    g.host.jkMaps.onFrame(3, blockRequest(id8, 3, 1, 65536), 'direct');
+    await clock.run(100);
+    assert.equal(g.host.jkMaps.uploads().groups, 1);
+    g.host.jkMaps.unhost();
+    assert.equal(g.host.jkMaps.uploads().groups, 0);
+});
+
+test('on the Imperial Network Protocol parts keep the size the joiner asked for, and an old joiner gets the map in a match', async () => {
+    const clock = makeClock();
+    const { gob, stream } = bigMap(2500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_imp.gob': gob }, [{ id: 2, direct: true }], { imperial: true });
+    await hostOn(clock, g, 'ctf_imp');
+    g.tab(2).jkMaps.fetch('ctf_imp', 'gob');
+    assert.ok(await clock.until(() => g.tab(2).jkMaps.state() !== 0, 600000));
+    assert.equal(g.tab(2).jkMaps.state(), 1);
+    assert.deepEqual(Buffer.from(g.tab(2).FS.files.get('/jk1/episode/ctf_imp.gob')), Buffer.from(gob));
+    const parts = blockParts(g.log, 2);
+    assert.ok(parts.every(f => f.len - 40 === 65536 || f.at + f.len - 40 === Math.min(1048576, stream - f.block * 1048576)));
+    let expected = 0;
+    for (let at = 0; at < stream; at += 1048576)
+        expected += Math.ceil(Math.min(1048576, stream - at) / 65536);
+    assert.equal(parts.length, expected);
+    assert.equal(blockReqs(g.log, 2).length, Math.ceil(stream / 1048576));
+});
+
+test('a new joiner gets the map from a paced host as from an old one', async () => {
+    const clock = makeClock();
+    const { gob } = bigMap(2500000);
+    const g = pacedGame(clock, { ...retailInstall, '/jk1/episode/ctf_new.gob': gob }, [{ id: 2, direct: true, src: source, lanes: ['direct'] }]);
+    await hostOn(clock, g, 'ctf_new');
+    g.tab(2).jkMaps.fetch('ctf_new', 'gob');
+    assert.ok(await clock.until(() => g.tab(2).jkMaps.state() !== 0, 600000));
+    assert.equal(g.tab(2).jkMaps.state(), 1);
+    assert.deepEqual(Buffer.from(g.tab(2).FS.files.get('/jk1/episode/ctf_new.gob')), Buffer.from(gob));
+    assert.equal(blockReqs(g.log, 2).length, 3);
 });
 
 let failed = 0;

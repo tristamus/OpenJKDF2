@@ -291,3 +291,70 @@ export function makeIDB() {
         },
     };
 }
+
+// ---- A made-up clock for code that waits (setTimeout, Date.now and
+// performance.now): run(ms) moves it on, running the timers due in order and
+// letting promises settle after each, so minutes of a slow transfer take a
+// moment. Work the browser does off the page (hashing) still takes real
+// time; wait for that with until().
+
+export function makeClock(start = 1700000000000) {
+    let now = start, seq = 0;
+    const timers = new Map();
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    const clock = {
+        now: () => now,
+        setTimeout(fn, ms) {
+            const id = ++seq;
+            timers.set(id, { at: now + Math.max(0, +ms || 0), fn, seq: id });
+            return id;
+        },
+        clearTimeout(id) {
+            timers.delete(id);
+        },
+        setInterval(fn, ms) {
+            const id = ++seq;
+            timers.set(id, { at: now + ms, fn, seq: id, every: Math.max(1, ms) });
+            return id;
+        },
+        clearInterval(id) {
+            timers.delete(id);
+        },
+        async run(ms) {
+            const end = now + ms;
+            await flush();
+            for (;;) {
+                let next = null;
+                for (const t of timers.values())
+                    if (!next || t.at < next.at || (t.at === next.at && t.seq < next.seq)) next = t;
+                if (!next || next.at > end)
+                    break;
+                now = Math.max(now, next.at);
+                if (next.every) {
+                    next.at += next.every;
+                    next.seq = ++seq;
+                } else {
+                    timers.delete(next.seq);
+                }
+                next.fn();
+                await flush();
+            }
+            now = end;
+            await flush();
+        },
+        // Runs the clock until test() holds, or ms pass (then false).
+        async until(test, ms, step = 100) {
+            for (let n = 0, end = now + ms; now < end; n++) {
+                if (test())
+                    return true;
+                await clock.run(step);
+                if (n % 50 === 49)
+                    await new Promise(resolve => setTimeout(resolve, 1));
+            }
+            return test();
+        },
+    };
+    clock.Date = { now: clock.now };
+    clock.performance = { now: clock.now };
+    return clock;
+}
