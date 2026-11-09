@@ -6959,12 +6959,15 @@
       // engine's: the idle fetch doesn't start, and a picture still on its
       // way is let go (taking an image's src away stops its download). Its
       // room asks for it again when pointed at, and its window when it
-      // opens.
+      // opens. But not the picture of the room whose window was opened last
+      // (its Host and Join open the prompt): that window's backdrop shares
+      // the download, so Chromium goes on with it anyway, and Firefox, which
+      // stops it, says in its console that the picture is corrupt.
       var roomPicturesStopped = false;
       function stopRoomPictures() {
         roomPicturesStopped = true;
         Object.keys(roomPicturesAsked).forEach(function(key) {
-          if (roomPicturesAsked[key].complete) return;
+          if (roomPicturesAsked[key].complete || key === roomGames.dataset.roomKey) return;
           roomPicturesAsked[key].removeAttribute('src');
           delete roomPicturesAsked[key];
         });

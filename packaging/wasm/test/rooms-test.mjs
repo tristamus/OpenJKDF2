@@ -256,8 +256,9 @@ test("a link to a room window asks for that room's picture with the page, and no
 // them, in a made-up page that is still loading (or has loaded), with or
 // without Save-Data and requestIdleCallback. Nothing runs by itself: the
 // test fires the load event, the idle callback and the timers, says which
-// pictures have come (arrived), and starts a game (stop: what openPicker
-// calls).
+// pictures have come (arrived), opens a room's window (open: a click on its
+// room, which marks the window with its key as openRoom does) and starts a
+// game (stop: what openPicker calls).
 function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {}) {
     const code = cut('      var roomPicturesAsked = {};', "      if (typeof ResizeObserver === 'function') {");
     const asked = [], images = [], dropped = [];
@@ -280,13 +281,16 @@ function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {
     const navigator = saveData === undefined ? {} : { connection: { saveData } };
     const requestIdleCallback = idle ? fn => idles.push(fn) : undefined;
     const setTimeout = (fn, ms) => timers.push({ fn, ms });
+    const roomGames = { dataset: {} };
+    const openRoom = key => { roomGames.dataset.roomKey = key; };
     const stop = new Function('document', 'openRoom', 'Image', 'ROOM_PICTURES', 'window', 'navigator', 'requestIdleCallback',
-                              'setTimeout', code + '\nreturn stopRoomPictures;')(
-        document, () => {}, Image, pictures, window, navigator, requestIdleCallback, setTimeout);
+                              'setTimeout', 'roomGames', code + '\nreturn stopRoomPictures;')(
+        document, openRoom, Image, pictures, window, navigator, requestIdleCallback, setTimeout, roomGames);
     const run = list => list.splice(0).forEach(f => (f.fn || f)());
+    const button = key => els.find(e => (e.dataset.room || e.dataset.opensRoom) === key);
     return { els, asked, loads, idles, timers, dropped, arrived, stop, srcs: () => asked.map(a => a.src),
              load: () => run(loads), idle: () => run(idles), timer: () => run(timers),
-             point: key => els.find(e => (e.dataset.room || e.dataset.opensRoom) === key).listeners.pointerenter() };
+             point: key => button(key).listeners.pointerenter(), open: key => button(key).listeners.click() };
 }
 
 test("pointing at a room, tabbing to it or touching it asks for its picture once", () => {
@@ -401,6 +405,39 @@ test("once a game is starting, the idle fetch doesn't start, and pictures on the
     w.idle();
     assert.deepEqual(w.dropped, [pictures['nar-shaddaa']]);
     assert.equal(w.asked.length, 1, 'and the idle fetch then asks for nothing');
+});
+
+test("Host or Join in a room's window lets that room's picture come: the window's backdrop shares its download", () => {
+    assert.ok(cut('      function openRoom(', '      var roomNoteTimer')
+        .includes('\n        roomGames.dataset.roomKey = key;'), "openRoom marks the window with its room's key");
+    // Both pictures on their way, Nar Shaddaa's window opened, then its Host.
+    let w = roomPictureWiring();
+    w.load();
+    w.idle();
+    w.open('nar-shaddaa');
+    w.stop();
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid']], "only the other room's picture is let go");
+    // Its room doesn't ask for it again (it's still coming); the other does.
+    w.point('nar-shaddaa');
+    w.point('sith-asteroid');
+    assert.deepEqual(w.srcs().slice(2), [pictures['sith-asteroid']]);
+
+    // The window opened last counts: Nar Shaddaa's, then Sith: Asteroid's.
+    w = roomPictureWiring();
+    w.load();
+    w.idle();
+    w.open('nar-shaddaa');
+    w.open('sith-asteroid');
+    w.stop();
+    assert.deepEqual(w.dropped, [pictures['nar-shaddaa']]);
+
+    // A picture asked for by pointing at its room, then its window opened.
+    w = roomPictureWiring({ readyState: 'complete' });
+    w.point('sith-asteroid');
+    w.open('sith-asteroid');
+    w.stop();
+    w.idle();
+    assert.deepEqual([w.dropped, w.srcs()], [[], [pictures['sith-asteroid']]]);
 });
 
 test('the folder prompt stops the pictures each time it opens', () => {
