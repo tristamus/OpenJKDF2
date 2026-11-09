@@ -1,7 +1,7 @@
 // Tests for how packaging/wasm/index.html gets the engine ready early: from
 // when the player asks to play, the engine's script is downloaded into the
-// browser's cache and its wasm downloaded and compiled (prefetchEngine), and
-// the engine gets the compiled
+// browser's cache (the script element waits for that) and its wasm
+// downloaded and compiled (prefetchEngine), and the engine gets the compiled
 // wasm through Module.instantiateWasm (earlyWasm), or downloads it again as it
 // did by itself when that failed. In Node (22 or newer):
 // node packaging/wasm/test/engine-early-test.mjs
@@ -42,10 +42,11 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 // The page's engine loading. answers: what each fetch of the wasm gets, in
 // turn (a Response, or an Error to reject with); after them, the engine's
 // wasm. scriptAnswers: the same for the script's, which otherwise gets a
-// script.
+// script, or a promise of a Response, for one still on its way. The page's
+// timers wait in env.timers until the test runs them.
 function page({ ENGINE = 'jspi', answers = [], scriptAnswers = [], WebAssembly: wa = WebAssembly } = {}) {
     const env = { fetched: [], scriptFetched: [], scriptAnswered: [], links: [], scripts: [], stopped: [], logged: [],
-                  warned: [], engineLog: [] };
+                  warned: [], engineLog: [], timers: [] };
     let engineNow = ENGINE;
     const fetch = (url, init) => {
         const script = url.endsWith('.js');
@@ -57,6 +58,7 @@ function page({ ENGINE = 'jspi', answers = [], scriptAnswers = [], WebAssembly: 
         if (script && a instanceof Response) env.scriptAnswered.push(a);
         return a instanceof Error ? Promise.reject(a) : Promise.resolve(a);
     };
+    const setTimeout = (fn, ms) => { env.timers.push({ fn, ms }); };
     const document = {
         baseURI: 'https://jediknight.zone/',
         createElement: tag => ({ tag }),
@@ -66,10 +68,10 @@ function page({ ENGINE = 'jspi', answers = [], scriptAnswers = [], WebAssembly: 
     const Module = { jkEngine: ENGINE };
     const console = { log: l => env.logged.push(l), warn: l => env.warned.push(l), error: l => env.logged.push(l) };
     const api = new Function('document', 'engineStopped', 'Module', 'console', 'ENGINE', 'engineLog', 'fetch',
-                             'WebAssembly', 'performance',
+                             'WebAssembly', 'performance', 'setTimeout',
                              'var leaveGuard;\n' + loadCode +
                              '\nreturn { loadEngine, prefetchEngine, engine: () => ENGINE, early: () => earlyEngine };')(
-        document, why => env.stopped.push(why), Module, console, ENGINE, env.engineLog, fetch, wa, performance);
+        document, why => env.stopped.push(why), Module, console, ENGINE, env.engineLog, fetch, wa, performance, setTimeout);
     // Starts the engine as openjkdf2.js does, with this engine's imports.
     function start() {
         assert.equal(typeof Module.instantiateWasm, 'function', 'the engine gets the early wasm');
@@ -106,6 +108,7 @@ for (const ENGINE of ['jspi', 'asyncify']) {
         await settle();
         assert.equal(p.env.scriptAnswered[0].bodyUsed, true, 'the script is read');
         p.loadEngine(false);
+        await settle();
         assert.deepEqual(p.env.scripts.map(s => s.src), [js]);
         const instance = await p.start();
         assert.equal(instance.exports.g(), 7);
@@ -212,8 +215,10 @@ test("the JSPI engine's script didn't download: the Asyncify engine loads withou
     await settle();
     p.loadEngine(false);
     assert.equal(typeof p.Module.instantiateWasm, 'function');
+    await settle();
     p.env.scripts[0].onerror();
     assert.equal(p.engine(), 'asyncify');
+    // Added at once: the Asyncify engine's script had no early download.
     assert.deepEqual(p.env.scripts.map(s => s.src), ['jspi/openjkdf2.js', 'openjkdf2.js']);
     assert.equal('instantiateWasm' in p.Module, false);
     // Nor is the JSPI wasm kept, compiled, for the rest of the tab.
@@ -254,10 +259,66 @@ test("the script's early download failing shows nowhere: the script element asks
         assert.deepEqual([p.env.warned, p.env.logged, p.env.stopped, p.env.engineLog], [[], [], [], []]);
         assert.equal(p.early().failed, false, 'the wasm is ready as ever');
         p.loadEngine(false);
+        await settle();
         assert.deepEqual(p.env.scripts.map(s => s.src), ['jspi/openjkdf2.js']);
         assert.equal((await p.start()).exports.g(), 7);
         assert.equal(p.env.scriptFetched.length, 1, 'not asked again here');
     }
+});
+
+// Safari (WebKit) keeps a download in its cache only once all of it has
+// come, so a script element added while the early download is on its way
+// would download the script a second time.
+test("the script element waits for the script's early download (10 s at most), then the cache has it", async () => {
+    for (const ENGINE of ['asyncify', 'jspi']) {
+        const js = ENGINE === 'jspi' ? 'jspi/openjkdf2.js' : 'openjkdf2.js';
+        let headers, more, end;
+        const body = new ReadableStream({ start(c) {
+            more = text => c.enqueue(new TextEncoder().encode(text));
+            end = () => c.close();
+        } });
+        const p = page({ ENGINE, scriptAnswers: [new Promise(ok => { headers = ok; })] });
+        p.prefetchEngine();
+        p.loadEngine(false);
+        await settle();
+        assert.deepEqual(p.env.scripts, [], 'not while the script is on its way');
+        assert.deepEqual(p.env.timers.map(t => t.ms), [10000]);
+        headers(new Response(body, { headers: { 'content-type': 'text/javascript' } }));
+        more('// the eng');
+        await settle();
+        assert.deepEqual(p.env.scripts, [], 'nor while the rest of it is');
+        more('ine');
+        end();
+        await settle();
+        assert.deepEqual(p.env.scripts.map(s => s.src), [js], 'once it has all come');
+        p.env.timers[0].fn();
+        await settle();
+        assert.equal(p.env.scripts.length, 1, 'and only once');
+        assert.equal(p.env.scriptFetched.length, 1);
+        assert.equal((await p.start()).exports.g(), 7);
+    }
+
+    // One that doesn't finish (a stalled connection): after 10 s the script
+    // element asks for the script itself.
+    const q = page({ scriptAnswers: [new Promise(() => {})] });
+    q.prefetchEngine();
+    q.loadEngine(false);
+    await settle();
+    assert.deepEqual(q.env.scripts, []);
+    q.env.timers.shift().fn();
+    await settle();
+    assert.deepEqual(q.env.scripts.map(s => s.src), ['jspi/openjkdf2.js']);
+    // When that doesn't download, the Asyncify engine's script, which had
+    // no early download, is added at once.
+    q.env.scripts[0].onerror();
+    assert.deepEqual(q.env.scripts.map(s => s.src), ['jspi/openjkdf2.js', 'openjkdf2.js']);
+    assert.deepEqual(q.env.timers, []);
+
+    // No early download (a phone, Save-Data): added at once, as before.
+    const r = page();
+    r.loadEngine(false);
+    assert.deepEqual(r.env.scripts.map(s => s.src), ['jspi/openjkdf2.js']);
+    assert.deepEqual(r.env.timers, []);
 });
 
 test('the engine looks for its wasm where ENGINE_FILES says', () => {

@@ -3639,7 +3639,21 @@
           ENGINE = Module.jkEngine = 'asyncify';
           loadEngine(false);
         };
-        document.body.appendChild(engine);
+        // When prefetchEngine is still downloading this engine's script, the
+        // script element is added once that's done (or after 10 s at most),
+        // and then finds it in the cache. Chromium and Firefox give a script
+        // element the download already on its way, but Safari (WebKit) keeps
+        // a file only once it has all come, and would download it again. The
+        // Asyncify engine tried after the JSPI one's script didn't download
+        // had no early download: its script is added at once.
+        var warming = earlyEngine && earlyEngine.kind === ENGINE ? earlyEngine.js : null;
+        if (warming) {
+          Promise.race([warming, new Promise(function(done) { setTimeout(done, 10000); })]).then(function() {
+            document.body.appendChild(engine);
+          });
+        } else {
+          document.body.appendChild(engine);
+        }
       }
 
       // ---- The files the page loads by name, named in this one place: each
@@ -3688,7 +3702,11 @@
         // used within a few seconds, as it mostly isn't while the player
         // picks their folder. What comes is read and dropped; if anything
         // goes wrong here, the script element downloads it by itself.
-        fetch(files.js, { credentials: 'same-origin' }).then(function(r) { return r.arrayBuffer(); }).catch(function() {});
+        // early.js settles once that's over, however it went (loadEngine
+        // waits for it).
+        early.js = fetch(files.js, { credentials: 'same-origin' }).then(function(r) {
+          return r.arrayBuffer();
+        }).then(function() {}, function() {});
         early.module = compileWasm(files.wasm).then(function(module) {
           early.ready = performance.now();
           return module;
