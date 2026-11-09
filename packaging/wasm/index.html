@@ -1909,11 +1909,12 @@
                               navigator.vendor);
       var ENGINE_FAILED = 'jkdf2mp-jspi-failed';
       try {
-        if (ENGINE === 'jspi' && !/[?&]engine=jspi(&|$)/.test(window.location.search) &&
-            sessionStorage.getItem(ENGINE_FAILED)) {
+        var engineFailed = sessionStorage.getItem(ENGINE_FAILED);
+        if (ENGINE === 'jspi' && !/[?&]engine=jspi(&|$)/.test(window.location.search) && engineFailed) {
           ENGINE = 'asyncify';
-          console.log("OpenJKDF2: the JSPI engine didn't work in this tab before; loading the Asyncify engine");
-          engineLog.push("The JSPI engine didn't work in this tab before; loading the Asyncify engine");
+          console.log("OpenJKDF2: the JSPI engine didn't work in this tab before (" + engineFailed +
+                      '); loading the Asyncify engine');
+          engineLog.push("The JSPI engine didn't work in this tab before (" + engineFailed + '); loading the Asyncify engine');
         }
       } catch (e) {}
       // For netstats.js (the match summary) and the log.
@@ -2000,9 +2001,12 @@
         if (engineProblem) return;
         engineProblem = true;
         engineLog.push('The game stopped: ' + why);  // for the saved network log
-        // The page loads the Asyncify engine when this tab is reloaded (ENGINE_FAILED).
-        if (ENGINE === 'jspi' && (!engineRunning || /SuspendError/.test(why + ' ' + (error && error.name))))
-          try { sessionStorage.setItem(ENGINE_FAILED, why); } catch (e) {}
+        // The page loads the Asyncify engine when this tab is reloaded
+        // (ENGINE_FAILED), but not for the browser turning down the memory,
+        // which the Asyncify engine needs as well.
+        var otherEngine = false;
+        if (ENGINE === 'jspi' && ((!engineRunning && !/memory/i.test(why)) || /SuspendError/.test(why + ' ' + (error && error.name))))
+          try { sessionStorage.setItem(ENGINE_FAILED, why); otherEngine = true; } catch (e) {}
         leaveGuard = false;
         spinnerElement.style.display = 'none';
         progressElement.hidden = true;
@@ -2013,7 +2017,9 @@
         };
         if (typeof showProblem !== 'function') return;
         showProblem(title, engineRunning
-          ? why + '\n\nPress F12 and open Console for details. Click anywhere else to hide this.'
+          ? why + (otherEngine ? '\n\nReload the page to play on: the game then starts with its other engine, which ' +
+                                 'works in every browser.' : '') +
+            '\n\nPress F12 and open Console for details. Click anywhere else to hide this.'
           : /memory/i.test(why)
           ? "The browser couldn't give the game the memory it needs. Close other tabs and programs, then " +
             'reload the page.\n\nThe browser said: ' + why

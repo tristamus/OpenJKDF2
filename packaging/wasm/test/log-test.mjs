@@ -90,6 +90,19 @@ test('the saved network log ends with the engine\'s last 2,000 lines', async () 
     assert.equal(r.lines[r.lines.length - 2], 'engine line to save');
 });
 
+test('the saved network log says which engine ran', async () => {
+    const r = await page.evaluate(() => {
+        const was = Module.jkEngine, lines = [];
+        for (const engine of ['jspi', 'asyncify']) {
+            Module.jkEngine = engine;
+            lines.push(netLogText().split('\r\n').filter(l => /^Engine: /.test(l)));
+        }
+        Module.jkEngine = was;
+        return lines;
+    });
+    assert.deepEqual(r, [['Engine: JSPI'], ['Engine: Asyncify']]);
+});
+
 test('"OpenJKDF2:" lines still reach the network log', async () => {
     const r = await page.evaluate(() => {
         const notes = [];

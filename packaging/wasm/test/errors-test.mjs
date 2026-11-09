@@ -183,7 +183,8 @@ test("a tab where the JSPI engine couldn't start, or hit a SuspendError, gets th
         assert.equal(tab.items[FAILED], why);
         const again = reload('jspi', '', tab.items);
         assert.equal(again.chosen, 'asyncify');
-        assert.deepEqual(again.logged, ["OpenJKDF2: the JSPI engine didn't work in this tab before; loading the Asyncify engine"]);
+        assert.deepEqual(again.logged, ["OpenJKDF2: the JSPI engine didn't work in this tab before (" + why +
+                                        '); loading the Asyncify engine']);
         assert.equal(again.engineLog.length, 1);
         // ?engine=jspi still gets it, and ?engine=asyncify was Asyncify anyway.
         assert.equal(reload('jspi', '?engine=jspi', tab.items).chosen, 'jspi');
@@ -198,6 +199,7 @@ test("a tab where the JSPI engine couldn't start, or hit a SuspendError, gets th
     e.name = 'SuspendError';
     p.rejection(e);
     assert.equal(p.shown[0].title, 'The game stopped');
+    assert.match(p.shown[0].text, /Reload the page to play on/);
     assert.match(suspended.items[FAILED], /SuspendError/);
     // Not remembered: any other crash during play, or the Asyncify engine failing.
     const crashed = storage();
@@ -205,6 +207,12 @@ test("a tab where the JSPI engine couldn't start, or hit a SuspendError, gets th
     q.env.Module.onRuntimeInitialized();
     q.rejection(thrown(WebAssembly.RuntimeError, 'unreachable', ENGINE_STACK));
     assert.deepEqual(crashed.items, {});
+    assert.doesNotMatch(q.shown[0].text, /Reload the page to play on/);
+    // Nor the browser turning down the memory, which the Asyncify engine needs too.
+    const memory = storage();
+    page({ ENGINE: 'jspi', sessionStorage: memory }).env.Module.onAbort(
+        'RangeError: WebAssembly.instantiate(): Out of memory: Cannot allocate Wasm memory for new instance');
+    assert.deepEqual(memory.items, {});
     const asyncify = storage();
     page({ ENGINE: 'asyncify', sessionStorage: asyncify }).env.Module.onAbort('both async and sync fetching of the wasm failed');
     assert.deepEqual(asyncify.items, {});

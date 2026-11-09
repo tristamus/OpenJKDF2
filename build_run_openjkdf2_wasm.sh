@@ -30,16 +30,17 @@ rm -rf wasm_out/mots/resource/shaders
 
 #rm -rf build_emcc
 mkdir -p build_emcc && pushd build_emcc
-cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake
-cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake
-make -j1 VERBOSE=1
+cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake || exit 1
+cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake || exit 1
+# Stop on a failed build, so an older engine left in the build folder isn't copied.
+make -j1 VERBOSE=1 || exit 1
 popd
 
 # The JSPI engine, which the page loads from jspi/ where the browser has JSPI
 # (cmake_modules/toolchain_wasm.cmake).
 mkdir -p build_emcc_jspi && pushd build_emcc_jspi
-cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake -DOPENJKDF2_WASM_JSPI=ON
-make -j1 VERBOSE=1
+cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake -DOPENJKDF2_WASM_JSPI=ON || exit 1
+make -j1 VERBOSE=1 || exit 1
 popd
 
 cp packaging/wasm/index.html wasm_out/index.html
