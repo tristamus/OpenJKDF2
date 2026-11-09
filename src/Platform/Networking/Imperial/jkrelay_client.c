@@ -60,8 +60,11 @@ typedef int jkr_sock;
 // wss://), one packet per binary message. A server is named by a ws:// or wss:// URL,
 // a bare host (wss://<host>/imperial) or host:port (ws://host:port/, for testing);
 // jkr_ResolveAddr gives each a made-up address that stands for it. Waits yield to the
-// page (emscripten_sleep, -sASYNCIFY) so messages can arrive. No direct links (no hole
-// punching), and dedicated servers reachable only at their own address aren't listed.
+// page (emscripten_sleep, through Asyncify or JSPI) so messages can arrive. A socket
+// the server (or a proxy, or the player's network) closed is opened again by the next
+// packet sent on it, at most once a second (jkr_WsSendTo), so the resume and re-HELLO
+// paths below work as they do over UDP. No direct links (no hole punching), and
+// dedicated servers reachable only at their own address aren't listed.
 #include <emscripten.h>
 
 #define JKR_WS_MAX_NAMES 16
@@ -81,7 +84,7 @@ static void jkr_WsUrlFor(const char* server, char* url, size_t cap)
     else
         snprintf(url, cap, "wss://%s/imperial", server);
 }
-static struct { int used, ws; struct sockaddr_in peer; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
+static struct { int used, ws; struct sockaddr_in peer; double reopenAt; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
 // When what jkr_WsRecvFrom read last came to the page (performance.now()): the
 // engine reads it at its next frame's first step, a frame or more later.
 static double jkr_wsRecvAtMs = 0.0;
@@ -106,6 +109,12 @@ EM_JS(int, jkr_js_open, (const char* url), {
     s.ws.onerror = function() { s.closed = true; };
     Module.jkrWs.socks[id] = s;
     return id;
+});
+
+// Whether a socket closed (the server or a proxy closed it, or it never opened).
+EM_JS(int, jkr_js_closed, (int id), {
+    var s = Module.jkrWs && Module.jkrWs.socks[id];
+    return !s || s.closed ? 1 : 0;
 });
 
 EM_JS(int, jkr_js_send, (int id, const void* p, int n), {
@@ -184,6 +193,15 @@ static int jkr_WsSendTo(int sk, const void* p, int n, const struct sockaddr_in* 
     if (jkr_wsSocks[sk].ws && (jkr_wsSocks[sk].peer.sin_addr.s_addr != to->sin_addr.s_addr || jkr_wsSocks[sk].peer.sin_port != to->sin_port))
     {
         jkr_js_close(jkr_wsSocks[sk].ws);   // another server now: one connection at a time
+        jkr_wsSocks[sk].ws = 0;
+    }
+    if (jkr_wsSocks[sk].ws && jkr_js_closed(jkr_wsSocks[sk].ws))
+    {
+        // The server (or a proxy) closed it: open it again, at most once a second.
+        double now = emscripten_get_now();
+        if (now - jkr_wsSocks[sk].reopenAt < 1000.0) return -1;
+        jkr_wsSocks[sk].reopenAt = now;
+        jkr_js_close(jkr_wsSocks[sk].ws);
         jkr_wsSocks[sk].ws = 0;
     }
     if (!jkr_wsSocks[sk].ws)
