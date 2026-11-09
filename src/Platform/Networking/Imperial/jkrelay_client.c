@@ -85,7 +85,7 @@ static void jkr_WsUrlFor(const char* server, char* url, size_t cap)
     else
         snprintf(url, cap, "wss://%s/imperial", server);
 }
-static struct { int used, ws; struct sockaddr_in peer; double reopenAt, reopenWait; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
+static struct { int used, ws; struct sockaddr_in peer; double reopenAt, reopenWait, openAt; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
 // When what jkr_WsRecvFrom read last came to the page (performance.now()): the
 // engine reads it at its next frame's first step, a frame or more later.
 static double jkr_wsRecvAtMs = 0.0;
@@ -215,16 +215,20 @@ static int jkr_WsSendTo(int sk, const void* p, int n, const struct sockaddr_in* 
         // The server (or a proxy, or the network) closed it: open it again, at most
         // once a second. While the server stays down (nothing comes on a new socket),
         // each try waits twice as long as the one before, 4 s at most (so a joiner's
-        // last try before JKR_TIMEOUT_MS is at 19 s: 0, 1, 3, 7, 11, 15, 19). The waits
+        // last try before JKR_TIMEOUT_MS is at 19 s: 0, 1, 3, 7, 11, 15, 19; that one
+        // only saves the game if it opens and the server's answer is read in the second
+        // that's left, which a tab at a few frames a second often misses). The waits
         // count from each open, the first one too (reopenAt). A try can only go when
         // something is sent (each frame, or a lone host's keepalive), so it's often a
         // little late; then the next wait counts from when this one was due, so in a
         // slow tab the tries don't fall later and later (unless it's a wait or more
-        // late, as when the browser took that long to give up on the last one).
+        // late, as when the browser took that long to give up on the last one). Never
+        // two opens less than a second apart, though (openAt): a try late by most of a
+        // 4 s wait would otherwise have the next one due a frame later.
         double now = emscripten_get_now();
         double wait = closed == 2 || jkr_wsSocks[sk].reopenWait < 1000.0 ? 1000.0 : jkr_wsSocks[sk].reopenWait;
         double due = jkr_wsSocks[sk].reopenAt + wait;
-        if (now < due) return -1;
+        if (now < due || now - jkr_wsSocks[sk].openAt < 1000.0) return -1;
         from = closed == 1 && now - due < wait ? due : now;
         jkr_wsSocks[sk].reopenWait = closed == 2 ? 1000.0 : (wait * 2.0 < 4000.0 ? wait * 2.0 : 4000.0);
         jkr_js_close(jkr_wsSocks[sk].ws);
@@ -235,6 +239,7 @@ static int jkr_WsSendTo(int sk, const void* p, int n, const struct sockaddr_in* 
         if (!(url = jkr_WsUrlOf(to))) return -1;   // not a server we named (a listed server's own address)
         jkr_wsSocks[sk].ws = jkr_js_open(url);
         jkr_wsSocks[sk].reopenAt = closed ? from : emscripten_get_now();
+        jkr_wsSocks[sk].openAt = emscripten_get_now();
         if (jkr_wsSocks[sk].ws < 0) { jkr_wsSocks[sk].ws = 0; return -1; }
         jkr_wsSocks[sk].peer = *to;
     }
