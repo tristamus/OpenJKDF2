@@ -177,14 +177,16 @@ test("a tab where the JSPI engine couldn't start, or hit a SuspendError, gets th
     const FAILED = 'jkdf2mp-jspi-failed';
     // The JSPI engine's wasm didn't download, compile or link: remembered.
     for (const why of ['both async and sync fetching of the wasm failed',
-                       "CompileError: WebAssembly.instantiate(): unknown import kind 0x55"]) {
+                       "CompileError: WebAssembly.instantiate(): unknown import kind 0x55",
+                       'RuntimeError: Aborted(native code called abort()). Build with -sASSERTIONS for more info.']) {
         const tab = storage();
         page({ ENGINE: 'jspi', sessionStorage: tab }).env.Module.onAbort(why);
         assert.equal(tab.items[FAILED], why);
         const again = reload('jspi', '', tab.items);
         assert.equal(again.chosen, 'asyncify');
-        assert.deepEqual(again.logged, ["OpenJKDF2: the JSPI engine didn't work in this tab before (" + why +
-                                        '); loading the Asyncify engine']);
+        // The reason's own full stop isn't kept before the ")".
+        assert.deepEqual(again.logged, ["OpenJKDF2: the JSPI engine didn't work in this tab before (" +
+                                        why.replace(/\.$/, '') + '); loading the Asyncify engine']);
         assert.equal(again.engineLog.length, 1);
         // ?engine=jspi still gets it, and ?engine=asyncify was Asyncify anyway.
         assert.equal(reload('jspi', '?engine=jspi', tab.items).chosen, 'jspi');
