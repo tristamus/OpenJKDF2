@@ -84,7 +84,8 @@ jobs:
       # Quit: back to the lobby once the saves are stored, with made-up storage.
       - name: Test Quit
         run: node packaging/wasm/test/quit-test.mjs
-      # The room list: every room opens its game's room window.
+      # The room list: every room opens its game's room window, and the room
+      # pictures (rooms/) are named by their content.
       - name: Test the room list
         run: node packaging/wasm/test/rooms-test.mjs
       # The Raw mouse input box: how it starts in each browser (ticked for a
@@ -156,6 +157,7 @@ jobs:
           mkdir -p web/jspi
           cp packaging/wasm/index.html packaging/wasm/move-out.html packaging/wasm/unzip.js build_emcc/openjkdf2.js \
              build_emcc/openjkdf2.wasm web/
+          cp -r packaging/wasm/rooms web/
           cp build_emcc_jspi/openjkdf2.js build_emcc_jspi/openjkdf2.wasm web/jspi/
       - uses: actions/upload-artifact@v4
         with:

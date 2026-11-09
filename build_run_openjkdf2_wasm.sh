@@ -44,6 +44,9 @@ make -j1 VERBOSE=1 || exit 1
 popd
 
 cp packaging/wasm/index.html wasm_out/index.html
+# The room windows' pictures, which the page names (rooms/<room>.<hash>.<type>).
+mkdir -p wasm_out/rooms
+cp packaging/wasm/rooms/* wasm_out/rooms/
 cp build_emcc/openjkdf2.js wasm_out/openjkdf2.js
 cp build_emcc/openjkdf2.wasm wasm_out/openjkdf2.wasm
 mkdir -p wasm_out/jspi
