@@ -8,6 +8,7 @@
 // the test.
 
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import assert from 'node:assert/strict';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -18,6 +19,7 @@ function cut(from, to) {
 }
 const code = cut('      // ---- Graphics acceleration', '      // Checked once, when the page opens');
 const jitCode = cut("      // ---- Edge's enhanced security", '      // Timed once, when the page opens');
+const timedCode = cut('      // Timed once, when the page opens', '        </script>\n\n        <div class="layout">');
 
 // A browser whose WebGL 2 draws with `renderer`, or has none (null). With
 // caveat set, asking for a context that needs the graphics card fails.
@@ -220,6 +222,7 @@ function jitPage({ ua = EDGE.ua, brands = EDGE.brands, stored = {}, storageThrow
     const localStorage = {
         getItem(k) { if (storageThrows) throw new Error('blocked'); return k in stored ? stored[k] : null; },
         setItem(k, v) { if (storageThrows) throw new Error('blocked'); stored[k] = v; },
+        removeItem(k) { if (storageThrows) throw new Error('blocked'); delete stored[k]; },
     };
     class Blob { constructor(parts) { seen.sources.push(parts.join('')); } }
     const URL = { createObjectURL: () => 'blob:test', revokeObjectURL: u => seen.revoked.push(u) };
@@ -233,12 +236,19 @@ function jitPage({ ua = EDGE.ua, brands = EDGE.brands, stored = {}, storageThrow
         }
         terminate() { seen.terminated++; }
     }
-    const document = { querySelectorAll: () => seen.others };
+    const notices = {};
+    const document = { querySelectorAll: () => seen.others, getElementById: id => notices[id] };
     const navigator = { userAgent: ua, userAgentData: { brands: brands.map(brand => ({ brand })) } };
     const fns = new Function('document', 'navigator', 'window', 'localStorage', 'Worker', 'URL', 'Blob',
-        code + jitCode + '\nreturn { jitBench, jitWorkerSource, jitCheck, showJitNotice, JIT_SLOW_RATIO };')(
+        code + jitCode + '\nreturn { jitBench, jitWorkerSource, jitCheck, showJitNotice, JIT_SLOW_RATIO, jitLastSlow, rememberJit };')(
         document, navigator, {}, localStorage, Worker, URL, Blob);
-    return { ...fns, seen, stored };
+    // The page's own start of the test (Timed once...), with the notice el.
+    const start = (el) => {
+        notices['jit-notice'] = el;
+        return new Function('document', 'navigator', 'window', 'localStorage', 'Worker', 'URL', 'Blob', 'browserProblem',
+            code + jitCode + timedCode + '\nreturn { jitCheck };')(document, navigator, {}, localStorage, Worker, URL, Blob, () => null);
+    };
+    return { ...fns, seen, stored, start };
 }
 
 function jitNotice() {
@@ -390,6 +400,201 @@ test('the resist-fingerprinting note says what it limits, and how to lift it for
     assert.equal(site, 'jediknight.zone');
     showPrivacyNote(el, false);
     assert.equal(el.hidden, true);
+});
+
+// ---- Notices from the first paint. The page fills them in a script just
+// after them, before the rest of the page is read, so they never push it
+// down; the Edge test's slow answer is remembered for the next visit.
+
+test('the notices are filled in before the rest of the page is read', () => {
+    const at = s => { const i = html.indexOf(s); assert.ok(i > 0, 'index.html has ' + s); return i; };
+    const layout = at('<div class="layout">');
+    for (const call of ["showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);",
+                        "jitCheck().then(function(r) {"]) {
+        assert.ok(at(call) > at('id="move-notice"'), call + ' comes after the notices');
+        assert.ok(at(call) < layout, call + ' comes before the page under them');
+    }
+    const script = html.lastIndexOf('<script', at("showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);"));
+    assert.ok(script > at('id="move-notice"'), 'in a script of its own, after the notices');
+});
+
+test('a slow test is remembered, a fast one forgets it, one that could not run leaves it', () => {
+    const p = jitPage();
+    assert.equal(p.jitLastSlow(), null);
+    p.rememberJit(13.5);
+    assert.equal(p.stored['jkdf2mp-jit-slow'], '13.5');
+    assert.equal(p.jitLastSlow(), 13.5);
+    p.rememberJit(null);
+    assert.equal(p.jitLastSlow(), 13.5, 'kept when the test could not run');
+    p.rememberJit(0.8);
+    assert.equal('jkdf2mp-jit-slow' in p.stored, false);
+    assert.equal(p.jitLastSlow(), null);
+    for (const v of ['', 'x', '3.9', '-20'])
+        assert.equal(jitPage({ stored: { 'jkdf2mp-jit-slow': v } }).jitLastSlow(), null, JSON.stringify(v));
+    const blocked = jitPage({ storageThrows: true });
+    assert.equal(blocked.jitLastSlow(), null);
+    blocked.rememberJit(13.5);
+});
+
+// A notice element that counts how often it's filled.
+function countedNotice() {
+    const el = jitNotice();
+    let html = '';
+    el.fills = 0;
+    Object.defineProperty(el, 'innerHTML', { get: () => html, set: v => { html = v; el.fills++; } });
+    return el;
+}
+const settle = () => new Promise(r => setTimeout(r, 0));
+
+test('Edge shows a remembered slow test from the start, and keeps it while still slow', async () => {
+    const p = jitPage({ ratio: 14, stored: { 'jkdf2mp-jit-slow': '13.5' } }), el = countedNotice();
+    p.start(el);
+    assert.equal(el.hidden, false, 'shown before the test ends');
+    assert.equal(el.fills, 1);
+    await settle();
+    assert.equal(el.hidden, false);
+    assert.equal(el.fills, 1, 'not filled again, so nothing moves');
+    assert.equal(p.stored['jkdf2mp-jit-slow'], '14');
+});
+
+test('a remembered slow test that is fast now hides the notice and forgets it', async () => {
+    const p = jitPage({ ratio: 0.8, stored: { 'jkdf2mp-jit-slow': '13.5' } }), el = countedNotice();
+    p.start(el);
+    assert.equal(el.hidden, false);
+    await settle();
+    assert.equal(el.hidden, true);
+    assert.equal('jkdf2mp-jit-slow' in p.stored, false);
+});
+
+test('the first slow test shows the notice when it ends, and is remembered', async () => {
+    const p = jitPage({ ratio: 13.5 }), el = countedNotice();
+    p.start(el);
+    assert.equal(el.hidden, true, 'nothing known yet');
+    await settle();
+    assert.equal(el.hidden, false);
+    assert.equal(p.stored['jkdf2mp-jit-slow'], '13.5');
+});
+
+test('a test that cannot run leaves a remembered notice up', async () => {
+    const p = jitPage({ worker: 'fail', stored: { 'jkdf2mp-jit-slow': '13.5' } }), el = countedNotice();
+    p.start(el);
+    await settle();
+    assert.equal(el.hidden, false);
+    assert.equal(p.stored['jkdf2mp-jit-slow'], '13.5');
+});
+
+test('Hide still wins over a remembered slow test, and other browsers never start it', async () => {
+    let p = jitPage({ ratio: 14, stored: { 'jkdf2mp-jit-slow': '13.5', 'jkdf2mp-jit-notice': 'hidden' } }), el = countedNotice();
+    p.start(el);
+    await settle();
+    assert.equal(el.hidden, true);
+    p = jitPage({ ua: 'Mozilla/5.0 Chrome/155.0.0.0', brands: ['Google Chrome'], stored: { 'jkdf2mp-jit-slow': '13.5' } });
+    el = countedNotice();
+    p.start(el);
+    await settle();
+    assert.equal(el.hidden, true);
+    assert.equal(el.fills, 0);
+    assert.equal(p.seen.sources.length, 0, 'no speed test outside Edge');
+});
+
+// ---- Something going wrong in the script after the notices. It runs
+// before the page's error handling is set up, and a throw would skip the
+// rest of it, so its checks are wrapped: what goes wrong is logged, the
+// script still defines everything the page uses later, and the page's later
+// scripts run (here the game folder prompt's own notices, which read
+// gfxCheck, jitRatio and privacyOn). Each script runs in one made-up window,
+// as a browser runs them.
+
+const noticesScript = cut('      // ---- The notices above, filled in here', '        </script>\n\n        <div class="layout">');
+const pickerNotices = '        var problem = browserProblem();\n' +
+    cut("        showGfxNotice(document.getElementById('picker-gfx')", '        if (!picker.open) picker.showModal();');
+
+function noticesWindow({ glThrows = false, missing = [], stored = {}, ratio = 13.5 } = {}) {
+    const errors = [], warnings = [];
+    const els = { 'gfx-notice': notice(), 'picker-gfx': notice(), 'jit-notice': jitNotice(), 'picker-jit': jitNotice(),
+                  'picker-privacy': { hidden: true } };
+    missing.forEach(id => delete els[id]);
+    const gl = () => ({
+        RENDERER: 0x1F01,
+        // A WebGL that breaks where the page doesn't expect it to.
+        getExtension(name) { if (glThrows) throw new TypeError('getExtension broke'); return null; },
+        getParameter() { return 'Google SwiftShader'; },
+    });
+    const document = {
+        createElement: () => ({ getContext: () => gl() }),
+        getElementById: id => els[id] || null,
+        querySelectorAll: () => [],
+    };
+    const navigator = { userAgent: EDGE.ua, userAgentData: { brands: EDGE.brands.map(brand => ({ brand })) } };
+    stored = { ...stored };
+    const localStorage = {
+        getItem: k => k in stored ? stored[k] : null,
+        setItem: (k, v) => { stored[k] = v; },
+        removeItem: k => { delete stored[k]; },
+    };
+    const sources = [];
+    class Blob { constructor(parts) { sources.push(parts.join('')); } }
+    class Worker {
+        postMessage() { queueMicrotask(() => this.onmessage({ data: ratio })); }
+        terminate() {}
+    }
+    const console = { error: (...a) => errors.push(a), warn: (...a) => warnings.push(a), log() {} };
+    const ctx = vm.createContext({ document, navigator, localStorage, Worker, Blob, console,
+        URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} }, location: { hostname: 'example.test' },
+        setTimeout, clearTimeout, queueMicrotask, performance });
+    ctx.window = ctx;
+    return { ctx, els, errors, warnings, sources, stored,
+             run: code => vm.runInContext(code, ctx) };
+}
+
+test('a throw in the graphics check is logged, and the rest of the page still runs', async () => {
+    const w = noticesWindow({ glThrows: true });
+    w.run(noticesScript);
+    assert.equal(w.errors.length, 1, 'logged once');
+    assert.match(w.errors[0][0], /^Graphics: /);
+    assert.equal(w.errors[0][1].message, 'getExtension broke', 'with what was thrown');
+    assert.equal(w.els['gfx-notice'].hidden, true, 'no notice');
+    assert.equal(w.run('gfxCheck'), null);
+    assert.equal(w.run('privacyOn'), false);
+    // The rest of the script ran: its settings are set and Edge's test started.
+    assert.equal(w.run('JIT_SLOW_RATIO'), 4);
+    assert.equal(w.run('JIT_NOTICE_SETTING'), 'jkdf2mp-jit-notice');
+    assert.equal(w.sources.length, 1, "Edge's test started");
+    await settle();
+    assert.equal(w.run('jitRatio'), 13.5);
+    assert.equal(w.els['jit-notice'].hidden, false);
+    // A later script: the game folder prompt's notices.
+    w.run(pickerNotices);
+    assert.equal(w.els['picker-gfx'].hidden, true);
+    assert.equal(w.els['picker-jit'].hidden, false);
+    assert.equal(w.els['picker-privacy'].hidden, true);
+    assert.equal(w.errors.length, 1, 'nothing else went wrong');
+});
+
+test("a throw in the start of Edge's test is logged, and the rest of the page still runs", () => {
+    const w = noticesWindow({ missing: ['jit-notice'], stored: { 'jkdf2mp-jit-slow': '13.5' } });
+    w.run(noticesScript);
+    assert.equal(w.errors.length, 1, 'logged once');
+    assert.match(w.errors[0][0], /enhanced security/);
+    assert.ok(w.errors[0][1] instanceof w.run('TypeError'));
+    assert.equal(w.els['gfx-notice'].hidden, false, 'the graphics notice is up as usual');
+    assert.equal(w.run('gfxCheck.state'), 'software');
+    assert.equal(w.run('jitRatio'), null);
+    w.run(pickerNotices);
+    assert.equal(w.els['picker-gfx'].hidden, false);
+    assert.equal(w.els['picker-jit'].hidden, true);
+    assert.equal(w.errors.length, 1);
+});
+
+test('with nothing wrong, the script after the notices logs no error', async () => {
+    const w = noticesWindow();
+    w.run(noticesScript);
+    await settle();
+    w.run(pickerNotices);
+    assert.deepEqual(w.errors, []);
+    assert.equal(w.els['gfx-notice'].hidden, false);
+    assert.equal(w.els['jit-notice'].hidden, false);
+    assert.equal(w.stored['jkdf2mp-jit-slow'], '13.5');
 });
 
 let failed = 0;

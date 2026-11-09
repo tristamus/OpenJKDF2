@@ -1505,6 +1505,405 @@
           <p class="fine move-status">A window from the old address opens for a moment to hand them over. Nothing
             goes through our server, and the old address keeps its copy.</p>
         </section>
+        <script>
+      // ---- The notices above, filled in here, before the rest of the page
+      // is read, so they are there from its first paint and never push it
+      // down. The game folder prompt shows them too (openPicker).
+
+      // What the game can't run without, checked before anyone picks a folder,
+      // so players see what's wrong instead of a page that never starts.
+      function browserProblem() {
+        if (typeof WebAssembly !== 'object') {
+          return "This browser has WebAssembly turned off, and the game needs it. " +
+                 "Use a current Chrome or Firefox.";
+        }
+        return null;
+      }
+
+      // ---- Graphics acceleration. With it off, the browser draws the game on
+      // the CPU (SwiftShader, or WARP on Windows): 3 fps on a 4-core computer,
+      // half speed with 12 cores busy on a 24-thread one. Or it can't draw it at
+      // all (Edge and Chrome on Linux since they dropped SwiftShader for web
+      // pages). Players are told how to turn it on, only when it's off.
+      var SOFTWARE_GL = /SwiftShader|llvmpipe|softpipe|lavapipe|Basic Render|\bWARP\b|Software Render|Software Rasterizer|Mesa OffScreen|GDI Generic/i;
+      // Names a real graphics card or driver. Anything else (a hidden name,
+      // as with Firefox's fingerprinting protection) is checked another way.
+      var NAMED_GL = /ANGLE|NVIDIA|GeForce|Quadro|AMD|Radeon|Intel|Apple|Adreno|Mali|PowerVR|Mesa|Direct3D|OpenGL|Metal|Vulkan/i;
+
+      function webgl2(attrs) {
+        try { return document.createElement('canvas').getContext('webgl2', attrs); } catch (e) { return null; }
+      }
+
+      // Lets go of a test context now rather than when it's collected, as
+      // browsers only keep a few contexts alive and the game needs one.
+      function releaseGl(gl) {
+        var lose = gl.getExtension('WEBGL_lose_context');
+        if (lose) lose.loseContext();
+      }
+
+      // What draws for a WebGL context: the graphics card or driver, as far as
+      // the browser tells.
+      function glRenderer(gl) {
+        try {
+          var info = gl.getExtension('WEBGL_debug_renderer_info');
+          return String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+        } catch (e) {
+          return '';
+        }
+      }
+
+      // 'none': no WebGL 2 at all. 'software': drawn without the graphics card.
+      function graphicsCheck() {
+        var gl = webgl2();
+        if (!gl) return { state: 'none', renderer: '' };
+        var renderer = glRenderer(gl);
+        releaseGl(gl);
+        if (SOFTWARE_GL.test(renderer)) return { state: 'software', renderer: renderer };
+        if (!NAMED_GL.test(renderer)) {
+          var hw = webgl2({ failIfMajorPerformanceCaveat: true });
+          if (!hw) return { state: 'software', renderer: renderer };
+          releaseGl(hw);
+        }
+        return { state: 'ok', renderer: renderer };
+      }
+
+      // Where each browser keeps the setting, and how it restarts. Pages
+      // can't open these addresses, so players copy one into a new tab.
+      // Edge 155 shows no Restart button after the switch; edge://restart
+      // typed in the address bar restarts it with its tabs.
+      var GFX_HOW = {
+        edge: { name: 'Microsoft Edge', address: 'edge://settings/system/manageSystem',
+                toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                restart: 'Restart Edge: go to <code>edge://restart</code> the same way. Your tabs reopen.' },
+        chrome: { name: 'Chrome', address: 'chrome://settings/system',
+                  toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                  restart: 'Click <b>Relaunch</b>.' },
+        brave: { name: 'Brave', address: 'brave://settings/system',
+                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                 restart: 'Click <b>Relaunch</b>.' },
+        opera: { name: 'Opera', address: 'opera://settings/system',
+                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                 restart: 'Click <b>Relaunch</b>.' },
+        operagx: { name: 'Opera GX', address: 'opera://settings/system',
+                   toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
+                   restart: 'Click <b>Relaunch</b>.' },
+        firefox: { name: 'Firefox', address: 'about:preferences#general',
+                   toggle: 'Under Performance, untick <b>Use recommended performance settings</b>, ' +
+                           'then tick <b>Use hardware acceleration when available</b>.',
+                   restart: 'Close Firefox completely and open it again.' },
+        // Safari has WebGL 2 from version 15, and comes with macOS and iOS updates.
+        safari: { name: 'Safari', heading: 'Update Safari to play',
+                  steps: 'Safari 15 and later can draw it. Update macOS, or iOS on an iPhone or iPad, ' +
+                         'which updates Safari, then come back to this page.' }
+      };
+
+      function browserKind() {
+        var brands = ((navigator.userAgentData && navigator.userAgentData.brands) || [])
+          .map(function(b) { return b.brand; });
+        var ua = navigator.userAgent;
+        if (brands.indexOf('Microsoft Edge') >= 0 || /\bEdg\//.test(ua)) return 'edge';
+        if (/Firefox\//.test(ua)) return 'firefox';
+        if (navigator.brave) return 'brave';
+        // Opera and Opera GX name themselves in the brands, and both in the user agent (OPR).
+        if (brands.indexOf('Opera GX') >= 0) return 'operagx';
+        if (brands.indexOf('Opera') >= 0 || /\bOPR\//.test(ua)) return 'opera';
+        if (brands.indexOf('Google Chrome') >= 0) return 'chrome';
+        if (/Version\/[\d.]+.*Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS|FxiOS|EdgiOS|OPR\//.test(ua)) return 'safari';
+        return null;
+      }
+
+      // Fills a notice with the steps for this browser, or hides it.
+      function showGfxNotice(el, gfx) {
+        if (!gfx || gfx.state === 'ok') {
+          el.hidden = true;
+          return;
+        }
+        var how = GFX_HOW[browserKind()];
+        var name = how ? how.name : 'Your browser';
+        var usually = how && how.steps ? '' : " Usually that's because graphics acceleration is turned off.";
+        var html = gfx.state === 'none'
+          ? '<h2>' + (how && how.heading || 'Turn on graphics acceleration to play') + '</h2><p>' + name +
+            " can't draw 3D graphics (WebGL 2) right now, and the game needs them." + usually + '</p>'
+          : '<h2>' + (how && how.heading || 'Turn on graphics acceleration') + '</h2><p>' + name +
+            ' is drawing without your graphics card, so the game runs slower and works your processor hard. ' +
+            'On many computers that means only a few frames per second.' + usually + '</p>';
+        if (how && how.steps) {
+          html += '<p>' + how.steps + '</p>';
+        } else if (how) {
+          html += '<ol><li>Open a new tab and go to <code>' + how.address + '</code>' +
+                  '<button class="copy" type="button">Copy</button></li>' +
+                  '<li>' + how.toggle + '</li>' +
+                  '<li>' + how.restart + ' Then come back to this page.</li></ol>';
+        } else {
+          html += "<p>Open your browser's settings, search for <b>acceleration</b>, turn on graphics " +
+                  '(hardware) acceleration, then restart the browser and come back to this page.</p>';
+        }
+        html += '<p class="fine">' + (how && how.steps ? '' : 'Already on? Update your graphics driver, then restart ' +
+                (how ? how.name : 'the browser') + '.') + '<span class="renderer"></span></p>';
+        el.innerHTML = html;
+        if (gfx.renderer)
+          el.querySelector('.renderer').textContent = ' Drawing with: ' + gfx.renderer + '.';
+        var copy = el.querySelector('.copy');
+        if (copy) {
+          copy.addEventListener('click', function() {
+            var done = function() { copy.textContent = 'Copied'; };
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(how.address).then(done, function() { selectText(el.querySelector('code')); });
+            } else {
+              selectText(el.querySelector('code'));
+            }
+          });
+        }
+        el.hidden = false;
+      }
+
+      // ---- Resist-fingerprinting (Firefox's privacy.resistFingerprinting, on
+      // in LibreWolf and Mullvad Browser) hides the graphics card's name, which
+      // then reads "Mozilla", holds WebGL to 2048 pixels across (16384 without
+      // it), steps the clock by 16.7 ms and scrambles what's read back from the
+      // screen, so screenshots come out as noise. A graphics card that really
+      // stops at 2048 doesn't hide its name, and only this steps the clock so,
+      // so the note needs all three. Timing the clock takes up to two of its
+      // steps (33 ms), and only where the first two signs are there.
+      function privacyMode(renderer) {
+        if (renderer !== 'Mozilla' || !/Firefox\//.test(navigator.userAgent)) return false;
+        var gl = webgl2();
+        if (!gl) return false;
+        var most = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+        releaseGl(gl);
+        if (!(most <= 2048)) return false;
+        var last = performance.now(), steps = [];
+        for (var i = 0; i < 1e7 && steps.length < 2; i++) {
+          var now = performance.now();
+          if (now !== last) {
+            steps.push(now - last);
+            last = now;
+          }
+        }
+        return steps.length === 2 && Math.min(steps[0], steps[1]) >= 16;
+      }
+
+      function showPrivacyNote(el, on) {
+        if (!on) {
+          el.hidden = true;
+          return;
+        }
+        el.innerHTML = '<h2>Privacy protection limits the game here</h2>' +
+          "<p>This browser's resist-fingerprinting is on, as in LibreWolf and Mullvad Browser. It holds the " +
+          "game's 3D graphics to 2048 pixels across, so a bigger window or fullscreen is drawn at a lower " +
+          'resolution, and screenshots come out as noise.</p>' +
+          '<p class="fine">To turn it off for this site only, go to <code>about:config</code> and add ' +
+          '<code class="site"></code> to <code>privacy.resistFingerprinting.exemptedDomains</code>, then reload ' +
+          'this page.</p>';
+        el.querySelector('.site').textContent = location.hostname;
+        el.hidden = false;
+      }
+
+      function selectText(node) {
+        var range = document.createRange();
+        range.selectNodeContents(node);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+
+      // Checked once, when the page opens; a restart of the browser reloads it.
+      // This script runs before the page's error handling is set up (and a
+      // throw would skip the rest of it), so whatever goes wrong here is
+      // logged and the page goes on without the notice.
+      var gfxCheck = null, privacyOn = false;
+      try {
+        gfxCheck = browserProblem() ? null : graphicsCheck();
+        showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
+        privacyOn = !!gfxCheck && gfxCheck.state !== 'none' && privacyMode(gfxCheck.renderer);
+        if (privacyOn) console.warn('Graphics: resist-fingerprinting is on, which holds WebGL to 2048 pixels');
+      } catch (e) {
+        console.error('Graphics: the check when the page opened failed', e);
+      }
+
+      // ---- When the game can't get its 3D graphics (WebGL 2) at all, the
+      // engine opens SDL's error box ("Could not create webgl context") and
+      // stops. Often the browser turned the page down: after the graphics
+      // driver crashes or resets, Chrome, Edge and Opera refuse 3D graphics to
+      // the site until it's reloaded. Otherwise acceleration is off, or the
+      // graphics card or its driver is blocked for WebGL 2. The box gets steps
+      // for those, in that order, and the browser's own reason.
+      function showGlRefused() {
+        if (showGlRefused.done) return;
+        showGlRefused.done = true;
+        var how = GFX_HOW[browserKind()];
+        var steps = '<li>Reload this page.<button class="reload" type="button">Reload</button> After a graphics ' +
+                    "driver crash or reset, Chrome, Edge and Opera stop a site's 3D graphics until it's reloaded.</li>";
+        if (how && how.steps) {
+          steps += '<li>' + how.steps + '</li>';
+        } else {
+          steps += '<li>Close ' + (how ? how.name : 'the browser') + ' completely, every window, and open it again.</li>';
+          steps += how ? '<li>Check graphics acceleration is on: open a new tab and go to <code>' + how.address +
+                         '</code>. ' + how.toggle + ' ' + how.restart + '</li>'
+                       : "<li>Check graphics acceleration is on: open the browser's settings, search for " +
+                         '<b>acceleration</b>, turn it on and restart the browser.</li>';
+          steps += '<li>Update your graphics driver, then restart the computer.</li>';
+        }
+        var el = document.createElement('section');
+        el.className = 'gfx-notice';
+        el.innerHTML = '<p>' + (how ? how.name : 'Your browser') + " wouldn't let the game draw 3D graphics " +
+                       '(WebGL 2). Try these in order:</p><ol>' + steps + '</ol><p class="fine"></p>';
+        if (Module.jkGlRefused) el.querySelector('.fine').textContent = 'The browser said: ' + Module.jkGlRefused;
+        el.querySelector('.reload').addEventListener('click', function() {
+          leaveGuard = false;
+          location.reload();
+        });
+        console.warn('Graphics: no WebGL 2 context' + (Module.jkGlRefused ? ' (' + Module.jkGlRefused + ')' : ''));
+        // The box opens once the engine has tried every context it asks for. If
+        // a later try worked, there's no box and nothing to add.
+        var tries = 0;
+        (function place() {
+          var box = document.querySelector('dialog.SDL3_messagebox[open]');
+          if (box) box.insertBefore(el, box.querySelector('button'));
+          else if (++tries < 50) setTimeout(place, 100);
+        })();
+      }
+
+      // ---- Edge's enhanced security. Where it applies (every site on Strict,
+      // unfamiliar sites on Balanced; it's off by default) Edge turns off its
+      // just-in-time compiler, so the game's WebAssembly runs in an interpreter.
+      // Pages can't ask whether it's on, so a short speed test in a worker
+      // tells: a WebAssembly loop timed against the browser's own sort, which
+      // isn't slowed. In Edge 155 the loop took 0.5 to 0.8 times as long as
+      // the sort normally, and on Strict 8 times on Windows and 13 to 15 on
+      // Linux; back to 0.8 once it was turned off for the site.
+      var JIT_SLOW_RATIO = 4;
+      var JIT_NOTICE_SETTING = 'jkdf2mp-jit-notice';
+
+      // Runs in the worker, so it uses nothing else from this page. f(n) is n
+      // rounds of add, multiply and xor.
+      function jitBench() {
+        var body = [0x01,0x02,0x7f, 0x02,0x40, 0x03,0x40,
+          0x20,0x02,0x20,0x00,0x4e,0x0d,0x01,
+          0x20,0x01,0x20,0x02,0x6a,0x41,0x03,0x6c,0x41,0x07,0x73,0x21,0x01,
+          0x20,0x02,0x41,0x01,0x6a,0x21,0x02,
+          0x0c,0x00, 0x0b,0x0b, 0x20,0x01,0x0b];
+        var bytes = new Uint8Array([0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+          0x01,0x06,0x01,0x60,0x01,0x7f,0x01,0x7f, 0x03,0x02,0x01,0x00,
+          0x07,0x05,0x01,0x01,0x66,0x00,0x00,
+          0x0a, body.length + 2, 0x01, body.length].concat(body));
+        function sortMs() {
+          var a = new Uint32Array(1 << 18), x = 12345;
+          for (var i = 0; i < a.length; i++) { x = (x * 1103515245 + 12345) >>> 0; a[i] = x; }
+          var t = performance.now();
+          a.sort();
+          return performance.now() - t;
+        }
+        return WebAssembly.instantiate(bytes).then(function(m) {
+          var f = m.instance.exports.f;
+          f(1000);
+          var loop = Infinity;
+          for (var i = 0; i < 3; i++) {
+            var t = performance.now();
+            f(4000000);
+            loop = Math.min(loop, performance.now() - t);
+          }
+          return loop / Math.max(Math.min(sortMs(), sortMs()), 0.1);
+        });
+      }
+
+      function jitWorkerSource() {
+        return 'onmessage = function() { (' + jitBench + ')().then(' +
+               'function(r) { postMessage(r); }, function() { postMessage(null); }); };';
+      }
+
+      // The loop's time over the sort's, or null when the test can't run or
+      // takes over 10 seconds.
+      function jitCheck() {
+        return new Promise(function(resolve) {
+          var url = null, worker = null, timer = null;
+          function done(r) {
+            clearTimeout(timer);
+            if (worker) worker.terminate();
+            if (url) URL.revokeObjectURL(url);
+            resolve(typeof r === 'number' && isFinite(r) ? r : null);
+          }
+          try {
+            url = URL.createObjectURL(new Blob([jitWorkerSource()], { type: 'text/javascript' }));
+            worker = new Worker(url);
+          } catch (e) {
+            done(null);
+            return;
+          }
+          worker.onmessage = function(ev) { done(ev.data); };
+          worker.onerror = function() { done(null); };
+          timer = setTimeout(function() { done(null); }, 10000);
+          worker.postMessage('go');
+        });
+      }
+
+      // The last test's ratio when it was slow, kept so the notice shows from
+      // the start next time, not when the test ends (it would push the page
+      // down). A fast test forgets it; one that couldn't run leaves it.
+      var JIT_SLOW_SETTING = 'jkdf2mp-jit-slow';
+      function jitLastSlow() {
+        try {
+          var r = Number(localStorage.getItem(JIT_SLOW_SETTING));
+          return r > JIT_SLOW_RATIO ? r : null;
+        } catch (e) {
+          return null;
+        }
+      }
+      function rememberJit(ratio) {
+        try {
+          if (ratio > JIT_SLOW_RATIO) localStorage.setItem(JIT_SLOW_SETTING, String(ratio));
+          else if (ratio !== null) localStorage.removeItem(JIT_SLOW_SETTING);
+        } catch (e) {}
+      }
+
+      function jitNoticeHidden() {
+        try { return localStorage.getItem(JIT_NOTICE_SETTING) === 'hidden'; } catch (e) { return false; }
+      }
+
+      // Edge only: other browsers have no such setting, so a slow test there
+      // means something this notice can't fix.
+      function showJitNotice(el, ratio) {
+        if (!(ratio > JIT_SLOW_RATIO) || browserKind() !== 'edge' || jitNoticeHidden()) {
+          el.hidden = true;
+          return;
+        }
+        el.innerHTML = '<h2>Turn off enhanced security for this site</h2>' +
+          "<p>Microsoft Edge's enhanced security is on for this site. It turns off the part of Edge " +
+          'that makes web games like this one run fast, so the game runs slower than it should.</p>' +
+          '<ol><li>Click the lock at the left of the address bar.</li>' +
+          '<li>Click <b>Enhanced security is active for this site</b>.</li>' +
+          '<li>Turn off <b>Use enhanced security for this site</b>, then reload this page.</li></ol>' +
+          '<p class="fine">This comes from a quick speed test, which a busy computer can throw off. ' +
+          "If Edge doesn't show that option, enhanced security is already off here." +
+          '<button class="hide" type="button">Hide</button></p>';
+        el.querySelector('.hide').addEventListener('click', function() {
+          try { localStorage.setItem(JIT_NOTICE_SETTING, 'hidden'); } catch (e) {}
+          document.querySelectorAll('.jit-notice').forEach(function(n) { n.hidden = true; });
+        });
+        el.hidden = false;
+      }
+
+      // Timed once, when the page opens, in Edge only. The game folder prompt
+      // shows the notice too once the test is done. Until then the page shows
+      // what the last test said. Like the graphics check, logged if it fails.
+      var jitRatio = null;
+      try {
+        if (!browserProblem() && browserKind() === 'edge') {
+          var jitLast = jitLastSlow();
+          if (jitLast !== null) showJitNotice(document.getElementById('jit-notice'), jitLast);
+          jitCheck().then(function(r) {
+            jitRatio = r;
+            rememberJit(r);
+            var el = document.getElementById('jit-notice');
+            // Still slow, or not known this time: what shows stays as it is.
+            if (jitLast !== null && !el.hidden && (r === null || r > JIT_SLOW_RATIO)) return;
+            showJitNotice(el, r);
+          });
+        }
+      } catch (e) {
+        console.error("OpenJKDF2: Edge's enhanced security test failed to start", e);
+      }
+        </script>
 
         <div class="layout">
           <aside class="sidebar">
@@ -3376,362 +3775,6 @@
           return "On a phone or tablet, you need the game files on it and a keyboard and mouse attached.";
         }
         return null;
-      }
-
-      // What the game can't run without, checked before anyone picks a folder,
-      // so players see what's wrong instead of a page that never starts.
-      function browserProblem() {
-        if (typeof WebAssembly !== 'object') {
-          return "This browser has WebAssembly turned off, and the game needs it. " +
-                 "Use a current Chrome or Firefox.";
-        }
-        return null;
-      }
-
-      // ---- Graphics acceleration. With it off, the browser draws the game on
-      // the CPU (SwiftShader, or WARP on Windows): 3 fps on a 4-core computer,
-      // half speed with 12 cores busy on a 24-thread one. Or it can't draw it at
-      // all (Edge and Chrome on Linux since they dropped SwiftShader for web
-      // pages). Players are told how to turn it on, only when it's off.
-      var SOFTWARE_GL = /SwiftShader|llvmpipe|softpipe|lavapipe|Basic Render|\bWARP\b|Software Render|Software Rasterizer|Mesa OffScreen|GDI Generic/i;
-      // Names a real graphics card or driver. Anything else (a hidden name,
-      // as with Firefox's fingerprinting protection) is checked another way.
-      var NAMED_GL = /ANGLE|NVIDIA|GeForce|Quadro|AMD|Radeon|Intel|Apple|Adreno|Mali|PowerVR|Mesa|Direct3D|OpenGL|Metal|Vulkan/i;
-
-      function webgl2(attrs) {
-        try { return document.createElement('canvas').getContext('webgl2', attrs); } catch (e) { return null; }
-      }
-
-      // Lets go of a test context now rather than when it's collected, as
-      // browsers only keep a few contexts alive and the game needs one.
-      function releaseGl(gl) {
-        var lose = gl.getExtension('WEBGL_lose_context');
-        if (lose) lose.loseContext();
-      }
-
-      // What draws for a WebGL context: the graphics card or driver, as far as
-      // the browser tells.
-      function glRenderer(gl) {
-        try {
-          var info = gl.getExtension('WEBGL_debug_renderer_info');
-          return String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
-        } catch (e) {
-          return '';
-        }
-      }
-
-      // 'none': no WebGL 2 at all. 'software': drawn without the graphics card.
-      function graphicsCheck() {
-        var gl = webgl2();
-        if (!gl) return { state: 'none', renderer: '' };
-        var renderer = glRenderer(gl);
-        releaseGl(gl);
-        if (SOFTWARE_GL.test(renderer)) return { state: 'software', renderer: renderer };
-        if (!NAMED_GL.test(renderer)) {
-          var hw = webgl2({ failIfMajorPerformanceCaveat: true });
-          if (!hw) return { state: 'software', renderer: renderer };
-          releaseGl(hw);
-        }
-        return { state: 'ok', renderer: renderer };
-      }
-
-      // Where each browser keeps the setting, and how it restarts. Pages
-      // can't open these addresses, so players copy one into a new tab.
-      // Edge 155 shows no Restart button after the switch; edge://restart
-      // typed in the address bar restarts it with its tabs.
-      var GFX_HOW = {
-        edge: { name: 'Microsoft Edge', address: 'edge://settings/system/manageSystem',
-                toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
-                restart: 'Restart Edge: go to <code>edge://restart</code> the same way. Your tabs reopen.' },
-        chrome: { name: 'Chrome', address: 'chrome://settings/system',
-                  toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
-                  restart: 'Click <b>Relaunch</b>.' },
-        brave: { name: 'Brave', address: 'brave://settings/system',
-                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
-                 restart: 'Click <b>Relaunch</b>.' },
-        opera: { name: 'Opera', address: 'opera://settings/system',
-                 toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
-                 restart: 'Click <b>Relaunch</b>.' },
-        operagx: { name: 'Opera GX', address: 'opera://settings/system',
-                   toggle: 'Turn on <b>Use graphics acceleration when available</b>.',
-                   restart: 'Click <b>Relaunch</b>.' },
-        firefox: { name: 'Firefox', address: 'about:preferences#general',
-                   toggle: 'Under Performance, untick <b>Use recommended performance settings</b>, ' +
-                           'then tick <b>Use hardware acceleration when available</b>.',
-                   restart: 'Close Firefox completely and open it again.' },
-        // Safari has WebGL 2 from version 15, and comes with macOS and iOS updates.
-        safari: { name: 'Safari', heading: 'Update Safari to play',
-                  steps: 'Safari 15 and later can draw it. Update macOS, or iOS on an iPhone or iPad, ' +
-                         'which updates Safari, then come back to this page.' }
-      };
-
-      function browserKind() {
-        var brands = ((navigator.userAgentData && navigator.userAgentData.brands) || [])
-          .map(function(b) { return b.brand; });
-        var ua = navigator.userAgent;
-        if (brands.indexOf('Microsoft Edge') >= 0 || /\bEdg\//.test(ua)) return 'edge';
-        if (/Firefox\//.test(ua)) return 'firefox';
-        if (navigator.brave) return 'brave';
-        // Opera and Opera GX name themselves in the brands, and both in the user agent (OPR).
-        if (brands.indexOf('Opera GX') >= 0) return 'operagx';
-        if (brands.indexOf('Opera') >= 0 || /\bOPR\//.test(ua)) return 'opera';
-        if (brands.indexOf('Google Chrome') >= 0) return 'chrome';
-        if (/Version\/[\d.]+.*Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS|FxiOS|EdgiOS|OPR\//.test(ua)) return 'safari';
-        return null;
-      }
-
-      // Fills a notice with the steps for this browser, or hides it.
-      function showGfxNotice(el, gfx) {
-        if (!gfx || gfx.state === 'ok') {
-          el.hidden = true;
-          return;
-        }
-        var how = GFX_HOW[browserKind()];
-        var name = how ? how.name : 'Your browser';
-        var usually = how && how.steps ? '' : " Usually that's because graphics acceleration is turned off.";
-        var html = gfx.state === 'none'
-          ? '<h2>' + (how && how.heading || 'Turn on graphics acceleration to play') + '</h2><p>' + name +
-            " can't draw 3D graphics (WebGL 2) right now, and the game needs them." + usually + '</p>'
-          : '<h2>' + (how && how.heading || 'Turn on graphics acceleration') + '</h2><p>' + name +
-            ' is drawing without your graphics card, so the game runs slower and works your processor hard. ' +
-            'On many computers that means only a few frames per second.' + usually + '</p>';
-        if (how && how.steps) {
-          html += '<p>' + how.steps + '</p>';
-        } else if (how) {
-          html += '<ol><li>Open a new tab and go to <code>' + how.address + '</code>' +
-                  '<button class="copy" type="button">Copy</button></li>' +
-                  '<li>' + how.toggle + '</li>' +
-                  '<li>' + how.restart + ' Then come back to this page.</li></ol>';
-        } else {
-          html += "<p>Open your browser's settings, search for <b>acceleration</b>, turn on graphics " +
-                  '(hardware) acceleration, then restart the browser and come back to this page.</p>';
-        }
-        html += '<p class="fine">' + (how && how.steps ? '' : 'Already on? Update your graphics driver, then restart ' +
-                (how ? how.name : 'the browser') + '.') + '<span class="renderer"></span></p>';
-        el.innerHTML = html;
-        if (gfx.renderer)
-          el.querySelector('.renderer').textContent = ' Drawing with: ' + gfx.renderer + '.';
-        var copy = el.querySelector('.copy');
-        if (copy) {
-          copy.addEventListener('click', function() {
-            var done = function() { copy.textContent = 'Copied'; };
-            if (navigator.clipboard) {
-              navigator.clipboard.writeText(how.address).then(done, function() { selectText(el.querySelector('code')); });
-            } else {
-              selectText(el.querySelector('code'));
-            }
-          });
-        }
-        el.hidden = false;
-      }
-
-      // ---- Resist-fingerprinting (Firefox's privacy.resistFingerprinting, on
-      // in LibreWolf and Mullvad Browser) hides the graphics card's name, which
-      // then reads "Mozilla", holds WebGL to 2048 pixels across (16384 without
-      // it), steps the clock by 16.7 ms and scrambles what's read back from the
-      // screen, so screenshots come out as noise. A graphics card that really
-      // stops at 2048 doesn't hide its name, and only this steps the clock so,
-      // so the note needs all three. Timing the clock takes up to two of its
-      // steps (33 ms), and only where the first two signs are there.
-      function privacyMode(renderer) {
-        if (renderer !== 'Mozilla' || !/Firefox\//.test(navigator.userAgent)) return false;
-        var gl = webgl2();
-        if (!gl) return false;
-        var most = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
-        releaseGl(gl);
-        if (!(most <= 2048)) return false;
-        var last = performance.now(), steps = [];
-        for (var i = 0; i < 1e7 && steps.length < 2; i++) {
-          var now = performance.now();
-          if (now !== last) {
-            steps.push(now - last);
-            last = now;
-          }
-        }
-        return steps.length === 2 && Math.min(steps[0], steps[1]) >= 16;
-      }
-
-      function showPrivacyNote(el, on) {
-        if (!on) {
-          el.hidden = true;
-          return;
-        }
-        el.innerHTML = '<h2>Privacy protection limits the game here</h2>' +
-          "<p>This browser's resist-fingerprinting is on, as in LibreWolf and Mullvad Browser. It holds the " +
-          "game's 3D graphics to 2048 pixels across, so a bigger window or fullscreen is drawn at a lower " +
-          'resolution, and screenshots come out as noise.</p>' +
-          '<p class="fine">To turn it off for this site only, go to <code>about:config</code> and add ' +
-          '<code class="site"></code> to <code>privacy.resistFingerprinting.exemptedDomains</code>, then reload ' +
-          'this page.</p>';
-        el.querySelector('.site').textContent = location.hostname;
-        el.hidden = false;
-      }
-
-      function selectText(node) {
-        var range = document.createRange();
-        range.selectNodeContents(node);
-        var sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-      }
-
-      // Checked once, when the page opens; a restart of the browser reloads it.
-      var gfxCheck = browserProblem() ? null : graphicsCheck();
-      showGfxNotice(document.getElementById('gfx-notice'), gfxCheck);
-      var privacyOn = !!gfxCheck && gfxCheck.state !== 'none' && privacyMode(gfxCheck.renderer);
-      if (privacyOn) console.warn('Graphics: resist-fingerprinting is on, which holds WebGL to 2048 pixels');
-
-      // ---- When the game can't get its 3D graphics (WebGL 2) at all, the
-      // engine opens SDL's error box ("Could not create webgl context") and
-      // stops. Often the browser turned the page down: after the graphics
-      // driver crashes or resets, Chrome, Edge and Opera refuse 3D graphics to
-      // the site until it's reloaded. Otherwise acceleration is off, or the
-      // graphics card or its driver is blocked for WebGL 2. The box gets steps
-      // for those, in that order, and the browser's own reason.
-      function showGlRefused() {
-        if (showGlRefused.done) return;
-        showGlRefused.done = true;
-        var how = GFX_HOW[browserKind()];
-        var steps = '<li>Reload this page.<button class="reload" type="button">Reload</button> After a graphics ' +
-                    "driver crash or reset, Chrome, Edge and Opera stop a site's 3D graphics until it's reloaded.</li>";
-        if (how && how.steps) {
-          steps += '<li>' + how.steps + '</li>';
-        } else {
-          steps += '<li>Close ' + (how ? how.name : 'the browser') + ' completely, every window, and open it again.</li>';
-          steps += how ? '<li>Check graphics acceleration is on: open a new tab and go to <code>' + how.address +
-                         '</code>. ' + how.toggle + ' ' + how.restart + '</li>'
-                       : "<li>Check graphics acceleration is on: open the browser's settings, search for " +
-                         '<b>acceleration</b>, turn it on and restart the browser.</li>';
-          steps += '<li>Update your graphics driver, then restart the computer.</li>';
-        }
-        var el = document.createElement('section');
-        el.className = 'gfx-notice';
-        el.innerHTML = '<p>' + (how ? how.name : 'Your browser') + " wouldn't let the game draw 3D graphics " +
-                       '(WebGL 2). Try these in order:</p><ol>' + steps + '</ol><p class="fine"></p>';
-        if (Module.jkGlRefused) el.querySelector('.fine').textContent = 'The browser said: ' + Module.jkGlRefused;
-        el.querySelector('.reload').addEventListener('click', function() {
-          leaveGuard = false;
-          location.reload();
-        });
-        console.warn('Graphics: no WebGL 2 context' + (Module.jkGlRefused ? ' (' + Module.jkGlRefused + ')' : ''));
-        // The box opens once the engine has tried every context it asks for. If
-        // a later try worked, there's no box and nothing to add.
-        var tries = 0;
-        (function place() {
-          var box = document.querySelector('dialog.SDL3_messagebox[open]');
-          if (box) box.insertBefore(el, box.querySelector('button'));
-          else if (++tries < 50) setTimeout(place, 100);
-        })();
-      }
-
-      // ---- Edge's enhanced security. Where it applies (every site on Strict,
-      // unfamiliar sites on Balanced; it's off by default) Edge turns off its
-      // just-in-time compiler, so the game's WebAssembly runs in an interpreter.
-      // Pages can't ask whether it's on, so a short speed test in a worker
-      // tells: a WebAssembly loop timed against the browser's own sort, which
-      // isn't slowed. In Edge 155 the loop took 0.5 to 0.8 times as long as
-      // the sort normally, and on Strict 8 times on Windows and 13 to 15 on
-      // Linux; back to 0.8 once it was turned off for the site.
-      var JIT_SLOW_RATIO = 4;
-      var JIT_NOTICE_SETTING = 'jkdf2mp-jit-notice';
-
-      // Runs in the worker, so it uses nothing else from this page. f(n) is n
-      // rounds of add, multiply and xor.
-      function jitBench() {
-        var body = [0x01,0x02,0x7f, 0x02,0x40, 0x03,0x40,
-          0x20,0x02,0x20,0x00,0x4e,0x0d,0x01,
-          0x20,0x01,0x20,0x02,0x6a,0x41,0x03,0x6c,0x41,0x07,0x73,0x21,0x01,
-          0x20,0x02,0x41,0x01,0x6a,0x21,0x02,
-          0x0c,0x00, 0x0b,0x0b, 0x20,0x01,0x0b];
-        var bytes = new Uint8Array([0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
-          0x01,0x06,0x01,0x60,0x01,0x7f,0x01,0x7f, 0x03,0x02,0x01,0x00,
-          0x07,0x05,0x01,0x01,0x66,0x00,0x00,
-          0x0a, body.length + 2, 0x01, body.length].concat(body));
-        function sortMs() {
-          var a = new Uint32Array(1 << 18), x = 12345;
-          for (var i = 0; i < a.length; i++) { x = (x * 1103515245 + 12345) >>> 0; a[i] = x; }
-          var t = performance.now();
-          a.sort();
-          return performance.now() - t;
-        }
-        return WebAssembly.instantiate(bytes).then(function(m) {
-          var f = m.instance.exports.f;
-          f(1000);
-          var loop = Infinity;
-          for (var i = 0; i < 3; i++) {
-            var t = performance.now();
-            f(4000000);
-            loop = Math.min(loop, performance.now() - t);
-          }
-          return loop / Math.max(Math.min(sortMs(), sortMs()), 0.1);
-        });
-      }
-
-      function jitWorkerSource() {
-        return 'onmessage = function() { (' + jitBench + ')().then(' +
-               'function(r) { postMessage(r); }, function() { postMessage(null); }); };';
-      }
-
-      // The loop's time over the sort's, or null when the test can't run or
-      // takes over 10 seconds.
-      function jitCheck() {
-        return new Promise(function(resolve) {
-          var url = null, worker = null, timer = null;
-          function done(r) {
-            clearTimeout(timer);
-            if (worker) worker.terminate();
-            if (url) URL.revokeObjectURL(url);
-            resolve(typeof r === 'number' && isFinite(r) ? r : null);
-          }
-          try {
-            url = URL.createObjectURL(new Blob([jitWorkerSource()], { type: 'text/javascript' }));
-            worker = new Worker(url);
-          } catch (e) {
-            done(null);
-            return;
-          }
-          worker.onmessage = function(ev) { done(ev.data); };
-          worker.onerror = function() { done(null); };
-          timer = setTimeout(function() { done(null); }, 10000);
-          worker.postMessage('go');
-        });
-      }
-
-      function jitNoticeHidden() {
-        try { return localStorage.getItem(JIT_NOTICE_SETTING) === 'hidden'; } catch (e) { return false; }
-      }
-
-      // Edge only: other browsers have no such setting, so a slow test there
-      // means something this notice can't fix.
-      function showJitNotice(el, ratio) {
-        if (!(ratio > JIT_SLOW_RATIO) || browserKind() !== 'edge' || jitNoticeHidden()) {
-          el.hidden = true;
-          return;
-        }
-        el.innerHTML = '<h2>Turn off enhanced security for this site</h2>' +
-          "<p>Microsoft Edge's enhanced security is on for this site. It turns off the part of Edge " +
-          'that makes web games like this one run fast, so the game runs slower than it should.</p>' +
-          '<ol><li>Click the lock at the left of the address bar.</li>' +
-          '<li>Click <b>Enhanced security is active for this site</b>.</li>' +
-          '<li>Turn off <b>Use enhanced security for this site</b>, then reload this page.</li></ol>' +
-          '<p class="fine">This comes from a quick speed test, which a busy computer can throw off. ' +
-          "If Edge doesn't show that option, enhanced security is already off here." +
-          '<button class="hide" type="button">Hide</button></p>';
-        el.querySelector('.hide').addEventListener('click', function() {
-          try { localStorage.setItem(JIT_NOTICE_SETTING, 'hidden'); } catch (e) {}
-          document.querySelectorAll('.jit-notice').forEach(function(n) { n.hidden = true; });
-        });
-        el.hidden = false;
-      }
-
-      // Timed once, when the page opens, in Edge only. The game folder prompt
-      // shows the notice too once the test is done.
-      var jitRatio = null;
-      if (!browserProblem() && browserKind() === 'edge') {
-        jitCheck().then(function(r) {
-          jitRatio = r;
-          showJitNotice(document.getElementById('jit-notice'), r);
-        });
       }
 
       // ---- The site moved from jkdf2mp.jkdf2mp-lobby.workers.dev to
