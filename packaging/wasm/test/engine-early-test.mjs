@@ -1,6 +1,7 @@
 // Tests for how packaging/wasm/index.html gets the engine ready early: from
-// when the player asks to play, the engine's script is preloaded and its wasm
-// downloaded and compiled (prefetchEngine), and the engine gets the compiled
+// when the player asks to play, the engine's script is downloaded into the
+// browser's cache and its wasm downloaded and compiled (prefetchEngine), and
+// the engine gets the compiled
 // wasm through Module.instantiateWasm (earlyWasm), or downloads it again as it
 // did by itself when that failed. In Node (22 or newer):
 // node packaging/wasm/test/engine-early-test.mjs
@@ -38,14 +39,22 @@ const ok = bytes => new Response(bytes, { headers: { 'content-type': 'applicatio
 const failed = status => new Response('no', { status, headers: { 'content-type': 'text/plain' } });
 const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 
-// The page's engine loading. answers: what each fetch gets, in turn (a
-// Response, or an Error to reject with); after them, the engine's wasm.
-function page({ ENGINE = 'jspi', answers = [], WebAssembly: wa = WebAssembly } = {}) {
-    const env = { fetched: [], links: [], scripts: [], stopped: [], logged: [], warned: [], engineLog: [] };
+// The page's engine loading. answers: what each fetch of the wasm gets, in
+// turn (a Response, or an Error to reject with); after them, the engine's
+// wasm. scriptAnswers: the same for the script's, which otherwise gets a
+// script.
+function page({ ENGINE = 'jspi', answers = [], scriptAnswers = [], WebAssembly: wa = WebAssembly } = {}) {
+    const env = { fetched: [], scriptFetched: [], scriptAnswered: [], links: [], scripts: [], stopped: [], logged: [],
+                  warned: [], engineLog: [] };
     let engineNow = ENGINE;
     const fetch = (url, init) => {
-        env.fetched.push({ url, credentials: init && init.credentials });
-        const a = answers.length ? answers.shift() : ok(WASM[url.startsWith('jspi/') ? 'jspi' : 'asyncify']);
+        const script = url.endsWith('.js');
+        (script ? env.scriptFetched : env.fetched).push({ url, credentials: init && init.credentials });
+        const list = script ? scriptAnswers : answers;
+        const a = list.length ? list.shift() :
+            script ? new Response('// the engine', { headers: { 'content-type': 'text/javascript' } }) :
+            ok(WASM[url.startsWith('jspi/') ? 'jspi' : 'asyncify']);
+        if (script && a instanceof Response) env.scriptAnswered.push(a);
         return a instanceof Error ? Promise.reject(a) : Promise.resolve(a);
     };
     const document = {
@@ -78,20 +87,24 @@ process.on('unhandledRejection', reason => unhandled.push(reason));
 test('nothing downloads until the player asks to play', async () => {
     const p = page();
     await settle();
-    assert.deepEqual([p.env.fetched, p.env.links, p.env.scripts], [[], [], []]);
+    assert.deepEqual([p.env.fetched, p.env.scriptFetched, p.env.links, p.env.scripts], [[], [], [], []]);
     assert.equal(p.early(), null);
 });
 
 for (const ENGINE of ['jspi', 'asyncify']) {
     const js = ENGINE === 'jspi' ? 'jspi/openjkdf2.js' : 'openjkdf2.js';
     const wasmFile = ENGINE === 'jspi' ? 'jspi/openjkdf2.wasm' : 'openjkdf2.wasm';
-    test(`${ENGINE}: Play preloads the script and compiles the wasm once, and the engine gets it`, async () => {
+    test(`${ENGINE}: Play downloads the script and compiles the wasm once, and the engine gets it`, async () => {
         const p = page({ ENGINE });
         p.prefetchEngine();
         p.prefetchEngine();
-        assert.deepEqual(p.env.links.map(l => [l.rel, l.as, l.href]), [['preload', 'script', js]]);
+        // The script into the browser's cache, asked as the script element
+        // will ask, not as a preload (which Chromium warns about).
+        assert.deepEqual(p.env.scriptFetched, [{ url: js, credentials: 'same-origin' }]);
+        assert.deepEqual(p.env.links, []);
         assert.deepEqual(p.env.fetched, [{ url: wasmFile, credentials: 'same-origin' }]);
         await settle();
+        assert.equal(p.env.scriptAnswered[0].bodyUsed, true, 'the script is read');
         p.loadEngine(false);
         assert.deepEqual(p.env.scripts.map(s => s.src), [js]);
         const instance = await p.start();
@@ -225,6 +238,23 @@ test('the folder prompt starts the early download, except where the game is unli
     assert.equal(opensEarly({ saveData: true }), false, 'Save-Data');
     assert.equal(opensEarly({ phone: 'On a phone...' }), false, 'a phone or tablet');
     assert.equal(opensEarly({ problem: 'This browser is too old' }), false, "a browser that can't run it");
+});
+
+test("the script's early download failing shows nowhere: the script element asks for it itself", async () => {
+    const cutOff = () => new Response(new ReadableStream({
+        start(c) { c.enqueue(new Uint8Array(10)); c.error(new TypeError('network error')); }
+    }));
+    for (const answer of [new TypeError('Failed to fetch'), failed(404), failed(503), cutOff()]) {
+        const p = page({ scriptAnswers: [answer] });
+        p.prefetchEngine();
+        await settle();
+        assert.deepEqual([p.env.warned, p.env.logged, p.env.stopped, p.env.engineLog], [[], [], [], []]);
+        assert.equal(p.early().failed, false, 'the wasm is ready as ever');
+        p.loadEngine(false);
+        assert.deepEqual(p.env.scripts.map(s => s.src), ['jspi/openjkdf2.js']);
+        assert.equal((await p.start()).exports.g(), 7);
+        assert.equal(p.env.scriptFetched.length, 1, 'not asked again here');
+    }
 });
 
 test('the engine looks for its wasm where ENGINE_FILES says', () => {

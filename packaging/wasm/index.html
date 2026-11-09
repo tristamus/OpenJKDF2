@@ -3664,24 +3664,27 @@
       // to start only once the folder was read, and then the script and the
       // wasm came one after the other. A tab where nobody asks to play
       // downloads nothing, and a player who closes the prompt has only
-      // downloaded it. The script is preloaded, and still runs only when
-      // loadEngine adds it, once the game's files are in; the compiled wasm
-      // goes to the engine through Module.instantiateWasm (earlyWasm). It's
-      // the engine chosen as the page opened (ENGINE); when the JSPI
-      // engine's script then doesn't download, the Asyncify engine loads as
-      // before, without this. Only the compiled code is made early: the
-      // engine's memory comes when it starts.
+      // downloaded it. The script goes into the browser's cache (in a kit
+      // its name changes with its content, so it's kept as it is) and still
+      // runs only when loadEngine adds it, once the game's files are in;
+      // the compiled wasm goes to the engine through Module.instantiateWasm
+      // (earlyWasm). It's the engine chosen as the page opened (ENGINE);
+      // when the JSPI engine's script then doesn't download, the Asyncify
+      // engine loads as before, without this. Only the compiled code is
+      // made early: the engine's memory comes when it starts.
       var earlyEngine = null;
 
       function prefetchEngine() {
         if (earlyEngine || typeof WebAssembly !== 'object' || typeof fetch !== 'function') return;
         var files = ENGINE_FILES[ENGINE];
         var early = earlyEngine = { kind: ENGINE, at: performance.now(), ready: 0, failed: false };
-        var link = document.createElement('link');
-        link.rel = 'preload';
-        link.as = 'script';
-        link.href = files.js;
-        document.head.appendChild(link);
+        // With the credentials the script element's ask will have
+        // (same-origin), so that it finds this in the cache. Not a link
+        // rel=preload: Chromium warns in the console when a preload isn't
+        // used within a few seconds, as it mostly isn't while the player
+        // picks their folder. What comes is read and dropped; if anything
+        // goes wrong here, the script element downloads it by itself.
+        fetch(files.js, { credentials: 'same-origin' }).then(function(r) { return r.arrayBuffer(); }).catch(function() {});
         early.module = compileWasm(files.wasm).then(function(module) {
           early.ready = performance.now();
           return module;
