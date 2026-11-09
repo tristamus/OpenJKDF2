@@ -942,6 +942,7 @@ test('the match summary: the match, each other player and the hits each way, wit
     }
     const s = join.ns.summary();
     assert.deepEqual([s.v, s.game, s.build, s.rules, s.reach, s.host, s.players], [1, 'jk', '1234abcd', 'hwys', 300, false, 2]);
+    assert.equal(s.jspi, undefined, 'the Asyncify engine (no Module.jkEngine) sets no flag');
     near(s.secs, 35, 1, 'time in the match');
     assert.deepEqual(s.fps, { median: 50, low: 50 });
     assert.equal(s.others.length, 1);
@@ -994,9 +995,11 @@ test('the match summary: none for a short match or one alone, and it says when t
     assert.equal(join.ns.summary(), null, 'only 20 s in it');
     join.ns.live(1, 2, false);
     w2.run(15000);
+    // The JSPI engine's games say so (the page's Module.jkEngine).
+    join.Module.jkEngine = 'jspi';
     const s = join.ns.summary();
     near(s.secs, 35, 1, 'in the match');
-    assert.deepEqual([s.sim, s.test, s.netstats, s.host, s.rules, s.game], [true, true, true, false, 'classic', 'jk']);
+    assert.deepEqual([s.sim, s.test, s.netstats, s.jspi, s.host, s.rules, s.game], [true, true, true, true, false, 'classic', 'jk']);
     assert.ok(s.others[0].ping > 0, 'with ?netstats, pings');
     // A new game starts over.
     join.ns.start(false);

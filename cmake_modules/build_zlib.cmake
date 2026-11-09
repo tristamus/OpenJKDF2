@@ -39,6 +39,10 @@ set(ZLIB_EXTRA_CMAKE_ARGS)
 if(TARGET_WASM)
     set(ZLIB_EXTRA_CMAKE_ARGS -DZLIB_BUILD_SHARED=OFF)
 endif()
+# The JSPI engine's zlib is compiled with Wasm setjmp (toolchain_wasm.cmake).
+if(OPENJKDF2_WASM_JSPI)
+    list(APPEND ZLIB_EXTRA_CMAKE_ARGS -DOPENJKDF2_WASM_JSPI:BOOL=ON)
+endif()
 
 ExternalProject_Add(
     ${ZLIB_TARGET_NAME}

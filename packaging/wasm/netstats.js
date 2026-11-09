@@ -987,6 +987,9 @@
         if (match.sim) s.sim = true;
         if (Module['jkNetTest']) s.test = true;
         if (Module['jkNetMeasure']) s.netstats = true;
+        // The JSPI engine (the page's Module.jkEngine), so its matches can be
+        // told apart from the Asyncify engine's.
+        if (Module['jkEngine'] === 'jspi') s.jspi = true;
         return fit(s);
     }
 

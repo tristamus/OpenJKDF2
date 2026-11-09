@@ -1882,8 +1882,31 @@
       // know, so the page's own are left out (moved: the lobby sent this page
       // load here from the old address, see moveIn).
       Module['arguments'] = window.location.search.substr(1).split('&')
-        .filter(i => i.length && ['keycheck', 'netlog', 'bench', 'netstats', 'netsim', 'nettest', 'netold', 'moved', 'imperial'].indexOf(i.split('=')[0]) < 0)
+        .filter(i => i.length && ['keycheck', 'netlog', 'bench', 'netstats', 'netsim', 'nettest', 'netold', 'moved', 'imperial', 'engine'].indexOf(i.split('=')[0]) < 0)
         .flatMap(i => { var kv = i.split('='); return kv.length > 1 ? ['-' + kv[0], decodeURIComponent(kv.slice(1).join('='))] : ['-' + kv[0]]; });
+      // ---- Which engine. Two builds of the same engine, which play together:
+      // the JSPI engine (jspi/openjkdf2.js and jspi/openjkdf2.wasm, built
+      // with OPENJKDF2_WASM_JSPI) pauses the game through the browser's JSPI
+      // (WebAssembly.Suspending and WebAssembly.promising), which makes it
+      // about a third smaller to download, quicker to start and a little
+      // lighter in a match; the Asyncify engine (openjkdf2.js) does it
+      // through its own instrumentation, and runs in any browser. Browsers
+      // without JSPI (Chrome and Edge before 137, Firefox before 153) get the
+      // Asyncify engine, and so does every WebKit browser (Safari, and any
+      // browser on an iPhone or iPad), where the JSPI engine hasn't been
+      // tried yet. ?engine=asyncify or ?engine=jspi picks one, to compare, or
+      // to try the JSPI engine in Safari; jspi still needs JSPI.
+      function engineKind(search, wasm, vendor) {
+        var asked = (/[?&]engine=(jspi|asyncify)(&|$)/.exec(search) || [])[1];
+        var jspi = !!wasm && typeof wasm.Suspending === 'function' && typeof wasm.promising === 'function';
+        if (!jspi || asked === 'asyncify') return 'asyncify';
+        return asked === 'jspi' || !/^Apple/.test(vendor || '') ? 'jspi' : 'asyncify';
+      }
+      var ENGINE = engineKind(window.location.search, typeof WebAssembly === 'object' ? WebAssembly : null,
+                              navigator.vendor);
+      // For netstats.js (the match summary) and the log.
+      Module.jkEngine = ENGINE;
+
       // ?netstats (this window pings the other players) and ?netsim (its
       // packets wait as if its connection were slower) are for netstats.js,
       // bundled into the engine, ?nettest (a scripted player) for the engine
@@ -3133,10 +3156,19 @@
           data.onerror = function() { engineStopped("openjkdf2_data.js didn't download"); };
           document.body.appendChild(data);
         }
+        // The engine finds its wasm next to its script. The browser gives no
+        // reason when one doesn't download (a 404, a 503, a dropped
+        // connection); when the JSPI engine's doesn't, the Asyncify engine
+        // gets a try (it may be a build without jspi/).
+        var src = ENGINE === 'jspi' ? 'jspi/openjkdf2.js' : 'openjkdf2.js';
         var engine = document.createElement('script');
-        engine.src = 'openjkdf2.js';
-        // The browser gives no reason (a 404, a 503, a dropped connection).
-        engine.onerror = function() { engineStopped("openjkdf2.js didn't download"); };
+        engine.src = src;
+        engine.onerror = function() {
+          if (ENGINE !== 'jspi') return engineStopped(src + " didn't download");
+          console.log('OpenJKDF2: ' + src + " didn't download; loading the Asyncify engine instead");
+          ENGINE = Module.jkEngine = 'asyncify';
+          loadEngine(false);
+        };
         document.body.appendChild(engine);
       }
 
@@ -5589,7 +5621,8 @@
             FS.writeFile(e.path, e.data, { canOwn: true });
           }
           loaded = null;
-          console.log('OpenJKDF2: the engine loaded ' + Math.round(t - clock.at) + ' ms after the folder was read, ' +
+          console.log('OpenJKDF2: the ' + (ENGINE === 'jspi' ? 'JSPI' : 'Asyncify') + ' engine loaded ' +
+                      Math.round(t - clock.at) + ' ms after the folder was read, ' +
                       'and took its files in ' + Math.round(performance.now() - t) + ' ms');
           mountSaves(FS, pickedPlayers, gameRoot);
         });

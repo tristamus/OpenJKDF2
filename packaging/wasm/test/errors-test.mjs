@@ -17,6 +17,7 @@ function cut(from, to) {
 }
 const code = cut('      window.onerror = function(message', '      // ---- Mouse look.');
 const loadCode = cut('      function loadEngine(', '      var picker = ');
+const engineKind = new Function(cut('      function engineKind(', '      var ENGINE = ') + '\nreturn engineKind;')();
 
 // The page's error handling, with the parts of the page it uses made up.
 function page() {
@@ -103,15 +104,55 @@ test('openjkdf2.js that doesn\'t download, or comes cut off, stops with Reload',
     assert.equal(p.shown[0].title, "The game couldn't start");
     assert.equal(p.shown[0].reload, true);
 
-    // The script element's error event.
-    const env = { leaveGuard: true, stopped: [], scripts: [] };
-    const document = { createElement: () => ({}), body: { appendChild: s => env.scripts.push(s) } };
-    new Function('document', 'engineStopped', 'var leaveGuard;\n' + loadCode + '\nloadEngine(false);')(
-        document, why => env.stopped.push(why));
-    assert.equal(env.scripts.length, 1);
-    assert.equal(env.scripts[0].src, 'openjkdf2.js');
-    env.scripts[0].onerror();
-    assert.deepEqual(env.stopped, ["openjkdf2.js didn't download"]);
+    // The script element's error event. When the JSPI engine's doesn't
+    // download, the Asyncify engine's is tried, and when that doesn't either,
+    // the game stops.
+    for (const ENGINE of ['asyncify', 'jspi']) {
+        const env = { leaveGuard: true, stopped: [], scripts: [], logged: [] };
+        const document = { createElement: () => ({}), body: { appendChild: s => env.scripts.push(s) } };
+        const Module = { jkEngine: ENGINE };
+        const engine = new Function('document', 'engineStopped', 'Module', 'console', 'ENGINE',
+                                    'var leaveGuard;\n' + loadCode + '\nloadEngine(false);\nreturn () => ENGINE;')(
+            document, why => env.stopped.push(why), Module, { log: line => env.logged.push(line) }, ENGINE);
+        if (ENGINE === 'jspi') {
+            assert.deepEqual(env.scripts.map(s => s.src), ['jspi/openjkdf2.js']);
+            env.scripts[0].onerror();
+            assert.deepEqual(env.stopped, []);
+            assert.deepEqual(env.logged, ["OpenJKDF2: jspi/openjkdf2.js didn't download; loading the Asyncify engine instead"]);
+            assert.deepEqual([engine(), Module.jkEngine], ['asyncify', 'asyncify']);
+        }
+        assert.equal(env.scripts[env.scripts.length - 1].src, 'openjkdf2.js');
+        env.scripts[env.scripts.length - 1].onerror();
+        assert.deepEqual(env.stopped, ["openjkdf2.js didn't download"]);
+    }
+    // An error from the JSPI engine's script counts as the engine's.
+    const q = page();
+    q.error('Uncaught SyntaxError: Unexpected end of input', 'https://jediknight.zone/jspi/openjkdf2.js',
+            thrown(SyntaxError, 'Unexpected end of input', ''));
+    assert.equal(q.shown[0].title, "The game couldn't start");
+    assert.equal(q.engineError(thrown(Error, 'x', '    at f (https://jediknight.zone/jspi/openjkdf2.js:1:2)'), ''), true);
+});
+
+test('the JSPI engine where the browser has JSPI, but not in Safari unless asked; the Asyncify engine elsewhere', () => {
+    const jspi = { Suspending: function() {}, promising: function() {} };
+    const chrome = 'Google Inc.', firefox = '', safari = 'Apple Computer, Inc.';
+    // Chrome, Edge (Google Inc.) and Firefox ('') with JSPI.
+    assert.equal(engineKind('', jspi, chrome), 'jspi');
+    assert.equal(engineKind('?mp', jspi, firefox), 'jspi');
+    assert.equal(engineKind('', jspi, undefined), 'jspi');
+    // Without JSPI, or only half of it.
+    assert.equal(engineKind('', {}, chrome), 'asyncify');
+    assert.equal(engineKind('', { Suspending: function() {} }, chrome), 'asyncify');
+    assert.equal(engineKind('', null, chrome), 'asyncify');
+    // Safari, and every browser on an iPhone or iPad, even with JSPI.
+    assert.equal(engineKind('', jspi, safari), 'asyncify');
+    // ?engine= picks one; jspi still needs JSPI.
+    assert.equal(engineKind('?engine=asyncify', jspi, chrome), 'asyncify');
+    assert.equal(engineKind('?autostart&engine=jspi', jspi, safari), 'jspi');
+    assert.equal(engineKind('?engine=jspi', {}, chrome), 'asyncify');
+    assert.equal(engineKind('?engine=jspi', null, safari), 'asyncify');
+    assert.equal(engineKind('?engine=other', jspi, safari), 'asyncify');
+    assert.equal(engineKind('?myengine=asyncify', jspi, chrome), 'jspi');
 });
 
 test("the browser running out of memory for the engine says so", () => {

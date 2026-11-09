@@ -211,6 +211,14 @@ Serve `wasm_out/` over HTTP and open `index.html`. The page asks for the folder 
 game's `episode/` and `resource/` directories and reads those files in the browser; nothing is
 uploaded and no game files are part of the build.
 
+The page loads one of two builds of the engine. Browsers with JSPI (WebAssembly JavaScript Promise
+Integration: Chrome and Edge 137+, Firefox 153+) get the JSPI engine from `jspi/`, which is about a
+third smaller and starts faster; other browsers, and Safari for now, get the Asyncify engine next
+to `index.html`. `?engine=asyncify` or `?engine=jspi` picks one. To build the JSPI engine, configure
+a second build folder with `-DOPENJKDF2_WASM_JSPI=ON`, copy its `openjkdf2.js` and `openjkdf2.wasm`
+into `wasm_out/jspi/`, and check it with `node packaging/wasm/test/jspi-check.mjs <build folder>`.
+Without `wasm_out/jspi/`, the page falls back to the Asyncify engine.
+
 Browsers can't open UDP sockets, so multiplayer (`src/Platform/Networking/WSRelay`) finds games
 and sets up connections through a WebSocket server, then sends game packets over WebRTC data
 channels, falling back to relaying them through that server when a direct link can't be made. To
