@@ -44,6 +44,12 @@ make -j1 VERBOSE=1 || exit 1
 popd
 
 cp packaging/wasm/index.html wasm_out/index.html
+# The rest of what the CI's web folder has: unzip.js, the worker the page
+# starts to unpack the zip methods the browser can't (ENGINE_FILES.unzip),
+# and move-out.html, which the site serves at its old address for the
+# page's Bring them over (moveIn).
+cp packaging/wasm/unzip.js wasm_out/unzip.js
+cp packaging/wasm/move-out.html wasm_out/move-out.html
 # The room windows' pictures, which the page names (rooms/<room>.<hash>.<type>).
 mkdir -p wasm_out/rooms
 cp packaging/wasm/rooms/* wasm_out/rooms/

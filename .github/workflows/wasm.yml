@@ -92,6 +92,10 @@ jobs:
       # pictures (rooms/) are named by their content.
       - name: Test the room list
         run: node packaging/wasm/test/rooms-test.mjs
+      # The files the page loads or opens by name beside itself: all in the
+      # web folder collected below and in build_run_openjkdf2_wasm.sh's.
+      - name: Test the web folder's files
+        run: node packaging/wasm/test/web-files-test.mjs
       # The Raw mouse input box: how it starts in each browser (ticked for a
       # new Firefox player on Windows) and what it says, with made-up browsers
       # and storage.
