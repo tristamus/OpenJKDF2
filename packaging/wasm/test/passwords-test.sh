@@ -1,7 +1,8 @@
 #!/bin/sh
 # Builds and runs passwords-test.c on this tree's own join code
 # (src/Platform/Networking/WSRelay/stdComm_WSRelay.c): what the join sends
-# for a room's password, and what the lobby's answers become. That file only
+# for a room's password, what the lobby's answers become, and when the join
+# screen (src/Gui/jkGUIMultiplayer.c) puts up the list. That file only
 # builds for the browser, so the structs, statics and functions the test
 # needs are cut out of the sources first. From the top of the source tree:
 #
@@ -27,6 +28,20 @@ cut_out() {
                 !/;[ \t]*$/ { p = 1; print; next }
             p { print }
             p && index($0, b) == 1 { done = 1; exit }
+            END { exit !done }' "$src/$1"
+    then
+        echo "passwords-test.sh: no \"$2\" in src/$1" >&2
+        exit 1
+    fi
+}
+
+# Prints the lines of src/$1 after the first one that is $2, leading blanks
+# aside, up to the next one that starts with $3.
+cut_after() {
+    if ! awk -v a="$2" -v b="$3" '
+            p && index($0, b) == 1 { done = 1; exit }
+            p { print }
+            !p { t = $0; sub(/^[ \t]+/, "", t); if (t == a) p = 1 }
             END { exit !done }' "$src/$1"
     then
         echo "passwords-test.sh: no \"$2\" in src/$1" >&2
@@ -76,6 +91,8 @@ statics() {
     cut_out "$relay" 'static void wsrelay_PumpControl('
     cut_out "$relay" 'static void wsrelay_DropListAsk('
     cut_out "$relay" 'static int wsrelay_EnsureOpen('
+    cut_out "$relay" 'void stdComm_WSRelay_Startup('
+    cut_out "$relay" 'void stdComm_CloseConnection('
     cut_out "$relay" 'int DirectPlay_EnumSessions2('
     cut_out "$relay" 'int stdComm_Open('
     cut_out "$relay" 'static void wsrelay_ShowList('
@@ -84,5 +101,9 @@ statics() {
     cut_out "$relay" 'int stdComm_WSRelay_LobbyChecksPassword('
 } > "$out/passwords-code.inc"
 
-cc -std=c11 -O2 -Wall -Werror -I"$out" -o "$out/passwords-test" "$top/packaging/wasm/test/passwords-test.c"
+# The join screen opening, after it clears the last visit's selection.
+cut_after Gui/jkGUIMultiplayer.c 'memset(&jkGui_guid_556040, 0, sizeof(GUID));' \
+    '#if defined(PLATFORM_WSRELAY) && defined(QOL_IMPROVEMENTS)' > "$out/passwords-open.inc"
+
+cc -std=c11 -O2 -Wall -Werror -DPLATFORM_WSRELAY -I"$out" -o "$out/passwords-test" "$top/packaging/wasm/test/passwords-test.c"
 "$out/passwords-test"

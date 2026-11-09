@@ -44,7 +44,7 @@ static int checks = 0;
 int Main_bVerboseNetworking = 1;
 int Main_bMotsCompat = 0;
 int stdComm_Imperial_bActive = 0;
-int stdComm_dword_8321E8, stdComm_dword_8321E0, stdComm_bIsServer;
+int stdComm_dword_8321E8, stdComm_dword_8321E0, stdComm_bIsServer, stdComm_dword_8321DC;
 DPID stdComm_dplayIdSelf;
 char16_t jkPlayer_playerShortName[32];
 int jkGuiMultiplayer_checksumSeed, jkGuiMultiplayer_dword_5564E8, dplay_dword_55D618;
@@ -78,6 +78,12 @@ static void stdString_SafeStrCopy(char* pDst, const char* pSrc, uint32_t lenDst)
 static int imperialOpens = 0;
 static int stdComm_Imperial_Open(int idx, char16_t* pwPassword) { imperialOpens++; return 0x80004005; }
 static int stdComm_Imperial_EnumSessions(void) { return 0; }
+static void stdComm_Imperial_Startup(void) {}
+static void stdComm_Imperial_CloseConnection(void) {}
+static void DirectPlay_Close(void) {}
+int jkGuiMultiplayer_numConnections;
+struct { char16_t name[0x80]; } jkGuiMultiplayer_aConnections[1];
+static int jk_snwprintf(char16_t* pOut, size_t n, const char16_t* pFmt, ...) { pOut[0] = 0; return 0; }
 static DPID DirectPlay_CreatePlayer(char16_t* pwName, int idk) { return 1; }
 static void Hack_ResetClients(void) {}
 static int stdComm_WSRelay_ClampReach(int reachMs) { return reachMs; }
@@ -134,6 +140,8 @@ static void wsrelay_js_map_unhost(void) {}
 static void wsrelay_js_mod_unhost(void) {}
 static int wsrelay_js_direct_open(int id) { return 0; }
 static void wsrelay_js_mod_restart(char* pOut, int maxLen) { pOut[0] = 0; }
+static int wsrelay_js_take_join_room(void) { return 0; }
+static void wsrelay_js_presence(char16_t* pName, int* pMots) {}
 
 static int wsrelay_js_send_text(const char* pText)
 {
@@ -358,11 +366,11 @@ static void test_list_later(void)
     now += 1;
     CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 1 && wsrelay_aShownRooms[0] == 7, "gave up, the list it had");
 
-    // Its answer comes late: the next ask shows it at once, as the wait did.
+    // Its answer comes late: it goes up when it comes (test_list_late).
     snprintf(line, sizeof(line), "list 8 3 %s", hex);
     lobbySays(line);
-    now += 1500;
-    CHECK(stdComm_EnumSessions(1, NULL) == 0 && wsrelay_aShownRooms[0] == 8, "a late answer is shown at the next ask");
+    now += 200;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 8, "a late answer goes up when it comes");
     CHECK(!stdComm_WSRelay_ListReady(), "with nothing left waiting");
 
     // The socket goes while it waits: no games.
@@ -418,6 +426,149 @@ static void test_list_later(void)
     CHECK(stdComm_WSRelay_ListReady(), "the relay's again");
 }
 
+// An answer that comes after the 500 ms give-up still goes up when it comes,
+// so the next ask doesn't take it for its own (every list after it an ask
+// late); and a list Jedi Knight asked for isn't shown after a restart into
+// Mysteries of the Sith, nor the other way round.
+static void test_list_late(void)
+{
+    char hex[sizeof(jkMultiEntry) * 2 + 1];
+    static char line[1024];
+    entryHex(hex, u"", 8);
+
+    listFrom(1);
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 3, "gave up: the list it had");
+    snprintf(line, sizeof(line), "list 20 1 %s", hex);
+    lobbySays(line);
+    now += 200;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 20, "the late answer goes up when it comes");
+    CHECK(!stdComm_WSRelay_ListReady(), "once");
+    now += 1300;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "the next ask waits for its own");
+    snprintf(line, sizeof(line), "list 21 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 21, "and shows it");
+
+    // Given up on, then the socket goes: no games, as when it goes before.
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 21, "gave up");
+    socketState = 2;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 0 && dplay_dword_55D618 == 0, "the socket went: none shown");
+    CHECK(!stdComm_WSRelay_ListReady(), "once");
+    CHECK(stdComm_EnumSessions(1, NULL) == 0 && dplay_dword_55D618 == 0, "the next ask connects");
+    listFrom(1);
+
+    // Given up on, then the screen closes: its answer isn't the next ask's.
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady(), "gave up");
+    DirectPlay_EnumSessions2();
+    snprintf(line, sizeof(line), "list 22 1 %s", hex);
+    lobbySays(line);
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "back: the next ask waits for its own");
+    snprintf(line, sizeof(line), "list 23 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 23, "and shows it");
+
+    // The engine restarts into Mysteries of the Sith while Jedi Knight's ask
+    // is out, whose answer comes in meanwhile, and the first answer it gets
+    // is late: no Jedi Knight games meanwhile.
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked for jk1");
+    stdComm_WSRelay_Startup();
+    socketState = 1;
+    Main_bMotsCompat = 1;
+    snprintf(line, sizeof(line), "list 24 1 %s", hex);
+    lobbySays(line);
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER && !strcmp(lastSent, "list mots"), "asked for mots");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 0, "gave up: none, not Jedi Knight's");
+    snprintf(line, sizeof(line), "list 25 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 25, "then its own");
+
+    // Back to Jedi Knight with nothing out: the last list it read is
+    // Mysteries of the Sith's.
+    stdComm_WSRelay_Startup();
+    socketState = 1;
+    Main_bMotsCompat = 0;
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER && !strcmp(lastSent, "list jk1"), "asked for jk1");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 0, "gave up: none, not Mysteries of the Sith's");
+    listFrom(1);
+}
+
+// The join screen opening (jkGuiMultiplayer_Show), after it clears the last
+// visit's selection: passwords-test.sh cuts it out of
+// src/Gui/jkGUIMultiplayer.c.
+static void joinScreenOpens(void)
+{
+#include "passwords-open.inc"
+}
+
+// Back on the join screen, its list box is empty until this visit's list is
+// up, and a click on one of its rows picks the game at that row if
+// dplay_dword_55D618 says there are that many (jkGuiMultiplayer_sub_413E00):
+// none of the last visit's.
+static void test_screen_opens(void)
+{
+    char hex[sizeof(jkMultiEntry) * 2 + 1];
+    static char line[1024];
+    entryHex(hex, u"", 8);
+
+    listFrom(1);
+    CHECK(dplay_dword_55D618 == 2, "two games up");
+    DirectPlay_EnumSessions2();
+    stdComm_CloseConnection();
+    now += 3000;
+    joinScreenOpens();
+    CHECK(dplay_dword_55D618 == 0, "back on the join screen: none of them to pick");
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER && dplay_dword_55D618 == 0, "nor while it asks");
+    snprintf(line, sizeof(line), "list 40 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 1 && wsrelay_aShownRooms[0] == 40, "this visit's");
+}
+
+// The other ways the join screen is done with its ask: Ok with no game
+// picked (stdComm_CloseConnection) and an engine restart
+// (stdComm_WSRelay_Startup). Neither takes the answer still to come for the
+// next ask's, nor puts it up on the way back.
+static void test_list_dropped(void)
+{
+    char hex[sizeof(jkMultiEntry) * 2 + 1];
+    static char line[1024];
+    entryHex(hex, u"", 8);
+
+    listFrom(1);
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    stdComm_CloseConnection();
+    snprintf(line, sizeof(line), "list 30 1 %s", hex);
+    lobbySays(line);
+    CHECK(!stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 3, "closed: what comes after isn't shown");
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "back: the next ask waits for its own");
+    snprintf(line, sizeof(line), "list 31 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 31, "and shows it");
+
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    stdComm_WSRelay_Startup();
+    socketState = 1;
+    snprintf(line, sizeof(line), "list 32 1 %s", hex);
+    lobbySays(line);
+    CHECK(!stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 0, "restarted: nothing shown");
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "after the restart: the next ask waits for its own");
+    snprintf(line, sizeof(line), "list 33 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 33, "and shows it");
+}
+
 // Which games the lobby checks for: none on the Imperial Network Protocol
 // connection, and none past the list.
 static void test_lobby_checks_password(void)
@@ -452,6 +603,9 @@ int main(void)
     test_snapshot();
     test_lobby_checks_password();
     test_list_later();
+    test_list_late();
+    test_list_dropped();
+    test_screen_opens();
 
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
