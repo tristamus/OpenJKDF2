@@ -81,6 +81,10 @@ jobs:
       # box with Reload, with made-up errors from the engine and elsewhere.
       - name: Test the engine's error box
         run: node packaging/wasm/test/errors-test.mjs
+      # The engine downloading and compiling from when the player asks to
+      # play, and what happens when that fails, with tiny made-up wasm.
+      - name: Test getting the engine ready early
+        run: node packaging/wasm/test/engine-early-test.mjs
       # Quit: back to the lobby once the saves are stored, with made-up storage.
       - name: Test Quit
         run: node packaging/wasm/test/quit-test.mjs

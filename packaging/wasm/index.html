@@ -3611,11 +3611,18 @@
           data.onerror = function() { engineStopped("openjkdf2_data.js didn't download"); };
           document.body.appendChild(data);
         }
-        // The engine finds its wasm next to its script. The browser gives no
+        // The engine's script, from ENGINE_FILES. The browser gives no
         // reason when one doesn't download (a 404, a 503, a dropped
         // connection); when the JSPI engine's doesn't, the Asyncify engine
         // gets a try (it may be a build without jspi/).
-        var src = ENGINE === 'jspi' ? 'jspi/openjkdf2.js' : 'openjkdf2.js';
+        var src = ENGINE_FILES[ENGINE].js;
+        // The wasm downloaded and compiled since the player asked to play
+        // (prefetchEngine), if it's this engine's and didn't fail. Set or
+        // cleared on every call, so the Asyncify engine tried after the JSPI
+        // one's script didn't download never gets the JSPI engine's wasm.
+        var early = earlyEngine && earlyEngine.kind === ENGINE && !earlyEngine.failed ? earlyEngine : null;
+        if (early) Module.instantiateWasm = function(imports, receive) { return earlyWasm(early, imports, receive); };
+        else delete Module.instantiateWasm;
         var engine = document.createElement('script');
         engine.src = src;
         engine.onerror = function() {
@@ -3626,6 +3633,110 @@
           loadEngine(false);
         };
         document.body.appendChild(engine);
+      }
+
+      // ---- The engine's files, for each engine, named in this one place:
+      // loadEngine and prefetchEngine load them from here, and the engine
+      // asks locateFile for its wasm, which it would otherwise look for next
+      // to its script.
+      var ENGINE_FILES = {
+        jspi: { js: 'jspi/openjkdf2.js', wasm: 'jspi/openjkdf2.wasm' },
+        asyncify: { js: 'openjkdf2.js', wasm: 'openjkdf2.wasm' }
+      };
+      Module.locateFile = function(path, dir) {
+        return path === 'openjkdf2.wasm' ? new URL(ENGINE_FILES[ENGINE].wasm, document.baseURI).href : dir + path;
+      };
+
+      // ---- The engine downloads, and its wasm compiles, from when the
+      // player asks to play (openPicker: Play JKDF2, or a room's Host or
+      // Join), while they choose their folder and the page reads it. It used
+      // to start only once the folder was read, and then the script and the
+      // wasm came one after the other. A tab where nobody asks to play
+      // downloads nothing, and a player who closes the prompt has only
+      // downloaded it. The script is preloaded, and still runs only when
+      // loadEngine adds it, once the game's files are in; the compiled wasm
+      // goes to the engine through Module.instantiateWasm (earlyWasm). It's
+      // the engine chosen as the page opened (ENGINE); when the JSPI
+      // engine's script then doesn't download, the Asyncify engine loads as
+      // before, without this. Only the compiled code is made early: the
+      // engine's memory comes when it starts.
+      var earlyEngine = null;
+
+      function prefetchEngine() {
+        if (earlyEngine || typeof WebAssembly !== 'object' || typeof fetch !== 'function') return;
+        var files = ENGINE_FILES[ENGINE];
+        var early = earlyEngine = { kind: ENGINE, at: performance.now(), ready: 0, failed: false };
+        var link = document.createElement('link');
+        link.rel = 'preload';
+        link.as = 'script';
+        link.href = files.js;
+        document.head.appendChild(link);
+        early.module = compileWasm(files.wasm).then(function(module) {
+          early.ready = performance.now();
+          return module;
+        });
+        // Caught here: a CompileError left unhandled would count as the
+        // engine stopping (unhandledrejection).
+        early.module.catch(function(err) {
+          early.failed = true;
+          console.warn('OpenJKDF2: getting the engine ready early failed (' + err + ')');
+        });
+      }
+
+      // The wasm at url, compiled as it downloads where the browser can.
+      function compileWasm(url) {
+        var response = fetch(url, { credentials: 'same-origin' });
+        if (typeof WebAssembly.compileStreaming === 'function') return WebAssembly.compileStreaming(response);
+        return response.then(function(r) {
+          if (!r.ok) throw new Error(r.status + ' : ' + r.url);
+          return r.arrayBuffer();
+        }).then(function(bytes) { return WebAssembly.compile(bytes); });
+      }
+
+      // Module.instantiateWasm, when the engine's wasm was readied early:
+      // started with the engine's imports, and handed to the engine. When it
+      // failed after all, or doesn't start (a file cut off on the way, or one
+      // from a different deploy than the script), it's downloaded again the
+      // way the engine downloads it by itself, and when that fails too the
+      // game stops as it did then (Module.onAbort).
+      function earlyWasm(early, imports, receive) {
+        var asked = performance.now();
+        early.module.then(function(module) {
+          return WebAssembly.instantiate(module, imports);
+        }).then(function(instance) {
+          var ahead = asked - early.ready;
+          console.log('OpenJKDF2: the engine downloaded and compiled in ' + Math.round(early.ready - early.at) + ' ms from Play, ' +
+                      Math.round(Math.abs(ahead)) + (ahead >= 0 ? ' ms before' : ' ms after') + ' the game needed it');
+          receive(instance);
+        }, function(err) {
+          // The browser couldn't give the engine its memory: another copy
+          // wouldn't help.
+          if (err instanceof RangeError) return engineStopped(String(err));
+          console.warn('OpenJKDF2: downloading the engine again (' + err + ')');
+          engineLog.push('Downloading the engine again (' + err + ')');
+          wasmAgain(ENGINE_FILES[early.kind].wasm, imports).then(function(result) {
+            receive(result.instance);
+          }, function(err) {
+            console.error('OpenJKDF2: failed to asynchronously prepare wasm: ' + err);
+            engineStopped(String(err));
+          });
+        });
+        return {};
+      }
+
+      // As the engine gets its wasm by itself (instantiateAsync in
+      // openjkdf2.js): compiled as it downloads, or else the whole file first.
+      function wasmAgain(url, imports) {
+        var streamed = typeof WebAssembly.instantiateStreaming === 'function' ?
+          WebAssembly.instantiateStreaming(fetch(url, { credentials: 'same-origin' }), imports) :
+          Promise.reject(new Error('this browser compiles only whole files'));
+        return streamed.catch(function(err) {
+          console.warn('OpenJKDF2: wasm streaming compile failed (' + err + '); downloading the whole file');
+          return fetch(url, { credentials: 'same-origin' }).then(function(r) {
+            if (!r.ok) throw new Error(r.status + ' : ' + r.url);
+            return r.arrayBuffer();
+          }).then(function(bytes) { return WebAssembly.instantiate(bytes, imports); });
+        });
       }
 
       var picker = document.getElementById('picker');
@@ -3652,6 +3763,10 @@
         problemReload.hidden = true;
         picker.onclick = null;
         var problem = browserProblem();
+        // Whoever opens this wants to play: the engine starts downloading
+        // (prefetchEngine). Not on a phone or tablet, where most who tap Play
+        // don't have what the game needs, nor with the browser saving data.
+        if (!problem && !phoneNote() && !(navigator.connection && navigator.connection.saveData)) prefetchEngine();
         showPickerResult(problem || phoneNote() || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
         showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio);
