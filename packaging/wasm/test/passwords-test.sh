@@ -62,7 +62,8 @@ statics() {
             wsrelay_aLeftPending wsrelay_numLeftPending wsrelay_numWelcomed wsrelay_storedEntryEnum \
             wsrelay_storedTailEnum wsrelay_pendingRoom wsrelay_bListReceived wsrelay_numListed wsrelay_aListRooms \
             wsrelay_aListEntries wsrelay_aListTails wsrelay_numShown wsrelay_aShownRooms wsrelay_aShownTails \
-            wsrelay_aListHits wsrelay_aShownHits wsrelay_aListPw wsrelay_aShownPw
+            wsrelay_aListHits wsrelay_aShownHits wsrelay_aListPw wsrelay_aShownPw \
+            wsrelay_bListAsked wsrelay_msecListAsked wsrelay_bListDropped
     cut_out "$relay" 'static int wsrelay_EntryHits('
     cut_out "$relay" 'static int wsrelay_HexNibble('
     cut_out "$relay" 'static int wsrelay_DecodeHex('
@@ -73,10 +74,13 @@ statics() {
     cut_out "$relay" 'static void wsrelay_HandleList('
     cut_out "$relay" 'static void wsrelay_HandleText('
     cut_out "$relay" 'static void wsrelay_PumpControl('
-    cut_out "$relay" 'static int wsrelay_WaitForChange('
+    cut_out "$relay" 'static void wsrelay_DropListAsk('
     cut_out "$relay" 'static int wsrelay_EnsureOpen('
+    cut_out "$relay" 'int DirectPlay_EnumSessions2('
     cut_out "$relay" 'int stdComm_Open('
+    cut_out "$relay" 'static void wsrelay_ShowList('
     cut_out "$relay" 'int stdComm_EnumSessions('
+    cut_out "$relay" 'int stdComm_WSRelay_ListReady('
     cut_out "$relay" 'int stdComm_WSRelay_LobbyChecksPassword('
 } > "$out/passwords-code.inc"
 

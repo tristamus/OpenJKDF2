@@ -78,7 +78,6 @@ static void stdString_SafeStrCopy(char* pDst, const char* pSrc, uint32_t lenDst)
 static int imperialOpens = 0;
 static int stdComm_Imperial_Open(int idx, char16_t* pwPassword) { imperialOpens++; return 0x80004005; }
 static int stdComm_Imperial_EnumSessions(void) { return 0; }
-static int DirectPlay_EnumSessions2(void) { return 0; }
 static DPID DirectPlay_CreatePlayer(char16_t* pwName, int idk) { return 1; }
 static void Hack_ResetClients(void) {}
 static int stdComm_WSRelay_ClampReach(int reachMs) { return reachMs; }
@@ -323,6 +322,102 @@ static void test_snapshot(void)
     CHECK(stdComm_WSRelay_LobbyChecksPassword(0), "checked again");
 }
 
+// The join screen doesn't wait for its list (it held the screen still for a
+// round trip to the lobby every 2 s): stdComm_EnumSessions asks, and
+// stdComm_WSRelay_ListReady, each frame, says when what came back is in
+// jkGuiMultiplayer_aEntries, as the wait put it there.
+static void test_list_later(void)
+{
+    char hex[sizeof(jkMultiEntry) * 2 + 1];
+    static char line[1024];
+    entryHex(hex, u"", 8);
+
+    listFrom(1);
+    CHECK(wsrelay_numShown == 2 && dplay_dword_55D618 == 2, "an answer already in is shown at once");
+    CHECK(!stdComm_WSRelay_ListReady(), "and nothing waits");
+
+    // Asked; the answer comes two frames later.
+    int r = stdComm_EnumSessions(1, NULL);
+    CHECK(r == STDCOMM_WSRELAY_LIST_LATER, "asked, not waited for: %x", r);
+    CHECK(!strcmp(lastSent, "list jk1"), "the ask went out: %s", lastSent);
+    CHECK(wsrelay_numShown == 2 && dplay_dword_55D618 == 2 && wsrelay_aShownRooms[0] == 3, "what's shown stays as it was");
+    now += 16;
+    CHECK(!stdComm_WSRelay_ListReady(), "nothing yet");
+    snprintf(line, sizeof(line), "list 7 2 %s", hex);
+    lobbySays(line);
+    now += 16;
+    CHECK(stdComm_WSRelay_ListReady(), "it came");
+    CHECK(wsrelay_numShown == 1 && dplay_dword_55D618 == 1 && wsrelay_aShownRooms[0] == 7 &&
+          jkGuiMultiplayer_aEntries[0].numPlayers == 2, "and it's shown");
+    CHECK(!stdComm_WSRelay_ListReady(), "once");
+
+    // No answer: after WSRELAY_LIST_MS the list it had, as the wait gave up.
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked again");
+    now += WSRELAY_LIST_MS - 1;
+    CHECK(!stdComm_WSRelay_ListReady(), "still waiting at %d ms", WSRELAY_LIST_MS - 1);
+    now += 1;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 1 && wsrelay_aShownRooms[0] == 7, "gave up, the list it had");
+
+    // Its answer comes late: the next ask shows it at once, as the wait did.
+    snprintf(line, sizeof(line), "list 8 3 %s", hex);
+    lobbySays(line);
+    now += 1500;
+    CHECK(stdComm_EnumSessions(1, NULL) == 0 && wsrelay_aShownRooms[0] == 8, "a late answer is shown at the next ask");
+    CHECK(!stdComm_WSRelay_ListReady(), "with nothing left waiting");
+
+    // The socket goes while it waits: no games.
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    socketState = 2;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 0 && dplay_dword_55D618 == 0, "the socket went: none shown");
+    int was = connects;
+    CHECK(stdComm_EnumSessions(1, NULL) == 0 && connects == was + 1 && dplay_dword_55D618 == 0, "the next ask connects, none shown");
+
+    // The join screen is done with it (Cancel, or joining a game).
+    listFrom(1);
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    DirectPlay_EnumSessions2();
+    snprintf(line, sizeof(line), "list 9 1 %s", hex);
+    lobbySays(line);
+    CHECK(!stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 3, "what comes after isn't shown");
+    // Back on the join screen, the next ask doesn't take that old answer for
+    // its own (which would put every list after it up an ask late).
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER && wsrelay_aShownRooms[0] == 3,
+          "nor at the next ask, which waits for its own");
+    snprintf(line, sizeof(line), "list 10 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 10, "and shows that when it comes");
+    // Without it, the latest there is, as the wait gave up with.
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    DirectPlay_EnumSessions2();
+    snprintf(line, sizeof(line), "list 11 1 %s", hex);
+    lobbySays(line);
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER && wsrelay_aShownRooms[0] == 10, "asked again");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 11, "gave up: the latest it had");
+    // One dropped while joining was read by the join's own wait.
+    listFrom(1);
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    snprintf(line, sizeof(line), "list 12 1 %s", hex);
+    lobbySays(line);
+    CHECK(join(1, u"", "error full") == 0x8877014A && wsrelay_aListRooms[0] == 12 && wsrelay_aShownRooms[1] == 4,
+          "the join read it, and what's shown stays");
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "the next ask waits for its own");
+    snprintf(line, sizeof(line), "list 13 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 13, "and shows it");
+
+    // Not on the Imperial Network Protocol connection.
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    stdComm_Imperial_bActive = 1;
+    lobbySays(line);
+    CHECK(!stdComm_WSRelay_ListReady(), "the relay's list isn't Imperial's");
+    stdComm_Imperial_bActive = 0;
+    CHECK(stdComm_WSRelay_ListReady(), "the relay's again");
+}
+
 // Which games the lobby checks for: none on the Imperial Network Protocol
 // connection, and none past the list.
 static void test_lobby_checks_password(void)
@@ -356,6 +451,7 @@ int main(void)
     test_lobby_checks();
     test_snapshot();
     test_lobby_checks_password();
+    test_list_later();
 
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

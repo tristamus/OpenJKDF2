@@ -543,15 +543,39 @@ void jkGuiMultiplayer_sub_4140B0(jkGuiMenu *pMenu)
     char16_t *v9; // [esp-14h] [ebp-18h]
     int v10; // [esp+0h] [ebp-4h]
 
+#ifdef PLATFORM_WSRELAY
+    // Added: the relay's games, asked for below, are put up when they come
+    // in, the same way as when stdComm_EnumSessions waited for them, which
+    // held this screen still for a round trip to the lobby every 2 s.
+    int bListIn = stdComm_WSRelay_ListReady();
+    if ( g_app_suspended || bListIn )
+#else
     if ( g_app_suspended )
+#endif
     {
         v1 = stdPlatform_GetTimeMsec();
+#ifdef PLATFORM_WSRELAY
+        if ( bListIn || v1 > jkGuiMultiplayer_dword_5564E8 + 5000 )
+#else
         if ( v1 > jkGuiMultiplayer_dword_5564E8 + 5000 )
+#endif
         {
             v2 = -1;
-            jkGuiMultiplayer_dword_5564E8 = v1;
             v10 = -1;
-            v3 = stdComm_EnumSessions(1, (char16_t *)jkGuiMultiplayer_aElements3[5].wstr);
+#ifdef PLATFORM_WSRELAY
+            if ( bListIn )
+                v3 = 0; // in jkGuiMultiplayer_aEntries now
+            else
+#endif
+            {
+                jkGuiMultiplayer_dword_5564E8 = v1;
+                v3 = stdComm_EnumSessions(1, (char16_t *)jkGuiMultiplayer_aElements3[5].wstr);
+            }
+#ifdef PLATFORM_WSRELAY
+            // Added: asked for, and put up when it's in (above).
+            if ( v3 == STDCOMM_WSRELAY_LIST_LATER )
+                return;
+#endif
             if ( !v3 )
             {
                 jkGuiRend_DarrayFreeEntry(&jkGuiMultiplayer_stru_5564A8);
