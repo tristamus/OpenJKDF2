@@ -282,10 +282,14 @@ function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {
     const requestIdleCallback = idle ? fn => idles.push(fn) : undefined;
     const setTimeout = (fn, ms) => timers.push({ fn, ms });
     const roomGames = { dataset: {} };
-    const openRoom = key => { roomGames.dataset.roomKey = key; };
+    // As openRoom marks the window with its key and notes the room's window opened.
+    const hold = {};
+    const openRoom = key => hold.open(key);
     const stop = new Function('document', 'openRoom', 'Image', 'ROOM_PICTURES', 'window', 'navigator', 'requestIdleCallback',
-                              'setTimeout', 'roomGames', code + '\nreturn stopRoomPictures;')(
-        document, openRoom, Image, pictures, window, navigator, requestIdleCallback, setTimeout, roomGames);
+                              'setTimeout', 'roomGames', 'hold', code +
+                              '\nhold.open = function(key) { roomGames.dataset.roomKey = key; roomWindowsOpened[key] = true; };' +
+                              '\nreturn stopRoomPictures;')(
+        document, openRoom, Image, pictures, window, navigator, requestIdleCallback, setTimeout, roomGames, hold);
     const run = list => list.splice(0).forEach(f => (f.fn || f)());
     const button = key => els.find(e => (e.dataset.room || e.dataset.opensRoom) === key);
     return { els, asked, loads, idles, timers, dropped, arrived, stop, srcs: () => asked.map(a => a.src),
@@ -409,7 +413,7 @@ test("once a game is starting, the idle fetch doesn't start, and pictures on the
 
 test("Host or Join in a room's window lets that room's picture come: the window's backdrop shares its download", () => {
     assert.ok(cut('      function openRoom(', '      var roomNoteTimer')
-        .includes('\n        roomGames.dataset.roomKey = key;'), "openRoom marks the window with its room's key");
+        .includes('\n        roomWindowsOpened[key] = true;'), "openRoom notes the room's window opened");
     // Both pictures on their way, Nar Shaddaa's window opened, then its Host.
     let w = roomPictureWiring();
     w.load();
@@ -422,14 +426,14 @@ test("Host or Join in a room's window lets that room's picture come: the window'
     w.point('sith-asteroid');
     assert.deepEqual(w.srcs().slice(2), [pictures['sith-asteroid']]);
 
-    // The window opened last counts: Nar Shaddaa's, then Sith: Asteroid's.
+    // Every window opened counts: Nar Shaddaa's, then Sith: Asteroid's.
     w = roomPictureWiring();
     w.load();
     w.idle();
     w.open('nar-shaddaa');
     w.open('sith-asteroid');
     w.stop();
-    assert.deepEqual(w.dropped, [pictures['nar-shaddaa']]);
+    assert.deepEqual(w.dropped, []);
 
     // A picture asked for by pointing at its room, then its window opened.
     w = roomPictureWiring({ readyState: 'complete' });
