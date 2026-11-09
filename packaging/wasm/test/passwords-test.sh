@@ -78,7 +78,8 @@ statics() {
             wsrelay_storedTailEnum wsrelay_pendingRoom wsrelay_bListReceived wsrelay_numListed wsrelay_aListRooms \
             wsrelay_aListEntries wsrelay_aListTails wsrelay_numShown wsrelay_aShownRooms wsrelay_aShownTails \
             wsrelay_aListHits wsrelay_aShownHits wsrelay_aListPw wsrelay_aShownPw \
-            wsrelay_bListAsked wsrelay_msecListAsked wsrelay_bListDropped wsrelay_bListGaveUp wsrelay_bListMots
+            wsrelay_bListAsked wsrelay_msecListAsked wsrelay_bListDropped wsrelay_bListGaveUp wsrelay_bListMots \
+            wsrelay_bListForget wsrelay_bListUnshown
     cut_out "$relay" 'static int wsrelay_EntryHits('
     cut_out "$relay" 'static int wsrelay_HexNibble('
     cut_out "$relay" 'static int wsrelay_DecodeHex('
@@ -94,6 +95,7 @@ statics() {
     cut_out "$relay" 'void stdComm_WSRelay_Startup('
     cut_out "$relay" 'void stdComm_CloseConnection('
     cut_out "$relay" 'int DirectPlay_EnumSessions2('
+    cut_out "$relay" 'void stdComm_WSRelay_ForgetList('
     cut_out "$relay" 'int stdComm_Open('
     cut_out "$relay" 'static void wsrelay_ShowList('
     cut_out "$relay" 'int stdComm_EnumSessions('

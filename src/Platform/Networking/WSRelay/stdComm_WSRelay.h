@@ -42,6 +42,10 @@ void stdComm_WSRelay_Shutdown();
 // does after stdComm_EnumSessions returns 0.
 int stdComm_WSRelay_ListReady();
 
+// Called when the join screen opens: if its first list is late, it gives up
+// with no games, as on the first visit, not with the last visit's.
+void stdComm_WSRelay_ForgetList();
+
 // Whether the lobby checks the password of listed game idx when this game
 // joins it, as the lobby said when it listed it. Its list then carries no
 // password to check the one typed against, and stdComm_Open sends the one

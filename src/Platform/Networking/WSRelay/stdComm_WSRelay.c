@@ -1961,6 +1961,11 @@ static int wsrelay_bListDropped = 0;
 static int wsrelay_bListGaveUp = 0;
 // Which game (Main_bMotsCompat) the join screen's last ask was for.
 static int wsrelay_bListMots = 0;
+// The join screen opened since it last asked the lobby
+// (stdComm_WSRelay_ForgetList).
+static int wsrelay_bListForget = 0;
+// A list came in, or was emptied, since wsrelay_ShowList last put one up.
+static int wsrelay_bListUnshown = 0;
 static int wsrelay_numListed = 0;
 static int wsrelay_aListRooms[WSRELAY_MAX_LISTED];
 static jkMultiEntry wsrelay_aListEntries[WSRELAY_MAX_LISTED];
@@ -2311,6 +2316,7 @@ static void wsrelay_HandleList(char* pArgs)
 
     wsrelay_numListed = n;
     wsrelay_bListReceived = 1;
+    wsrelay_bListUnshown = 1;
 }
 
 static void wsrelay_HandleText(char* pText)
@@ -3347,6 +3353,7 @@ static void wsrelay_ShowList()
     }
     wsrelay_numShown = n;
     dplay_dword_55D618 = n;
+    wsrelay_bListUnshown = 0;
 }
 
 // The join screen is done with the list it asked for: it closed, or the
@@ -3357,6 +3364,15 @@ int DirectPlay_EnumSessions2()
 {
     wsrelay_DropListAsk();
     return 0;
+}
+
+// The join screen opens (jkGuiMultiplayer_Show). If the answer to its first
+// ask is late, it gives up with no games, as on the first visit, not with
+// the last visit's: neither the list put up last nor the answer to an ask
+// it was done with, which that ask reads first (stdComm_EnumSessions).
+void stdComm_WSRelay_ForgetList()
+{
+    wsrelay_bListForget = 1;
 }
 
 int stdComm_EnumSessions(int a, void* b)
@@ -3385,10 +3401,15 @@ int stdComm_EnumSessions(int a, void* b)
         wsrelay_bListDropped = 0;
         // Added: nor is a list the other game asked for, before the engine
         // restarted into this one, what this ask gives up with if its answer
-        // is late (stdComm_WSRelay_ListReady).
-        if (wsrelay_bListMots != Main_bMotsCompat)
+        // is late (stdComm_WSRelay_ListReady), nor one from before the join
+        // screen opened (stdComm_WSRelay_ForgetList).
+        if (wsrelay_bListMots != Main_bMotsCompat || wsrelay_bListForget)
+        {
             wsrelay_numListed = 0;
+            wsrelay_bListUnshown = 1;
+        }
         wsrelay_bListMots = Main_bMotsCompat;
+        wsrelay_bListForget = 0;
 
         // Only the games this one can join: Jedi Knight can't join a game
         // Mysteries of the Sith hosts, or the other way round.
@@ -3417,8 +3438,8 @@ int stdComm_EnumSessions(int a, void* b)
 // Called each frame of the join screen. 1 once the list it asked for
 // (stdComm_EnumSessions) is in jkGuiMultiplayer_aEntries, for the screen to
 // put up: when the lobby's answer comes, when the socket closes (no games
-// then), or after WSRELAY_LIST_MS with the list it had, as the wait did, and
-// then again when the answer comes.
+// then), or after WSRELAY_LIST_MS with the list it had, as the wait did,
+// unless that's the one up already, and then again when the answer comes.
 int stdComm_WSRelay_ListReady()
 {
     if (stdComm_Imperial_bActive || !wsrelay_bListAsked)
@@ -3434,6 +3455,12 @@ int stdComm_WSRelay_ListReady()
         if (wsrelay_bListGaveUp || stdPlatform_GetTimeMsec() - wsrelay_msecListAsked < WSRELAY_LIST_MS)
             return 0;
         wsrelay_bListGaveUp = 1;
+        // Nothing new since the list up now went up: it isn't put up
+        // again, as a rebuild sets the selection back and would undo a
+        // click on a row half done (jkGuiMultiplayer_sub_4140B0). A list
+        // with no games has no row to click, and goes up again.
+        if (!wsrelay_bListUnshown && wsrelay_numShown > 0 && dplay_dword_55D618 == wsrelay_numShown)
+            return 0;
         wsrelay_ShowList();
         return 1;
     }

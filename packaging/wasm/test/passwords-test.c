@@ -360,11 +360,14 @@ static void test_list_later(void)
     CHECK(!stdComm_WSRelay_ListReady(), "once");
 
     // No answer: after WSRELAY_LIST_MS the list it had, as the wait gave up.
+    // That's the one up already, which isn't put up again: a rebuild would
+    // undo a click on a row half done (test_give_up).
     CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked again");
     now += WSRELAY_LIST_MS - 1;
-    CHECK(!stdComm_WSRelay_ListReady(), "still waiting at %d ms", WSRELAY_LIST_MS - 1);
+    CHECK(!stdComm_WSRelay_ListReady() && !wsrelay_bListGaveUp, "still waiting at %d ms", WSRELAY_LIST_MS - 1);
     now += 1;
-    CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 1 && wsrelay_aShownRooms[0] == 7, "gave up, the list it had");
+    CHECK(!stdComm_WSRelay_ListReady() && wsrelay_bListGaveUp && wsrelay_numShown == 1 && wsrelay_aShownRooms[0] == 7,
+          "gave up, the list it had, which stays up");
 
     // Its answer comes late: it goes up when it comes (test_list_late).
     snprintf(line, sizeof(line), "list 8 3 %s", hex);
@@ -439,7 +442,8 @@ static void test_list_late(void)
     listFrom(1);
     CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
     now += WSRELAY_LIST_MS;
-    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 3, "gave up: the list it had");
+    CHECK(!stdComm_WSRelay_ListReady() && wsrelay_bListGaveUp && wsrelay_aShownRooms[0] == 3,
+          "gave up: the list it had stays up");
     snprintf(line, sizeof(line), "list 20 1 %s", hex);
     lobbySays(line);
     now += 200;
@@ -454,7 +458,7 @@ static void test_list_late(void)
     // Given up on, then the socket goes: no games, as when it goes before.
     CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
     now += WSRELAY_LIST_MS;
-    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 21, "gave up");
+    CHECK(!stdComm_WSRelay_ListReady() && wsrelay_bListGaveUp && wsrelay_aShownRooms[0] == 21, "gave up");
     socketState = 2;
     CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 0 && dplay_dword_55D618 == 0, "the socket went: none shown");
     CHECK(!stdComm_WSRelay_ListReady(), "once");
@@ -464,7 +468,7 @@ static void test_list_late(void)
     // Given up on, then the screen closes: its answer isn't the next ask's.
     CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
     now += WSRELAY_LIST_MS;
-    CHECK(stdComm_WSRelay_ListReady(), "gave up");
+    CHECK(!stdComm_WSRelay_ListReady() && wsrelay_bListGaveUp, "gave up");
     DirectPlay_EnumSessions2();
     snprintf(line, sizeof(line), "list 22 1 %s", hex);
     lobbySays(line);
@@ -514,7 +518,9 @@ static void joinScreenOpens(void)
 // Back on the join screen, its list box is empty until this visit's list is
 // up, and a click on one of its rows picks the game at that row if
 // dplay_dword_55D618 says there are that many (jkGuiMultiplayer_sub_413E00):
-// none of the last visit's.
+// none of the last visit's. Nor are they put up when the lobby answers
+// later than WSRELAY_LIST_MS: the give-up puts up no games then, as on the
+// first visit.
 static void test_screen_opens(void)
 {
     char hex[sizeof(jkMultiEntry) * 2 + 1];
@@ -532,6 +538,151 @@ static void test_screen_opens(void)
     snprintf(line, sizeof(line), "list 40 1 %s", hex);
     lobbySays(line);
     CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 1 && wsrelay_aShownRooms[0] == 40, "this visit's");
+
+    // The lobby is slow. Back on the join screen, the give-up puts up no
+    // games, and this visit's when they come.
+    snprintf(line, sizeof(line), "list 41 1 %s 42 1 %s", hex, hex);
+    lobbySays(line);
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == 0 && dplay_dword_55D618 == 2 && wsrelay_aShownRooms[1] == 42, "two games up");
+    DirectPlay_EnumSessions2();
+    stdComm_CloseConnection();
+    now += 60000;
+    joinScreenOpens();
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER && dplay_dword_55D618 == 0, "back: asked");
+    CHECK(wsrelay_numListed == 0 && wsrelay_bListUnshown, "the last visit's list is gone, and nothing's up");
+    now += WSRELAY_LIST_MS - 1;
+    CHECK(!stdComm_WSRelay_ListReady(), "the box stays empty till the give-up");
+    now += 1;
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 0 && wsrelay_numShown == 0,
+          "gave up: no games, not the last visit's");
+    CHECK(!stdComm_WSRelay_ListReady(), "once");
+    snprintf(line, sizeof(line), "list 43 1 %s", hex);
+    lobbySays(line);
+    now += 200;
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 1 && wsrelay_aShownRooms[0] == 43, "then this visit's");
+    // The next ask's give-up keeps it up (test_give_up).
+    now += 1300;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked again");
+    now += WSRELAY_LIST_MS;
+    CHECK(!stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 1 && wsrelay_aShownRooms[0] == 43, "gave up: it stays up");
+    snprintf(line, sizeof(line), "list 44 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 44, "and the answer goes up");
+
+    // Esc while an ask is out, whose answer comes in meanwhile: the next
+    // visit's first ask reads it first (wsrelay_DropListAsk), and doesn't
+    // give up with it either.
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    DirectPlay_EnumSessions2();
+    stdComm_CloseConnection();
+    snprintf(line, sizeof(line), "list 45 1 %s 46 1 %s", hex, hex);
+    lobbySays(line);
+    now += 5000;
+    joinScreenOpens();
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER && dplay_dword_55D618 == 0, "back: asked");
+    CHECK(wsrelay_aListRooms[0] == 45 && wsrelay_numListed == 0, "the last ask's answer was read, and is gone");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 0 && wsrelay_numShown == 0,
+          "gave up: no games, not the last ask's");
+    snprintf(line, sizeof(line), "list 47 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 1 && wsrelay_aShownRooms[0] == 47, "then this visit's");
+
+    // The socket went meanwhile: the first ask connects, and the first one
+    // on the new socket gives up with no games.
+    DirectPlay_EnumSessions2();
+    stdComm_CloseConnection();
+    socketState = 2;
+    now += 3000;
+    joinScreenOpens();
+    int was = connects;
+    CHECK(stdComm_EnumSessions(1, NULL) == 0 && connects == was + 1 && dplay_dword_55D618 == 0, "back: it connects");
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked on the new socket");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 0 && wsrelay_numShown == 0,
+          "gave up: no games, not the last visit's");
+    snprintf(line, sizeof(line), "list 48 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 48, "then this visit's");
+
+    // The last visit had no games: the give-up puts up "No games to join"
+    // (the box is empty till then).
+    lobbySays("list");
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == 0 && dplay_dword_55D618 == 0 && wsrelay_numShown == 0, "no games up");
+    DirectPlay_EnumSessions2();
+    stdComm_CloseConnection();
+    now += 3000;
+    joinScreenOpens();
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "back: asked");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 0, "gave up: no games");
+    snprintf(line, sizeof(line), "list 49 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 49, "then this visit's");
+}
+
+// The give-up (WSRELAY_LIST_MS) doesn't put up again the list that's up
+// already. Each rebuild of the list box sets its selection back from
+// jkGui_guid_556040 (jkGuiMultiplayer_sub_4140B0), so a click whose button
+// went down before one and up after it picked the row's old game: a lobby
+// slower than that rebuilt it twice an ask, at the give-up and the answer.
+// A list read since, or none, still goes up then.
+static void test_give_up(void)
+{
+    char hex[sizeof(jkMultiEntry) * 2 + 1];
+    static char line[1024];
+    entryHex(hex, u"", 8);
+
+    // Answers 700 ms late: one rebuild an ask, the answer's.
+    listFrom(1);
+    int rebuilds = 0;
+    for (int i = 0; i < 5; i++)
+    {
+        now += 2000;
+        CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "ask %d", i);
+        for (int t = 0; t < 700; t += 16)
+        {
+            now += 16;
+            rebuilds += stdComm_WSRelay_ListReady();
+        }
+        snprintf(line, sizeof(line), "list %d 1 %s 4 1 %s", 50 + i, hex, hex);
+        lobbySays(line);
+        now += 16;
+        rebuilds += stdComm_WSRelay_ListReady();
+    }
+    CHECK(rebuilds == 5 && wsrelay_aShownRooms[0] == 54, "a lobby 700 ms late: one rebuild an ask, not %d", rebuilds);
+
+    // A list read meanwhile, by a join's own wait, goes up at the give-up.
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    snprintf(line, sizeof(line), "list 60 1 %s", hex);
+    lobbySays(line);
+    CHECK(join(1, u"", "error full") == 0x8877014A && wsrelay_aListRooms[0] == 60 && wsrelay_aShownRooms[0] == 54,
+          "the join read a list");
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 1 && wsrelay_aShownRooms[0] == 60,
+          "gave up: that one goes up");
+    CHECK(!stdComm_WSRelay_ListReady(), "once");
+    snprintf(line, sizeof(line), "list 61 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 61, "then the answer");
+
+    // No games up: the give-up puts "No games to join" up again, which has
+    // no row to click.
+    lobbySays("list");
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == 0 && dplay_dword_55D618 == 0, "no games up");
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && dplay_dword_55D618 == 0, "gave up: none");
+    listFrom(1);
 }
 
 // The other ways the join screen is done with its ask: Ok with no game
@@ -606,6 +757,7 @@ int main(void)
     test_list_late();
     test_list_dropped();
     test_screen_opens();
+    test_give_up();
 
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

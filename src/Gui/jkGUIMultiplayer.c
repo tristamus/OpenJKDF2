@@ -219,8 +219,10 @@ LABEL_1:
                     // Added: none of the last visit's games until this visit's
                     // list is up. The list box starts empty, and a click on
                     // one of its rows, or a gamepad's Ok, picked the game
-                    // listed there last time.
+                    // listed there last time. Nor do they come back when the
+                    // lobby is slow to answer (stdComm_WSRelay_ForgetList).
                     dplay_dword_55D618 = 0;
+                    stdComm_WSRelay_ForgetList();
 #endif
 #if defined(PLATFORM_WSRELAY) && defined(QOL_IMPROVEMENTS)
                     // Added: no address box for the Imperial Network Protocol: its server
