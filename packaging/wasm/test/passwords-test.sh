@@ -63,7 +63,7 @@ statics() {
             wsrelay_storedTailEnum wsrelay_pendingRoom wsrelay_bListReceived wsrelay_numListed wsrelay_aListRooms \
             wsrelay_aListEntries wsrelay_aListTails wsrelay_numShown wsrelay_aShownRooms wsrelay_aShownTails \
             wsrelay_aListHits wsrelay_aShownHits wsrelay_aListPw wsrelay_aShownPw \
-            wsrelay_bListAsked wsrelay_msecListAsked wsrelay_bListDropped
+            wsrelay_bListAsked wsrelay_msecListAsked wsrelay_bListDropped wsrelay_bListGaveUp wsrelay_bListMots
     cut_out "$relay" 'static int wsrelay_EntryHits('
     cut_out "$relay" 'static int wsrelay_HexNibble('
     cut_out "$relay" 'static int wsrelay_DecodeHex('

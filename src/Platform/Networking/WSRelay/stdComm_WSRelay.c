@@ -1957,6 +1957,10 @@ static int wsrelay_bListAsked = 0;
 static uint32_t wsrelay_msecListAsked = 0;
 // It was done with one before its answer was read (wsrelay_DropListAsk).
 static int wsrelay_bListDropped = 0;
+// It was given up on (WSRELAY_LIST_MS), and its answer still goes up.
+static int wsrelay_bListGaveUp = 0;
+// Which game (Main_bMotsCompat) the join screen's last ask was for.
+static int wsrelay_bListMots = 0;
 static int wsrelay_numListed = 0;
 static int wsrelay_aListRooms[WSRELAY_MAX_LISTED];
 static jkMultiEntry wsrelay_aListEntries[WSRELAY_MAX_LISTED];
@@ -3379,6 +3383,12 @@ int stdComm_EnumSessions(int a, void* b)
         if (wsrelay_bListDropped)
             wsrelay_PumpControl();
         wsrelay_bListDropped = 0;
+        // Added: nor is a list the other game asked for, before the engine
+        // restarted into this one, what this ask gives up with if its answer
+        // is late (stdComm_WSRelay_ListReady).
+        if (wsrelay_bListMots != Main_bMotsCompat)
+            wsrelay_numListed = 0;
+        wsrelay_bListMots = Main_bMotsCompat;
 
         // Only the games this one can join: Jedi Knight can't join a game
         // Mysteries of the Sith hosts, or the other way round.
@@ -3389,12 +3399,12 @@ int stdComm_EnumSessions(int a, void* b)
         // WSRELAY_LIST_MS) held the join screen still for a round trip to
         // the lobby every 2 s. The screen puts the list up when it comes in,
         // as it did after the wait (stdComm_WSRelay_ListReady). An answer
-        // already here (one that came after the last wait gave up) goes up
-        // now, as the wait put it up at once.
+        // already here goes up now, as the wait put it up at once.
         wsrelay_PumpControl();
         if (!wsrelay_bListReceived && wsrelay_js_state() == WSRELAY_STATE_OPEN)
         {
             wsrelay_bListAsked = 1;
+            wsrelay_bListGaveUp = 0;
             wsrelay_msecListAsked = stdPlatform_GetTimeMsec();
             return STDCOMM_WSRELAY_LIST_LATER;
         }
@@ -3407,16 +3417,26 @@ int stdComm_EnumSessions(int a, void* b)
 // Called each frame of the join screen. 1 once the list it asked for
 // (stdComm_EnumSessions) is in jkGuiMultiplayer_aEntries, for the screen to
 // put up: when the lobby's answer comes, when the socket closes (no games
-// then), or after WSRELAY_LIST_MS with the list it had, as the wait did.
+// then), or after WSRELAY_LIST_MS with the list it had, as the wait did, and
+// then again when the answer comes.
 int stdComm_WSRelay_ListReady()
 {
     if (stdComm_Imperial_bActive || !wsrelay_bListAsked)
         return 0;
 
     wsrelay_PumpControl();
-    if (!wsrelay_bListReceived && wsrelay_js_state() == WSRELAY_STATE_OPEN
-        && stdPlatform_GetTimeMsec() - wsrelay_msecListAsked < WSRELAY_LIST_MS)
-        return 0;
+    if (!wsrelay_bListReceived && wsrelay_js_state() == WSRELAY_STATE_OPEN)
+    {
+        // After WSRELAY_LIST_MS the list it had, as the wait gave up. The
+        // answer still goes up when it comes: the wait left it for the next
+        // ask to take for its own, and every list after it went up an ask
+        // late.
+        if (wsrelay_bListGaveUp || stdPlatform_GetTimeMsec() - wsrelay_msecListAsked < WSRELAY_LIST_MS)
+            return 0;
+        wsrelay_bListGaveUp = 1;
+        wsrelay_ShowList();
+        return 1;
+    }
 
     wsrelay_bListAsked = 0;
     wsrelay_ShowList();

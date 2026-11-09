@@ -215,6 +215,13 @@ LABEL_1:
                     _memset(&v35, 0, sizeof(v35));
                     _memset(&jkGuiMultiplayer_stru_556168, 0, sizeof(jkGuiMultiplayer_stru_556168));
                     memset(&jkGui_guid_556040, 0, sizeof(GUID));
+#ifdef PLATFORM_WSRELAY
+                    // Added: none of the last visit's games until this visit's
+                    // list is up. The list box starts empty, and a click on
+                    // one of its rows, or a gamepad's Ok, picked the game
+                    // listed there last time.
+                    dplay_dword_55D618 = 0;
+#endif
 #if defined(PLATFORM_WSRELAY) && defined(QOL_IMPROVEMENTS)
                     // Added: no address box for the Imperial Network Protocol: its server
                     // comes from the page (stdComm_Imperial.c), not from here. (The box,
