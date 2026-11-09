@@ -18,6 +18,9 @@ rm -f wasm_out/openjkdf2.data
 rm -f wasm_out/openjkdf2_data.data
 rm -f wasm_out/openjkdf2_data.js
 rm -f wasm_out/index.html
+# The JSPI engine (built below): an old one left here would be loaded instead
+# of this build in browsers with JSPI.
+rm -rf wasm_out/jspi
 rm -rf wasm_out/jk1/resource/shaders
 #mkdir -p wasm_out/jk1/resource/shaders
 rm -rf wasm_out/mots/resource/shaders
@@ -27,14 +30,25 @@ rm -rf wasm_out/mots/resource/shaders
 
 #rm -rf build_emcc
 mkdir -p build_emcc && pushd build_emcc
-cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake
-cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake
-make -j1 VERBOSE=1
+cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake || exit 1
+cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake || exit 1
+# Stop on a failed build, so an older engine left in the build folder isn't copied.
+make -j1 VERBOSE=1 || exit 1
+popd
+
+# The JSPI engine, which the page loads from jspi/ where the browser has JSPI
+# (cmake_modules/toolchain_wasm.cmake).
+mkdir -p build_emcc_jspi && pushd build_emcc_jspi
+cmake .. --toolchain $(pwd)/../cmake_modules/toolchain_wasm.cmake -DOPENJKDF2_WASM_JSPI=ON || exit 1
+make -j1 VERBOSE=1 || exit 1
 popd
 
 cp packaging/wasm/index.html wasm_out/index.html
 cp build_emcc/openjkdf2.js wasm_out/openjkdf2.js
 cp build_emcc/openjkdf2.wasm wasm_out/openjkdf2.wasm
+mkdir -p wasm_out/jspi
+cp build_emcc_jspi/openjkdf2.js wasm_out/jspi/openjkdf2.js
+cp build_emcc_jspi/openjkdf2.wasm wasm_out/jspi/openjkdf2.wasm
 # Only present when configured with -DOPENJKDF2_WASM_PRELOAD_DATA=ON (local testing;
 # the package contains game assets, never publish it). Otherwise the page asks the
 # player for their own game folder.
@@ -43,6 +57,7 @@ if [ -f build_emcc/openjkdf2_data.data ]; then
     cp build_emcc/openjkdf2_data.data wasm_out/openjkdf2_data.data
     # The JS is minified to one line, so short-circuit the test instead of commenting out the rest of the line
     gsed -i -E 's/var hasByteServing ?= ?/var hasByteServing=false\&\&/g' wasm_out/openjkdf2.js
+    gsed -i -E 's/var hasByteServing ?= ?/var hasByteServing=false\&\&/g' wasm_out/jspi/openjkdf2.js
 fi
 
 # Update maxthomas.dev/openjkdf2, if you're me

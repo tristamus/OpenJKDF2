@@ -60,8 +60,12 @@ typedef int jkr_sock;
 // wss://), one packet per binary message. A server is named by a ws:// or wss:// URL,
 // a bare host (wss://<host>/imperial) or host:port (ws://host:port/, for testing);
 // jkr_ResolveAddr gives each a made-up address that stands for it. Waits yield to the
-// page (emscripten_sleep, -sASYNCIFY) so messages can arrive. No direct links (no hole
-// punching), and dedicated servers reachable only at their own address aren't listed.
+// page (emscripten_sleep, through Asyncify or JSPI) so messages can arrive. A socket
+// the server (or a proxy, or the player's network) closed is opened again by the next
+// packet sent on it once what came on it has been read, at most once a second, and
+// less often while the server stays down (jkr_WsSendTo), so the resume and re-HELLO
+// paths below work as they do over UDP. No direct links (no hole punching), and
+// dedicated servers reachable only at their own address aren't listed.
 #include <emscripten.h>
 
 #define JKR_WS_MAX_NAMES 16
@@ -81,7 +85,7 @@ static void jkr_WsUrlFor(const char* server, char* url, size_t cap)
     else
         snprintf(url, cap, "wss://%s/imperial", server);
 }
-static struct { int used, ws; struct sockaddr_in peer; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
+static struct { int used, ws; struct sockaddr_in peer; double reopenAt, reopenWait, openAt; } jkr_wsSocks[JKR_WS_MAX_SOCKS];
 // When what jkr_WsRecvFrom read last came to the page (performance.now()): the
 // engine reads it at its next frame's first step, a frame or more later.
 static double jkr_wsRecvAtMs = 0.0;
@@ -96,16 +100,31 @@ EM_JS(int, jkr_js_open, (const char* url), {
     s.ws.onopen = function() { for (var i = 0; i < s.out.length; i++) s.ws.send(s.out[i]); s.out = []; };
     // Changed: what isn't read yet is capped, as a UDP socket's buffer is (a server
     // flooding us drops packets instead of filling the tab's memory).
+    // A relay packet (binary) on it means the server took it (s.heard).
     s.ws.onmessage = function(ev) {
-        if (!(ev.data instanceof ArrayBuffer) || s.q.length >= 4096) return;
+        if (!(ev.data instanceof ArrayBuffer)) return;
+        s.heard = true;
+        if (s.q.length >= 4096) return;
         var d = new Uint8Array(ev.data);
         d.at = performance.now();
         s.q.push(d);
     };
-    s.ws.onclose = function() { s.closed = true; };
-    s.ws.onerror = function() { s.closed = true; };
+    // What waited for it to open never goes (and isn't counted as backlog).
+    s.ws.onclose = function() { s.closed = true; s.out = []; };
+    s.ws.onerror = function() { s.closed = true; s.out = []; };
     Module.jkrWs.socks[id] = s;
     return id;
+});
+
+// Whether a socket closed (the server or a proxy closed it, or it never opened)
+// and everything that came on it has been read: 0 not (open, connecting, or still
+// with something to read), 1 closed before the server sent anything on it (it never
+// opened, or a server or proxy took it and closed it at once), 2 closed after the
+// server sent something.
+EM_JS(int, jkr_js_closed, (int id), {
+    var s = Module.jkrWs && Module.jkrWs.socks[id];
+    if (!s) return 1;
+    return s.closed && !s.q.length ? (s.heard ? 2 : 1) : 0;
 });
 
 EM_JS(int, jkr_js_send, (int id, const void* p, int n), {
@@ -113,7 +132,9 @@ EM_JS(int, jkr_js_send, (int id, const void* p, int n), {
     if (!s || s.closed) return -1;
     var d = HEAPU8.slice(p, p + n);
     if (s.ws.readyState === 1) s.ws.send(d);
-    else if (s.ws.readyState === 0) s.out.push(d);
+    // While it connects (which can take a while for a server that's down), what's
+    // sent waits, 64 packets at most, as a UDP socket's buffer would.
+    else if (s.ws.readyState === 0 && s.out.length < 64) s.out.push(d);
     else return -1;
     return n;
 });
@@ -185,11 +206,40 @@ static int jkr_WsSendTo(int sk, const void* p, int n, const struct sockaddr_in* 
     {
         jkr_js_close(jkr_wsSocks[sk].ws);   // another server now: one connection at a time
         jkr_wsSocks[sk].ws = 0;
+        jkr_wsSocks[sk].reopenWait = 0.0;   // its tries start at 1 s
+    }
+    int closed = jkr_wsSocks[sk].ws ? jkr_js_closed(jkr_wsSocks[sk].ws) : 0;
+    double from = 0.0;   // a reopen's: when its wait counts from
+    if (closed)
+    {
+        // The server (or a proxy, or the network) closed it: open it again, at most
+        // once a second. While the server stays down (nothing comes on a new socket),
+        // each try waits twice as long as the one before, 4 s at most (so a joiner's
+        // last try before JKR_TIMEOUT_MS is at 19 s: 0, 1, 3, 7, 11, 15, 19; that one
+        // only saves the game if it opens and the server's answer is read in the second
+        // that's left, which a tab at a few frames a second often misses). The waits
+        // count from each open, the first one too (reopenAt). A try can only go when
+        // something is sent (each frame, or a lone host's keepalive), so it's often a
+        // little late; then the next wait counts from when this one was due, so in a
+        // slow tab the tries don't fall later and later (unless it's a wait or more
+        // late, as when the browser took that long to give up on the last one). Never
+        // two opens less than a second apart, though (openAt): a try late by most of a
+        // 4 s wait would otherwise have the next one due a frame later.
+        double now = emscripten_get_now();
+        double wait = closed == 2 || jkr_wsSocks[sk].reopenWait < 1000.0 ? 1000.0 : jkr_wsSocks[sk].reopenWait;
+        double due = jkr_wsSocks[sk].reopenAt + wait;
+        if (now < due || now - jkr_wsSocks[sk].openAt < 1000.0) return -1;
+        from = closed == 1 && now - due < wait ? due : now;
+        jkr_wsSocks[sk].reopenWait = closed == 2 ? 1000.0 : (wait * 2.0 < 4000.0 ? wait * 2.0 : 4000.0);
+        jkr_js_close(jkr_wsSocks[sk].ws);
+        jkr_wsSocks[sk].ws = 0;
     }
     if (!jkr_wsSocks[sk].ws)
     {
         if (!(url = jkr_WsUrlOf(to))) return -1;   // not a server we named (a listed server's own address)
         jkr_wsSocks[sk].ws = jkr_js_open(url);
+        jkr_wsSocks[sk].reopenAt = closed ? from : emscripten_get_now();
+        jkr_wsSocks[sk].openAt = emscripten_get_now();
         if (jkr_wsSocks[sk].ws < 0) { jkr_wsSocks[sk].ws = 0; return -1; }
         jkr_wsSocks[sk].peer = *to;
     }

@@ -38,6 +38,13 @@ set(ZLIB_SHARED_LIBRARY_DIR ${ZLIB_ROOT}/lib)
 set(ZLIB_EXTRA_CMAKE_ARGS)
 if(TARGET_WASM)
     set(ZLIB_EXTRA_CMAKE_ARGS -DZLIB_BUILD_SHARED=OFF)
+    # The JSPI engine's zlib is compiled with Wasm setjmp (toolchain_wasm.cmake),
+    # passed both ways on every configure, as for libpng (build_libpng.cmake).
+    if(OPENJKDF2_WASM_JSPI)
+        list(APPEND ZLIB_EXTRA_CMAKE_ARGS -DOPENJKDF2_WASM_JSPI:BOOL=ON "-DCMAKE_C_FLAGS:STRING=-sSUPPORT_LONGJMP=wasm")
+    else()
+        list(APPEND ZLIB_EXTRA_CMAKE_ARGS -DOPENJKDF2_WASM_JSPI:BOOL=OFF "-DCMAKE_C_FLAGS:STRING=")
+    endif()
 endif()
 
 ExternalProject_Add(

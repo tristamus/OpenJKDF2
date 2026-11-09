@@ -35,10 +35,26 @@ jobs:
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           make -C build_emcc -j"$(nproc)"
-      # Map downloads for joiners, with made-up GOBs (no game files).
+      # The JSPI engine, which the page loads where the browser has JSPI
+      # (cmake_modules/toolchain_wasm.cmake), from the same source.
+      - name: Make the JSPI engine
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          cmake -B build_emcc_jspi --toolchain cmake_modules/toolchain_wasm.cmake -DOPENJKDF2_WASM_JSPI=ON
+          make -C build_emcc_jspi -j"$(nproc)"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The JSPI engine: no invoke_* or JavaScript exception imports (a
+      # JavaScript frame under a pause), only the expected imports can pause,
+      # only main is promising, and no other export reaches a pause through
+      # direct calls (jspi-check.mjs; callbacks through function pointers
+      # aren't followed).
+      - name: Check the JSPI engine
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          node packaging/wasm/test/jspi-check.mjs build_emcc_jspi --reach "$(em-config BINARYEN_ROOT)/bin/wasm-dis"
+      # Map downloads for joiners, with made-up GOBs (no game files).
       - name: Test map downloads
         run: node packaging/wasm/test/maps-test.mjs
       # The host's mod for joiners, with made-up files (no game files).
@@ -134,9 +150,10 @@ jobs:
       # players pick their own install folder in the page.
       - name: Collect web build
         run: |
-          mkdir -p web
+          mkdir -p web/jspi
           cp packaging/wasm/index.html packaging/wasm/move-out.html packaging/wasm/unzip.js build_emcc/openjkdf2.js \
              build_emcc/openjkdf2.wasm web/
+          cp build_emcc_jspi/openjkdf2.js build_emcc_jspi/openjkdf2.wasm web/jspi/
       - uses: actions/upload-artifact@v4
         with:
           name: openjkdf2-wasm

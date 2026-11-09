@@ -902,6 +902,35 @@ test('a joiners\' link that drops and won\'t come back is tried again after 5, 1
     assert.ok(received(three).length > 250);
 });
 
+test('a try at a joiners\' link that falls due while the other is quiet goes once they\'re heard from again', async () => {
+    const world = makeWorld();
+    world.canLink = (a, b) => a === 1 || b === 1;
+    const [, two, three] = await room(world, [2, 3]);
+    let threeSends = true;
+    const timer = world.every(() => {
+        send(two, 3, message(1));
+        if (threeSends) send(three, 2, message(1));
+    }, 1000);
+    const offers = () => world.lobby.signals.filter(s => s.from === 2 && s.to === 3).length;
+    // The first two tries fail, and 3 goes quiet (loading a level, say)
+    // before the third, 15 s after the second.
+    await world.run(12000);
+    assert.equal(offers(), 2);
+    threeSends = false;
+    world.canLink = () => true;
+    await world.run(30000);
+    assert.equal(offers(), 2);
+    assert.equal(two.net.route(3), 1);
+    // Once 3 is heard from again, the third goes, and they link.
+    threeSends = true;
+    await world.run(5000);
+    world.cancel(timer);
+    await world.run(500);
+    assert.equal(offers(), 3);
+    assert.ok(two.net.peers[3] && two.net.peers[3].open, 'linked');
+    assert.equal(two.net.route(3), 3);
+});
+
 test('packets over a joiners\' link wait for the switch, which comes after what went through the host', async () => {
     const world = makeWorld();
     world.oneWay = (a, b) => (a === 1 || b === 1 ? 300 : 5);

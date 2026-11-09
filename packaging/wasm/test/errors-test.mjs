@@ -17,18 +17,26 @@ function cut(from, to) {
 }
 const code = cut('      window.onerror = function(message', '      // ---- Mouse look.');
 const loadCode = cut('      function loadEngine(', '      var picker = ');
+const engineKind = new Function(cut('      function engineKind(', '      var ENGINE = ') + '\nreturn engineKind;')();
+const engineAgain = cut('      var ENGINE_FAILED = ', '      // For netstats.js');
+
+// A made-up sessionStorage.
+function storage(items = {}) {
+    return { items, getItem: k => k in items ? items[k] : null, setItem: (k, v) => { items[k] = String(v); } };
+}
 
 // The page's error handling, with the parts of the page it uses made up.
-function page() {
+function page({ ENGINE = 'asyncify', sessionStorage = storage(), search = '' } = {}) {
     const listeners = {}, shown = [], logged = [];
     const element = () => ({ style: {}, hidden: false, textContent: '' });
     const env = {
-        window: { addEventListener: (type, fn) => { listeners[type] = fn; } },
+        window: { addEventListener: (type, fn) => { listeners[type] = fn; }, location: { search } },
         Module: { printErr: () => {}, setStatus: () => {} },
         engineLog: [],
         spinnerElement: element(), progressElement: element(), statusElement: element(),
         showProblem: (title, text, reload) => shown.push({ title, text, reload }),
         console: { error: line => logged.push(line) },
+        ENGINE, ENGINE_FAILED: 'jkdf2mp-jspi-failed', sessionStorage,
     };
     const names = Object.keys(env);
     const run = new Function(...names, 'var leaveGuard = true;\n' + code +
@@ -103,15 +111,140 @@ test('openjkdf2.js that doesn\'t download, or comes cut off, stops with Reload',
     assert.equal(p.shown[0].title, "The game couldn't start");
     assert.equal(p.shown[0].reload, true);
 
-    // The script element's error event.
-    const env = { leaveGuard: true, stopped: [], scripts: [] };
-    const document = { createElement: () => ({}), body: { appendChild: s => env.scripts.push(s) } };
-    new Function('document', 'engineStopped', 'var leaveGuard;\n' + loadCode + '\nloadEngine(false);')(
-        document, why => env.stopped.push(why));
-    assert.equal(env.scripts.length, 1);
-    assert.equal(env.scripts[0].src, 'openjkdf2.js');
-    env.scripts[0].onerror();
-    assert.deepEqual(env.stopped, ["openjkdf2.js didn't download"]);
+    // The script element's error event. When the JSPI engine's doesn't
+    // download, the Asyncify engine's is tried, and when that doesn't either,
+    // the game stops.
+    for (const ENGINE of ['asyncify', 'jspi']) {
+        const env = { leaveGuard: true, stopped: [], scripts: [], logged: [] };
+        const document = { createElement: () => ({}), body: { appendChild: s => env.scripts.push(s) } };
+        const Module = { jkEngine: ENGINE };
+        const engineLog = [];
+        const engine = new Function('document', 'engineStopped', 'Module', 'console', 'ENGINE', 'engineLog',
+                                    'var leaveGuard;\n' + loadCode + '\nloadEngine(false);\nreturn () => ENGINE;')(
+            document, why => env.stopped.push(why), Module, { log: line => env.logged.push(line) }, ENGINE, engineLog);
+        if (ENGINE === 'jspi') {
+            assert.deepEqual(env.scripts.map(s => s.src), ['jspi/openjkdf2.js']);
+            env.scripts[0].onerror();
+            assert.deepEqual(env.stopped, []);
+            assert.deepEqual(env.logged, ["OpenJKDF2: jspi/openjkdf2.js didn't download; loading the Asyncify engine instead"]);
+            assert.deepEqual([engine(), Module.jkEngine], ['asyncify', 'asyncify']);
+            assert.deepEqual(engineLog, ["jspi/openjkdf2.js didn't download; loading the Asyncify engine instead"]);
+        }
+        assert.equal(env.scripts[env.scripts.length - 1].src, 'openjkdf2.js');
+        env.scripts[env.scripts.length - 1].onerror();
+        assert.deepEqual(env.stopped, ["openjkdf2.js didn't download"]);
+    }
+    // An error from the JSPI engine's script counts as the engine's.
+    const q = page();
+    q.error('Uncaught SyntaxError: Unexpected end of input', 'https://jediknight.zone/jspi/openjkdf2.js',
+            thrown(SyntaxError, 'Unexpected end of input', ''));
+    assert.equal(q.shown[0].title, "The game couldn't start");
+    assert.equal(q.engineError(thrown(Error, 'x', '    at f (https://jediknight.zone/jspi/openjkdf2.js:1:2)'), ''), true);
+});
+
+test('the JSPI engine where the browser has JSPI, but not in Safari unless asked; the Asyncify engine elsewhere', () => {
+    const jspi = { Suspending: function() {}, promising: function() {} };
+    const chrome = 'Google Inc.', firefox = '', safari = 'Apple Computer, Inc.';
+    // Chrome, Edge (Google Inc.) and Firefox ('') with JSPI.
+    assert.equal(engineKind('', jspi, chrome), 'jspi');
+    assert.equal(engineKind('?mp', jspi, firefox), 'jspi');
+    assert.equal(engineKind('', jspi, undefined), 'jspi');
+    // Without JSPI, or only half of it.
+    assert.equal(engineKind('', {}, chrome), 'asyncify');
+    assert.equal(engineKind('', { Suspending: function() {} }, chrome), 'asyncify');
+    assert.equal(engineKind('', null, chrome), 'asyncify');
+    // Safari, and every browser on an iPhone or iPad, even with JSPI.
+    assert.equal(engineKind('', jspi, safari), 'asyncify');
+    // ?engine= picks one; jspi still needs JSPI.
+    assert.equal(engineKind('?engine=asyncify', jspi, chrome), 'asyncify');
+    assert.equal(engineKind('?autostart&engine=jspi', jspi, safari), 'jspi');
+    assert.equal(engineKind('?engine=jspi', {}, chrome), 'asyncify');
+    assert.equal(engineKind('?engine=jspi', null, safari), 'asyncify');
+    assert.equal(engineKind('?engine=other', jspi, safari), 'asyncify');
+    assert.equal(engineKind('?myengine=asyncify', jspi, chrome), 'jspi');
+});
+
+test("a tab where the JSPI engine couldn't start, or hit a SuspendError, gets the Asyncify engine when reloaded", () => {
+    // The page's choice on a reload, with what the tab remembers.
+    function reload(ENGINE, search, items) {
+        const env = { logged: [], engineLog: [] };
+        const window = { location: { search } };
+        const chosen = new Function('ENGINE', 'window', 'sessionStorage', 'console', 'engineLog',
+                                    engineAgain + '\nreturn ENGINE;')(
+            ENGINE, window, items === null ? undefined : storage(items), { log: line => env.logged.push(line) }, env.engineLog);
+        return { chosen, ...env };
+    }
+    const FAILED = 'jkdf2mp-jspi-failed';
+    // The JSPI engine's wasm didn't download, compile or link: remembered.
+    for (const why of ['both async and sync fetching of the wasm failed',
+                       "CompileError: WebAssembly.instantiate(): unknown import kind 0x55",
+                       'RuntimeError: Aborted(native code called abort()). Build with -sASSERTIONS for more info.']) {
+        const tab = storage();
+        page({ ENGINE: 'jspi', sessionStorage: tab }).env.Module.onAbort(why);
+        assert.equal(tab.items[FAILED], why);
+        const again = reload('jspi', '', tab.items);
+        assert.equal(again.chosen, 'asyncify');
+        // The reason's own full stop isn't kept before the ")".
+        assert.deepEqual(again.logged, ["OpenJKDF2: the JSPI engine didn't work in this tab before (" +
+                                        why.replace(/\.$/, '') + '); loading the Asyncify engine']);
+        assert.equal(again.engineLog.length, 1);
+        // ?engine=jspi still gets it, and ?engine=asyncify was Asyncify anyway.
+        assert.equal(reload('jspi', '?engine=jspi', tab.items).chosen, 'jspi');
+        assert.equal(reload('asyncify', '?engine=asyncify', tab.items).chosen, 'asyncify');
+    }
+    // A SuspendError during play: remembered too.
+    const suspended = storage();
+    const p = page({ ENGINE: 'jspi', sessionStorage: suspended });
+    p.env.Module.onRuntimeInitialized();
+    const SuspendError = typeof WebAssembly.SuspendError === 'function' ? WebAssembly.SuspendError : class SuspendError extends Error {};
+    const e = thrown(SuspendError, 'trying to suspend JS frames', ENGINE_STACK);
+    e.name = 'SuspendError';
+    p.rejection(e);
+    assert.equal(p.shown[0].title, 'The game stopped');
+    assert.match(p.shown[0].text, /Reload the page to play on/);
+    assert.match(suspended.items[FAILED], /SuspendError/);
+    // Not remembered: any other crash during play, or the Asyncify engine failing.
+    const crashed = storage();
+    const q = page({ ENGINE: 'jspi', sessionStorage: crashed });
+    q.env.Module.onRuntimeInitialized();
+    q.rejection(thrown(WebAssembly.RuntimeError, 'unreachable', ENGINE_STACK));
+    assert.deepEqual(crashed.items, {});
+    assert.doesNotMatch(q.shown[0].text, /Reload the page to play on/);
+    // Nor the browser turning down the memory, which the Asyncify engine needs too.
+    const memory = storage();
+    page({ ENGINE: 'jspi', sessionStorage: memory }).env.Module.onAbort(
+        'RangeError: WebAssembly.instantiate(): Out of memory: Cannot allocate Wasm memory for new instance');
+    assert.deepEqual(memory.items, {});
+    // A crash before the start that names memory is the JSPI engine's still, and not the browser's memory.
+    const oob = storage();
+    const o = page({ ENGINE: 'jspi', sessionStorage: oob });
+    o.env.Module.onAbort('RuntimeError: memory access out of bounds');
+    assert.equal(oob.items[FAILED], 'RuntimeError: memory access out of bounds');
+    assert.doesNotMatch(o.shown[0].text, /couldn't give the game the memory/);
+    // V8's other words for it (WebAssembly.Memory()).
+    const mem2 = storage();
+    page({ ENGINE: 'jspi', sessionStorage: mem2 }).env.Module.onAbort('RangeError: WebAssembly.Memory(): could not allocate memory');
+    assert.deepEqual(mem2.items, {});
+    const mem3 = storage();
+    page({ ENGINE: 'jspi', sessionStorage: mem3 }).env.Module.onAbort('RangeError: Array buffer allocation failed');
+    assert.deepEqual(mem3.items, {});
+    // ?engine=jspi keeps the JSPI engine on a reload, so the box doesn't say the other engine comes.
+    const asked = storage();
+    const a = page({ ENGINE: 'jspi', sessionStorage: asked, search: '?engine=jspi' });
+    a.env.Module.onRuntimeInitialized();
+    a.rejection(e);
+    assert.match(asked.items[FAILED], /SuspendError/);
+    assert.doesNotMatch(a.shown[0].text, /Reload the page to play on/);
+    const asyncify = storage();
+    page({ ENGINE: 'asyncify', sessionStorage: asyncify }).env.Module.onAbort('both async and sync fetching of the wasm failed');
+    assert.deepEqual(asyncify.items, {});
+    // A fresh tab, and storage the browser turns down (no sessionStorage, or it throws).
+    assert.equal(reload('jspi', '', {}).chosen, 'jspi');
+    assert.equal(reload('jspi', '', null).chosen, 'jspi');
+    const blocked = { getItem() { throw new Error('SecurityError'); }, setItem() { throw new Error('SecurityError'); } };
+    const r = page({ ENGINE: 'jspi', sessionStorage: blocked });
+    r.env.Module.onAbort('both async and sync fetching of the wasm failed');
+    assert.equal(r.shown.length, 1);
 });
 
 test("the browser running out of memory for the engine says so", () => {
