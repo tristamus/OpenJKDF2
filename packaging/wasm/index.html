@@ -2387,7 +2387,9 @@
       // such as a browser add-on's script, used to show "The game stopped" and
       // turn off the leave warning while the game played on; now it's left to
       // the console.
-      var ENGINE_FRAME = /openjkdf2(_data)?\.(js|wasm)|wasm-function|wasm:\/\//;
+      // A kit's engine files have their content's hash in their names
+      // (ENGINE_FILES): openjkdf2.<12 hex digits>.js and .wasm.
+      var ENGINE_FRAME = /openjkdf2(_data)?(\.[0-9a-f]{12})?\.(js|wasm)|wasm-function|wasm:\/\//;
       var engineRunning = false, engineProblem = false;
 
       function engineError(error, source) {
@@ -3635,14 +3637,22 @@
         document.body.appendChild(engine);
       }
 
-      // ---- The engine's files, for each engine, named in this one place:
-      // loadEngine and prefetchEngine load them from here, and the engine
-      // asks locateFile for its wasm, which it would otherwise look for next
-      // to its script.
-      var ENGINE_FILES = {
-        jspi: { js: 'jspi/openjkdf2.js', wasm: 'jspi/openjkdf2.wasm' },
-        asyncify: { js: 'openjkdf2.js', wasm: 'openjkdf2.wasm' }
-      };
+      // ---- The files the page loads by name, named in this one place: each
+      // engine's script and wasm (loadEngine and prefetchEngine load them
+      // from here, and the engine asks locateFile for its wasm, which it
+      // would otherwise look for next to its script) and unzip.js (a worker,
+      // unzip). Here they're the names a build's web/ folder has. In a kit
+      // they're under e/, named by their content (openjkdf2.<12 hex
+      // digits of its SHA-256>.wasm), so the browser keeps them for good
+      // and a page only ever gets its own engine, also from before a deploy
+      // (the kit keeps the last kits' files): the kit's build script
+      // (tools/build-kit.mjs in jkdf2mp-bb-server) rewrites the JSON between
+      // the two kit-files marks, and nothing else in the page.
+      var ENGINE_FILES = /* kit-files */ {
+        "jspi": { "js": "jspi/openjkdf2.js", "wasm": "jspi/openjkdf2.wasm" },
+        "asyncify": { "js": "openjkdf2.js", "wasm": "openjkdf2.wasm" },
+        "unzip": "unzip.js"
+      } /* /kit-files */;
       Module.locateFile = function(path, dir) {
         return path === 'openjkdf2.wasm' ? new URL(ENGINE_FILES[ENGINE].wasm, document.baseURI).href : dir + path;
       };
@@ -4878,7 +4888,7 @@
 
       function unzip(z, data) {
         if (!unzipper) {
-          var worker = new Worker('unzip.js'), calls = {}, next = 1;
+          var worker = new Worker(ENGINE_FILES.unzip), calls = {}, next = 1;
           var fail = function(why) {
             for (var id in calls) calls[id].reject(new Error(why));
             calls = {};

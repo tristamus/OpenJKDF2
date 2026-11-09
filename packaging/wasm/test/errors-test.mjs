@@ -140,6 +140,12 @@ test('openjkdf2.js that doesn\'t download, or comes cut off, stops with Reload',
             thrown(SyntaxError, 'Unexpected end of input', ''));
     assert.equal(q.shown[0].title, "The game couldn't start");
     assert.equal(q.engineError(thrown(Error, 'x', '    at f (https://jediknight.zone/jspi/openjkdf2.js:1:2)'), ''), true);
+    // A kit's engine files, named by their content (ENGINE_FILES), count too;
+    // its unzip.js doesn't.
+    assert.equal(q.engineError(thrown(Error, 'x', '    at f (https://jediknight.zone/e/jspi/openjkdf2.0123456789ab.js:1:2)'), ''), true);
+    assert.equal(q.engineError(thrown(Error, 'x', '    at f (https://jediknight.zone/e/openjkdf2.0123456789ab.wasm:1:2)'), ''), true);
+    assert.equal(q.engineError(new Error('x'), 'https://jediknight.zone/e/openjkdf2.0123456789ab.js'), true);
+    assert.equal(q.engineError(thrown(Error, 'x', '    at f (https://jediknight.zone/e/unzip.0123456789ab.js:1:2)'), ''), false);
 });
 
 test('the JSPI engine where the browser has JSPI, but not in Safari unless asked; the Asyncify engine elsewhere', () => {
