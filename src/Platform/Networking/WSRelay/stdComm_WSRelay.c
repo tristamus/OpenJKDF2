@@ -3327,12 +3327,14 @@ int DirectPlay_GetSession_passwordidk(jkMultiEntry* pEntry)
 }
 
 // The relay's latest list onto the join screen (jkGuiMultiplayer_aEntries),
-// and none while the socket is down.
+// and none while the socket is down. That list is forgotten then: a give-up
+// on the next socket's first ask puts up no games, not the ones from before
+// (stdComm_WSRelay_ListReady).
 static void wsrelay_ShowList()
 {
     int n = wsrelay_numListed;
     if (wsrelay_js_state() != WSRELAY_STATE_OPEN)
-        n = 0;
+        n = wsrelay_numListed = 0;
 
     memset(jkGuiMultiplayer_aEntries, 0, sizeof(jkMultiEntry) * 32);
     for (int i = 0; i < n; i++)

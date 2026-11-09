@@ -463,6 +463,16 @@ static void test_list_late(void)
     CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 0 && dplay_dword_55D618 == 0, "the socket went: none shown");
     CHECK(!stdComm_WSRelay_ListReady(), "once");
     CHECK(stdComm_EnumSessions(1, NULL) == 0 && dplay_dword_55D618 == 0, "the next ask connects");
+    // The new socket's first answer is late: the give-up puts up no games,
+    // not the ones from before the socket went.
+    now += 2000;
+    CHECK(stdComm_EnumSessions(1, NULL) == STDCOMM_WSRELAY_LIST_LATER, "asked on the new socket");
+    now += WSRELAY_LIST_MS;
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_numShown == 0 && dplay_dword_55D618 == 0,
+          "gave up: none, not the list from before the socket went");
+    snprintf(line, sizeof(line), "list 26 1 %s", hex);
+    lobbySays(line);
+    CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 26, "then its answer");
     listFrom(1);
 
     // Given up on, then the screen closes: its answer isn't the next ask's.
@@ -608,8 +618,8 @@ static void test_screen_opens(void)
     lobbySays(line);
     CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 48, "then this visit's");
 
-    // The last visit had no games: the give-up puts up "No games to join"
-    // (the box is empty till then).
+    // The last visit had no games: the give-up puts up none, the game's
+    // "(Searching...)" (the box is empty till then).
     lobbySays("list");
     now += 2000;
     CHECK(stdComm_EnumSessions(1, NULL) == 0 && dplay_dword_55D618 == 0 && wsrelay_numShown == 0, "no games up");
@@ -673,8 +683,8 @@ static void test_give_up(void)
     lobbySays(line);
     CHECK(stdComm_WSRelay_ListReady() && wsrelay_aShownRooms[0] == 61, "then the answer");
 
-    // No games up: the give-up puts "No games to join" up again, which has
-    // no row to click.
+    // No games up: the give-up puts no games ("(Searching...)") up again,
+    // which has no row to click.
     lobbySays("list");
     now += 2000;
     CHECK(stdComm_EnumSessions(1, NULL) == 0 && dplay_dword_55D618 == 0, "no games up");
