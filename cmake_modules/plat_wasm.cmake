@@ -38,7 +38,7 @@ macro(plat_initialize)
     # toolchain_wasm.cmake), which the page loads where the browser has it,
     # and through Asyncify in the other.
     if(OPENJKDF2_WASM_JSPI)
-        set(WASM_PAUSE_FLAG "-sJSPI")
+        set(WASM_PAUSE_FLAG "-sJSPI -sSUPPORT_LONGJMP=wasm")
     else()
         set(WASM_PAUSE_FLAG "-sASYNCIFY")
     endif()

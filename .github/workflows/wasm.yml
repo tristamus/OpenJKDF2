@@ -42,13 +42,19 @@ jobs:
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           cmake -B build_emcc_jspi --toolchain cmake_modules/toolchain_wasm.cmake -DOPENJKDF2_WASM_JSPI=ON
           make -C build_emcc_jspi -j"$(nproc)"
-      # Map downloads for joiners, with made-up GOBs (no game files).
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # No JavaScript frame can end up under a pause in the JSPI engine.
+      # The JSPI engine: no invoke_* or JavaScript exception imports (a
+      # JavaScript frame under a pause), only the expected imports can pause,
+      # only main is promising, and no other export reaches a pause through
+      # direct calls (jspi-check.mjs; callbacks through function pointers
+      # aren't followed).
       - name: Check the JSPI engine
-        run: node packaging/wasm/test/jspi-check.mjs build_emcc_jspi
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          node packaging/wasm/test/jspi-check.mjs build_emcc_jspi --reach "$(em-config BINARYEN_ROOT)/bin/wasm-dis"
+      # Map downloads for joiners, with made-up GOBs (no game files).
       - name: Test map downloads
         run: node packaging/wasm/test/maps-test.mjs
       # The host's mod for joiners, with made-up files (no game files).

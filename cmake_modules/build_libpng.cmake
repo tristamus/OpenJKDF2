@@ -19,9 +19,15 @@ set(PNG_STATIC_LIBRARY_PATH ${PNG_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}${PNG_
 set(PNG_IMPORT_LIBRARY_PATH ${PNG_ROOT}/lib/${CMAKE_IMPORT_LIBRARY_PREFIX}${PNG_LIBRARIES}${CMAKE_IMPORT_LIBRARY_SUFFIX})
 
 # The JSPI engine's libpng is compiled with Wasm setjmp (toolchain_wasm.cmake).
+# Passed both ways on every configure, so switching the option in a build
+# folder that's already set up rebuilds libpng the other way.
 set(LIBPNG_EXTRA_CMAKE_ARGS)
-if(OPENJKDF2_WASM_JSPI)
-    set(LIBPNG_EXTRA_CMAKE_ARGS -DOPENJKDF2_WASM_JSPI:BOOL=ON)
+if(TARGET_WASM)
+    if(OPENJKDF2_WASM_JSPI)
+        set(LIBPNG_EXTRA_CMAKE_ARGS -DOPENJKDF2_WASM_JSPI:BOOL=ON "-DCMAKE_C_FLAGS:STRING=-sSUPPORT_LONGJMP=wasm")
+    else()
+        set(LIBPNG_EXTRA_CMAKE_ARGS -DOPENJKDF2_WASM_JSPI:BOOL=OFF "-DCMAKE_C_FLAGS:STRING=")
+    endif()
 endif()
 
 ExternalProject_Add(

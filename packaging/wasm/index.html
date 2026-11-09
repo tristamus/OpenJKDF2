@@ -1887,15 +1887,18 @@
       // ---- Which engine. Two builds of the same engine, which play together:
       // the JSPI engine (jspi/openjkdf2.js and jspi/openjkdf2.wasm, built
       // with OPENJKDF2_WASM_JSPI) pauses the game through the browser's JSPI
-      // (WebAssembly.Suspending and WebAssembly.promising), which makes it
-      // about a third smaller to download, quicker to start and a little
-      // lighter in a match; the Asyncify engine (openjkdf2.js) does it
+      // (WebAssembly.Suspending and WebAssembly.promising), which makes its
+      // wasm about a third smaller (about a fifth less to download,
+      // compressed), a little quicker to start and a little lighter in a
+      // match; the Asyncify engine (openjkdf2.js) does it
       // through its own instrumentation, and runs in any browser. Browsers
       // without JSPI (Chrome and Edge before 137, Firefox before 153) get the
       // Asyncify engine, and so does every WebKit browser (Safari, and any
       // browser on an iPhone or iPad), where the JSPI engine hasn't been
       // tried yet. ?engine=asyncify or ?engine=jspi picks one, to compare, or
-      // to try the JSPI engine in Safari; jspi still needs JSPI.
+      // to try the JSPI engine in Safari; jspi still needs JSPI. A tab where
+      // the JSPI engine couldn't start, or stopped with a SuspendError, gets
+      // the Asyncify engine when it's reloaded (ENGINE_FAILED, engineStopped).
       function engineKind(search, wasm, vendor) {
         var asked = (/[?&]engine=(jspi|asyncify)(&|$)/.exec(search) || [])[1];
         var jspi = !!wasm && typeof wasm.Suspending === 'function' && typeof wasm.promising === 'function';
@@ -1904,6 +1907,15 @@
       }
       var ENGINE = engineKind(window.location.search, typeof WebAssembly === 'object' ? WebAssembly : null,
                               navigator.vendor);
+      var ENGINE_FAILED = 'jkdf2mp-jspi-failed';
+      try {
+        if (ENGINE === 'jspi' && !/[?&]engine=jspi(&|$)/.test(window.location.search) &&
+            sessionStorage.getItem(ENGINE_FAILED)) {
+          ENGINE = 'asyncify';
+          console.log("OpenJKDF2: the JSPI engine didn't work in this tab before; loading the Asyncify engine");
+          engineLog.push("The JSPI engine didn't work in this tab before; loading the Asyncify engine");
+        }
+      } catch (e) {}
       // For netstats.js (the match summary) and the log.
       Module.jkEngine = ENGINE;
 
@@ -1988,6 +2000,9 @@
         if (engineProblem) return;
         engineProblem = true;
         engineLog.push('The game stopped: ' + why);  // for the saved network log
+        // The page loads the Asyncify engine when this tab is reloaded (ENGINE_FAILED).
+        if (ENGINE === 'jspi' && (!engineRunning || /SuspendError/.test(why + ' ' + (error && error.name))))
+          try { sessionStorage.setItem(ENGINE_FAILED, why); } catch (e) {}
         leaveGuard = false;
         spinnerElement.style.display = 'none';
         progressElement.hidden = true;
@@ -3166,6 +3181,7 @@
         engine.onerror = function() {
           if (ENGINE !== 'jspi') return engineStopped(src + " didn't download");
           console.log('OpenJKDF2: ' + src + " didn't download; loading the Asyncify engine instead");
+          engineLog.push(src + " didn't download; loading the Asyncify engine instead");
           ENGINE = Module.jkEngine = 'asyncify';
           loadEngine(false);
         };
@@ -6828,6 +6844,7 @@
         return ['OpenJKDF2 network log, saved ' + new Date().toISOString(),
                 'Page: ' + location.href.split('#')[0],
                 'Browser: ' + navigator.userAgent,
+                'Engine: ' + (Module.jkEngine === 'jspi' ? 'JSPI' : 'Asyncify'),
                 'Times are UTC.', ''].concat(net ? net.log : ['(the game never connected to the relay)'])
                .concat(net && net.session ? ['', 'now: ' + net.health()] : [])
                .concat(['', 'The engine\'s last ' + Math.min(engineLog.length, ENGINE_LOG_LINES) + ' lines:'],
@@ -7238,7 +7255,8 @@
 
         copy.onclick = function() {
           var all = ['OpenJKDF2 frame times, ' + new Date().toISOString()].concat(lines(),
-                     ['Page: ' + location.href.split('#')[0], 'User agent: ' + navigator.userAgent]).join('\n');
+                     ['Page: ' + location.href.split('#')[0], 'User agent: ' + navigator.userAgent,
+                      'Engine: ' + (Module.jkEngine === 'jspi' ? 'JSPI' : 'Asyncify')]).join('\n');
           var done = function() { copy.textContent = 'Copied'; setTimeout(function() { copy.textContent = 'Copy results'; }, 1500); };
           if (navigator.clipboard) {
             navigator.clipboard.writeText(all).then(done, function() { selectText(text); });

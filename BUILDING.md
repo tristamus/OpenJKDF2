@@ -212,12 +212,17 @@ game's `episode/` and `resource/` directories and reads those files in the brows
 uploaded and no game files are part of the build.
 
 The page loads one of two builds of the engine. Browsers with JSPI (WebAssembly JavaScript Promise
-Integration: Chrome and Edge 137+, Firefox 153+) get the JSPI engine from `jspi/`, which is about a
-third smaller and starts faster; other browsers, and Safari for now, get the Asyncify engine next
-to `index.html`. `?engine=asyncify` or `?engine=jspi` picks one. To build the JSPI engine, configure
-a second build folder with `-DOPENJKDF2_WASM_JSPI=ON`, copy its `openjkdf2.js` and `openjkdf2.wasm`
-into `wasm_out/jspi/`, and check it with `node packaging/wasm/test/jspi-check.mjs <build folder>`.
-Without `wasm_out/jspi/`, the page falls back to the Asyncify engine.
+Integration: Chrome and Edge 137+, Firefox 153+) get the JSPI engine from `jspi/`, whose wasm is
+about a third smaller (about a fifth less to download, compressed) and which starts a little
+faster; other browsers, and Safari for now, get the Asyncify engine next to `index.html`.
+`?engine=asyncify` or `?engine=jspi` picks one. The script above builds both (the JSPI engine in
+`build_emcc_jspi`). To build the JSPI engine yourself, configure a build folder with
+`-DOPENJKDF2_WASM_JSPI=ON`, copy its `openjkdf2.js` and `openjkdf2.wasm` into `wasm_out/jspi/`,
+and check it with `node packaging/wasm/test/jspi-check.mjs <build folder>` (add
+`--reach "$(em-config BINARYEN_ROOT)/bin/wasm-dis"` to also check the engine's other entry points,
+as CI does). Without
+`wasm_out/jspi/`, the page falls back to the Asyncify engine. If the JSPI engine downloads but
+can't start in a tab, reloading that tab gets the Asyncify engine.
 
 Browsers can't open UDP sockets, so multiplayer (`src/Platform/Networking/WSRelay`) finds games
 and sets up connections through a WebSocket server, then sends game packets over WebRTC data
