@@ -651,11 +651,17 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             return b[0] === 0x4A && b[1] === 0x4C && b[2] === 0 && b[3] === 0;
         };
 
-        /* Another joiner's packet came: says hello to it the first time. */
+        /* Another joiner's packet came: says hello to it the first time, and
+           makes a try at a link that fell due while nothing came from them
+           (net.linkOffer). */
         net.heardFrom = function(from) {
             var l = net.links[from], now = performance.now();
             if (l) {
                 l.heardAt = now;
+                if (l.due) {
+                    l.due = false;
+                    net.linkOffer(from);
+                }
                 return;
             }
             if (from === net.myId() || !net.linksOn()) return;
@@ -698,7 +704,14 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
 
         net.linkOffer = function(id) {
             var l = net.links[id], now = performance.now();
-            if (!l || net.peers[id] || now < l.retryAt || l.tries >= 4 || now - l.heardAt > 5000 || !net.linksOn()) return;
+            if (!l || net.peers[id] || now < l.retryAt || l.tries >= 4 || !net.linksOn()) return;
+            // Nothing from them for 5 s (loading a level, or stalled): this
+            // try goes when they're heard again (net.heardFrom). It used to be
+            // dropped, and the pair stayed on the way through the host.
+            if (now - l.heardAt > 5000) {
+                l.due = true;
+                return;
+            }
             l.tries++;
             net.askIce();
             net.offer(id);
