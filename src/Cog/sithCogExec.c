@@ -23,6 +23,12 @@
 #include <stdint.h>
 #include <math.h>
 
+// JK.EXE converts cog flex values to ints with the FPU set to round down
+static inline int32_t sithCogExec_FlexToInt(cog_flex_t val)
+{
+    return (int32_t)floor((flex64_t)val);
+}
+
 // MOTS added
 int32_t sithCogExec_009d39b0 = 0;
 sithCog* sithCogExec_pIdkMotsCtx = NULL;
@@ -465,7 +471,7 @@ int32_t sithCogExec_PopInt(sithCog *pCog)
     if ( tmp.type == SITHCOG_VALUE_INT )
         return tmp.data[0];
     if ( tmp.type == SITHCOG_VALUE_FLOAT )
-        return (int)tmp.dataAsFloat[0]; // FLEXTODO
+        return sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
 #ifdef COG_COMPRESS_VAR_SIZE
     if ( tmp.type == SITHCOG_VALUE_VECTOR )
     {
@@ -554,7 +560,7 @@ sithCog* sithCogExec_PopCog(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -606,7 +612,7 @@ SithThing* sithCogExec_PopThing(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -657,7 +663,7 @@ SithThing* sithCogExec_PopTemplate(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -706,7 +712,7 @@ sithSound* sithCogExec_PopSound(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -761,7 +767,7 @@ SithSector* sithCogExec_PopSector(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -810,7 +816,7 @@ SithSurface* sithCogExec_PopSurface(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -860,7 +866,7 @@ rdMaterial* sithCogExec_PopMaterial(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -915,7 +921,7 @@ rdModel3* sithCogExec_PopModel3(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -970,7 +976,7 @@ rdKeyframe* sithCogExec_PopKeyframe(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -1023,7 +1029,7 @@ SithAIClass* sithCogExec_PopAIClass(sithCog *pCog)
     }
     else if ( tmp.type == SITHCOG_VALUE_FLOAT )
     {
-        idx = (int)(flex64_t)tmp.dataAsFloat[0]; // FLEXTODO
+        idx = sithCogExec_FlexToInt(tmp.dataAsFloat[0]);
     }
 #ifdef COG_COMPRESS_VAR_SIZE
     else if ( tmp.type == SITHCOG_VALUE_VECTOR )
@@ -1310,6 +1316,7 @@ void sithCogExec_IntererOps(sithCog *pCog, int32_t opcode)
 }
 
 // MOTS altered?
+// JK.EXE's x87 compares count an unordered result (NaN) as less and equal
 void sithCogExec_FloatOps(sithCog *pCog, int32_t opcode)
 {
     cog_flex_t operand_a = sithCogExec_PopFlex(pCog);
@@ -1326,7 +1333,7 @@ void sithCogExec_FloatOps(sithCog *pCog, int32_t opcode)
             sithCogExec_PushFlex(pCog, operand_a * operand_b);
             break;
         case COG_OPCODE_DIV:
-            sithCogExec_PushFlex(pCog, (operand_a == 0.0) ? (cog_flex_t)0.0 : operand_b / operand_a);
+            sithCogExec_PushFlex(pCog, (operand_a == 0.0 || operand_a != operand_a) ? (cog_flex_t)0.0 : operand_b / operand_a);
             break;
         case COG_OPCODE_MOD:
             sithCogExec_PushFlex(pCog, fmod((float)operand_b, (float)operand_a));
@@ -1335,13 +1342,13 @@ void sithCogExec_FloatOps(sithCog *pCog, int32_t opcode)
             sithCogExec_PushInt(pCog, (operand_b > operand_a) ? 1 : 0);
             break;
         case COG_OPCODE_CMPLS:
-            sithCogExec_PushInt(pCog, (operand_b < operand_a) ? 1 : 0);
+            sithCogExec_PushInt(pCog, !(operand_b >= operand_a) ? 1 : 0);
             break;
         case COG_OPCODE_CMPEQ:
-            sithCogExec_PushInt(pCog, (operand_b == operand_a) ? 1 : 0);
+            sithCogExec_PushInt(pCog, !(operand_b < operand_a || operand_b > operand_a) ? 1 : 0);
             break;
         case COG_OPCODE_CMPLE:
-            sithCogExec_PushInt(pCog, (operand_b <= operand_a) ? 1 : 0);
+            sithCogExec_PushInt(pCog, !(operand_b > operand_a) ? 1 : 0);
             break;
         case COG_OPCODE_CMPGE:
             sithCogExec_PushInt(pCog, (operand_b >= operand_a) ? 1 : 0);

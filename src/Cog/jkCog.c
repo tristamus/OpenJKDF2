@@ -160,13 +160,15 @@ void jkCog_SetFlags(sithCog *ctx)
 {
     signed int flags; // esi
     SithThing *thing; // eax
+    uint32_t oldFlags;
 
     flags = sithCogExec_PopInt(ctx);
     thing = sithCogExec_PopThing(ctx);
     if ( thing && flags)
     {
+        oldFlags = thing->jkFlags;
         thing->jkFlags |= flags;
-        if ( COG_SHOULD_SYNC(ctx) )
+        if ( COG_SHOULD_SYNC(ctx) && thing->jkFlags != oldFlags )
         {
             sithThing_SyncThing(thing, SITHTHING_SYNC_STATE);
         }
@@ -177,6 +179,7 @@ void jkCog_ClearFlags(sithCog *ctx)
 {
     signed int v1; // esi
     SithThing *v2; // eax
+    uint32_t oldFlags;
 
     v1 = sithCogExec_PopInt(ctx);
     v2 = sithCogExec_PopThing(ctx);
@@ -184,8 +187,9 @@ void jkCog_ClearFlags(sithCog *ctx)
     {
         if ( v1 )
         {
+            oldFlags = v2->jkFlags;
             v2->jkFlags &= ~v1;
-            if ( COG_SHOULD_SYNC(ctx) )
+            if ( COG_SHOULD_SYNC(ctx) && v2->jkFlags != oldFlags )
             {
                 sithThing_SyncThing(v2, SITHTHING_SYNC_STATE);
             }
@@ -221,7 +225,7 @@ void jkCog_SetWeaponMesh(sithCog *ctx)
     if ( actorThing )
     {
         // MOTS added:
-        if (!actorThing->playerInfo) {
+        if (Main_bMotsCompat && !actorThing->playerInfo) {
             jkPlayer_FUN_00404fe0(actorThing);
         }
         v4 = actorThing->playerInfo;
