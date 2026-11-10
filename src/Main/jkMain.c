@@ -44,6 +44,7 @@
 #include "Win95/stdComm.h"
 #if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
 #include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_GetSessionNextMap
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h" // Added: the match record
 static void jkMain_FollowHostMap(void); // Added: a dedicated server's next level
 static char jkMain_aMissingMap[128];  // Added: the server went on to a level we don't have
 #endif
@@ -494,6 +495,11 @@ void jkMain_EscapeMenuLeave(int a2, int a3)
             jkPlayer_Close();
             jkGame_isDDraw = 0;
         }
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+        // Added: the match record, the level is over for this game
+        if ( sithNet_isMulti && a3 != JK_GAMEMODE_ESCAPE )
+            stdComm_WSRelay_MatchEnd(a3 == 3);
+#endif
         if ( a3 != JK_GAMEMODE_ESCAPE && jkMain_bInit )
         {
             jkPlayer_Shutdown();
@@ -732,6 +738,10 @@ LABEL_28:
                 }
                 if ( sithNet_isMulti )
                     jkDSS_wrap_SendSaberInfo_alt();
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+                // Added: the match record, this game is in the level
+                stdComm_WSRelay_MatchStart();
+#endif
             }
         }
         else {
@@ -897,6 +907,11 @@ void jkMain_GameplayLeave(int a2, int a3)
         jkPlayer_Close();
         jkGame_isDDraw = 0;
     }
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+    // Added: the match record, the level is over for this game
+    if ( sithNet_isMulti && a3 != 6 )
+        stdComm_WSRelay_MatchEnd(a3 == 3);
+#endif
     if ( a3 != 6 && jkMain_bInit )
     {
         jkPlayer_Shutdown();

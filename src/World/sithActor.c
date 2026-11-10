@@ -17,6 +17,7 @@
 #include "Dss/sithMulti.h"
 #include "Dss/sithDSSThing.h"
 #include "jk.h"
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
 
 void sithActor_SetDifficulty(SithThing *pActor)
 {
@@ -163,6 +164,11 @@ LABEL_32:
         sithActor_PlayDamageSoundFx(pActor, damage, damageType);
         return damage;
     }
+#ifdef PLATFORM_WSRELAY
+    // Added: the match record, what this game's player died of
+    if ( sithNet_isMulti && pActor->type == SITH_THING_PLAYER )
+        stdComm_WSRelay_MatchDying(pActor, pThing, damageType);
+#endif
     if ( sithMessage_g_outputstream )
         sithDSSThing_Death(pActor, receiver_, 0, -1, 255);
     sithActor_KillActor(pActor, receiver_, damageType);

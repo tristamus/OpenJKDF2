@@ -378,6 +378,19 @@ void stdComm_WSRelay_TestSkill(SithThing* pVictim, int bin, int bSent);
 // which the host checks before taking anything from it.
 int stdComm_WSRelay_InMatch();
 
+// The match record (packaging/wasm/ladder.js): what this game sees of its
+// match, which it reports to a lobby that keeps one. MatchStart once a
+// multiplayer level is loaded; MatchDying when this game's own player is
+// about to die of pSource, which only this game knows; MatchKill for each
+// kill as this game counts it; MatchScores whenever the scoreboard may have
+// changed; MatchEnd when the level is left (bLeft: its player leaves the
+// game, not only the level).
+void stdComm_WSRelay_MatchStart(void);
+void stdComm_WSRelay_MatchDying(SithThing* pVictim, SithThing* pSource, int damageType);
+void stdComm_WSRelay_MatchKill(SithPlayer* pVictim, SithThing* pVictimThing, SithThing* pKiller);
+void stdComm_WSRelay_MatchScores(void);
+void stdComm_WSRelay_MatchEnd(int bLeft);
+
 #endif // PLATFORM_WSRELAY
 
 #ifdef __cplusplus
