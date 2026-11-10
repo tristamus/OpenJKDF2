@@ -54,6 +54,14 @@ jobs:
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           node packaging/wasm/test/jspi-check.mjs build_emcc_jspi --reach "$(em-config BINARYEN_ROOT)/bin/wasm-dis"
+      # Both engines: what getting the graphics back after a lost WebGL
+      # context (std3D_wasmGlPoll in std3D.c) takes from Emscripten's own GL
+      # code, which isn't its public API: the GL tables and string caches,
+      # initExtensions and its initExtensionsDone flag, getNewId and
+      # Module.ctx (glrestore-check.mjs). A rename in a later Emscripten would
+      # otherwise only show when a player's graphics are lost.
+      - name: Check the engines' lost-graphics recovery against Emscripten's GL code
+        run: node packaging/wasm/test/glrestore-check.mjs build_emcc build_emcc_jspi
       # Map downloads for joiners, with made-up GOBs (no game files).
       - name: Test map downloads
         run: node packaging/wasm/test/maps-test.mjs

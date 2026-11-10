@@ -4195,7 +4195,8 @@ void std3D_WasmGlWatch(void)
 // no name the engine still holds reaches anything, and deleting one does nothing) and the
 // extensions asked for again; otherwise 0. Emscripten never hands out a name twice
 // (GL.getNewId), so an old name can't reach a new object either. GL, its tables and
-// initExtensions are Emscripten's own (libwebgl.js in emsdk 6.0.12), not its public API.
+// initExtensions are Emscripten's own (libwebgl.js in emsdk 6.0.12), not its public API;
+// packaging/wasm/test/glrestore-check.mjs checks a built openjkdf2.js for them (CI runs it).
 EM_JS(int, std3D_wasmGlPoll, (), {
   var s = Module.jkGl, gl = Module.ctx;
   if (!s || !gl) return 0;
