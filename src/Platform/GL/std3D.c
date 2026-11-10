@@ -99,14 +99,15 @@ typedef struct std3DFramebuffer
 } std3DFramebuffer;
 
 GLint std3D_windowFbo = 0;
-std3DFramebuffer std3D_framebuffers[2];
+// Changed: one set of render targets instead of two used on alternate frames. Each frame
+// clears the whole set before drawing into it (std3D_StartScene) and every pass reads only
+// what was drawn into it that frame, so the second set only doubled the video memory.
+std3DFramebuffer std3D_framebuffers[1];
 std3DFramebuffer *std3D_pFb = NULL;
 
 static bool has_initted = false;
 
 static void* last_overlay = NULL;
-
-static int std3D_activeFb = 1;
 
 int init_once = 0;
 GLuint programDefault, programMenu;
@@ -177,7 +178,7 @@ int std3D_bInitted = 0;
 rdColormap std3D_ui_colormap;
 int std3D_bReinitHudElements = 0;
 
-void std3D_generateIntermediateFbo(int32_t width, int32_t height, std3DIntermediateFbo* pFbo, int isFloat)
+void std3D_generateIntermediateFbo(int32_t width, int32_t height, std3DIntermediateFbo* pFbo, int isFloat, int withDepth)
 {
     // Generate the framebuffer
     memset(pFbo, 0, sizeof(*pFbo));
@@ -200,21 +201,31 @@ void std3D_generateIntermediateFbo(int32_t width, int32_t height, std3DIntermedi
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Changed: no second mip level. Level 1 is dropped because every sampler of these
+    // targets is GL_LINEAR (min and mag), which reads only the base level, so the level made
+    // by glGenerateMipmap was never read (the blur shaders' bias 1.0 changes nothing). If a
+    // mipmap min filter is ever used here (upstream's "use mipmaps for blurring"), this change
+    // must go: put back MAX_LEVEL 1, glGenerateMipmap here and gen_mips 1 in std3D_DrawSceneFbo.
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
-    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     
     // Attach fbTex to our currently bound framebuffer fb
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pFbo->tex, 0);
 
-    // Set up our render buffer
-    glGenRenderbuffers(1, &pFbo->rbo);
-    glBindRenderbuffer(GL_RENDERBUFFER, pFbo->rbo);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
-    
-    // Bind it to our framebuffer fb
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, pFbo->rbo);
+    // Changed: a depth buffer only where asked for. The only passes into these targets
+    // (std3D_DrawSimpleTex) draw with GL_ALWAYS and nothing reads their depth, so the bloom
+    // targets go without one. The two SSAO targets keep theirs: Firefox's software renderer
+    // (llvmpipe) gives the SSAO pass slightly different output (1 in 255 on some pixels) when
+    // the target has no depth attachment, even with the depth test off, so dropping it there
+    // would change the picture.
+    if (withDepth)
+    {
+        glGenRenderbuffers(1, &pFbo->rbo);
+        glBindRenderbuffer(GL_RENDERBUFFER, pFbo->rbo);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, pFbo->rbo);
+    }
     if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         stdPlatform_Printf("std3D: ERROR, Framebuffer is incomplete!\n");
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -410,13 +421,19 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    //glGenerateMipmap(GL_TEXTURE_2D);
+    // Changed: was MAX_LEVEL 1 plus glGenerateMipmap. Level 1 is dropped because every sampler
+    // of tex1 is GL_LINEAR, which never reads it; if a mipmap filter is ever used, this must go
+    // (see std3D_generateIntermediateFbo).
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     
     // Attach fbTex to our currently bound framebuffer fb
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, pFb->tex1, 0);
 
+    // Changed: the position and normal targets (tex2, tex3) are read only by SSAO and drawn to
+    // only while it is on (std3D_SetSceneDrawBuffers), so they're only made then. Turning SSAO
+    // on makes the set again (enable_extra & 2, std3D_StartScene).
+    if (jkPlayer_enableSSAO)
+    {
     // Set up our position fb texture
     glGenTextures(1, &pFb->tex2);
     glBindTexture(GL_TEXTURE_2D, pFb->tex2);
@@ -440,6 +457,7 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
     
     // Attach fbTex to our currently bound framebuffer fb
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, pFb->tex3, 0);
+    }
 
     // Set up our render buffer
     glGenRenderbuffers(1, &pFb->rbo);
@@ -460,9 +478,9 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
 
     if (jkPlayer_enableSSAO)
     {
-        std3D_generateIntermediateFbo(width, height, &pFb->ssaoBlur1, 0);
-        std3D_generateIntermediateFbo(pFb->ssaoBlur1.w/2, pFb->ssaoBlur1.h/2, &pFb->ssaoBlur2, 0);
-        //std3D_generateIntermediateFbo(pFb->ssaoBlur2.w/2, pFb->ssaoBlur2.h/2, &pFb->ssaoBlur3, 0);
+        std3D_generateIntermediateFbo(width, height, &pFb->ssaoBlur1, 0, 1);
+        std3D_generateIntermediateFbo(pFb->ssaoBlur1.w/2, pFb->ssaoBlur1.h/2, &pFb->ssaoBlur2, 0, 1);
+        //std3D_generateIntermediateFbo(pFb->ssaoBlur2.w/2, pFb->ssaoBlur2.h/2, &pFb->ssaoBlur3, 0, 1);
 
         pFb->enable_extra |= 2;
     }
@@ -470,11 +488,11 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
     if (jkPlayer_enableBloom)
     {
         pFb->enable_extra |= 1;
-        std3D_generateIntermediateFbo(width, height, &pFb->blur1, 1);
-        //std3D_generateIntermediateFbo(width, height, &pFb->blurBlend, 1);
-        std3D_generateIntermediateFbo(pFb->blur1.w/4, pFb->blur1.h/4, &pFb->blur2, 1);
-        std3D_generateIntermediateFbo(pFb->blur2.w/4, pFb->blur2.h/4, &pFb->blur3, 1);
-        std3D_generateIntermediateFbo(pFb->blur3.w/4, pFb->blur3.h/4, &pFb->blur4, 1);
+        std3D_generateIntermediateFbo(width, height, &pFb->blur1, 1, 0);
+        //std3D_generateIntermediateFbo(width, height, &pFb->blurBlend, 1, 0);
+        std3D_generateIntermediateFbo(pFb->blur1.w/4, pFb->blur1.h/4, &pFb->blur2, 1, 0);
+        std3D_generateIntermediateFbo(pFb->blur2.w/4, pFb->blur2.h/4, &pFb->blur3, 1, 0);
+        std3D_generateIntermediateFbo(pFb->blur3.w/4, pFb->blur3.h/4, &pFb->blur4, 1, 0);
 
         /*pFb->blur1.iw = width;
         pFb->blur1.ih = height;
@@ -523,16 +541,7 @@ void std3D_deleteFramebuffer(std3DFramebuffer* pFb)
 
 void std3D_swapFramebuffers()
 {
-    if (std3D_activeFb == 2)
-    {
-        std3D_activeFb = 1;
-        std3D_pFb = &std3D_framebuffers[0];
-    }
-    else
-    {
-        std3D_activeFb = 2;
-        std3D_pFb = &std3D_framebuffers[1];
-    }
+    std3D_pFb = &std3D_framebuffers[0]; // Changed: one set (see std3D_framebuffers)
 }
 
 GLuint std3D_loadProgram(const char* fpath_base)
@@ -632,9 +641,6 @@ int init_resources()
     std3D_ClampRenderTargetSize(&tex_w, &tex_h); // Added
 
     std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[0]);
-    std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[1]);
-
-    std3D_activeFb = 1;
     std3D_pFb = &std3D_framebuffers[0];
     
     if ((programDefault = std3D_loadProgram("shaders/default")) == 0) return false;
@@ -848,7 +854,6 @@ void std3D_FreeResources()
     glDeleteProgram(programDefault);
     glDeleteProgram(programMenu);
     std3D_deleteFramebuffer(&std3D_framebuffers[0]);
-    std3D_deleteFramebuffer(&std3D_framebuffers[1]);
     glDeleteTextures(1, &blank_tex);
     glDeleteTextures(1, &blank_tex_white);
     glDeleteTextures(1, &worldpal_texture);
@@ -2610,7 +2615,7 @@ void std3D_DrawSceneFbo()
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
         std3D_DrawSimpleTex(&std3D_ssaoStage, &std3D_pFb->ssaoBlur1, std3D_pFb->tex2, std3D_pFb->tex3, tiledrand_texture, frameNum, 0.0, 0.0, 0); // test ssao output
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->ssaoBlur2, std3D_pFb->ssaoBlur1.tex, 0, 0, 14.0, 3.0, 1.0 * rad_scale, 1);
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->ssaoBlur2, std3D_pFb->ssaoBlur1.tex, 0, 0, 14.0, 3.0, 1.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
         //std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->ssaoBlur3, std3D_pFb->ssaoBlur2.tex, 0, 0, 8.0, 3.0, 4.0);
 
         glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
@@ -2625,10 +2630,10 @@ void std3D_DrawSceneFbo()
     {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur1, std3D_pFb->tex1, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 1);
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur2, std3D_pFb->blur1.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 1);
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur3, std3D_pFb->blur2.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 1);
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur4, std3D_pFb->blur3.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 1);
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur1, std3D_pFb->tex1, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur2, std3D_pFb->blur1.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur3, std3D_pFb->blur2.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur4, std3D_pFb->blur3.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
 
         float bloom_intensity = 1.0;
         float bloom_gamma = 1.0;
