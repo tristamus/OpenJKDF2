@@ -4299,7 +4299,11 @@ static int std3D_WasmGlReady(void)
         std3D_wasmGlSay(1);
         std3D_ForgetGLResources();
         std3D_bWasmGlFailed = 0;
-        if (!init_resources())
+        // A failure here goes to the page's box, not to SDL's message box (see shader_utils.c)
+        shader_utils_bQuiet = 1;
+        int made = init_resources();
+        shader_utils_bQuiet = 0;
+        if (!made)
         {
             // Taken away again meanwhile: made when it's back (the next poll sees the loss)
             if (std3D_wasmGlIsLost()) return 0;

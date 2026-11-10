@@ -21,6 +21,11 @@
 
 #include "Platform/Common/stdEmbeddedRes.h"
 
+// Added: set while the web build makes the graphics again after the browser gave them back
+// (std3D_WasmGlReady). A failure is then shown by the page, so no message box: SDL's waits for
+// a click and would stop the game behind it.
+int shader_utils_bQuiet = 0;
+
 /**
  * Display compilation errors from the OpenGL shader compiler
  */
@@ -45,7 +50,8 @@ void print_log(GLuint object) {
 	
 	SDL_LogMessage(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_ERROR, "%s\n", log);
 	
-	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", log, NULL);
+	if (!shader_utils_bQuiet)
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", log, NULL);
 	
 	free(log);
 }
@@ -58,7 +64,9 @@ GLuint load_shader_file(const char* filepath, GLenum type)
     {
     	char errtmp[256];
         snprintf(errtmp, 256, "std3D: Failed to load shader file `%s`!\n", filepath);
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", errtmp, NULL);
+        stdPlatform_Printf("%s", errtmp);
+        if (!shader_utils_bQuiet)
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", errtmp, NULL);
         return -1;
     }
     
