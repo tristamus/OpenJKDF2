@@ -172,7 +172,9 @@ static void jkGame_UpdateScreenshots()
                                    : "Screenshot not saved: the browser couldn't store it.");
     }
 
-    if (!jkGame_bScreenshotQueued)
+    // Added (P22): no frame is drawn while the browser has taken the graphics away; the
+    // screenshot waits for the first one after they're back
+    if (!jkGame_bScreenshotQueued || !std3D_WasmFrameDrawn())
         return;
     jkGame_bScreenshotQueued = 0;
 

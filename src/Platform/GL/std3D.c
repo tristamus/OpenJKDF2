@@ -24,6 +24,12 @@
 
 #ifdef ARCH_WASM
 #include <emscripten/html5_webgl.h>
+#include <emscripten.h>
+// Added (P22): getting the graphics back after the browser takes them away; at the end of this file
+static int std3D_WasmGlReady(void);
+static int std3D_WasmGlLost(void);
+static void std3D_WasmGlDrew(void);
+static int std3D_bWasmFrameDrawn = 0; // the last std3D_DrawMenu drew a frame (std3D_WasmFrameDrawn)
 #endif
 
 #ifdef WIN32
@@ -771,18 +777,20 @@ int init_resources()
     // Tiled random
     // FLEXTODO
     glGenTextures(1, &tiledrand_texture);
-    if (tiledrand_data) {
-        free(tiledrand_data);
-    }
-    tiledrand_data = (rdVector3*)malloc(3 * 4 * 4 * sizeof(float));
-    memset(tiledrand_data, 0, 3 * 4 * 4 * sizeof(float));
+    // Added: made once a session and kept, so the SSAO noise is the same when the graphics
+    // are made again (P22, a lost WebGL context), and that spends none of the game's random
+    // numbers (_frand is rand()). Before, each init_resources drew 32 new ones.
+    if (!tiledrand_data) {
+        tiledrand_data = (rdVector3*)malloc(3 * 4 * 4 * sizeof(float));
+        memset(tiledrand_data, 0, 3 * 4 * 4 * sizeof(float));
 
-    for (int i = 0; i < 4*4; i++)
-    {
-        tiledrand_data[i].x = (_frand() * 2.0) - 1.0;
-        tiledrand_data[i].y = (_frand() * 2.0) - 1.0;
-        tiledrand_data[i].z = 0.0;
-        rdVector_Normalize3Acc(&tiledrand_data[i]);
+        for (int i = 0; i < 4*4; i++)
+        {
+            tiledrand_data[i].x = (_frand() * 2.0) - 1.0;
+            tiledrand_data[i].y = (_frand() * 2.0) - 1.0;
+            tiledrand_data[i].z = 0.0;
+            rdVector_Normalize3Acc(&tiledrand_data[i]);
+        }
     }
 
     glBindTexture(GL_TEXTURE_2D, tiledrand_texture);
@@ -911,9 +919,18 @@ int std3D_StartScene()
     ++std3D_frameCount;
 
     //printf("Begin draw\n");
+#ifdef ARCH_WASM
+    // Added: nothing is drawn while the browser has taken the graphics away, and once it
+    // gives them back they're made again here before anything else (P22). The game goes on.
+    if (!std3D_WasmGlReady()) return 1;
+#endif
     if (!has_initted)
     {
         if (!init_resources()) {
+#ifdef ARCH_WASM
+            // Added: taken away while they were being made: made when they're back
+            if (std3D_WasmGlLost()) return 1;
+#endif
             stdPlatform_Printf("std3D: Failed to init resources, exiting...");
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Failed to init resources, exiting...", NULL);
             exit(-1);
@@ -1379,6 +1396,16 @@ static void std3D_PresentSWWorld(void)
 void std3D_DrawMenu()
 {
     if (Main_bHeadless) return;
+#ifdef ARCH_WASM
+    // Added: see std3D_StartScene. What this frame queued is dropped, as drawing it does: the
+    // HUD's quads carry texture names, and a list kept through a loss would be drawn later
+    // with names from the old context.
+    if (!std3D_WasmGlReady() || !has_initted) {
+        std3D_bWasmFrameDrawn = 0;
+        std3D_ResetUIRenderList();
+        return;
+    }
+#endif
 
     std3D_UpdateWindowViewport(); // Added
 
@@ -1744,6 +1771,9 @@ void std3D_DrawMenu()
     std3D_DrawUIRenderList();
 
     last_flags = 0;
+#ifdef ARCH_WASM
+    std3D_WasmGlDrew(); // Added
+#endif
 }
 
 void std3D_DrawMapOverlay()
@@ -2735,6 +2765,13 @@ void std3D_DoTex(rdDDrawSurface* tex, rdTri* tri, int tris_left)
 void std3D_DrawRenderList()
 {
     if (Main_bHeadless) return;
+    // Added: nothing to draw with before init_resources has made it (world_data_elements is
+    // NULL then, and std3D_pFb before the first one). In the browser a level can run that way
+    // while the graphics are away (P22); the list is dropped as drawing it would.
+    if (!has_initted) {
+        std3D_ResetRenderList();
+        return;
+    }
 
     //printf("Draw render list\n");
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
@@ -3180,6 +3217,7 @@ int std3D_ClearZBuffer()
     // (scene start + the POV weapon's clear) so the software path stays in lockstep with the HW one.
     rdZRaster_ClearZBuffer();
 #endif
+    if (!has_initted) return 1; // Added: see std3D_DrawRenderList
     glDepthMask(GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -4131,3 +4169,163 @@ int std3D_IsReady()
 {
     return has_initted;
 }
+#ifdef ARCH_WASM
+// Added (P22): getting the graphics back after the browser takes them away (a lost WebGL
+// context: a graphics driver crash, reset or update, a GPU process crash, or low memory). The
+// page cancels the loss (index.html), so the browser gives the canvas a fresh context, the same
+// JS object, once it can. Nothing made on the old one works on it, and the extensions are off
+// again ("The Context Restored Event" in the WebGL spec). The engine keeps running meanwhile,
+// draws nothing, and makes everything again at the first frame after it's back.
+
+// Module.jkGl.down: a loss was seen and the graphics haven't been made again since. Called
+// before the context is made (Window_RecreateSDL2Window), so no loss can come before it.
+EM_JS(void, std3D_wasmGlListen, (), {
+  if (Module.jkGl || !Module.canvas) return;
+  var s = Module.jkGl = { down: 0, losses: 0, rebuilds: 0 };
+  Module.canvas.addEventListener('webglcontextlost', function() { s.losses++; s.down = 1; });
+});
+
+void std3D_WasmGlWatch(void)
+{
+    std3D_wasmGlListen();
+}
+
+// At the start of each scene and menu frame: 1 while the context is lost; 2 once, at the first
+// of them after it came back, by then with Emscripten's tables emptied of the old objects (so
+// no name the engine still holds reaches anything, and deleting one does nothing) and the
+// extensions asked for again; otherwise 0. Emscripten never hands out a name twice
+// (GL.getNewId), so an old name can't reach a new object either. GL, its tables and
+// initExtensions are Emscripten's own (libwebgl.js in emsdk 6.0.12), not its public API.
+EM_JS(int, std3D_wasmGlPoll, (), {
+  var s = Module.jkGl, gl = Module.ctx;
+  if (!s || !gl) return 0;
+  if (gl.isContextLost()) { s.down = 1; return 1; }
+  if (!s.down) return 0;
+  s.down = 0;
+  ['buffers', 'programs', 'framebuffers', 'renderbuffers', 'textures', 'shaders', 'vaos', 'queries', 'samplers', 'transformFeedbacks', 'syncs']
+    .forEach(function(n) { if (GL[n]) GL[n].fill(null); });
+  GL.stringCache = {};
+  GL.stringiCache = {};
+  gl.currentProgram = null;
+  gl.currentArrayBufferBinding = gl.currentElementArrayBufferBinding = 0;
+  gl.currentPixelPackBufferBinding = gl.currentPixelUnpackBufferBinding = 0;
+  GL.currentContext.initExtensionsDone = false;
+  GL.initExtensions(GL.currentContext);
+  if (Module.jkPace) Module.jkPace.fences = [];
+  s.rebuilds++;
+  return 2;
+});
+
+EM_JS(int, std3D_wasmGlIsLost, (), {
+  return Module.ctx && Module.ctx.isContextLost() ? 1 : 0;
+});
+
+// Tells the page (index.html), with a 'jkgl' event on the canvas: 1 'rebuilding' (the first
+// frame after the graphics came back), 2 'back' (a frame was drawn with them again), 3 'failed'
+// (the context is there but they couldn't be made again).
+EM_JS(void, std3D_wasmGlSay, (int what), {
+  var name = ["", 'rebuilding', 'back', 'failed'][what];
+  if (Module.jkGl) Module.jkGl[name + 'At'] = performance.now();
+  if (Module.canvas) Module.canvas.dispatchEvent(new CustomEvent('jkgl', { detail: name }));
+});
+
+static int std3D_bWasmGlBack = 0;   // made again: the page hears it after the next frame drawn
+static int std3D_bWasmGlFailed = 0; // couldn't be made again: nothing more until the next loss
+
+// Forgets every GL name the engine holds, without using any of them, and clears the flags that
+// make each thing be made or uploaded again: the scene's shaders, framebuffers, palettes and
+// buffers by init_resources right after this, world and model textures as they're next seen
+// (rdMaterial_AddToTextureCache), UI, font and HUD bitmaps as they're next drawn
+// (std3D_DrawUIBitmapRGBA), the menu and overlay textures now. What was queued to draw with the
+// old names is dropped.
+static void std3D_ForgetGLResources(void)
+{
+    stdPlatform_Printf("std3D: the browser gave the graphics back, making them again\n");
+
+    // World and model textures (and jkgm's emissive and displacement ones)
+    std3D_PurgeEntireTextureCache();
+
+    // UI bitmaps: each mip of a bitmap in the cache uploads again when it's next drawn
+    for (int i = 0; i < STD3D_MAX_TEXTURES; i++)
+    {
+        stdBitmap* pBmp = std3D_aUIBitmaps[i];
+        if (pBmp && pBmp->abLoadedToGPU)
+        {
+            for (int j = 0; j < pBmp->numMips; j++)
+            {
+                pBmp->abLoadedToGPU[j] = 0;
+                pBmp->aTextureIds[j] = 0;
+                if (pBmp->paDataDepthConverted && pBmp->paDataDepthConverted[j]) {
+                    free(pBmp->paDataDepthConverted[j]);
+                    pBmp->paDataDepthConverted[j] = NULL;
+                }
+            }
+        }
+        std3D_aUIBitmaps[i] = NULL;
+        std3D_aUITextures[i] = 0;
+    }
+    std3D_loadedUITexturesAmt = 0;
+    last_ui_tex = 0;
+
+    // Shaders, framebuffers, palettes, buffers; the HUD's bitmaps load again (jkHudInv)
+    if (has_initted)
+        std3D_FreeResources();
+    memset(std3D_framebuffers, 0, sizeof(std3D_framebuffers));
+    std3D_swWorldTexId = 0;
+    std3D_swWorldTexW = std3D_swWorldTexH = 0;
+
+    // The menu and overlay textures stdDisplay_SetMode made: filled from their buffers each frame
+    stdDisplay_RecreateGLTextures();
+
+    // Queued with the old names
+    std3D_ResetRenderList();
+    std3D_ResetUIRenderList();
+}
+
+// 0 while this frame can't draw: the context is lost, or the graphics couldn't be made again.
+// At the first frame after the context came back, everything is made again first.
+static int std3D_WasmGlReady(void)
+{
+    int state = std3D_wasmGlPoll();
+    if (state == 1) return 0;
+    if (state == 2)
+    {
+        std3D_wasmGlSay(1);
+        std3D_ForgetGLResources();
+        std3D_bWasmGlFailed = 0;
+        if (!init_resources())
+        {
+            // Taken away again meanwhile: made when it's back (the next poll sees the loss)
+            if (std3D_wasmGlIsLost()) return 0;
+            stdPlatform_Printf("std3D: the graphics couldn't be made again\n");
+            std3D_bWasmGlFailed = 1;
+            std3D_wasmGlSay(3);
+            return 0;
+        }
+        std3D_bWasmGlBack = 1;
+    }
+    return !std3D_bWasmGlFailed;
+}
+
+// Added: whether the last std3D_DrawMenu drew a frame; none is while the graphics are away,
+// and reading the window then gives nothing (jkGame_UpdateScreenshots waits for one)
+int std3D_WasmFrameDrawn(void)
+{
+    return std3D_bWasmFrameDrawn;
+}
+
+static int std3D_WasmGlLost(void)
+{
+    return std3D_wasmGlIsLost();
+}
+
+// At the end of each std3D_DrawMenu that drew
+static void std3D_WasmGlDrew(void)
+{
+    std3D_bWasmFrameDrawn = 1;
+    if (std3D_bWasmGlBack) {
+        std3D_bWasmGlBack = 0;
+        std3D_wasmGlSay(2);
+    }
+}
+#endif

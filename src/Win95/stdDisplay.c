@@ -200,6 +200,33 @@ int stdDisplay_SetMode(unsigned int modeIdx, const void *palette, int paged)
     return 1;
 }
 
+#ifdef ARCH_WASM
+// Added: the menu and overlay textures again, on a new WebGL context (std3D_ForgetGLResources).
+// Their old names are forgotten, not deleted; std3D_DrawMenu fills them from the buffers each frame.
+void stdDisplay_RecreateGLTextures(void)
+{
+    if (!Video_bModeSet || !Video_menuBuffer.sdlSurface || !Video_overlayMapBuffer.sdlSurface)
+        return;
+
+    int w = Video_menuBuffer.format.width;
+    int h = Video_menuBuffer.format.height;
+
+    glGenTextures(1, &Video_menuTexId);
+    glBindTexture(GL_TEXTURE_2D, Video_menuTexId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, Video_menuBuffer.sdlSurface->pixels);
+
+    glGenTextures(1, &Video_overlayTexId);
+    glBindTexture(GL_TEXTURE_2D, Video_overlayTexId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, Video_overlayMapBuffer.sdlSurface->pixels);
+}
+#endif
+
 int stdDisplay_ClearRect(tVBuffer *buf, int fillColor, rdRect *rect)
 {
     return stdDisplay_VBufferFill(buf, fillColor, rect);

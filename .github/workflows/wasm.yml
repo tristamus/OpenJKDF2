@@ -81,6 +81,10 @@ jobs:
       # box with Reload, with made-up errors from the engine and elsewhere.
       - name: Test the engine's error box
         run: node packaging/wasm/test/errors-test.mjs
+      # The browser taking the graphics away and giving them back: the note, the
+      # timers and the box with Reload, with a made-up canvas and engine events.
+      - name: Test losing the graphics
+        run: node packaging/wasm/test/glloss-test.mjs
       # The engine downloading and compiling from when the player asks to
       # play, and what happens when that fails, with tiny made-up wasm.
       - name: Test getting the engine ready early

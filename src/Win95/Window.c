@@ -2142,6 +2142,9 @@ void Window_RecreateSDL2Window()
         exit(-1);
     }
 #else
+#ifdef ARCH_WASM
+    std3D_WasmGlWatch(); // Added: before the context exists, so no loss of it goes unseen (P22)
+#endif
     glWindowContext = SDL_GL_CreateContext(displayWindow);
     
     // Retry with 3.30 instead

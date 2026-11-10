@@ -133,6 +133,8 @@ void std3D_ScreenshotWindow(const char* pFpath);
 #endif
 #ifdef ARCH_WASM
 uint8_t* std3D_ReadWindowRGBA(int* pW, int* pH); // Added
+void std3D_WasmGlWatch(void); // Added: P22, watches for a lost WebGL context
+int std3D_WasmFrameDrawn(void); // Added: P22
 #endif
 
 void std3D_ResetUIRenderList();
