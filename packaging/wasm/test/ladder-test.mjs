@@ -68,7 +68,8 @@ function makeGame({ can = ['links', 'pw', 'match'], key = 'ab'.repeat(16), anon 
     const sent = [];
     const listeners = {};
     const Module = {
-        jkNet: { ws: { send: line => sent.push(line) }, state: 1, session: 3, seat: 'k', lobbyCan: can },
+        jkNet: { ws: { send: line => sent.push(line) }, state: 1, session: true, seat: { room: 7, id: 2, key: 'k' },
+                 lobbyCan: can },
     };
     if (key) Module.jkLadderKey = key;
     if (anon) Module.jkLadderAnon = true;
@@ -259,6 +260,150 @@ test('more kills than a report takes go in several, the end with the last', () =
     assert.deepEqual(got.map(r => r.ev.length), [64, 64, 22]);
     assert.deepEqual(got.map(r => r.end), [undefined, undefined, 'level']);
     assert.deepEqual(got.flatMap(r => r.ev.map(e => e[0])), Array.from({ length: 150 }, (_, i) => i + 1));
+});
+
+// A level played for five seconds whose last kill hasn't gone yet, with the
+// lobby out of reach (down) as it ends.
+function endsUnheard(g, { host = false } = {}) {
+    start(g, { host });
+    g.world.run(5000);
+    g.reports();
+    g.net.state = 0;
+    g.L.kill(2, 1, 2);
+    g.world.run(1000);
+    g.L.scores([[1, 4, 5, 2, 1, 0], [2, 1, 1, 4, 0, 0]], TEAMS);
+    g.L.end(false);
+    assert.equal(g.sent.length, 0);
+}
+
+test("a level's end the lobby couldn't be told is kept, and goes when the lobby is back", () => {
+    const g = makeGame();
+    endsUnheard(g, { host: true });
+    g.world.run(20000);
+    assert.equal(g.sent.length, 0, 'not while the lobby is out of reach');
+    g.net.state = 1;
+    g.world.run(1000);
+    const got = g.reports();
+    assert.equal(got.length, 1);
+    const [r] = got;
+    assert.deepEqual([r.lv, r.map, r.end, r.t], [1, 'm4.jkl', 'level', 6000], "the level's own, its time stopped where it ended");
+    assert.equal(r.ev.length, 1);
+    assert.ok(r.ev[0][1] >= 21000 && r.ev[0][1] <= 22100, 'the kill with how long ago it really was: ' + r.ev[0][1]);
+    assert.equal(r.sb[0][2], 5, 'with the scoreboard as it ended');
+    g.world.run(120000);
+    assert.equal(g.sent.length, 0, 'once');
+});
+
+test("a host's goes ahead of its next level's first report, never after it", () => {
+    const g = makeGame();
+    endsUnheard(g, { host: true });
+    g.world.run(3000);
+    start(g, { host: true });
+    g.L.kill(2, 1, 1);
+    g.world.run(4000);
+    assert.equal(g.sent.length, 0);
+    // A send that fails keeps both, in their order.
+    const send = g.net.ws.send;
+    g.net.ws.send = () => { throw new Error('closing'); };
+    g.net.state = 1;
+    g.world.run(2000);
+    g.net.ws.send = send;
+    g.world.run(1000);
+    const got = g.reports();
+    assert.deepEqual(got.map(r => [r.lv, r.end || '', r.ev.length]), [[1, 'level', 1], [2, '', 1]]);
+    assert.equal(got[0].t, 6000);
+    assert.equal(got[0].sb[0][2], 5, "the first level's scoreboard, not the second's");
+    assert.equal(got[1].sb[0][2], 4);
+    assert.equal(got[1].ev[0][0], 1, "the second level's kills are counted from one");
+});
+
+test("another game's goes only until its own next level begins", () => {
+    const back = makeGame();
+    endsUnheard(back);
+    back.world.run(2000);
+    back.net.state = 1;
+    back.world.run(1000);
+    assert.deepEqual(back.reports().map(r => [r.lv, r.end, r.ev.length]), [[1, 'level', 1]], 'back before it: it goes');
+    const late = makeGame();
+    endsUnheard(late);
+    late.world.run(2000);
+    start(late);
+    late.net.state = 1;
+    late.world.run(40000);
+    assert.deepEqual(late.reports().map(r => [r.lv, r.end || '']), [[2, ''], [2, '']], "after it: the host's next match is open, so it's dropped");
+});
+
+test("nothing is kept for a player who left, a lobby with no record, or a level the lobby never heard of", () => {
+    // Leaving gives up the seat.
+    const left = makeGame();
+    start(left);
+    left.world.run(5000);
+    left.reports();
+    left.net.state = 0;
+    left.L.kill(2, 1, 2);
+    left.L.end(true);
+    left.net.state = 1;
+    left.world.run(10000);
+    assert.equal(left.sent.length, 0);
+    // No record, so no report of the level ever went.
+    const none = makeGame({ can: ['links', 'pw'] });
+    start(none, { host: true });
+    none.world.run(5000);
+    none.L.end(false);
+    none.net.lobbyCan = ['links', 'pw', 'match'];
+    none.world.run(10000);
+    assert.equal(none.sent.length, 0);
+    // Out of reach for the whole level.
+    const never = makeGame();
+    never.net.state = 0;
+    start(never, { host: true });
+    never.world.run(5000);
+    never.L.kill(2, 1, 2);
+    never.L.end(false);
+    never.net.state = 1;
+    never.world.run(10000);
+    assert.equal(never.sent.length, 0);
+});
+
+test("what's kept is dropped after five minutes, when the game leaves, and in another seat", () => {
+    const old = makeGame();
+    endsUnheard(old, { host: true });
+    old.world.run(5 * 60 * 1000 + 1000);
+    old.net.state = 1;
+    old.world.run(5000);
+    assert.equal(old.sent.length, 0, 'the lobby has closed the match by itself by then');
+    const gone = makeGame();
+    endsUnheard(gone, { host: true });
+    gone.net.session = false;
+    gone.net.seat = null;
+    gone.world.run(2000);
+    // Hosting again: another room.
+    gone.net.session = true;
+    gone.net.seat = { room: 9, id: 1, key: 'n' };
+    gone.net.state = 1;
+    start(gone, { host: true });
+    gone.world.run(2000);
+    assert.deepEqual(gone.reports().map(r => [r.lv, r.end || '']), [[2, '']], "the old room's last report doesn't go to the new one");
+    const moved = makeGame();
+    endsUnheard(moved, { host: true });
+    moved.net.seat = { room: 9, id: 1, key: 'n' };
+    moved.net.state = 1;
+    moved.world.run(2000);
+    assert.equal(moved.sent.length, 0);
+});
+
+test('an end with more kills waiting than go at once is finished a moment later', () => {
+    const g = makeGame();
+    start(g);
+    g.world.run(100);
+    g.reports();
+    for (let i = 0; i < 300; i++) g.L.kill(1 + i % 2, 2 - i % 2, 2);
+    g.L.end(false);
+    assert.deepEqual(g.reports().map(r => [r.ev.length, r.end || '']), [[64, ''], [64, ''], [64, ''], [64, '']]);
+    g.world.run(1000);
+    assert.deepEqual(g.reports().map(r => [r.ev.length, r.end || '']), [[44, 'level']]);
+    g.world.run(60000);
+    assert.equal(g.sent.length, 0);
 });
 
 test('a player who asked not to be recorded by name sends no key', () => {

@@ -25,6 +25,23 @@
 // or the page closes. The lobby never answers one. Kills seen while the
 // socket is down wait for it, each with how long ago it was.
 //
+// A level that ends while the socket is down (the lobby restarting, a
+// network that dropped for a moment) can't say so then, and the game goes on
+// to its next level. Its last report, with the kills still waiting and from
+// the host the scoreboard as the level ended, is kept (L.last) and goes as
+// soon as a report can go again, before anything of the next level:
+// - from the host for LAST_MS, also once its next level has begun. The lobby
+//   has the match open until the host ends it or opens the next, so the last
+//   report followed by the next level's first closes it as it ended. After
+//   the next level's first it would open the old match again, so nothing of
+//   a level goes while an older level's last is kept.
+// - from another game only until its own next level begins: by then the
+//   host has opened the next match, and when that's the same level again the
+//   lobby would take the old report for the new match.
+// It's only for the game still in the seat it had: a game that left, or sits
+// in another room by now, drops it. A player who leaves (end "left") gives
+// up the seat right after, so that last report can't be kept.
+//
 // The page says who the player is: Module.jkLadderKey is their browser key
 // (from the lobby's /ladder/key), and Module.jkLadderAnon is true when they
 // asked not to be recorded by name, in which case the key isn't sent either.
@@ -41,6 +58,9 @@
     // Kills kept while the lobby can't be reached, and for how long.
     var MAX_WAITING = 1024;
     var MAX_AGO_MS = 10 * 60 * 1000;
+    // A level's last report that couldn't go is kept this long. The lobby
+    // closes a match nobody reports to after five minutes.
+    var LAST_MS = 5 * 60 * 1000;
 
     function now() {
         return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -72,7 +92,9 @@
         waiting: [],    // kills not reported yet: {n, at, victim, killer, kind}
         sb: null, teams: null,
         sentAt: 0,
-        timer: null, soon: null
+        timer: null, soon: null,
+        last: null,     // an ended level's last report, still to go (L.keep)
+        lastTimer: null
     };
 
     // Whether a report can go now: the socket is open, this game has a seat in
@@ -83,11 +105,15 @@
                   net.lobbyCan.indexOf('match') >= 0);
     };
 
-    L.report = function(end) {
+    // A report of a level: the one being played, or a kept one (of), whose
+    // time in the level stopped when it ended.
+    L.report = function(end, of) {
+        var s = of || L;
         var t = now();
-        var kills = L.waiting.slice(0, MAX_EVENTS);
+        var kills = s.waiting.slice(0, MAX_EVENTS);
         var r = {
-            v: 1, lv: L.lv, map: L.map, title: L.title, t: Math.max(0, Math.round(t - L.since)), build: L.build,
+            v: 1, lv: s.lv, map: s.map, title: s.title, t: Math.max(0, Math.round((of ? of.endAt : t) - s.since)),
+            build: s.build,
             ev: kills.map(function(k) {
                 return [k.n, Math.min(MAX_AGO_MS, Math.max(0, Math.round(t - k.at))), k.victim, k.killer, k.kind];
             })
@@ -96,13 +122,13 @@
             r.anon = 1;
         else if (typeof Module.jkLadderKey === 'string' && Module.jkLadderKey)
             r.pk = Module.jkLadderKey;
-        if (L.idle)
+        if (s.idle)
             r.idle = 1;
-        if (L.host) {
-            r.rules = L.rules;
-            if (L.sb) {
-                r.sb = L.sb;
-                r.teams = L.teams;
+        if (s.host) {
+            r.rules = s.rules;
+            if (s.sb) {
+                r.sb = s.sb;
+                r.teams = s.teams;
             }
         }
         if (end)
@@ -110,29 +136,77 @@
         return { line: 'match ' + b64(JSON.stringify(r)), kills: kills.length };
     };
 
-    // Sends what's waiting, and the level's end if this is it. False if the
-    // lobby can't be reached, or keeps no record.
-    L.send = function(end) {
-        if (!L.canSend())
-            return false;
+    // Sends a level's waiting kills, and its end with the last of them if
+    // this is it. False if a send failed or there's more than goes at once.
+    function sendOf(s, end) {
         // What's too old to place is dropped.
         var t = now();
-        while (L.waiting.length && t - L.waiting[0].at > MAX_AGO_MS)
-            L.waiting.shift();
+        while (s.waiting.length && t - s.waiting[0].at > MAX_AGO_MS)
+            s.waiting.shift();
         for (var i = 0; i < MAX_AT_ONCE; i++) {
-            var last = L.waiting.length <= MAX_EVENTS;
-            var r = L.report(last ? end : '');
+            var last = s.waiting.length <= MAX_EVENTS;
+            var r = L.report(last ? end : '', s === L ? null : s);
             try {
                 Module.jkNet.ws.send(r.line);
             } catch (e) {
                 return false;
             }
-            L.waiting.splice(0, r.kills);
-            L.sentAt = t;
+            s.waiting.splice(0, r.kills);
+            s.sentAt = t;
             if (last)
                 return true;
         }
         return !end;
+    }
+
+    // Keeps the level's last report, which couldn't go, for when it can
+    // (L.flush). Only of a level the lobby has had a report of, so a lobby
+    // without a record or a game without a seat is never kept anything for.
+    L.keep = function() {
+        var net = Module.jkNet;
+        L.drop();
+        if (!L.sentAt || !net || !net.session || !net.seat)
+            return;
+        var t = now();
+        L.last = { room: net.seat.room, seat: net.seat.id, until: t + LAST_MS, endAt: t,
+                   lv: L.lv, map: L.map, title: L.title, build: L.build, host: L.host, idle: L.idle, rules: L.rules,
+                   since: L.since, waiting: L.waiting, sb: L.sb, teams: L.teams, sentAt: L.sentAt };
+        L.lastTimer = setInterval(L.flush, RETRY_MS);
+    };
+
+    L.drop = function() {
+        L.last = null;
+        clearInterval(L.lastTimer);
+        L.lastTimer = null;
+    };
+
+    // Sends the kept last report if it can go. True when nothing is kept any
+    // more: it went, or it's too old, or its game left or has another seat.
+    L.flush = function() {
+        var k = L.last;
+        if (!k)
+            return true;
+        var net = Module.jkNet;
+        if (now() > k.until || !net || !net.session ||
+            (net.seat && (net.seat.room !== k.room || net.seat.id !== k.seat))) {
+            L.drop();
+            return true;
+        }
+        if (!L.canSend() || !sendOf(k, 'level'))
+            return false;
+        L.drop();
+        return true;
+    };
+
+    // Sends what's waiting, and the level's end if this is it. False if the
+    // lobby can't be reached, or keeps no record.
+    L.send = function(end) {
+        if (!L.canSend())
+            return false;
+        // An older level's last report goes first, or this one waits for it.
+        if (!L.flush())
+            return false;
+        return sendOf(L, end);
     };
 
     L.tick = function() {
@@ -155,6 +229,11 @@
 
     L.start = function(map, title, mode, scoreLimit, timeLimitMin, host, idle, build) {
         L.stop();
+        // Its next level: the host has opened the next match by now, so a
+        // last report kept from another game than the host's has no match
+        // to go to. A host's still closes its own (L.send).
+        if (L.last && !L.last.host)
+            L.drop();
         L.on = true;
         L.lv++;
         L.map = mapName(map);
@@ -190,7 +269,10 @@
     L.end = function(left) {
         if (!L.on)
             return;
-        L.send(left ? 'left' : 'level');
+        // A level's end that can't go now is kept for when it can. Not a
+        // player's leaving: the seat is given up right after.
+        if (!L.send(left ? 'left' : 'level') && !left)
+            L.keep();
         L.stop();
     };
 
