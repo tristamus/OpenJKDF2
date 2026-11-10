@@ -7753,7 +7753,9 @@
           } catch (e) {}
           showMatchParts(on);
         }
-        if (on && (status.match !== matchesLive.latest || !matchesLive.recent)) {
+        // A newer match, or no list yet and none on its way.
+        if (on && (status.match !== matchesLive.latest ||
+                   (!matchesLive.recent && !matchesLive.busy && !matchesLive.retry))) {
           matchesLive.latest = status.match;
           askMatches();
         }
