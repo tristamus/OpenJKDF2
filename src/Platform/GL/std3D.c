@@ -4302,6 +4302,12 @@ static int std3D_WasmGlReady(void)
             std3D_wasmGlSay(3);
             return 0;
         }
+        // The display palette, as std3D_StartScene loads it: init_resources leaves it white, and
+        // std3D_DrawMenu can be the first to draw after this (a menu-only frame), before any
+        // StartScene has loaded it
+        glBindTexture(GL_TEXTURE_2D, displaypal_texture);
+        memcpy(displaypal_data, stdDisplay_masterPalette, 0x300);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGB, GL_UNSIGNED_BYTE, displaypal_data);
         std3D_bWasmGlBack = 1;
     }
     return !std3D_bWasmGlFailed;
