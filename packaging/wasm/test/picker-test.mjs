@@ -19,6 +19,8 @@ function cut(from, to) {
 const { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, filesToSave,
         gameFileStore, whatsNew, newsText, savedDay, keptFolderStore, listFolder, folderKind, keptPath, keptMerge,
         REQUIRED_JK, REQUIRED_MOTS, hasGameData, placeCdKey, keepFlashGlows, ZIP_METHODS } = new Function(
+    // The page's file names (ENGINE_FILES), which unzip() starts its worker from.
+    cut('      var ENGINE_FILES = ', '      Module.locateFile = function') +
     cut('      var REQUIRED_JK', '      function loadEngine') +
     cut('      var MOD_RESOURCE_DIRS', '      // ---- Which files each mod changes') +
     '\nreturn { openZips, detectMods, isSkipped, pickedFiles, placeModFiles, filesToRead, placeGraphicsPacks, ' +

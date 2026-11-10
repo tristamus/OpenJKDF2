@@ -74,16 +74,28 @@ jobs:
       # made-up browser.
       - name: Test the graphics acceleration and enhanced security notices
         run: node packaging/wasm/test/graphics-test.mjs
+      # The tab's icon: in the page, in the page's colors.
+      - name: Test the tab's icon
+        run: node packaging/wasm/test/icon-test.mjs
       # The engine failing to start or stopping: only its own errors show the
       # box with Reload, with made-up errors from the engine and elsewhere.
       - name: Test the engine's error box
         run: node packaging/wasm/test/errors-test.mjs
+      # The engine downloading and compiling from when the player asks to
+      # play, and what happens when that fails, with tiny made-up wasm.
+      - name: Test getting the engine ready early
+        run: node packaging/wasm/test/engine-early-test.mjs
       # Quit: back to the lobby once the saves are stored, with made-up storage.
       - name: Test Quit
         run: node packaging/wasm/test/quit-test.mjs
-      # The room list: every room opens its game's room window.
+      # The room list: every room opens its game's room window, and the room
+      # pictures (rooms/) are named by their content.
       - name: Test the room list
         run: node packaging/wasm/test/rooms-test.mjs
+      # The files the page loads or opens by name beside itself: all in the
+      # web folder collected below and in build_run_openjkdf2_wasm.sh's.
+      - name: Test the web folder's files
+        run: node packaging/wasm/test/web-files-test.mjs
       # The Raw mouse input box: how it starts in each browser (ticked for a
       # new Firefox player on Windows) and what it says, with made-up browsers
       # and storage.
@@ -153,6 +165,7 @@ jobs:
           mkdir -p web/jspi
           cp packaging/wasm/index.html packaging/wasm/move-out.html packaging/wasm/unzip.js build_emcc/openjkdf2.js \
              build_emcc/openjkdf2.wasm web/
+          cp -r packaging/wasm/rooms web/
           cp build_emcc_jspi/openjkdf2.js build_emcc_jspi/openjkdf2.wasm web/jspi/
       - uses: actions/upload-artifact@v4
         with:

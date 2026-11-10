@@ -30,8 +30,21 @@ extern "C" {
 // game just now, after too many wrong ones for it in the last minute.
 #define STDCOMM_WSRELAY_PASSWORD_WAIT (0x4A4B5057)
 
+// What stdComm_EnumSessions returns when it has asked the lobby for its games
+// and the join screen puts them up once they're in (stdComm_WSRelay_ListReady).
+#define STDCOMM_WSRELAY_LIST_LATER (0x4A4B4C4C)
+
 void stdComm_WSRelay_Startup();
 void stdComm_WSRelay_Shutdown();
+
+// Called each frame of the join screen: 1 once the games stdComm_EnumSessions
+// asked for are in jkGuiMultiplayer_aEntries, for the screen to put up as it
+// does after stdComm_EnumSessions returns 0.
+int stdComm_WSRelay_ListReady();
+
+// Called when the join screen opens: if its first list is late, it gives up
+// with no games, as on the first visit, not with the last visit's.
+void stdComm_WSRelay_ForgetList();
 
 // Whether the lobby checks the password of listed game idx when this game
 // joins it, as the lobby said when it listed it. Its list then carries no

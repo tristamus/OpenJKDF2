@@ -7,7 +7,8 @@
 // The room list and the code that wires it up are taken from index.html as
 // they are; the document and the room window are made up by the test.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -54,7 +55,9 @@ function clicked(buttons) {
         }
     }));
     const document = { querySelectorAll: sel => els.filter(e => e.matches(sel)) };
-    new Function('document', 'openRoom', 'room', 'roomGames', wiring)(document, key => opened.push(key), {}, {});
+    // (The pictures' idle fetch waits for a load event that never comes.)
+    const window = { addEventListener() {} };
+    new Function('document', 'openRoom', 'room', 'roomGames', 'window', wiring)(document, key => opened.push(key), {}, {}, window);
     return els.map((e, i) => {
         opened.length = 0;
         if (e.listeners.click) e.listeners.click();
@@ -214,6 +217,239 @@ test('a resize redraws the tables on the next frame, not while the observer repo
     assert.equal(fills, 1, 'not redrawn once the window has closed');
     observer([]);
     assert.equal(frames.length, 0, 'a closed window asks for no frame');
+});
+
+// ---- Room pictures: files beside the page, named by their content, asked
+// for with the page when the address names a room, and when a player points
+// at a room.
+
+const pictures = new Function(cut('      var ROOM_PICTURES = {', '      (function() {') + 'return ROOM_PICTURES;')();
+
+test('each room picture is a file named by its content, the same in the styles', () => {
+    assert.deepEqual(Object.keys(pictures).sort(), Object.keys(ROOMS).sort());
+    assert.ok(!/data:image\/(webp|jpeg|png)/.test(html), 'no picture left in the page');
+    for (const [key, name] of Object.entries(pictures)) {
+        const css = new RegExp('\\.room-games\\[data-room-key="' + key + '"\\] \\{[^}]*--backdrop: url\\("([^"]+)"\\)').exec(html);
+        assert.ok(css, key + ' has a picture in the styles');
+        assert.equal(css[1], name, key + ': the styles and ROOM_PICTURES name the same file');
+        const m = /^rooms\/[a-z-]+\.([0-9a-f]{8})\.(webp|jpg)$/.exec(name);
+        assert.ok(m, name + ' is rooms/<room>.<hash>.<type>');
+        const file = new URL('../' + name, import.meta.url);
+        assert.ok(existsSync(file), name + ' is there');
+        assert.equal(createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 8), m[1], name + "'s name matches its content");
+    }
+});
+
+test("a link to a room window asks for that room's picture with the page, and nothing else does", () => {
+    const head = cut('      var ROOM_PICTURES = {', '    </script>\n    <style>\n      body {');
+    for (const [hash, want] of [['#nar-shaddaa', [pictures['nar-shaddaa']]], ['#sith-asteroid', [pictures['sith-asteroid']]],
+                                ['', []], ['#rooms', []], ['#bundled', []], ['#__proto__', []], ['#toString', []]]) {
+        const links = [];
+        const document = { createElement: () => ({}), head: { appendChild: l => links.push(l) } };
+        new Function('document', 'location', head)(document, { hash });
+        assert.deepEqual(links.map(l => l.href), want, hash || '(none)');
+        links.forEach(l => { assert.equal(l.rel, 'preload'); assert.equal(l.as, 'image'); });
+    }
+});
+
+// The room buttons' wiring and the pictures' idle fetch, as the page has
+// them, in a made-up page that is still loading (or has loaded), with or
+// without Save-Data and requestIdleCallback. Nothing runs by itself: the
+// test fires the load event, the idle callback and the timers, says which
+// pictures have come (arrived), opens a room's window (open: a click on its
+// room, which marks the window with its key as openRoom does) and starts a
+// game (stop: what openPicker calls).
+function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {}) {
+    const code = cut('      var roomPicturesAsked = {};', "      if (typeof ResizeObserver === 'function') {");
+    const asked = [], images = [], dropped = [];
+    // An image is complete once it has come or failed (or has no src), and
+    // taking its src away stops its download.
+    class Image {
+        constructor() { this.complete = true; images.push(this); }
+        set src(v) { this.url = v; this.complete = false; asked.push({ src: v, priority: this.fetchPriority }); }
+        removeAttribute(name) {
+            assert.equal(name, 'src');
+            if (!this.complete) dropped.push(this.url);
+            this.complete = true;
+        }
+    }
+    const arrived = src => images.filter(i => i.url === src).forEach(i => { i.complete = true; });
+    const els = roomButtons().map(b => ({ dataset: b.dataset, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; } }));
+    const document = { querySelectorAll: () => els, readyState };
+    const loads = [], idles = [], timers = [];
+    const window = { addEventListener(type, fn) { if (type === 'load') loads.push(fn); } };
+    const navigator = saveData === undefined ? {} : { connection: { saveData } };
+    const requestIdleCallback = idle ? fn => idles.push(fn) : undefined;
+    const setTimeout = (fn, ms) => timers.push({ fn, ms });
+    const roomGames = { dataset: {} };
+    // As openRoom marks the window with its key and notes the room's window opened.
+    const hold = {};
+    const openRoom = key => hold.open(key);
+    const stop = new Function('document', 'openRoom', 'Image', 'ROOM_PICTURES', 'window', 'navigator', 'requestIdleCallback',
+                              'setTimeout', 'roomGames', 'hold', code +
+                              '\nhold.open = function(key) { roomGames.dataset.roomKey = key; roomWindowsOpened[key] = true; };' +
+                              '\nreturn stopRoomPictures;')(
+        document, openRoom, Image, pictures, window, navigator, requestIdleCallback, setTimeout, roomGames, hold);
+    const run = list => list.splice(0).forEach(f => (f.fn || f)());
+    const button = key => els.find(e => (e.dataset.room || e.dataset.opensRoom) === key);
+    return { els, asked, loads, idles, timers, dropped, arrived, stop, srcs: () => asked.map(a => a.src),
+             load: () => run(loads), idle: () => run(idles), timer: () => run(timers),
+             point: key => button(key).listeners.pointerenter(), open: key => button(key).listeners.click() };
+}
+
+test("pointing at a room, tabbing to it or touching it asks for its picture once", () => {
+    const w = roomPictureWiring(), els = w.els;
+    const jk = els.filter(e => (e.dataset.room || e.dataset.opensRoom) === 'nar-shaddaa');
+    const mots = els.filter(e => (e.dataset.room || e.dataset.opensRoom) === 'sith-asteroid');
+    jk[0].listeners.pointerenter();
+    jk[1].listeners.focus();
+    jk[2].listeners.touchstart();
+    assert.deepEqual(w.srcs(), [pictures['nar-shaddaa']], 'once for Nar Shaddaa, from any of its rooms');
+    mots[1].listeners.pointerenter();
+    assert.deepEqual(w.srcs(), [pictures['nar-shaddaa'], pictures['sith-asteroid']]);
+    assert.deepEqual(w.asked.map(a => a.priority), [undefined, undefined], 'at the usual priority');
+    els.forEach(e => assert.equal(typeof e.listeners.click, 'function', 'each still opens its window'));
+    w.load();
+    w.idle();
+    assert.equal(w.asked.length, 2, 'the idle fetch asks for neither again');
+});
+
+test('once the page has loaded and the browser is idle, both pictures are asked for at low priority', () => {
+    let w = roomPictureWiring();
+    assert.equal(w.loads.length, 1, 'waits for the load event');
+    assert.equal(w.idles.length + w.timers.length + w.asked.length, 0, 'nothing before it');
+    w.load();
+    assert.equal(w.idles.length, 1, 'then for the browser to be idle');
+    assert.equal(w.asked.length, 0);
+    w.idle();
+    assert.deepEqual(w.asked, Object.values(pictures).map(src => ({ src, priority: 'low' })));
+    w.els.forEach(e => { e.listeners.pointerenter(); e.listeners.focus(); });
+    assert.equal(w.asked.length, 2, 'and never again');
+
+    // One pointed at before the browser was idle isn't asked for twice.
+    w = roomPictureWiring();
+    w.els.find(e => (e.dataset.room || e.dataset.opensRoom) === 'sith-asteroid').listeners.pointerenter();
+    w.load();
+    w.idle();
+    assert.deepEqual(w.srcs(), [pictures['sith-asteroid'], pictures['nar-shaddaa']]);
+
+    // A page that has already loaded asks for the idle time at once.
+    w = roomPictureWiring({ readyState: 'complete' });
+    assert.equal(w.loads.length, 0);
+    w.idle();
+    assert.equal(w.asked.length, 2);
+
+    // No requestIdleCallback (Safari): a second after the load event.
+    w = roomPictureWiring({ idle: false });
+    w.load();
+    assert.equal(w.timers.length, 1);
+    assert.equal(w.timers[0].ms, 1000);
+    w.timer();
+    assert.equal(w.asked.length, 2);
+
+    // Save-Data off is the same as no Save-Data.
+    w = roomPictureWiring({ saveData: false });
+    w.load();
+    w.idle();
+    assert.equal(w.asked.length, 2);
+});
+
+test('with Save-Data on, only a room pointed at asks for its picture', () => {
+    const w = roomPictureWiring({ saveData: true });
+    w.load();
+    assert.equal(w.idles.length + w.timers.length, 0, 'no idle fetch');
+    assert.equal(w.asked.length, 0);
+    w.els.find(e => (e.dataset.room || e.dataset.opensRoom) === 'nar-shaddaa').listeners.pointerenter();
+    assert.deepEqual(w.srcs(), [pictures['nar-shaddaa']]);
+});
+
+test("once a game is starting, the idle fetch doesn't start, and pictures on their way are let go", () => {
+    // The folder prompt opens before the page has loaded: nothing after.
+    let w = roomPictureWiring();
+    w.stop();
+    w.load();
+    w.idle();
+    assert.deepEqual(w.asked, []);
+    // After the load event, before the browser is idle (also with no
+    // requestIdleCallback): nothing.
+    w = roomPictureWiring();
+    w.load();
+    w.stop();
+    w.idle();
+    assert.deepEqual(w.asked, []);
+    w = roomPictureWiring({ idle: false });
+    w.load();
+    w.stop();
+    w.timer();
+    assert.deepEqual(w.asked, []);
+
+    // While the idle fetch is on its way: what hasn't come yet is let go,
+    // what has is kept.
+    w = roomPictureWiring();
+    w.load();
+    w.idle();
+    assert.equal(w.asked.length, 2);
+    w.arrived(pictures['nar-shaddaa']);
+    w.stop();
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid']]);
+    // Pointed at again (the prompt closed without a game): the one let go
+    // is asked for again, at the usual priority; the one that came isn't.
+    w.point('sith-asteroid');
+    w.point('nar-shaddaa');
+    assert.deepEqual(w.asked.slice(2), [{ src: pictures['sith-asteroid'], priority: undefined }]);
+    // A second prompt lets go of what's on its way again, and only that.
+    w.stop();
+    w.stop();
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid'], pictures['sith-asteroid']]);
+
+    // A picture asked for by pointing at its room is let go the same way.
+    w = roomPictureWiring({ readyState: 'complete' });
+    w.point('nar-shaddaa');
+    w.stop();
+    w.idle();
+    assert.deepEqual(w.dropped, [pictures['nar-shaddaa']]);
+    assert.equal(w.asked.length, 1, 'and the idle fetch then asks for nothing');
+});
+
+test("Host or Join in a room's window lets that room's picture come: the window's backdrop shares its download", () => {
+    assert.ok(cut('      function openRoom(', '      var roomNoteTimer')
+        .includes('\n        roomWindowsOpened[key] = true;'), "openRoom notes the room's window opened");
+    // Both pictures on their way, Nar Shaddaa's window opened, then its Host.
+    let w = roomPictureWiring();
+    w.load();
+    w.idle();
+    w.open('nar-shaddaa');
+    w.stop();
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid']], "only the other room's picture is let go");
+    // Its room doesn't ask for it again (it's still coming); the other does.
+    w.point('nar-shaddaa');
+    w.point('sith-asteroid');
+    assert.deepEqual(w.srcs().slice(2), [pictures['sith-asteroid']]);
+
+    // Every window opened counts: Nar Shaddaa's, then Sith: Asteroid's.
+    w = roomPictureWiring();
+    w.load();
+    w.idle();
+    w.open('nar-shaddaa');
+    w.open('sith-asteroid');
+    w.stop();
+    assert.deepEqual(w.dropped, []);
+
+    // A picture asked for by pointing at its room, then its window opened.
+    w = roomPictureWiring({ readyState: 'complete' });
+    w.point('sith-asteroid');
+    w.open('sith-asteroid');
+    w.stop();
+    w.idle();
+    assert.deepEqual([w.dropped, w.srcs()], [[], [pictures['sith-asteroid']]]);
+});
+
+test('the folder prompt stops the pictures each time it opens', () => {
+    // At the top level of openPicker, not under a condition; the rooms'
+    // script, which defines it, comes after the prompt's.
+    assert.ok(cut('      function openPicker(', '      function closePicker(')
+        .includes("\n        if (typeof stopRoomPictures === 'function') stopRoomPictures();\n"), 'openPicker calls it');
+    assert.ok(html.indexOf('      function stopRoomPictures() {') > html.indexOf('      function openPicker('));
 });
 
 let failed = 0;
