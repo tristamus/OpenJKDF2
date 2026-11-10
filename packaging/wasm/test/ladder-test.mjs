@@ -369,7 +369,8 @@ const cleanStatus = new Function('GAME_NAMES', cut('      function cleanStatus(s
     'return cleanStatus;')(GAME_NAMES);
 const matchesCode = cut('      var MATCH_KEY_SETTING', '      function matchLink(');
 const page = new Function('GAME_NAMES', matchesCode +
-    'return { cleanRecent, matchId, matchList, matchWinner, matchLength, matchAgo, myMatch, MATCH_ROWS, MATCH_MINE_MS };')(GAME_NAMES);
+    'return { cleanRecent, cleanTop, topShown, ordinal, playerHref, standingsHref, matchId, matchList, matchWinner, ' +
+    'matchLength, matchAgo, myMatch, MATCH_ROWS, TOP_ROWS, MATCH_MINE_MS };')(GAME_NAMES);
 
 test("the page reads the lobby's latest match from its status, and nothing from a lobby without a record", () => {
     const status = { online: 0, lobby: [], byGame: {}, games: [] };
@@ -414,12 +415,68 @@ test('the list of latest matches is taken only as what the page shows', () => {
 test("one game's matches, or both games' together, newest first", () => {
     const recent = page.cleanRecent({ games: { jk1: [{ id: 9 }, { id: 7 }, { id: 4 }, { id: 3 }, { id: 2 }, { id: 1 }],
                                                mots: [{ id: 8 }, { id: 5 }] } });
-    assert.deepEqual(page.matchList(recent, 'all', page.MATCH_ROWS).map(m => m.id), [9, 8, 7, 5, 4, 3]);
+    assert.equal(page.MATCH_ROWS, 5);
+    assert.deepEqual(page.matchList(recent, 'all', page.MATCH_ROWS).map(m => m.id), [9, 8, 7, 5, 4]);
     assert.deepEqual(page.matchList(recent, 'all', 3).map(m => [m.id, m.game]), [[9, 'jk1'], [8, 'mots'], [7, 'jk1']]);
     assert.deepEqual(page.matchList(recent, 'mots', 6).map(m => m.id), [8, 5]);
     assert.deepEqual(page.matchList(recent, 'jk1', 2).map(m => m.id), [9, 7]);
     assert.deepEqual(page.matchList(null, 'all', 6), []);
     assert.deepEqual(page.matchList(recent, 'nonsense', 6), []);
+});
+
+test('the standings are taken only as what the page shows', () => {
+    for (const bad of [null, 'x', 12, {}, { top: null }, { top: 'x', you: 'x' }, { top: { jk1: 'x', mots: [] } }]) {
+        const got = page.cleanTop(bad);
+        assert.deepEqual(Object.keys(got.games), ['jk1', 'mots']);
+        assert.deepEqual(got.games.jk1, { period: 'week', week: { players: [], of: 0, matches: 0, you: null },
+                                          month: { players: [], of: 0, matches: 0, you: null },
+                                          all: { players: [], of: 0, matches: 0, you: null } });
+        assert.equal(got.you, null);
+    }
+    const got = page.cleanTop({ v: 1, top: {
+        jk1: { period: 'month', extra: 1,
+               week: { players: 'x', of: 'x', matches: -1, you: { rank: 0 } },
+               month: { players: [{ id: 7, name: 'Kyle_K', score: 12.4, kills: 14, deaths: 9, matches: 2, extra: 'x' },
+                                  { id: '8', name: 'A text id' }, null, 'x', { id: 0 },
+                                  { id: 9, name: 'a\x07b' + 'c'.repeat(100), score: -3, kills: 'x', deaths: -1, matches: 1.9 },
+                                  { id: 10, name: '', score: 'x' }],
+                        of: 2, matches: 5, you: { rank: 2, score: -3, extra: 1 } },
+               all: { players: Array.from({ length: 40 }, (_, i) => ({ id: i + 1, name: '<b>x</b>' })), of: 61, matches: 9 } },
+        mots: { period: 'decade' },
+        other: { period: 'week' },
+    }, you: { id: 9, name: 'a\x07b', last: 41.5, extra: 1 } });
+    assert.equal(got.games.jk1.period, 'month');
+    assert.equal(got.games.mots.period, 'week', 'a period the page has no word for');
+    assert.deepEqual(got.games.jk1.week, { players: [], of: 0, matches: 0, you: null });
+    assert.deepEqual(got.games.jk1.month.players, [
+        { id: 7, name: 'Kyle_K', score: 12, kills: 14, deaths: 9, matches: 2 },
+        { id: 9, name: 'ab' + 'c'.repeat(30), score: -3, kills: 0, deaths: 0, matches: 1 },
+        { id: 10, name: 'Anonymous', score: 0, kills: 0, deaths: 0, matches: 0 }]);
+    assert.deepEqual([got.games.jk1.month.of, got.games.jk1.month.matches, got.games.jk1.month.you], [3, 5, { rank: 2, score: -3 }]);
+    assert.equal(got.games.jk1.all.players.length, page.TOP_ROWS);
+    assert.equal(got.games.jk1.all.players[0].name, '<b>x</b>', 'as text: the page never writes it as markup');
+    assert.deepEqual(got.you, { id: 9, name: 'ab', last: 0 });
+    assert.deepEqual(page.cleanTop({ you: { id: 9, name: 'Maw', last: 41 } }).you, { id: 9, name: 'Maw', last: 41 });
+});
+
+test("the standings shown: the game and period picked, else the game played last and the lobby's period", () => {
+    const top = page.cleanTop({ top: { jk1: { period: 'month' }, mots: { period: 'all' } } });
+    const recent = page.cleanRecent({ games: { jk1: [{ id: 9 }], mots: [{ id: 12 }] } });
+    assert.deepEqual(page.topShown(top, recent, null, null), { game: 'mots', period: 'all' });
+    assert.deepEqual(page.topShown(top, recent, 'jk1', null), { game: 'jk1', period: 'month' });
+    assert.deepEqual(page.topShown(top, recent, 'jk1', 'week'), { game: 'jk1', period: 'week' });
+    assert.deepEqual(page.topShown(top, recent, 'all', 'nonsense'), { game: 'mots', period: 'all' }, 'an older setting');
+    assert.deepEqual(page.topShown(top, page.cleanRecent({ games: {} }), null, null), { game: 'jk1', period: 'month' });
+    assert.deepEqual(page.topShown(null, null, null, null), { game: 'jk1', period: 'week' }, 'before anything has come');
+});
+
+test('places and links, as the record pages word them', () => {
+    assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 103, 111].map(page.ordinal),
+                     ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '103rd', '111th']);
+    assert.equal(page.playerHref(7, 'jk1', 'week'), '/player/7?game=jk&period=week');
+    assert.equal(page.playerHref(7, 'mots', ''), '/player/7?game=mots');
+    assert.equal(page.standingsHref('jk1', ''), '/players');
+    assert.equal(page.standingsHref('mots', 'all'), '/players?game=mots&period=all');
 });
 
 test('who won: a player, one recorded without a name, a team, or nobody alone', () => {
@@ -457,11 +514,27 @@ test('the page shows nothing of the record until the lobby says it keeps one', (
     for (const tag of marked)
         assert.match(tag, /\shidden(?=[\s>])/, tag);
     // The section is right under the rooms, and the box above Go To.
-    const rooms = html.indexOf('<section id="rooms"'), matches = html.indexOf('<section id="matches"'),
+    const rooms = html.indexOf('<section id="rooms"'), board = html.indexOf('<section id="leaderboard"'),
           features = html.indexOf('<section id="features"');
-    assert.ok(rooms > 0 && matches > rooms && features > matches);
-    assert.ok(!html.substring(html.indexOf('</section>', rooms) + 10, matches).trim(), 'nothing between them');
-    assert.ok(html.indexOf('id="side-matches"') < html.indexOf('<div class="goto">'));
+    assert.ok(rooms > 0 && board > rooms && features > board);
+    assert.ok(!html.substring(html.indexOf('</section>', rooms) + 10, board).trim(), 'nothing between them');
+    assert.ok(html.indexOf('id="side-top"') > 0 && html.indexOf('id="side-top"') < html.indexOf('<div class="goto">'));
+    // A link to the section's old name still lands on it.
+    assert.ok(html.indexOf('id="matches"') > board && html.indexOf('id="matches"') < features);
+    // Every game and period has its button in the section, and each game one in the box.
+    assert.equal((html.match(/data-top-game="jk1"/g) || []).length, 2);
+    assert.equal((html.match(/data-top-game="mots"/g) || []).length, 2);
+    for (const period of ['week', 'month', 'all'])
+        assert.equal((html.match(new RegExp(`data-top-period="${period}"`, 'g')) || []).length, 1);
+    // Where the viewer stands is said under each list that may be too short to have them.
+    assert.match(html, /class="side-you" data-my-rank="5" hidden/);
+    assert.match(html, /class="top-you" data-my-rank="10" hidden/);
+    // What the page's code fills in is all there.
+    const code = cut('      var MATCH_KEY_SETTING', '      var hideZoneBeforeLobby = hideZone;');
+    for (const id of [...code.matchAll(/getElementById\('([^']+)'\)/g)].map(m => m[1]).filter(id => id !== 'zone'))
+        assert.ok(html.includes(`id="${id}"`), 'the page has #' + id);
+    for (const mark of [...code.matchAll(/querySelectorAll\('\[(data-[a-z-]+)\]'\)/g)].map(m => m[1]))
+        assert.ok(new RegExp(`<[a-z]+[^>]*\\s${mark}(?=[\\s>=])`).test(html), 'the page has [' + mark + ']');
 });
 
 test("players' names only go into the page as text", () => {
@@ -472,8 +545,25 @@ test("players' names only go into the page as text", () => {
 test('the key is asked for when a game starts, not by a page that only shows', () => {
     const code = cut('      var MATCH_KEY_SETTING', '      var hideZoneBeforeLobby = hideZone;');
     assert.equal(code.split('askPlayerKey()').length - 1, 2, 'its definition, and one call');
-    assert.match(code, /function matchesGameStart\(\) \{\s+if \(!matchesLive\.on\) return;\s+askPlayerKey\(\);/);
+    assert.match(code, /function matchesGameStart\(\) \{\s+if \(!matchesWanted\(\)\) return;\s+askPlayerKey\(\);/);
     assert.match(html, /hideZone = function\(\) \{\s+matchesGameStart\(\);/);
+});
+
+test("a player who presses Play before the lobby's first status gets a key too", () => {
+    // Wanted until a status says the lobby keeps no record: the first match
+    // of someone quick isn't left without its player.
+    const wanted = new Function('matchesLive', cut('      function matchesWanted()', '      // Gets this browser') +
+                                'return matchesWanted();');
+    assert.equal(wanted({ on: false, told: false }), true, 'no status yet');
+    assert.equal(wanted({ on: true, told: true }), true);
+    assert.equal(wanted({ on: false, told: true }), false, 'a lobby without a record');
+    const code = cut('      function matchesStatus(status)', '      function storedPlayerKey()');
+    assert.match(code, /var on = status\.match !== null;\s+matchesLive\.told = true;/);
+    assert.match(cut('      function askPlayerKey()', '      // A game is starting'), /if \(!matchesWanted\(\) \|\| Module\.jkLadderAnon/);
+});
+
+test("the standings are asked for with the lobby's cookie, so they can say where the viewer stands", () => {
+    assert.match(html, /fetch\('\/ladder\/recent', \{ cache: 'no-store', credentials: 'same-origin' \}\)/);
 });
 
 let failed = 0;

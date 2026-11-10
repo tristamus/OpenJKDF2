@@ -170,6 +170,31 @@ window.jkLobbyMock = (function() {
               teams: true, name: null, team: 3, score: 31 }
         ]
     };
+    // The standings, as /ladder/recent answers them: each game's leaders
+    // over each period, and the viewer (Kyle_K, with their latest match).
+    function board(players, of, matches, you) {
+        return { players: players.map(function(p) {
+                     return { id: p[0], name: p[1], score: p[2], kills: p[3], deaths: p[4], matches: p[5] };
+                 }), of: of, matches: matches, you: you || null };
+    }
+    var JK_WEEK = [[7, 'Kyle_K', 213, 215, 103, 11], [12, 'Boc', 172, 191, 254, 14], [3, 'Maw', 169, 177, 112, 8],
+                   [5, 'Jerec', 168, 171, 142, 10], [9, 'Yun', 166, 169, 71, 8], [21, 'Jan_Ors', 126, 130, 193, 11],
+                   [14, 'Qu_Rahn', 86, 87, 120, 6], [18, 'Pic', 51, 56, 114, 5], [2, 'Sariss', 24, 25, 12, 2],
+                   [25, 'Gorc', 17, 20, 43, 3]];
+    var JK_ALL = [[9, 'Yun', 1840, 1866, 902, 96], [7, 'Kyle_K', 1622, 1650, 1011, 88],
+                  [5, 'Jerec', 1433, 1470, 1204, 104], [12, 'Boc', 1318, 1402, 1877, 131], [3, 'Maw', 990, 1012, 760, 61],
+                  [21, 'Jan_Ors', 811, 840, 1190, 77], [30, 'Ewok_Assassin_The_Third', 640, 655, 512, 40],
+                  [14, 'Qu_Rahn', 512, 530, 701, 44], [18, 'Pic', 401, 433, 820, 52], [2, 'Sariss', 288, 290, 143, 19]];
+    var TOP = {
+        jk1: { period: 'week', week: board(JK_WEEK, 14, 19, { rank: 1, score: 213 }),
+               month: board(JK_ALL.slice(1).concat(JK_ALL.slice(0, 1)), 23, 61, { rank: 1, score: 1622 }),
+               all: board(JK_ALL, 37, 244, { rank: 2, score: 1622 }) },
+        mots: { period: 'month', week: board([], 0, 0),
+                month: board([[31, 'Dash_R', 41, 44, 30, 4], [33, 'Vima_D', 29, 30, 35, 3], [7, 'Kyle_K', 12, 14, 9, 1]], 3, 5,
+                             { rank: 3, score: 12 }),
+                all: board([[31, 'Dash_R', 96, 101, 80, 9], [33, 'Vima_D', 54, 57, 71, 7], [7, 'Kyle_K', 12, 14, 9, 1]], 3, 12,
+                           { rank: 3, score: 12 }) }
+    };
     var live = null;      // the status as players come and go
     var moving = null;    // the timer making them
     var nextId = 60;
@@ -348,7 +373,11 @@ window.jkLobbyMock = (function() {
                     return out;
                 });
             });
-            return { v: 1, games: games };
+            if (current === 'empty') {
+                var none = { period: 'week', week: board([], 0, 0), month: board([], 0, 0), all: board([], 0, 0) };
+                return { v: 1, games: games, top: { jk1: none, mots: none }, you: null };
+            }
+            return { v: 1, games: games, top: copy(TOP), you: { id: 7, name: 'Kyle_K', last: 41 } };
         },
         describe: function(kind, label, quick, want) {
             var folder = 'your ' + GAME_NAMES[want.game] + ' folder';

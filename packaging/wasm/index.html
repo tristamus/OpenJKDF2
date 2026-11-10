@@ -1413,10 +1413,11 @@
         }
       }
 
-      /* Latest matches, from the lobby's record of every match
-         (jkdf2mp-bb-server's ladder.js): a box in the sidebar and a section
-         under the rooms. Both, and the links to them, are hidden unless the
-         lobby says it keeps a record. */
+      /* The leaderboard, from the lobby's record of every match
+         (jkdf2mp-bb-server's ladder.js): Top Players in a box in the sidebar,
+         and a section under the rooms with a game's standings and the latest
+         matches. Both, and the links to them, are hidden unless the lobby
+         says it keeps a record. */
       .game-ball {
         display: inline-block;
         flex: none;
@@ -1472,6 +1473,44 @@
       .side-matches .side-none { margin: 6px 8px 0; color: var(--muted); font: 12px/1.3 Arial, Helvetica, sans-serif; }
       .side-matches .side-mine { margin: 5px 8px 0; font: bold 12px/1.3 Arial, Helvetica, sans-serif; }
       #zone .side-matches .side-mine a { color: var(--gold); }
+      .side-top-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        padding: 5px 8px 2px;
+        color: var(--muted);
+        font: 12px/1.3 Arial, Helvetica, sans-serif;
+      }
+      .side-top-games { display: flex; gap: 3px; }
+      .side-top-games button {
+        padding: 0 6px 1px;
+        border: 1px solid var(--gold);
+        background: none;
+        color: var(--gold);
+        font: bold 11px Verdana, Geneva, sans-serif;
+        cursor: pointer;
+      }
+      .side-top-games button:hover { background-color: rgba(255, 204, 102, 0.2); }
+      .side-top-games button[aria-pressed=true] { background-color: var(--gold); color: #000; cursor: default; }
+      .side-matches ol.side-top li {
+        display: grid;
+        grid-template-columns: 1.3em minmax(0, 1fr) auto;
+        column-gap: 6px;
+        align-items: baseline;
+      }
+      .side-top .rank { color: var(--muted); }
+      .side-top .score { font-variant-numeric: tabular-nums; }
+      .side-top li.you .score, #zone .side-matches ol.side-top li.you a { color: var(--gold); }
+      .side-matches .side-you { margin: 4px 8px 0; font: 13px/1.3 Arial, Helvetica, sans-serif; }
+      #zone .side-matches .side-you a {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--gold);
+        text-decoration: none;
+      }
+      #zone .side-matches .side-you a:hover span:first-child { text-decoration: underline; }
       #zone a.side-more {
         display: block;
         margin: 8px;
@@ -1503,8 +1542,17 @@
         background-color: var(--teal-dark);
         box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35);
       }
-      .match-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-      .match-table th {
+      .top-tabs { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 6px 0 8px; }
+      .top-tabs .match-tabs { margin: 0; }
+      .top-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(180px, 34%);
+        gap: 12px 18px;
+        align-items: start;
+      }
+      .top-layout > div { min-width: 0; }
+      .top-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .top-table th {
         padding: 3px 8px;
         background-color: var(--gold);
         border-bottom: 1px solid #000;
@@ -1513,18 +1561,32 @@
         text-align: left;
         white-space: nowrap;
       }
-      .match-table td { padding: 2px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); white-space: nowrap; }
-      .match-table tbody tr:last-child td { border-bottom: 0; }
-      .match-table th.num, .match-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-      .match-table td.level, .match-table td.mod, .match-table td.won {
-        max-width: 190px;
+      .top-table td { padding: 2px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); white-space: nowrap; }
+      .top-table tbody tr:last-child td { border-bottom: 0; }
+      .top-table th.num, .top-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      .top-table td.name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+      .top-table td.name a { font-weight: bold; }
+      .top-table td.rank { color: var(--muted); }
+      .top-table tr.you td { background-color: rgba(255, 204, 102, 0.14); }
+      #zone .top-table tr.you td.name a { color: var(--gold); }
+      .top-table .tag { margin-left: 6px; color: var(--gold); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .top-table td.empty { padding: 14px 10px; color: var(--muted); text-align: center; white-space: normal; }
+      .top-you { margin: 6px 3px 0 0; font: 13px/1.3 Arial, Helvetica, sans-serif; }
+      #zone .top-you a { display: flex; justify-content: space-between; gap: 8px; padding: 0 8px; color: var(--gold); }
+      #zone .top-latest h3 { margin: 0 0 2px; }
+      .top-latest ol { margin: 0; padding: 0; list-style: none; }
+      .top-latest li { padding: 3px 0 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.18); }
+      .top-latest li a { font-weight: bold; overflow-wrap: anywhere; }
+      .top-latest small { display: block; color: var(--muted); font-size: 13px; }
+      .top-latest .fact {
+        display: inline-block;
+        max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
+        vertical-align: bottom;
+        white-space: nowrap;
       }
-      .match-table td.level a { font-weight: bold; }
-      .match-table .tag { margin-left: 4px; color: var(--muted); font-size: 12px; }
-      .match-table .soft, .match-table td.when { color: var(--muted); }
-      .match-table td.empty { padding: 14px 10px; color: var(--muted); text-align: center; white-space: normal; }
+      .top-latest .side-none { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
       .match-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 10px 0 0; }
       #zone a.match-more { display: inline-block; color: #fff; text-decoration: none; }
       .match-name { display: flex; gap: 8px; align-items: baseline; margin: 10px 0 0; cursor: pointer; }
@@ -1560,53 +1622,42 @@
       .style-2001 .match-tabs button:hover { background-color: var(--stripe); }
       .style-2001 .match-tabs button[aria-pressed=true] { background-color: var(--frame); color: #fff; }
       .style-2001 .match-scroll { margin-right: 0; border: 0; background: none; box-shadow: none; }
-      .style-2001 .match-table { font-size: 12px; }
-      .style-2001 .match-table th {
+      .style-2001 .side-top-head { padding: 5px 0 2px; color: var(--navy-muted); }
+      .style-2001 .side-top-games button { border-color: var(--frame); color: var(--frame); }
+      .style-2001 .side-top-games button:hover { background-color: var(--stripe); }
+      .style-2001 .side-top-games button[aria-pressed=true] { background-color: var(--frame); color: #fff; }
+      .style-2001 .side-top .rank { color: var(--navy-muted); }
+      .style-2001 .side-top li.you .score, .style-2001 #zone .side-matches ol.side-top li.you a,
+      .style-2001 #zone .side-matches .side-you a, .style-2001 #zone .top-you a,
+      .style-2001 #zone .top-table tr.you td.name a, .style-2001 .top-table .tag { color: var(--frame); }
+      .style-2001 .side-matches .side-you { margin: 4px 4px 0; }
+      .style-2001 .top-table { font-size: 12px; }
+      .style-2001 .top-table th {
         padding: 0 6px 4px;
         background: var(--dots) 0 100% / 100% 1px no-repeat;
         border: 0;
         color: var(--frame);
       }
-      .style-2001 .match-table td { padding: 3px 6px; border: 0; }
-      .style-2001 .match-table tbody tr:nth-child(odd) { background-color: var(--stripe); }
-      .style-2001 #zone .match-table td.level a { text-decoration: none; }
-      .style-2001 #zone .match-table td.level a:hover { text-decoration: underline; }
-      .style-2001 .match-table .tag, .style-2001 .match-table .soft, .style-2001 .match-table td.when,
-      .style-2001 .match-table td.empty, .style-2001 .match-name .fine { color: var(--navy-muted); }
+      .style-2001 .top-table td { padding: 3px 6px; border: 0; }
+      .style-2001 .top-table tbody tr:nth-child(odd) { background-color: var(--stripe); }
+      .style-2001 .top-table tr.you td { background-color: rgba(0, 102, 153, 0.12); }
+      .style-2001 #zone .top-table td.name a, .style-2001 #zone .top-latest li a { text-decoration: none; }
+      .style-2001 #zone .top-table td.name a:hover, .style-2001 #zone .top-latest li a:hover { text-decoration: underline; }
+      .style-2001 .top-table td.rank, .style-2001 .top-table td.empty, .style-2001 .top-latest small,
+      .style-2001 .top-latest .side-none, .style-2001 .match-name .fine { color: var(--navy-muted); }
+      .style-2001 .top-latest li { border-bottom: 0; padding: 3px 6px; }
+      .style-2001 .top-latest li:nth-child(odd) { background-color: var(--stripe); }
       .style-2001 #zone a.match-more { color: var(--navy); }
       .style-2001 .match-name input { accent-color: var(--frame); }
 
       @media (max-width: 700px) {
-        /* On a phone the section under the rooms is the one list, and each
-           match is a block of two or three lines instead of a table row:
-           the level and when, who won and the score, then the mod. */
+        /* On a phone the section under the rooms is the one place: the
+           standings without two of their columns, then the latest matches. */
         .side-matches { display: none; }
-        .match-table, .match-table tbody { display: block; }
-        .match-table thead, .match-table .wide, .match-table td.mod.none, .match-table td.score.none { display: none; }
-        .match-table tr {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          column-gap: 10px;
-          padding: 4px 8px;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-        }
-        .match-table tbody tr:last-child { border-bottom: 0; }
-        .match-table td, .style-2001 .match-table td { padding: 0; border: 0; }
-        .match-table td.level, .match-table td.mod, .match-table td.won { max-width: none; }
-        .match-table td.level { grid-area: 1 / 1; }
-        .match-table td.when { grid-area: 1 / 2; }
-        .match-table td.won { grid-area: 2 / 1; }
-        .match-table td.score { grid-area: 2 / 2; }
-        .match-table td.mod { grid-area: 3 / 1 / auto / span 2; }
-        .match-table td.won:not(.none)::before { content: 'Won by '; color: var(--muted); }
-        .match-table td.score::before { content: 'Score '; color: var(--muted); }
-        .match-table td.mod::before { content: 'Mod: '; color: var(--muted); }
-        .match-table td.empty { grid-column: 1 / -1; padding: 10px 0; }
-        .style-2001 .match-table tr { border-bottom: 0; }
-        .style-2001 .match-table td.won:not(.none)::before, .style-2001 .match-table td.score::before,
-        .style-2001 .match-table td.mod::before {
-          color: var(--navy-muted);
-        }
+        .top-layout { grid-template-columns: minmax(0, 1fr); }
+        .top-table .wide { display: none; }
+        .top-table th, .top-table td { padding-left: 6px; padding-right: 6px; }
+        .top-table td.name { max-width: 150px; }
       }
     </style>
     <style>
@@ -1684,7 +1735,7 @@
 
         <nav class="goldnav" aria-label="Sections">
           <a href="#rooms">Game Rooms</a>
-          <a href="#matches" data-matches hidden>Matches</a>
+          <a href="#leaderboard" data-matches hidden>Leaderboard</a>
           <a href="#features">Features</a>
           <a href="#start">Getting Started</a>
           <a href="#files">Your Files</a>
@@ -2109,19 +2160,27 @@
             <div class="boxart" aria-hidden="true"><b>Jedi Knight</b><span>Dark Forces II</span></div>
             <ul>
               <li><a href="#rooms" class="here">Game Rooms</a></li>
-              <li data-matches hidden><a href="#matches">Latest Matches</a></li>
+              <li data-matches hidden><a href="#leaderboard">Leaderboard</a></li>
               <li><a href="#features">Features</a></li>
               <li><a href="#start">Getting Started</a></li>
               <li><a href="#files">Your Files</a></li>
               <li><a href="#screenshots">Your Screenshots</a></li>
               <li><a href="#help">Game Help</a></li>
             </ul>
-            <div class="side-matches" id="side-matches" data-matches hidden>
-              <h2>Latest Matches</h2>
-              <ol id="side-matches-list"></ol>
-              <p class="side-none" id="side-matches-none" hidden>None yet.</p>
+            <div class="side-matches" id="side-top" data-matches hidden>
+              <h2>Top Players</h2>
+              <div class="side-top-head">
+                <span id="side-top-period">This Week</span>
+                <span class="side-top-games" role="group" aria-label="Game">
+                  <button type="button" data-top-game="jk1" aria-pressed="true" title="Jedi Knight">JK</button>
+                  <button type="button" data-top-game="mots" aria-pressed="false" title="Mysteries of the Sith">MotS</button>
+                </span>
+              </div>
+              <ol class="side-top" id="side-top-list"></ol>
+              <p class="side-none" id="side-top-none" hidden>Nobody yet.</p>
+              <p class="side-you" data-my-rank="5" hidden><a href="/players"><span></span><span></span></a></p>
               <p class="side-mine" data-my-match hidden><a href="/matches">Your last match &raquo;</a></p>
-              <a class="zone-button side-more" href="/matches">All matches &raquo;</a>
+              <a class="zone-button side-more" data-standings href="/players">Standings &raquo;</a>
             </div>
             <div class="goto">Go To:
               <a href="https://github.com/shinyquagsire23/OpenJKDF2">OpenJKDF2</a>
@@ -2179,29 +2238,46 @@
               </ul>
             </section>
 
-            <section id="matches" aria-labelledby="matches-title" data-matches hidden>
-              <h2 class="ruled" id="matches-title">Latest Matches <small>Recorded as they end</small></h2>
-              <p class="note">Every match played in the rooms gets a page: the scoreboard, who killed whom, the
-                level and the mod.</p>
-              <div class="match-tabs" role="group" aria-label="Game">
-                <button type="button" data-matches-game="all" aria-pressed="true">Both games</button>
-                <button type="button" data-matches-game="jk1" aria-pressed="false"><span class="game-ball" aria-hidden="true"></span>Jedi Knight</button>
-                <button type="button" data-matches-game="mots" aria-pressed="false"><span class="game-ball mots" aria-hidden="true"></span>Mysteries of the Sith</button>
+            <section id="leaderboard" aria-labelledby="leaderboard-title" data-matches hidden>
+              <h2 class="ruled" id="leaderboard-title">Leaderboard <small id="top-count"></small></h2>
+              <p class="note">Every match played in the rooms counts when it ends. Score is kills minus suicides, as
+                on the game's own scoreboard.</p>
+              <div class="top-tabs">
+                <div class="match-tabs" role="group" aria-label="Game">
+                  <button type="button" data-top-game="jk1" aria-pressed="true"><span class="game-ball" aria-hidden="true"></span>Jedi Knight</button>
+                  <button type="button" data-top-game="mots" aria-pressed="false"><span class="game-ball mots" aria-hidden="true"></span>Mysteries of the Sith</button>
+                </div>
+                <div class="match-tabs" role="group" aria-label="Period">
+                  <button type="button" data-top-period="week" aria-pressed="true">This Week</button>
+                  <button type="button" data-top-period="month" aria-pressed="false">This Month</button>
+                  <button type="button" data-top-period="all" aria-pressed="false">All Time</button>
+                </div>
               </div>
-              <div class="match-scroll">
-                <table class="match-table" role="table" aria-labelledby="matches-title">
-                  <thead role="rowgroup"><tr role="row">
-                    <th scope="col" role="columnheader">Level</th><th scope="col" role="columnheader">Mod</th>
-                    <th scope="col" role="columnheader" class="num wide">Players</th>
-                    <th scope="col" role="columnheader" class="num wide">Length</th>
-                    <th scope="col" role="columnheader">Won by</th>
-                    <th scope="col" role="columnheader" class="num">Score</th>
-                    <th scope="col" role="columnheader">Played</th>
-                  </tr></thead>
-                  <tbody id="matches-rows" role="rowgroup"></tbody>
-                </table>
+              <div class="top-layout">
+                <div>
+                  <div class="match-scroll">
+                    <table class="top-table" aria-labelledby="leaderboard-title">
+                      <thead><tr>
+                        <th scope="col" class="num">#</th><th scope="col">Player</th>
+                        <th scope="col" class="num">Score</th><th scope="col" class="num">Kills</th>
+                        <th scope="col" class="num wide">Deaths</th><th scope="col" class="num">K/D</th>
+                        <th scope="col" class="num wide">Matches</th>
+                      </tr></thead>
+                      <tbody id="top-rows"></tbody>
+                    </table>
+                  </div>
+                  <p class="top-you" data-my-rank="10" hidden><a href="/players"><span></span><span></span></a></p>
+                </div>
+                <div class="top-latest" id="matches">
+                  <h3 id="latest-title">Latest matches</h3>
+                  <ol id="latest-list" aria-labelledby="latest-title"></ol>
+                  <p class="side-none" id="latest-none" hidden>None yet. A match is recorded when two or more players
+                    play a level in a room for a minute or more.</p>
+                </div>
               </div>
-              <p class="match-foot"><a class="zone-button match-more" href="/matches">All matches &raquo;</a>
+              <p class="match-foot"><a class="zone-button match-more" data-standings href="/players">Full standings &raquo;</a>
+                <a class="zone-button match-more" href="/matches">All matches &raquo;</a>
+                <a href="/players" data-my-record hidden>Your record</a>
                 <a href="/matches" data-my-match hidden>Your last match</a></p>
               <label class="match-name"><input type="checkbox" data-match-name checked>
                 <span>Put my name on match pages <span class="fine">Unticked, you're in your matches as Anonymous,
@@ -2282,10 +2358,12 @@
                   Download the screenshots you want to keep.</li>
                 <li data-matches hidden><b>Matches are recorded.</b> When a match in the rooms ends, its scoreboard,
                   who killed whom, the level and the mod go on a page anyone can open, with the names players
-                  used in the game. To be on them as Anonymous, untick "Put my name on match pages" under
-                  <a href="#matches">Latest Matches</a> or when you start. To keep your matches together, this
+                  used in the game, and it counts in the standings and on each player's own page. To be in
+                  them as Anonymous, untick "Put my name on match pages" under
+                  <a href="#leaderboard">Leaderboard</a> or when you start. To keep your matches together, this
                   browser gets a random player number when you play, kept here and in a cookie. There are no
-                  accounts.</li>
+                  accounts, so a browser without its number is taken for the player whose name it plays
+                  under.</li>
                 <li id="move-files" hidden><b>Played at the old address?</b> <button class="text-button"
                   type="button" data-move-in>Bring your characters, controls, saved game files, mods and screenshots
                   over from jkdf2mp.jkdf2mp-lobby.workers.dev.</button> If the game then asks for your folder,
@@ -7506,15 +7584,27 @@
 
       // ---- The match record. A lobby that keeps a record of every match
       // (ladder.js in jkdf2mp-bb-server) says so in its status, and each
-      // match gets a page there (/match/<id>). Then, and only then, this
-      // page shows the latest matches, in a box in the sidebar and a section
-      // under the rooms, from the lobby's /ladder/recent:
-      //   { v: 1, games: { jk1: [{ id: 12, title: 'Canyon Oasis', mod: 'SBX 3.1', pack: 0, custom: 0,
-      //                            players: 4, secs: 754, at: 1794300000000, teams: false,
-      //                            name: 'Kyle_K', team: 0, score: 15 }], mots: [] } }
-      // newest first, with who won: name, or null with team (1 Red, 2 Gold,
-      // 3 Blue, 4 Green) when a team did, and '' for a winner recorded
-      // without a name. It asks again when the status names a newer match.
+      // match gets a page there (/match/<id>), each player one
+      // (/player/<id>), and each game its standings (/players). Then, and
+      // only then, this page shows the leaderboard: Top Players in a box in
+      // the sidebar, and a section under the rooms with a game's standings
+      // and the latest matches, all from the lobby's /ladder/recent:
+      //   { v: 1,
+      //     games: { jk1: [{ id: 12, title: 'Canyon Oasis', mod: 'SBX 3.1', pack: 0, custom: 0,
+      //                      players: 4, secs: 754, at: 1794300000000, teams: false,
+      //                      name: 'Kyle_K', team: 0, score: 15 }], mots: [] },
+      //     top: { jk1: { period: 'week', week: board, month: board, all: board }, mots: {...} },
+      //     you: { id: 7, name: 'Kyle_K', last: 12 } }
+      // The matches are newest first, with who won: name, or null with team
+      // (1 Red, 2 Gold, 3 Blue, 4 Green) when a team did, and '' for a winner
+      // recorded without a name. top has each game's standings over this
+      // week, this month and all time, and the period to show first; a board
+      // is { players: [{ id, name, score, kills, deaths, matches }], of,
+      // matches, you: { rank, score } }: its first ten players, how many it
+      // has, how many matches it adds up, and where this browser's player
+      // stands in it (null when they don't). you is that player, by the
+      // lobby's cookie, with their latest match, or null. The page asks again
+      // when the status names a newer match.
       // The game reports its matches by itself (ladder.js here, bundled into
       // the engine). The page says who its player is: Module.jkLadderKey is
       // this browser's player key, which the lobby gives out and keeps in a
@@ -7525,19 +7615,25 @@
       // the page as text.
       var MATCH_KEY_SETTING = 'jkdf2mp-player-key';
       var MATCH_NAME_SETTING = 'jkdf2mp-match-name';    // 'off': recorded as Anonymous
-      var MATCH_GAME_SETTING = 'jkdf2mp-matches-game';  // the lists' game: 'all', 'jk1' or 'mots'
+      var MATCH_GAME_SETTING = 'jkdf2mp-matches-game';  // the standings' game: 'jk1' or 'mots'
       var MATCH_MINE_SETTING = 'jkdf2mp-last-match';    // { id, at }: the last match this browser played
       var MATCH_ON_SETTING = 'jkdf2mp-matches';         // 'on': the lobby kept a record at the last visit
-      var MATCH_ROWS = 6;        // matches in the section
-      var MATCH_SIDE_ROWS = 4;   // and in the sidebar's box
+      var MATCH_ROWS = 5;        // matches beside the standings
+      var TOP_ROWS = 10;         // players in the section's standings
+      var TOP_SIDE_ROWS = 5;     // and in the sidebar's box
       var MATCH_MINE_MS = 30 * 24 * 60 * 60 * 1000;     // "Your last match" is offered this long
       var MATCH_RETRY_MS = 30000;
       var MATCH_TEAMS = ['', 'Red', 'Gold', 'Blue', 'Green'];
-      // on: the lobby's status said it keeps a record. shown: the lists
-      // show, which they also do from the start where it kept one at the
-      // last visit, so the page doesn't shift when the status comes.
-      var matchesLive = { on: false, shown: false, latest: -1, recent: null, game: 'all', busy: false, again: false,
-                          failures: 0, retry: null, keyAt: 0, keyBusy: false, mine: 0 };
+      var TOP_PERIODS = { week: 'This Week', month: 'This Month', all: 'All Time' };
+      var TOP_PERIODS_LC = { week: 'this week', month: 'this month', all: 'all time' };
+      // on: the lobby's status said it keeps a record (told: a status has
+      // come at all). shown: the lists show, which they also do from the
+      // start where it kept one at the last visit, so the page doesn't shift
+      // when the status comes. game and period: the standings shown, each
+      // null until picked, which shows what the lobby would (topShown).
+      var matchesLive = { on: false, told: false, shown: false, latest: -1, recent: null, top: null, game: null,
+                          period: null, busy: false, again: false, failures: 0, retry: null, keyAt: 0, keyBusy: false,
+                          mine: 0 };
 
       // Only what the page shows, in the types it expects, whatever arrives.
       function cleanRecent(a) {
@@ -7560,8 +7656,69 @@
         return out;
       }
 
-      // A match's number, as the lobby's pages take it.
+      // A match's number, as the lobby's pages take it (a player's is the same).
       function matchId(v) { return typeof v === 'number' && v >= 1 && v <= 999999999 && Math.floor(v) === v; }
+
+      // The standings and the viewer, the same way: { games: { jk1: { period,
+      // week, month, all }, mots }, you }.
+      function cleanTop(a) {
+        function str(v, max) {
+          return typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]/g, '').substring(0, max) : '';
+        }
+        function num(v, max) { return typeof v === 'number' && isFinite(v) && v >= 0 ? Math.min(Math.floor(v), max) : 0; }
+        function whole(v) { return typeof v === 'number' && isFinite(v) ? Math.max(-1e7, Math.min(1e7, Math.round(v))) : 0; }
+        var top = a && typeof a === 'object' && a.top && typeof a.top === 'object' ? a.top : {};
+        var out = { games: {}, you: null };
+        Object.keys(GAME_NAMES).forEach(function(game) {
+          var g = top[game] && typeof top[game] === 'object' ? top[game] : {};
+          var boards = { period: TOP_PERIODS[g.period] ? g.period : 'week' };
+          Object.keys(TOP_PERIODS).forEach(function(period) {
+            var b = g[period] && typeof g[period] === 'object' ? g[period] : {};
+            var players = (Array.isArray(b.players) ? b.players : []).slice(0, TOP_ROWS).filter(function(r) {
+              return r && typeof r === 'object' && matchId(r.id);
+            }).map(function(r) {
+              return { id: r.id, name: str(r.name, 32) || 'Anonymous', score: whole(r.score), kills: num(r.kills, 1e7),
+                       deaths: num(r.deaths, 1e7), matches: num(r.matches, 1e7) };
+            });
+            var you = b.you && typeof b.you === 'object' && matchId(b.you.rank) ?
+              { rank: b.you.rank, score: whole(b.you.score) } : null;
+            boards[period] = { players: players, of: Math.max(num(b.of, 1e7), players.length),
+                               matches: num(b.matches, 1e7), you: you };
+          });
+          out.games[game] = boards;
+        });
+        if (a && typeof a === 'object' && a.you && typeof a.you === 'object' && matchId(a.you.id))
+          out.you = { id: a.you.id, name: str(a.you.name, 32), last: matchId(a.you.last) ? a.you.last : 0 };
+        return out;
+      }
+
+      // The game and period whose standings show: the ones picked, else the
+      // game played last and the period the lobby names for it (the shortest
+      // anyone played in).
+      function topShown(top, recent, game, period) {
+        if (game !== 'jk1' && game !== 'mots') {
+          var jk = recent && recent.jk1[0] ? recent.jk1[0].id : 0, mots = recent && recent.mots[0] ? recent.mots[0].id : 0;
+          game = mots > jk ? 'mots' : 'jk1';
+        }
+        if (!TOP_PERIODS[period]) period = top ? top.games[game].period : 'week';
+        return { game: game, period: period };
+      }
+
+      function ordinal(n) {
+        var tens = n % 100, ones = n % 10;
+        return n + (tens >= 11 && tens <= 13 ? 'th' : ones === 1 ? 'st' : ones === 2 ? 'nd' : ones === 3 ? 'rd' : 'th');
+      }
+
+      // A player's page and a game's standings, as the lobby's pages link them.
+      function playerHref(id, game, period) {
+        return '/player/' + id + '?game=' + (game === 'mots' ? 'mots' : 'jk') + (period ? '&period=' + period : '');
+      }
+      function standingsHref(game, period) {
+        var q = [];
+        if (game === 'mots') q.push('game=mots');
+        if (period) q.push('period=' + period);
+        return '/players' + (q.length ? '?' + q.join('&') : '');
+      }
 
       // The matches a list shows: one game's, or both games' together, newest first.
       function matchList(recent, game, n) {
@@ -7623,67 +7780,118 @@
         return t;
       }
 
+      // The latest matches beside the standings, both games' together.
       function renderMatches() {
-        var now = Date.now(), game = matchesLive.game, both = game === 'all';
-        document.querySelectorAll('[data-matches-game]').forEach(function(b) {
-          b.setAttribute('aria-pressed', String(b.dataset.matchesGame === game));
-        });
-        var rows = document.getElementById('matches-rows');
-        var list = matchList(matchesLive.recent, game, MATCH_ROWS);
-        rows.replaceChildren.apply(rows, list.map(function(m) {
-          var tr = el('tr');
-          var level = el('td', 'level');
-          level.append(matchLink(m, both));
-          if (m.custom) level.append(el('span', 'tag', 'Custom'));
-          var mod = el('td', 'mod', m.mod || (m.pack ? 'Remastered pack' : ''));
-          if (!mod.textContent) {
-            mod.className = 'mod none';
-            mod.append(el('span', 'soft', '–'));
-          }
-          var won = el('td', 'won', matchWinner(m));
-          if (!won.textContent) {
-            won.className = 'won none';
-            won.append(el('span', 'soft', 'No single winner'));
-          }
-          var when = el('td', 'when');
+        var now = Date.now();
+        var list = matchList(matchesLive.recent, 'all', MATCH_ROWS);
+        var latest = document.getElementById('latest-list');
+        latest.replaceChildren.apply(latest, list.map(function(m) {
+          var li = el('li');
+          var won = matchWinner(m);
+          // Its mod, who won, how many played and when: each kept whole
+          // where the line wraps.
+          var facts = [m.mod || (m.pack ? 'Remastered pack' : ''),
+                       won ? won + ' won' + (m.score === null ? '' : ' with ' + m.score) : '',
+                       plural(m.players, 'player', 'players')].filter(Boolean);
+          var line = el('small');
+          facts.forEach(function(fact) { line.append(el('span', 'fact', fact), ' · '); });
+          var when = el('span', 'fact');
           when.append(matchTime(m, now));
-          tr.append(level, mod, el('td', 'num wide', String(m.players)), el('td', 'num wide', matchLength(m.secs)),
-                    won, el('td', 'num score' + (m.score === null ? ' none' : ''), m.score === null ? '–' : String(m.score)),
-                    when);
+          line.append(when);
+          li.append(matchLink(m, true), line);
+          return li;
+        }));
+        var none = document.getElementById('latest-none');
+        none.hidden = list.length > 0;
+        if (!matchesLive.recent)
+          none.textContent = lobbyLive.state === 'down' ? "The latest matches aren't available right now." :
+                                                         'Loading the latest matches...';
+        renderTop();
+      }
+
+      // The standings: the sidebar's box and the section's table, for the
+      // game and period picked, and where this browser's player stands.
+      function renderTop() {
+        var top = matchesLive.top;
+        var shown = topShown(top, matchesLive.recent, matchesLive.game, matchesLive.period);
+        var game = shown.game, period = shown.period;
+        var board = top ? top.games[game][period] : null;
+        var you = top ? top.you : null;
+        document.querySelectorAll('[data-top-game]').forEach(function(b) {
+          b.setAttribute('aria-pressed', String(b.dataset.topGame === game));
+        });
+        document.querySelectorAll('[data-top-period]').forEach(function(b) {
+          b.setAttribute('aria-pressed', String(b.dataset.topPeriod === period));
+        });
+        document.getElementById('side-top-period').textContent = TOP_PERIODS[period];
+        var count = document.getElementById('top-count');
+        count.replaceChildren();
+        if (board && board.matches)
+          count.append(el('b', null, String(board.matches)), ' ' + (board.matches === 1 ? 'match' : 'matches') + ' ' +
+                       TOP_PERIODS_LC[period]);
+        function link(p) {
+          var a = el('a', null, p.name);
+          a.href = playerHref(p.id, game, period);
+          return a;
+        }
+        var players = board ? board.players : [];
+        var rows = document.getElementById('top-rows');
+        rows.replaceChildren.apply(rows, players.map(function(p, i) {
+          var tr = el('tr', you && you.id === p.id ? 'you' : null);
+          var name = el('td', 'name');
+          name.append(link(p));
+          if (you && you.id === p.id) name.append(el('span', 'tag', 'You'));
+          tr.append(el('td', 'num rank', String(i + 1)), name, el('td', 'num', String(p.score)),
+                    el('td', 'num', String(p.kills)), el('td', 'num wide', String(p.deaths)),
+                    el('td', 'num', (p.kills / Math.max(1, p.deaths)).toFixed(2)), el('td', 'num wide', String(p.matches)));
           return tr;
         }));
-        if (!list.length) {
-          var none = el('td', 'empty', matchesLive.recent ?
-            'No ' + (both ? '' : GAME_NAMES[game] + ' ') + 'matches recorded yet. A match is recorded when two or ' +
-            'more players play a level in a room for a minute or more.' :
-            lobbyLive.state === 'down' ? "The latest matches aren't available right now." :
-            'Loading the latest matches...');
+        // Nobody: no match of this game counts yet, or none in this period.
+        var any = top && top.games[game].all.players.length > 0;
+        var nobody = !top ? (lobbyLive.state === 'down' ? "The standings aren't available right now." : 'Loading the standings...') :
+          any ? 'Nobody has played ' + GAME_NAMES[game] + ' ' + TOP_PERIODS_LC[period] + ' yet.' :
+          'No ' + GAME_NAMES[game] + ' matches count yet. A match counts when two or more players play a level in ' +
+          'a room for two minutes or more.';
+        if (!players.length) {
+          var none = el('td', 'empty', nobody);
           none.colSpan = 7;
           var tr = el('tr');
           tr.append(none);
           rows.append(tr);
         }
-        // A table still, where a phone lays the rows out as blocks.
-        rows.querySelectorAll('tr').forEach(function(tr) { tr.setAttribute('role', 'row'); });
-        rows.querySelectorAll('td').forEach(function(td) { td.setAttribute('role', 'cell'); });
-        var side = document.getElementById('side-matches-list');
-        var sideList = matchList(matchesLive.recent, game, MATCH_SIDE_ROWS);
-        side.replaceChildren.apply(side, sideList.map(function(m) {
-          var li = el('li');
-          var won = matchWinner(m);
-          var line = el('small', null, (won ? (m.name !== null ? 'Won by ' + won : won + ' won') + ', ' : ''));
-          line.append(matchTime(m, now));
-          li.append(matchLink(m, true), line);
+        var side = document.getElementById('side-top-list');
+        side.replaceChildren.apply(side, players.slice(0, TOP_SIDE_ROWS).map(function(p, i) {
+          var li = el('li', you && you.id === p.id ? 'you' : null);
+          li.append(el('span', 'rank', String(i + 1)), link(p), el('span', 'score', String(p.score)));
           return li;
         }));
-        document.getElementById('side-matches-none').hidden = sideList.length > 0 || !matchesLive.recent;
-        document.querySelectorAll('.side-more, .match-more').forEach(function(a) {
-          a.href = '/matches' + (both ? '' : '?game=' + (game === 'jk1' ? 'jk' : game));
+        var sideNone = document.getElementById('side-top-none');
+        sideNone.hidden = players.length > 0;
+        sideNone.textContent = !top ? 'Loading...' : any ? 'Nobody ' + TOP_PERIODS_LC[period] + ' yet.' : 'Nobody yet.';
+        // Where the viewer stands in these, under a list that's too short to
+        // have them (each says how many it shows), and their own page and
+        // last match.
+        var rank = board && you ? board.you : null;
+        document.querySelectorAll('[data-my-rank]').forEach(function(e) {
+          e.hidden = !rank || rank.rank <= Number(e.dataset.myRank);
+          if (e.hidden) return;
+          var a = e.querySelector('a'), spans = a.querySelectorAll('span');
+          a.href = playerHref(you.id, game, period);
+          spans[0].textContent = 'You: ' + ordinal(rank.rank) + (board.of > 1 ? ' of ' + board.of : '');
+          spans[1].textContent = String(rank.score);
         });
+        document.querySelectorAll('[data-my-record]').forEach(function(a) {
+          a.hidden = !you;
+          if (you) a.href = '/player/' + you.id;
+        });
+        document.querySelectorAll('[data-standings]').forEach(function(a) {
+          a.href = standingsHref(game, matchesLive.period ? period : '');
+        });
+        var mine = Math.max(matchesLive.mine, you ? you.last : 0);
         document.querySelectorAll('[data-my-match]').forEach(function(e) {
-          e.hidden = !matchesLive.mine;
+          e.hidden = !mine;
           var a = e.tagName === 'A' ? e : e.querySelector('a');
-          if (matchesLive.mine) a.href = '/match/' + matchesLive.mine;
+          if (mine) a.href = '/match/' + mine;
         });
       }
 
@@ -7697,15 +7905,19 @@
         clearTimeout(matchesLive.retry);
         matchesLive.retry = null;
         if (window.jkLobbyMock) {
-          matchesLive.recent = cleanRecent(window.jkLobbyMock.recent ? window.jkLobbyMock.recent() : null) ||
-                               matchesLive.recent;
+          var mock = window.jkLobbyMock.recent ? window.jkLobbyMock.recent() : null;
+          if (cleanRecent(mock)) {
+            matchesLive.recent = cleanRecent(mock);
+            matchesLive.top = cleanTop(mock);
+          }
           renderMatches();
           return;
         }
         matchesLive.busy = true;
         // no-store: the page asks because there's a new match, so the list it
-        // got a moment ago won't do.
-        fetch('/ladder/recent', { cache: 'no-store', credentials: 'omit' }).then(function(res) {
+        // got a moment ago won't do. With the lobby's cookie, if this
+        // browser has one, for where its player stands.
+        fetch('/ladder/recent', { cache: 'no-store', credentials: 'same-origin' }).then(function(res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
         }).then(function(a) {
@@ -7714,6 +7926,7 @@
           matchesLive.busy = false;
           matchesLive.failures = 0;
           matchesLive.recent = recent;
+          matchesLive.top = cleanTop(a);
           renderMatches();
           if (matchesLive.again) {
             matchesLive.again = false;
@@ -7745,6 +7958,7 @@
           return;
         }
         var on = status.match !== null;
+        matchesLive.told = true;
         if (on !== matchesLive.on || on !== matchesLive.shown) {
           matchesLive.on = on;
           try {
@@ -7770,11 +7984,18 @@
         }
       }
 
+      // Whether the lobby keeps a record, as far as the page knows: it said
+      // so, or hasn't said anything yet. A player who presses Play before the
+      // first status is taken for one of a lobby that does, so their first
+      // match has their key too (a lobby without a record has no key to give,
+      // and the game reports nothing to it).
+      function matchesWanted() { return matchesLive.on || !matchesLive.told; }
+
       // Gets this browser's player key from the lobby, which answers with
       // the one in its cookie, else the one kept here, else a new one, and
       // sets the cookie again. Not for a player who isn't recorded by name.
       function askPlayerKey() {
-        if (!matchesLive.on || Module.jkLadderAnon || matchesLive.keyBusy || window.jkLobbyMock ||
+        if (!matchesWanted() || Module.jkLadderAnon || matchesLive.keyBusy || window.jkLobbyMock ||
             Date.now() - matchesLive.keyAt < MATCH_RETRY_MS) return;
         matchesLive.keyBusy = true;
         matchesLive.keyAt = Date.now();
@@ -7801,7 +8022,7 @@
       // Firefox would ask the player in a prompt of its own, so it isn't
       // asked.
       function matchesGameStart() {
-        if (!matchesLive.on) return;
+        if (!matchesWanted()) return;
         askPlayerKey();
         try {
           if (!Module.jkLadderAnon && navigator.storage && navigator.storage.persist &&
@@ -7845,11 +8066,17 @@
             }
           });
         });
-        document.querySelectorAll('[data-matches-game]').forEach(function(b) {
+        document.querySelectorAll('[data-top-game]').forEach(function(b) {
           b.addEventListener('click', function() {
-            matchesLive.game = b.dataset.matchesGame;
+            matchesLive.game = b.dataset.topGame;
             try { localStorage.setItem(MATCH_GAME_SETTING, matchesLive.game); } catch (e) {}
-            renderMatches();
+            renderTop();
+          });
+        });
+        document.querySelectorAll('[data-top-period]').forEach(function(b) {
+          b.addEventListener('click', function() {
+            matchesLive.period = b.dataset.topPeriod;
+            renderTop();
           });
         });
         if (shown && /^https?:$/.test(location.protocol)) showMatchParts(true);
@@ -7857,7 +8084,7 @@
         setInterval(function() {
           if (!matchesLive.shown || document.hidden || document.getElementById('zone').hidden) return;
           var now = Date.now();
-          document.querySelectorAll('#matches time[data-at], #side-matches time[data-at]').forEach(function(t) {
+          document.querySelectorAll('#leaderboard time[data-at]').forEach(function(t) {
             t.textContent = matchAgo(Number(t.dataset.at), now);
           });
         }, 60000);
