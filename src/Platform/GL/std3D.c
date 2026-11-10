@@ -3441,7 +3441,12 @@ int std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is_alph
 
         texture->pDataDepthConverted = image_data;
 #endif
+        // Added: palette indices are never filtered by the sampler (default_f.glsl filters the
+        // colors itself), but the filter above was picked from is_16bit as the surface's last
+        // image left it: 1 after jkgm replaced it (jkgm.cpp), then purged and loaded as 8-bit
         texture->is_16bit = 0;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, image_8bpp);
 
         texture->pDataDepthConverted = NULL;
