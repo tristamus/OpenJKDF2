@@ -46,6 +46,7 @@ function page({ engine = true } = {}) {
         canvas, document, boxes, logs,
         Module: engine ? { jkGl: { down: 0 } } : {},
         gameLost: false,
+        engineProblem: false,
         Date: { now: () => now },
         console: { warn: m => logs.push(m), log: m => logs.push(m) },
         setTimeout(fn, ms) { const id = nextId++; timers.push({ id, at: now + ms, fn }); return id; },
@@ -211,10 +212,64 @@ test('an engine that can\'t make them again gets the box when they come back', (
 
 test('a box already up (the game stopped) is not replaced', () => {
     const p = page();
+    p.ctx.engineProblem = true;
     p.ctx.gameLost = true;
     p.canvas.fire('webglcontextlost');
     p.wait(30000);
     assert.equal(p.boxes.length, 0);
+    p.canvas.fire('webglcontextrestored');
+    p.canvas.fire('jkgl', 'rebuilding');
+    p.canvas.fire('jkgl', 'back');
+    assert.equal(p.ctx.gameLost, true, 'the game stopped: still only a reload helps');
+});
+
+test('after a box was shown and hidden, later losses still get the box', () => {
+    const p = page();
+    for (let i = 0; i < 2; i++) {
+        p.canvas.fire('webglcontextlost');
+        p.wait(1000);
+        p.canvas.fire('webglcontextrestored');
+        p.canvas.fire('jkgl', 'rebuilding');
+        p.canvas.fire('jkgl', 'back');
+        p.wait(10000);
+    }
+    p.canvas.fire('webglcontextlost');      // the 3rd in 2 minutes: the box
+    assert.equal(p.boxes.length, 1);
+    p.canvas.fire('webglcontextrestored');  // given back behind it; the player hides the box
+    p.canvas.fire('jkgl', 'rebuilding');
+    p.canvas.fire('jkgl', 'back');
+    assert.equal(p.lost(), false);
+    p.wait(10000);
+    p.canvas.fire('webglcontextlost');      // the 4th in 2 minutes: the box again, not a silent black screen
+    assert.equal(p.boxes.length, 2);
+    assert.match(p.boxes[1].text, /away 4 times in 2 minutes/);
+    assert.equal(p.lost(), true);
+    p.wait(130000);                         // never given back, and the losses have aged out
+    p.canvas.fire('webglcontextrestored');
+    p.canvas.fire('jkgl', 'rebuilding');
+    p.canvas.fire('jkgl', 'back');
+    p.wait(10000);
+    p.canvas.fire('webglcontextlost');      // one loss, after a box: the note, then the 30 s box
+    assert.equal(p.boxes.length, 2);
+    assert.equal(p.note().hidden, false);
+    p.wait(30000);
+    assert.equal(p.boxes.length, 3);
+    assert.match(p.boxes[2].text, /hasn't given them back/);
+    assert.equal(p.note().hidden, true);
+});
+
+test('back behind a box: the game can go fullscreen again', () => {
+    const p = page();
+    p.canvas.fire('webglcontextlost');
+    p.wait(30000);
+    assert.equal(p.boxes.length, 1);
+    assert.equal(p.ctx.gameLost, true, 'no fullscreen while the graphics are away');
+    p.canvas.fire('webglcontextrestored');
+    p.canvas.fire('jkgl', 'rebuilding');
+    assert.equal(p.ctx.gameLost, true, 'not before a frame is drawn');
+    p.canvas.fire('jkgl', 'back');
+    assert.equal(p.ctx.gameLost, false);
+    assert.equal(p.lost(), false);
 });
 
 let failed = 0;

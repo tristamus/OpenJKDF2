@@ -2575,7 +2575,8 @@
           // couldn't make them, or they were taken GL_LOSSES_MAX times in
           // GL_LOSSES_MS (a driver that keeps failing).
           var GL_BACK_MS = 30000, GL_DRAW_MS = 10000, GL_LOSSES_MAX = 3, GL_LOSSES_MS = 120000;
-          var glLosses = [], glTimer = 0, glNote = null;
+          // glBoxed: the box below was shown since the graphics were last drawn.
+          var glLosses = [], glTimer = 0, glNote = null, glBoxed = false;
           function glNoteShow(on) {
             if (on && !glNote) {
               glNote = document.createElement('div');
@@ -2592,8 +2593,11 @@
             clearTimeout(glTimer);
             glNoteShow(false);
             console.warn('Graphics: ' + why);
-            // A box with Reload is up already (the game stopped, or an earlier reason): it stays.
-            if (typeof gameLost !== 'undefined' && gameLost) return;
+            // The game stopped: its box with Reload says so, and stays.
+            if (typeof engineProblem !== 'undefined' && engineProblem) return;
+            // Otherwise the box comes every time, also after an earlier one was shown and hidden (a 4th
+            // loss, or 30 s without them after it); if it's still up, showProblem just changes its text.
+            glBoxed = true;
             if (typeof showProblem === 'function')
               showProblem('The game lost its graphics', text + ' Reload the page to play again.\n\n' +
                           'Click anywhere else to hide this.', true);
@@ -2643,6 +2647,13 @@
               document.documentElement.classList.remove('gl-lost');
               glNoteShow(false);
               console.log('Graphics: back');
+              // Back behind a box of ours: the game plays on, so it can go fullscreen again
+              // (gameLost, set by showProblem), unless the game itself stopped.
+              if (glBoxed) {
+                glBoxed = false;
+                if (typeof gameLost !== 'undefined' && !(typeof engineProblem !== 'undefined' && engineProblem))
+                  gameLost = false;
+              }
             }
           }, false);
 
@@ -7481,7 +7492,7 @@
       function playFullscreen() {
         if (!fullscreenOption.checked || document.fullscreenElement || !document.fullscreenEnabled) return;
         if (!document.getElementById('zone').hidden || document.querySelector('dialog[open]')) return;
-        if (gameLost) return;  // the game stopped or lost its graphics: only a reload helps
+        if (gameLost) return;  // the game stopped, or lost its graphics and they aren't back: only a reload helps
         // Chrome and Edge give these keys to the page this way, only in
         // fullscreen the page asked for: Esc, and W, T and N with any of Ctrl,
         // Shift and Alt, so Ctrl+W (Fire and Forward by default), Ctrl+T and
