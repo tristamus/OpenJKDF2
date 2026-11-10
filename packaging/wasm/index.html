@@ -1412,6 +1412,202 @@
           grid-template-columns: minmax(0, 1fr) 5em;
         }
       }
+
+      /* Latest matches, from the lobby's record of every match
+         (jkdf2mp-bb-server's ladder.js): a box in the sidebar and a section
+         under the rooms. Both, and the links to them, are hidden unless the
+         lobby says it keeps a record. */
+      .game-ball {
+        display: inline-block;
+        flex: none;
+        width: 10px;
+        height: 10px;
+        margin-right: 5px;
+        border: 1px solid #000;
+        border-radius: 50%;
+        vertical-align: -1px;
+        background: radial-gradient(circle at 35% 30%, #ffe7a8, #c27a2a 70%, #5a3000);
+      }
+      .game-ball.mots { background: radial-gradient(circle at 35% 30%, #e9ffff, #8fdbe4 55%, #2b8796); }
+
+      .side-matches {
+        margin: 14px 8px 0;
+        border: 1px solid #000;
+        background-color: var(--teal-dark);
+        box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35);
+        color: #fff;
+      }
+      .side-matches h2 {
+        margin: 0;
+        padding: 3px 8px;
+        background-color: var(--gold);
+        border-bottom: 1px solid #000;
+        color: #000;
+        font: bold 13px Verdana, Geneva, sans-serif;
+      }
+      .side-matches ol { margin: 0; padding: 2px 8px 0; list-style: none; }
+      .side-matches li {
+        padding: 3px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+        font: 13px/1.3 Arial, Helvetica, sans-serif;
+      }
+      #zone .side-matches li a {
+        display: block;
+        overflow: hidden;
+        color: var(--link);
+        font-weight: bold;
+        text-decoration: underline;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #zone .side-matches li a:hover { color: var(--gold); }
+      .side-matches small {
+        display: block;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .side-matches .side-none { margin: 6px 8px 0; color: var(--muted); font: 12px/1.3 Arial, Helvetica, sans-serif; }
+      .side-matches .side-mine { margin: 5px 8px 0; font: bold 12px/1.3 Arial, Helvetica, sans-serif; }
+      #zone .side-matches .side-mine a { color: var(--gold); }
+      #zone a.side-more {
+        display: block;
+        margin: 8px;
+        padding: 2px 0;
+        color: #fff;
+        font-size: 12px;
+        text-align: center;
+        text-decoration: none;
+      }
+
+      .match-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 8px; }
+      .match-tabs button {
+        padding: 1px 10px 2px;
+        border: 1px solid var(--gold);
+        background: none;
+        color: var(--gold);
+        font: bold 12px Verdana, Geneva, sans-serif;
+        cursor: pointer;
+      }
+      .match-tabs button:hover { background-color: rgba(255, 204, 102, 0.2); }
+      .match-tabs button[aria-pressed=true] { background-color: var(--gold); color: #000; cursor: default; }
+      .match-tabs button[aria-pressed=true] .game-ball { border-color: #000; }
+      /* The table scrolls sideways inside its frame where the page is too
+         narrow for it, so the page itself never does. */
+      .match-scroll {
+        margin-right: 3px;
+        overflow-x: auto;
+        border: 1px solid #000;
+        background-color: var(--teal-dark);
+        box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35);
+      }
+      .match-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .match-table th {
+        padding: 3px 8px;
+        background-color: var(--gold);
+        border-bottom: 1px solid #000;
+        color: #000;
+        font: bold 12px Verdana, Geneva, sans-serif;
+        text-align: left;
+        white-space: nowrap;
+      }
+      .match-table td { padding: 2px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); white-space: nowrap; }
+      .match-table tbody tr:last-child td { border-bottom: 0; }
+      .match-table th.num, .match-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      .match-table td.level, .match-table td.mod, .match-table td.won {
+        max-width: 190px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .match-table td.level a { font-weight: bold; }
+      .match-table .tag { margin-left: 4px; color: var(--muted); font-size: 12px; }
+      .match-table .soft, .match-table td.when { color: var(--muted); }
+      .match-table td.empty { padding: 14px 10px; color: var(--muted); text-align: center; white-space: normal; }
+      .match-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 10px 0 0; }
+      #zone a.match-more { display: inline-block; color: #fff; text-decoration: none; }
+      .match-name { display: flex; gap: 8px; align-items: baseline; margin: 10px 0 0; cursor: pointer; }
+      .match-name input { flex: none; accent-color: var(--gold); }
+      .match-name .fine { display: block; color: var(--muted); font-size: 13px; }
+
+      .style-2001 .side-matches {
+        margin: 12px 8px 0;
+        padding: 0 8px 2px;
+        background-color: #fff;
+        border: 1px solid var(--sky);
+        box-shadow: none;
+        color: var(--navy);
+      }
+      .style-2001 .side-matches h2 {
+        padding: 7px 0 5px;
+        background: var(--dots) 0 100% / 100% 1px no-repeat;
+        border: 0;
+        color: var(--navy);
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+      .style-2001 .side-matches ol { padding: 4px 0 0; }
+      .style-2001 .side-matches li { padding: 2px 4px; border-bottom: 0; font: 12px/1.4 Verdana, Geneva, sans-serif; }
+      .style-2001 .side-matches li:nth-child(odd) { background-color: var(--stripe); }
+      .style-2001 #zone .side-matches li a { color: var(--navy); text-decoration: none; }
+      .style-2001 #zone .side-matches li a:hover { color: var(--frame); text-decoration: underline; }
+      .style-2001 .side-matches small, .style-2001 .side-matches .side-none { color: var(--navy-muted); font-size: 11px; }
+      .style-2001 .side-matches .side-none, .style-2001 .side-matches .side-mine { margin: 6px 0 0; }
+      .style-2001 #zone .side-matches .side-mine a { color: var(--frame); }
+      .style-2001 #zone a.side-more { margin: 8px 0 6px; color: var(--navy); }
+      .style-2001 .match-tabs button { border-color: var(--frame); color: var(--frame); }
+      .style-2001 .match-tabs button:hover { background-color: var(--stripe); }
+      .style-2001 .match-tabs button[aria-pressed=true] { background-color: var(--frame); color: #fff; }
+      .style-2001 .match-scroll { margin-right: 0; border: 0; background: none; box-shadow: none; }
+      .style-2001 .match-table { font-size: 12px; }
+      .style-2001 .match-table th {
+        padding: 0 6px 4px;
+        background: var(--dots) 0 100% / 100% 1px no-repeat;
+        border: 0;
+        color: var(--frame);
+      }
+      .style-2001 .match-table td { padding: 3px 6px; border: 0; }
+      .style-2001 .match-table tbody tr:nth-child(odd) { background-color: var(--stripe); }
+      .style-2001 #zone .match-table td.level a { text-decoration: none; }
+      .style-2001 #zone .match-table td.level a:hover { text-decoration: underline; }
+      .style-2001 .match-table .tag, .style-2001 .match-table .soft, .style-2001 .match-table td.when,
+      .style-2001 .match-table td.empty, .style-2001 .match-name .fine { color: var(--navy-muted); }
+      .style-2001 #zone a.match-more { color: var(--navy); }
+      .style-2001 .match-name input { accent-color: var(--frame); }
+
+      @media (max-width: 700px) {
+        /* On a phone the section under the rooms is the one list, and each
+           match is a block of two or three lines instead of a table row:
+           the level and when, who won and the score, then the mod. */
+        .side-matches { display: none; }
+        .match-table, .match-table tbody { display: block; }
+        .match-table thead, .match-table .wide, .match-table td.mod.none, .match-table td.score.none { display: none; }
+        .match-table tr {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          column-gap: 10px;
+          padding: 4px 8px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+        }
+        .match-table tbody tr:last-child { border-bottom: 0; }
+        .match-table td, .style-2001 .match-table td { padding: 0; border: 0; }
+        .match-table td.level, .match-table td.mod, .match-table td.won { max-width: none; }
+        .match-table td.level { grid-area: 1 / 1; }
+        .match-table td.when { grid-area: 1 / 2; }
+        .match-table td.won { grid-area: 2 / 1; }
+        .match-table td.score { grid-area: 2 / 2; }
+        .match-table td.mod { grid-area: 3 / 1 / auto / span 2; }
+        .match-table td.won:not(.none)::before { content: 'Won by '; color: var(--muted); }
+        .match-table td.score::before { content: 'Score '; color: var(--muted); }
+        .match-table td.mod::before { content: 'Mod: '; color: var(--muted); }
+        .match-table td.empty { grid-column: 1 / -1; padding: 10px 0; }
+        .style-2001 .match-table tr { border-bottom: 0; }
+        .style-2001 .match-table td.won:not(.none)::before, .style-2001 .match-table td.score::before,
+        .style-2001 .match-table td.mod::before {
+          color: var(--navy-muted);
+        }
+      }
     </style>
     <style>
       /* Room pictures: each room window's art, by the room's key in ROOMS,
@@ -1488,6 +1684,7 @@
 
         <nav class="goldnav" aria-label="Sections">
           <a href="#rooms">Game Rooms</a>
+          <a href="#matches" data-matches hidden>Matches</a>
           <a href="#features">Features</a>
           <a href="#start">Getting Started</a>
           <a href="#files">Your Files</a>
@@ -1912,12 +2109,20 @@
             <div class="boxart" aria-hidden="true"><b>Jedi Knight</b><span>Dark Forces II</span></div>
             <ul>
               <li><a href="#rooms" class="here">Game Rooms</a></li>
+              <li data-matches hidden><a href="#matches">Latest Matches</a></li>
               <li><a href="#features">Features</a></li>
               <li><a href="#start">Getting Started</a></li>
               <li><a href="#files">Your Files</a></li>
               <li><a href="#screenshots">Your Screenshots</a></li>
               <li><a href="#help">Game Help</a></li>
             </ul>
+            <div class="side-matches" id="side-matches" data-matches hidden>
+              <h2>Latest Matches</h2>
+              <ol id="side-matches-list"></ol>
+              <p class="side-none" id="side-matches-none" hidden>None yet.</p>
+              <p class="side-mine" data-my-match hidden><a href="/matches">Your last match &raquo;</a></p>
+              <a class="zone-button side-more" href="/matches">All matches &raquo;</a>
+            </div>
             <div class="goto">Go To:
               <a href="https://github.com/shinyquagsire23/OpenJKDF2">OpenJKDF2</a>
               <a href="https://github.com/tristamus/jkdf2mp-bb-server">Lobby source</a>
@@ -1972,6 +2177,35 @@
                 <li><button class="link-button" type="button" data-room="sith-asteroid" aria-haspopup="dialog"><span class="count busy">&ndash;</span><span><span class="room-name">Sith: Asteroid</span> <span class="tag game-count"></span></span></button></li>
                 <li><button class="link-button" type="button" data-opens-room="sith-asteroid" aria-haspopup="dialog"><span class="count"></span><span class="room-name">Sith: Altyr 5</span></button></li>
               </ul>
+            </section>
+
+            <section id="matches" aria-labelledby="matches-title" data-matches hidden>
+              <h2 class="ruled" id="matches-title">Latest Matches <small>Recorded as they end</small></h2>
+              <p class="note">Every match played in the rooms gets a page: the scoreboard, who killed whom, the
+                level and the mod.</p>
+              <div class="match-tabs" role="group" aria-label="Game">
+                <button type="button" data-matches-game="all" aria-pressed="true">Both games</button>
+                <button type="button" data-matches-game="jk1" aria-pressed="false"><span class="game-ball" aria-hidden="true"></span>Jedi Knight</button>
+                <button type="button" data-matches-game="mots" aria-pressed="false"><span class="game-ball mots" aria-hidden="true"></span>Mysteries of the Sith</button>
+              </div>
+              <div class="match-scroll">
+                <table class="match-table" role="table" aria-labelledby="matches-title">
+                  <thead role="rowgroup"><tr role="row">
+                    <th scope="col" role="columnheader">Level</th><th scope="col" role="columnheader">Mod</th>
+                    <th scope="col" role="columnheader" class="num wide">Players</th>
+                    <th scope="col" role="columnheader" class="num wide">Length</th>
+                    <th scope="col" role="columnheader">Won by</th>
+                    <th scope="col" role="columnheader" class="num">Score</th>
+                    <th scope="col" role="columnheader">Played</th>
+                  </tr></thead>
+                  <tbody id="matches-rows" role="rowgroup"></tbody>
+                </table>
+              </div>
+              <p class="match-foot"><a class="zone-button match-more" href="/matches">All matches &raquo;</a>
+                <a href="/matches" data-my-match hidden>Your last match</a></p>
+              <label class="match-name"><input type="checkbox" data-match-name checked>
+                <span>Put my name on match pages <span class="fine">Unticked, you're in your matches as Anonymous,
+                  and they aren't kept together as one player's.</span></span></label>
             </section>
 
             <section id="features" aria-labelledby="features-title">
@@ -2046,6 +2280,12 @@
                 <li>Your characters, controls and <a href="#screenshots">screenshots</a> are saved in this
                   browser too. <b>Clearing this site's data deletes them all, and the saved game files.</b>
                   Download the screenshots you want to keep.</li>
+                <li data-matches hidden><b>Matches are recorded.</b> When a match in the rooms ends, its scoreboard,
+                  who killed whom, the level and the mod go on a page anyone can open, with the names players
+                  used in the game. To be on them as Anonymous, untick "Put my name on match pages" under
+                  <a href="#matches">Latest Matches</a> or when you start. To keep your matches together, this
+                  browser gets a random player number when you play, kept here and in a cookie. There are no
+                  accounts.</li>
                 <li id="move-files" hidden><b>Played at the old address?</b> <button class="text-button"
                   type="button" data-move-in>Bring your characters, controls, saved game files, mods and screenshots
                   over from jkdf2mp.jkdf2mp-lobby.workers.dev.</button> If the game then asks for your folder,
@@ -2161,6 +2401,9 @@
               Enhance pointer precision, so the view can't suddenly jolt. Unticked, it uses your Windows mouse settings,
               acceleration included. Untick it if mouse look doesn't turn, as over remote desktop or with a drawing
               tablet.</span></span></label>
+          <label class="picker-option" data-matches hidden><input type="checkbox" data-match-name checked>
+            <span>Put my name on match pages <span class="fine">Each match played in the rooms gets a page anyone can
+              open, with its scoreboard and who killed whom. Unticked, you're on it as Anonymous.</span></span></label>
           <div class="actions">
             <button class="play" type="button">Start</button>
             <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
@@ -6260,7 +6503,9 @@
       // id is the lobby's room number, names start with the host's, online
       // counts everyone with the game running, in a game or not, and net is
       // the netcode the game's host speaks. Names are typed by players, so
-      // they only ever go into the page as text.
+      // they only ever go into the page as text. A lobby that keeps a record
+      // of every match also says which match is the latest (match: 12, or 0
+      // before the first), for the latest matches below.
 
       // The netcode this page's game speaks (STDCOMM_WSRELAY_NETCODE in
       // stdComm_WSRelay.h, which this has to match). The lobby only lets it
@@ -6321,7 +6566,8 @@
           var waiting = b ? names(b.lobby) : k === 'jk1' ? lobby : [];
           byGame[k] = { online: b ? num(b.online) : waiting.length + playing, lobby: waiting };
         });
-        return { online: num(s.online), lobby: lobby, byGame: byGame, games: games };
+        return { online: num(s.online), lobby: lobby, byGame: byGame, games: games,
+                 match: typeof s.match === 'number' && isFinite(s.match) && s.match >= 0 ? Math.floor(s.match) : null };
       }
 
       // One room's part of the status: its game's players and games.
@@ -6480,6 +6726,7 @@
         if (lobbyLive.status) lobbyLive.updated = new Date();
         renderRoomCount();
         if (room.open) renderRoom();
+        matchesStatus(lobbyLive.status);
       }
 
       function renderRoomCount() {
@@ -7257,8 +7504,369 @@
         }, true);
       })();
 
+      // ---- The match record. A lobby that keeps a record of every match
+      // (ladder.js in jkdf2mp-bb-server) says so in its status, and each
+      // match gets a page there (/match/<id>). Then, and only then, this
+      // page shows the latest matches, in a box in the sidebar and a section
+      // under the rooms, from the lobby's /ladder/recent:
+      //   { v: 1, games: { jk1: [{ id: 12, title: 'Canyon Oasis', mod: 'SBX 3.1', pack: 0, custom: 0,
+      //                            players: 4, secs: 754, at: 1794300000000, teams: false,
+      //                            name: 'Kyle_K', team: 0, score: 15 }], mots: [] } }
+      // newest first, with who won: name, or null with team (1 Red, 2 Gold,
+      // 3 Blue, 4 Green) when a team did, and '' for a winner recorded
+      // without a name. It asks again when the status names a newer match.
+      // The game reports its matches by itself (ladder.js here, bundled into
+      // the engine). The page says who its player is: Module.jkLadderKey is
+      // this browser's player key, which the lobby gives out and keeps in a
+      // cookie as well (/ladder/key), asked for when a game starts, so
+      // someone who only looks gets no cookie; Module.jkLadderAnon is true
+      // for a player who unticked "Put my name on match pages", who gets no
+      // key either. Names are typed by players, so they only ever go into
+      // the page as text.
+      var MATCH_KEY_SETTING = 'jkdf2mp-player-key';
+      var MATCH_NAME_SETTING = 'jkdf2mp-match-name';    // 'off': recorded as Anonymous
+      var MATCH_GAME_SETTING = 'jkdf2mp-matches-game';  // the lists' game: 'all', 'jk1' or 'mots'
+      var MATCH_MINE_SETTING = 'jkdf2mp-last-match';    // { id, at }: the last match this browser played
+      var MATCH_ON_SETTING = 'jkdf2mp-matches';         // 'on': the lobby kept a record at the last visit
+      var MATCH_ROWS = 6;        // matches in the section
+      var MATCH_SIDE_ROWS = 4;   // and in the sidebar's box
+      var MATCH_MINE_MS = 30 * 24 * 60 * 60 * 1000;     // "Your last match" is offered this long
+      var MATCH_RETRY_MS = 30000;
+      var MATCH_TEAMS = ['', 'Red', 'Gold', 'Blue', 'Green'];
+      // on: the lobby's status said it keeps a record. shown: the lists
+      // show, which they also do from the start where it kept one at the
+      // last visit, so the page doesn't shift when the status comes.
+      var matchesLive = { on: false, shown: false, latest: -1, recent: null, game: 'all', busy: false, again: false,
+                          failures: 0, retry: null, keyAt: 0, keyBusy: false, mine: 0 };
+
+      // Only what the page shows, in the types it expects, whatever arrives.
+      function cleanRecent(a) {
+        function str(v, max) {
+          return typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]/g, '').substring(0, max) : '';
+        }
+        function num(v, max) { return typeof v === 'number' && isFinite(v) && v >= 0 ? Math.min(Math.floor(v), max) : 0; }
+        if (!a || typeof a !== 'object' || !a.games || typeof a.games !== 'object') return null;
+        var out = {};
+        Object.keys(GAME_NAMES).forEach(function(game) {
+          out[game] = (Array.isArray(a.games[game]) ? a.games[game] : []).slice(0, 16).filter(function(m) {
+            return m && typeof m === 'object' && matchId(m.id);
+          }).map(function(m) {
+            return { id: m.id, game: game, title: str(m.title, 48) || 'Unknown level', mod: str(m.mod, 64),
+                     pack: !!m.pack, custom: !!m.custom, players: num(m.players, 64), secs: num(m.secs, 1e7),
+                     at: num(m.at, 8.64e15), teams: !!m.teams, name: typeof m.name === 'string' ? str(m.name, 32) : null,
+                     team: num(m.team, 4), score: typeof m.score === 'number' && isFinite(m.score) ? Math.round(m.score) : null };
+          });
+        });
+        return out;
+      }
+
+      // A match's number, as the lobby's pages take it.
+      function matchId(v) { return typeof v === 'number' && v >= 1 && v <= 999999999 && Math.floor(v) === v; }
+
+      // The matches a list shows: one game's, or both games' together, newest first.
+      function matchList(recent, game, n) {
+        var list = !recent ? [] : game === 'all' ? recent.jk1.concat(recent.mots) : recent[game] || [];
+        return list.slice().sort(function(a, b) { return b.id - a.id; }).slice(0, n);
+      }
+
+      function matchWinner(m) {
+        if (m.name !== null) return m.name || 'Anonymous';
+        return m.team ? MATCH_TEAMS[m.team] + ' team' : '';
+      }
+
+      function matchLength(secs) {
+        if (secs < 90) return secs + ' s';
+        var min = Math.round(secs / 60);
+        return min < 120 ? min + ' min' : Math.floor(min / 60) + ' h ' + min % 60 + ' min';
+      }
+
+      function matchAgo(ms, now) {
+        var s = Math.max(0, (now - ms) / 1000);
+        if (s < 90) return 'just now';
+        if (s < 5400) return Math.round(s / 60) + ' min ago';
+        if (s < 129600) return Math.round(s / 3600) + ' h ago';
+        if (s < 30 * 86400) return Math.round(s / 86400) + ' days ago';
+        return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+
+      // The last match this browser's game was told was saved, if it's
+      // recent enough to offer: its number, or 0.
+      function myMatch(text, now) {
+        try {
+          var m = JSON.parse(text || 'null');
+          return m && matchId(m.id) && typeof m.at === 'number' && now - m.at < MATCH_MINE_MS ? m.id : 0;
+        } catch (e) {
+          return 0;
+        }
+      }
+
+      function matchLink(m, withGame) {
+        var a = el('a', null);
+        a.href = '/match/' + m.id;
+        if (withGame) {
+          var ball = el('span', 'game-ball' + (m.game === 'mots' ? ' mots' : ''));
+          ball.title = GAME_NAMES[m.game];
+          a.append(ball);
+        }
+        a.append(document.createTextNode(m.title));
+        return a;
+      }
+
+      function matchTime(m, now) {
+        var t = el('time', null, matchAgo(m.at, now));
+        if (m.at) {
+          t.dataset.at = m.at;
+          t.dateTime = new Date(m.at).toISOString();
+          t.title = new Date(m.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric',
+                                                               hour: 'numeric', minute: '2-digit' });
+        }
+        return t;
+      }
+
+      function renderMatches() {
+        var now = Date.now(), game = matchesLive.game, both = game === 'all';
+        document.querySelectorAll('[data-matches-game]').forEach(function(b) {
+          b.setAttribute('aria-pressed', String(b.dataset.matchesGame === game));
+        });
+        var rows = document.getElementById('matches-rows');
+        var list = matchList(matchesLive.recent, game, MATCH_ROWS);
+        rows.replaceChildren.apply(rows, list.map(function(m) {
+          var tr = el('tr');
+          var level = el('td', 'level');
+          level.append(matchLink(m, both));
+          if (m.custom) level.append(el('span', 'tag', 'Custom'));
+          var mod = el('td', 'mod', m.mod || (m.pack ? 'Remastered pack' : ''));
+          if (!mod.textContent) {
+            mod.className = 'mod none';
+            mod.append(el('span', 'soft', '–'));
+          }
+          var won = el('td', 'won', matchWinner(m));
+          if (!won.textContent) {
+            won.className = 'won none';
+            won.append(el('span', 'soft', 'No single winner'));
+          }
+          var when = el('td', 'when');
+          when.append(matchTime(m, now));
+          tr.append(level, mod, el('td', 'num wide', String(m.players)), el('td', 'num wide', matchLength(m.secs)),
+                    won, el('td', 'num score' + (m.score === null ? ' none' : ''), m.score === null ? '–' : String(m.score)),
+                    when);
+          return tr;
+        }));
+        if (!list.length) {
+          var none = el('td', 'empty', matchesLive.recent ?
+            'No ' + (both ? '' : GAME_NAMES[game] + ' ') + 'matches recorded yet. A match is recorded when two or ' +
+            'more players play a level in a room for a minute or more.' :
+            lobbyLive.state === 'down' ? "The latest matches aren't available right now." :
+            'Loading the latest matches...');
+          none.colSpan = 7;
+          var tr = el('tr');
+          tr.append(none);
+          rows.append(tr);
+        }
+        // A table still, where a phone lays the rows out as blocks.
+        rows.querySelectorAll('tr').forEach(function(tr) { tr.setAttribute('role', 'row'); });
+        rows.querySelectorAll('td').forEach(function(td) { td.setAttribute('role', 'cell'); });
+        var side = document.getElementById('side-matches-list');
+        var sideList = matchList(matchesLive.recent, game, MATCH_SIDE_ROWS);
+        side.replaceChildren.apply(side, sideList.map(function(m) {
+          var li = el('li');
+          var won = matchWinner(m);
+          var line = el('small', null, (won ? (m.name !== null ? 'Won by ' + won : won + ' won') + ', ' : ''));
+          line.append(matchTime(m, now));
+          li.append(matchLink(m, true), line);
+          return li;
+        }));
+        document.getElementById('side-matches-none').hidden = sideList.length > 0 || !matchesLive.recent;
+        document.querySelectorAll('.side-more, .match-more').forEach(function(a) {
+          a.href = '/matches' + (both ? '' : '?game=' + (game === 'jk1' ? 'jk' : game));
+        });
+        document.querySelectorAll('[data-my-match]').forEach(function(e) {
+          e.hidden = !matchesLive.mine;
+          var a = e.tagName === 'A' ? e : e.querySelector('a');
+          if (matchesLive.mine) a.href = '/match/' + matchesLive.mine;
+        });
+      }
+
+      // Asks the lobby for the latest matches. One it couldn't get keeps
+      // what's shown, and it asks again after a while, less and less often.
+      function askMatches() {
+        if (matchesLive.busy) {
+          matchesLive.again = true;
+          return;
+        }
+        clearTimeout(matchesLive.retry);
+        matchesLive.retry = null;
+        if (window.jkLobbyMock) {
+          matchesLive.recent = cleanRecent(window.jkLobbyMock.recent ? window.jkLobbyMock.recent() : null) ||
+                               matchesLive.recent;
+          renderMatches();
+          return;
+        }
+        matchesLive.busy = true;
+        // no-store: the page asks because there's a new match, so the list it
+        // got a moment ago won't do.
+        fetch('/ladder/recent', { cache: 'no-store', credentials: 'omit' }).then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        }).then(function(a) {
+          var recent = cleanRecent(a);
+          if (!recent) throw new Error('not a list of matches');
+          matchesLive.busy = false;
+          matchesLive.failures = 0;
+          matchesLive.recent = recent;
+          renderMatches();
+          if (matchesLive.again) {
+            matchesLive.again = false;
+            askMatches();
+          }
+        }).catch(function(e) {
+          matchesLive.busy = false;
+          matchesLive.again = false;
+          matchesLive.failures++;
+          console.warn('OpenJKDF2: could not get the latest matches (' + e + ')');
+          if (lobbyWatch && lobbyWatch.stopped) return;
+          matchesLive.retry = setTimeout(askMatches, Math.min(MATCH_RETRY_MS * Math.pow(2, matchesLive.failures - 1),
+                                                              5 * 60 * 1000));
+        });
+      }
+
+      function showMatchParts(on) {
+        matchesLive.shown = on;
+        document.querySelectorAll('[data-matches]').forEach(function(e) { e.hidden = !on; });
+        if (on) renderMatches();
+      }
+
+      // Takes the lobby's latest status (lobbyShow), or null when there's
+      // none. Its match is the latest match's number, or null from a lobby
+      // that keeps no record, which hides the lists.
+      function matchesStatus(status) {
+        if (!status) {
+          if (matchesLive.shown && !matchesLive.recent) renderMatches();
+          return;
+        }
+        var on = status.match !== null;
+        if (on !== matchesLive.on || on !== matchesLive.shown) {
+          matchesLive.on = on;
+          try {
+            if (on) localStorage.setItem(MATCH_ON_SETTING, 'on');
+            else localStorage.removeItem(MATCH_ON_SETTING);
+          } catch (e) {}
+          showMatchParts(on);
+        }
+        // A newer match, or no list yet and none on its way.
+        if (on && (status.match !== matchesLive.latest ||
+                   (!matchesLive.recent && !matchesLive.busy && !matchesLive.retry))) {
+          matchesLive.latest = status.match;
+          askMatches();
+        }
+      }
+
+      function storedPlayerKey() {
+        try {
+          var key = localStorage.getItem(MATCH_KEY_SETTING);
+          return typeof key === 'string' && /^[0-9a-f]{32}$/.test(key) ? key : '';
+        } catch (e) {
+          return '';
+        }
+      }
+
+      // Gets this browser's player key from the lobby, which answers with
+      // the one in its cookie, else the one kept here, else a new one, and
+      // sets the cookie again. Not for a player who isn't recorded by name.
+      function askPlayerKey() {
+        if (!matchesLive.on || Module.jkLadderAnon || matchesLive.keyBusy || window.jkLobbyMock ||
+            Date.now() - matchesLive.keyAt < MATCH_RETRY_MS) return;
+        matchesLive.keyBusy = true;
+        matchesLive.keyAt = Date.now();
+        var kept = storedPlayerKey();
+        fetch('/ladder/key', { method: 'POST', cache: 'no-store', credentials: 'same-origin',
+                               headers: { 'Content-Type': 'application/json' },
+                               body: JSON.stringify(kept ? { key: kept } : {}) }).then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        }).then(function(a) {
+          matchesLive.keyBusy = false;
+          if (!a || typeof a.key !== 'string' || !/^[0-9a-f]{32}$/.test(a.key)) throw new Error('no key in the answer');
+          Module.jkLadderKey = a.key;
+          try { localStorage.setItem(MATCH_KEY_SETTING, a.key); } catch (e) {}
+        }).catch(function(e) {
+          matchesLive.keyBusy = false;
+          console.warn('OpenJKDF2: could not get a player key for the match record (' + e + ')');
+        });
+      }
+
+      // A game is starting: the key, and a word to the browser to keep what
+      // this site stores (the key, and the saved game files) when it runs
+      // short of room. Chrome, Edge and Safari decide that by themselves;
+      // Firefox would ask the player in a prompt of its own, so it isn't
+      // asked.
+      function matchesGameStart() {
+        if (!matchesLive.on) return;
+        askPlayerKey();
+        try {
+          if (!Module.jkLadderAnon && navigator.storage && navigator.storage.persist &&
+              !/\bFirefox\//.test(navigator.userAgent)) {
+            var kept = navigator.storage.persist();
+            if (kept && kept.catch) kept.catch(function() {});
+          }
+        } catch (e) {}
+      }
+
+      // The game says the lobby saved a match it reported (ladder.js). The
+      // landing page offers it after Quit.
+      Module.jkLadderSaved = function(id) {
+        if (!matchId(id)) return;
+        try { localStorage.setItem(MATCH_MINE_SETTING, JSON.stringify({ id: id, at: Date.now() })); } catch (e) {}
+      };
+
+      (function() {
+        var anon = false, shown = false;
+        try {
+          shown = localStorage.getItem(MATCH_ON_SETTING) === 'on';
+          anon = localStorage.getItem(MATCH_NAME_SETTING) === 'off';
+          var game = localStorage.getItem(MATCH_GAME_SETTING);
+          if (game === 'jk1' || game === 'mots') matchesLive.game = game;
+          matchesLive.mine = myMatch(localStorage.getItem(MATCH_MINE_SETTING), Date.now());
+        } catch (e) {}
+        Module.jkLadderAnon = anon;
+        // The key this browser already has does until the lobby answers.
+        if (!anon && storedPlayerKey()) Module.jkLadderKey = storedPlayerKey();
+        var boxes = document.querySelectorAll('[data-match-name]');
+        boxes.forEach(function(box) {
+          box.checked = !anon;
+          box.addEventListener('change', function() {
+            Module.jkLadderAnon = !box.checked;
+            boxes.forEach(function(other) { other.checked = box.checked; });
+            try { localStorage.setItem(MATCH_NAME_SETTING, box.checked ? 'on' : 'off'); } catch (e) {}
+            if (box.checked) {
+              if (storedPlayerKey()) Module.jkLadderKey = storedPlayerKey();
+            } else {
+              delete Module.jkLadderKey;
+            }
+          });
+        });
+        document.querySelectorAll('[data-matches-game]').forEach(function(b) {
+          b.addEventListener('click', function() {
+            matchesLive.game = b.dataset.matchesGame;
+            try { localStorage.setItem(MATCH_GAME_SETTING, matchesLive.game); } catch (e) {}
+            renderMatches();
+          });
+        });
+        if (shown && /^https?:$/.test(location.protocol)) showMatchParts(true);
+        // "5 min ago" moves on while the page shows.
+        setInterval(function() {
+          if (!matchesLive.shown || document.hidden || document.getElementById('zone').hidden) return;
+          var now = Date.now();
+          document.querySelectorAll('#matches time[data-at], #side-matches time[data-at]').forEach(function(t) {
+            t.textContent = matchAgo(Number(t.dataset.at), now);
+          });
+        }, 60000);
+      })();
+
       var hideZoneBeforeLobby = hideZone;
       hideZone = function() {
+        matchesGameStart();
+        clearTimeout(matchesLive.retry);
         stopLobbyWatch();
         stopImperialWatch();
         if (room.open) room.close();

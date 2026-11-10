@@ -5,8 +5,9 @@
 // instead of watching the lobby, with a bar to switch between them and to
 // make players come and go. Each scenario has the Imperial relay's games
 // too, as the site's Worker would answer for them (/imperial-games), in
-// place of asking it. The names are made up, except Coruscant, the relay's
-// own server.
+// place of asking it, and the lobby's latest matches, as its /ladder/recent
+// would answer (none in "Nobody on"). The names are made up, except
+// Coruscant, the relay's own server.
 
 window.jkLobbyMock = (function() {
     // n of these from the one at from on, for games too big to name everyone
@@ -141,6 +142,34 @@ window.jkLobbyMock = (function() {
     var show = null;
     var showImperial = null;
     var current = 'busy';
+
+    // The latest matches, as the lobby's /ladder/recent answers: newest
+    // first, each so many minutes ago.
+    var MATCHES = {
+        jk1: [
+            { id: 41, title: 'Canyon Oasis', mod: '', pack: 0, custom: 0, players: 4, secs: 754, ago: 3,
+              teams: false, name: 'Kyle_K', team: 0, score: 15 },
+            { id: 40, title: 'Battleground Jedi', mod: 'SBX 3.1', pack: 0, custom: 0, players: 6, secs: 1210, ago: 26,
+              teams: false, name: 'MaraJade', team: 0, score: 22 },
+            { id: 38, title: 'Drazen Isle', mod: 'SBX 3.1', pack: 0, custom: 1, players: 8, secs: 1805, ago: 95,
+              teams: true, name: null, team: 1, score: 40 },
+            { id: 37, title: 'Nar Shaddaa Loading Terminal', mod: '', pack: 1, custom: 0, players: 2, secs: 412,
+              ago: 190, teams: false, name: '', team: 0, score: 9 },
+            { id: 35, title: 'Blades of Death', mod: 'Saber Battle X', pack: 0, custom: 0, players: 3, secs: 660,
+              ago: 60 * 26, teams: false, name: 'Jerec', team: 0, score: 11 },
+            { id: 33, title: 'Valley of the Jedi Tower', mod: '', pack: 0, custom: 0, players: 5, secs: 900,
+              ago: 60 * 50, teams: false, name: null, team: 0, score: null },
+            { id: 31, title: 'Oasis Night (a level with a very long name indeed)', mod: 'JK Enhanced with everything', pack: 0,
+              custom: 1, players: 12, secs: 7400, ago: 60 * 24 * 9, teams: false, name: 'Ewok_Assassin_The_Third', team: 0,
+              score: 104 }
+        ],
+        mots: [
+            { id: 39, title: 'Asteroid Outpost', mod: '', pack: 0, custom: 0, players: 3, secs: 540, ago: 48,
+              teams: false, name: 'Dash_R', team: 0, score: 8 },
+            { id: 36, title: 'Altyr 5', mod: 'MotS Tweaks', pack: 0, custom: 0, players: 4, secs: 1320, ago: 60 * 7,
+              teams: true, name: null, team: 3, score: 31 }
+        ]
+    };
     var live = null;      // the status as players come and go
     var moving = null;    // the timer making them
     var nextId = 60;
@@ -159,7 +188,8 @@ window.jkLobbyMock = (function() {
             all = all.concat(s.lobby[k]);
             online += byGame[k].online;
         });
-        return { online: online, lobby: all.sort(), byGame: byGame, games: copy(s.games) };
+        return { online: online, lobby: all.sort(), byGame: byGame, games: copy(s.games),
+                 match: current === 'empty' ? 0 : MATCHES.jk1[0].id };
     }
 
     // One thing happens in one game: someone comes online, leaves, joins or
@@ -306,6 +336,19 @@ window.jkLobbyMock = (function() {
             if (extra) extra.append(makeControls('room'));
             show(null, 'connecting');
             setTimeout(function() { choose(current); }, 700);
+        },
+        // What the lobby's /ladder/recent would answer.
+        recent: function() {
+            var now = Date.now(), games = {};
+            Object.keys(MATCHES).forEach(function(k) {
+                games[k] = current === 'empty' ? [] : MATCHES[k].map(function(m) {
+                    var out = copy(m);
+                    out.at = now - m.ago * 60000;
+                    delete out.ago;
+                    return out;
+                });
+            });
+            return { v: 1, games: games };
         },
         describe: function(kind, label, quick, want) {
             var folder = 'your ' + GAME_NAMES[want.game] + ' folder';

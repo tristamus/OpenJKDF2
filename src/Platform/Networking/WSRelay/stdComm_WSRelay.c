@@ -143,6 +143,11 @@
 #include "stdPlatform.h"
 #include "version.h"
 #include "jk.h"
+#include "Gui/jkGUITitle.h"
+#include "World/sithWorld.h"
+#include "General/stdFnames.h"
+#include "General/stdStrTable.h"
+#include "Main/jkStrings.h"
 
 #include <emscripten.h>
 #include <math.h>
@@ -1329,6 +1334,11 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 net.onPong();
                 return true;
             }
+            /* The lobby saved a match this game reported (ladder.js). */
+            if (op === 'matched') {
+                if (Module.jkLadder) Module.jkLadder.saved(parseInt(text.substring(sp + 1), 10));
+                return true;
+            }
             /* The host's credentials for the link the new player offers. */
             if (op === 'peer-joined') net.askIce();
             if (op === 'signal') {
@@ -1339,7 +1349,8 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 return true;
             }
             /* What the lobby can do beyond the basics: links (passing link
-               setup between joiners), pw (checking room passwords). */
+               setup between joiners), pw (checking room passwords), match
+               (keeping a record of each match, ladder.js). */
             if (op === 'lobby') {
                 net.lobbyCan = text.split(' ').slice(1);
                 return true;
@@ -3551,4 +3562,144 @@ void stdComm_WSRelay_DescribeMod(int idx, char16_t* pOut, int maxChars)
     for (; text[i] && i < maxChars - 1; i++)
         pOut[i] = (char16_t)(uint8_t)text[i];
     pOut[i] = 0;
+}
+
+// ---- The match record: what this game sees of its match, for the lobby to
+// keep (packaging/wasm/ladder.js, which sends it; the lobby's src/ladder.js
+// has what becomes of it). Every game counts kills by itself as they're
+// announced, so each reports the ones it counts; the host's scoreboard is the
+// one the others take over, so only its game's is used.
+
+EM_JS(void, wsrelay_js_match_start, (const char* pMap, const char16_t* pTitle, int mode, int scoreLimit, int timeLimitMin, int bHost, int bIdle, const char* pBuild), {
+    if (!Module.jkLadder) return;
+    var chars = [];
+    for (var i = 0; pTitle && i < 64; i++) {
+        var ch = HEAPU16[(pTitle >> 1) + i];
+        if (!ch) break;
+        chars.push(ch);
+    }
+    Module.jkLadder.start(UTF8ToString(pMap), String.fromCharCode.apply(null, chars), mode, scoreLimit, timeLimitMin,
+                          !!bHost, !!bIdle, UTF8ToString(pBuild));
+});
+
+EM_JS(void, wsrelay_js_match_kill, (int victim, int killer, int kind), {
+    if (Module.jkLadder) Module.jkLadder.kill(victim, killer, kind);
+});
+
+// pRows: n rows of six (player id, score, kills, deaths, suicides, team).
+EM_JS(void, wsrelay_js_match_scores, (const int32_t* pRows, int n, const int32_t* pTeams), {
+    if (!Module.jkLadder) return;
+    var rows = [];
+    for (var i = 0; i < n; i++) {
+        var row = [];
+        for (var j = 0; j < 6; j++) row.push(HEAP32[(pRows >> 2) + i * 6 + j]);
+        rows.push(row);
+    }
+    var teams = [];
+    for (var t = 0; t < 5; t++) teams.push(HEAP32[(pTeams >> 2) + t]);
+    Module.jkLadder.scores(rows, teams);
+});
+
+EM_JS(void, wsrelay_js_match_end, (int bLeft), {
+    if (Module.jkLadder) Module.jkLadder.end(!!bLeft);
+});
+
+// What killed this game's player, from when its health ran out until the kill
+// is counted.
+static int wsrelay_matchKind = 0;
+static int wsrelay_bMatchOn = 0;
+
+void stdComm_WSRelay_MatchScores(void)
+{
+    static int32_t aRows[32 * 6];
+    static int32_t aTeams[5];
+    int n = 0;
+
+    if (!wsrelay_bMatchOn)
+        return;
+    for (int i = 0; i < jkPlayer_maxPlayers && i < 32; i++)
+    {
+        SithPlayer* pPlayer = &jkPlayer_playerInfos[i];
+        if (!(pPlayer->flags & 1) || !pPlayer->playerNetId)
+            continue;
+        int32_t* pRow = &aRows[n++ * 6];
+        pRow[0] = (int32_t)pPlayer->playerNetId;
+        pRow[1] = pPlayer->score;
+        pRow[2] = pPlayer->numKills;
+        pRow[3] = pPlayer->numKilled;
+        pRow[4] = pPlayer->numSuicides;
+        pRow[5] = pPlayer->teamNum;
+    }
+    for (int i = 0; i < 5; i++)
+        aTeams[i] = sithNet_teamScore[i];
+    wsrelay_js_match_scores(aRows, n, aTeams);
+}
+
+// The level's title as the loading screen shows it, or the level's name where
+// it has none. (jkGuiTitle_quicksave_related_func1 finds it the same way, and
+// reads the loading screen's texts again besides, which this leaves alone.)
+static char16_t* wsrelay_matchTitle(char* pJklFname)
+{
+    char aKey[64];
+    char16_t* pTitle;
+
+    stdFnames_CopyShortName(aKey, 64, pJklFname);
+    jkGuiTitle_sub_4189A0(aKey);
+    pTitle = NULL;
+#ifdef QOL_IMPROVEMENTS
+    pTitle = stdStrTable_GetValue(&jkStrings_tableExtOver, aKey);
+#endif
+    if (!pTitle)
+        pTitle = stdStrTable_GetValue(&jkCog_strings, aKey);
+    if (!pTitle)
+        pTitle = jkStrings_GetUniStringWithFallback(aKey);
+    return pTitle;
+}
+
+void stdComm_WSRelay_MatchStart(void)
+{
+    // The lobby's rooms only: a match on the Imperial Network Protocol relay
+    // isn't one of its.
+    if (!sithNet_isMulti || !sithWorld_g_pCurrentWorld || stdComm_Imperial_bActive)
+        return;
+    wsrelay_matchKind = 0;
+    wsrelay_bMatchOn = 1;
+    wsrelay_js_match_start(sithWorld_g_pCurrentWorld->map_jkl_fname,
+                           wsrelay_matchTitle(sithWorld_g_pCurrentWorld->map_jkl_fname),
+                           sithNet_MultiModeFlags, sithNet_scorelimit, sithNet_multiplayer_timelimit / 60000,
+                           sithNet_isServer, sithNet_isServer && jkGuiNetHost_bIsDedicated, openjkdf2_aReleaseCommitShort);
+    stdComm_WSRelay_MatchScores();
+}
+
+void stdComm_WSRelay_MatchDying(SithThing* pVictim, SithThing* pSource, int damageType)
+{
+    if (wsrelay_bMatchOn && pVictim && pVictim == sithPlayer_g_pLocalPlayerThing)
+        wsrelay_matchKind = pSource ? stdComm_WSRelay_HitKind(pSource, damageType) : STDCOMM_WSRELAY_KIND_OTHER;
+}
+
+void stdComm_WSRelay_MatchKill(SithPlayer* pVictim, SithThing* pVictimThing, SithThing* pKiller)
+{
+    if (!wsrelay_bMatchOn || !pVictim || !pVictim->playerNetId)
+        return;
+    // Nobody's kill, as the game scores it: a fall, the level, the player's
+    // own doing.
+    int killer = 0;
+    if (pKiller && pKiller != pVictimThing && pKiller->type == SITH_THING_PLAYER && pKiller->actorParams.pPlayer)
+        killer = (int)pKiller->actorParams.pPlayer->playerNetId;
+    int kind = 0;
+    if (pVictimThing == sithPlayer_g_pLocalPlayerThing)
+    {
+        kind = wsrelay_matchKind ? wsrelay_matchKind : STDCOMM_WSRELAY_KIND_OTHER;
+        wsrelay_matchKind = 0;
+    }
+    wsrelay_js_match_kill((int)pVictim->playerNetId, killer, kind);
+}
+
+void stdComm_WSRelay_MatchEnd(int bLeft)
+{
+    if (!wsrelay_bMatchOn)
+        return;
+    stdComm_WSRelay_MatchScores();
+    wsrelay_bMatchOn = 0;
+    wsrelay_js_match_end(bLeft);
 }

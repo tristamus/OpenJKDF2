@@ -23,6 +23,7 @@
 #include "Devices/sithComm.h"
 #include "Engine/sithInterp.h"
 #include "stdPlatform.h"
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
 
 #define sithMulti_infoPrintf(fmt, ...) stdPlatform_Printf(fmt, ##__VA_ARGS__)
 #define sithMulti_verbosePrintf(fmt, ...) if (Main_bVerboseNetworking) \
@@ -385,6 +386,11 @@ void sithMulti_ProcessKilledPlayer(SithPlayer *pPlayer, SithThing *pPlayerThing,
     SithPlayer *v9; // [esp-4h] [ebp-110h]
     SithPlayer *v10; // [esp-4h] [ebp-110h]
     char16_t a1a[128]; // [esp+Ch] [ebp-100h] BYREF
+
+#ifdef PLATFORM_WSRELAY
+    // Added: the match record
+    stdComm_WSRelay_MatchKill(pPlayer, pPlayerThing, pKiller);
+#endif
 
     ++pPlayer->numKilled;
     if ( !pKiller || pKiller->type != SITH_THING_PLAYER )
@@ -1331,6 +1337,10 @@ void sithMulti_Update(int msecDeltaTime)
         {
             sithNet_bSyncScores = 0;
             sithMulti_SyncPlayers(-1, 0);
+#ifdef PLATFORM_WSRELAY
+            // Added: the match record, the scoreboard the others take over
+            stdComm_WSRelay_MatchScores();
+#endif
         }
         if ( (sithNet_MultiModeFlags & MULTIMODEFLAG_TIMELIMIT) != 0 && sithTime_g_msecGameTime > sithNet_multiplayer_timelimit )
         {
