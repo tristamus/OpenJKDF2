@@ -8367,6 +8367,13 @@
           if (!frames || document.hidden) return;
           var t = frameTimes(frames, seen), stats = frameStats(t.times, t.work);
           seen = frames.count;
+          // While the browser has taken the graphics away (gl-lost, see Lost graphics) the
+          // frames draw nothing, so their rate says nothing, and the note "The graphics
+          // stopped for a moment" has the place this one would take: they start over.
+          if (document.documentElement.classList.contains('gl-lost')) {
+            streak = 0;
+            return;
+          }
           // Mostly in a menu, or the tab was hidden: no say either way.
           if (!stats || stats.seconds < SLOW_CHECK_MS / 2000) return;
           var settings = displaySettings();
