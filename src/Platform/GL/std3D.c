@@ -24,6 +24,12 @@
 
 #ifdef ARCH_WASM
 #include <emscripten/html5_webgl.h>
+#include <emscripten.h>
+// Added (P22): getting the graphics back after the browser takes them away; at the end of this file
+static int std3D_WasmGlReady(void);
+static int std3D_WasmGlLost(void);
+static void std3D_WasmGlDrew(void);
+static int std3D_bWasmFrameDrawn = 0; // the last std3D_DrawMenu drew a frame (std3D_WasmFrameDrawn)
 #endif
 
 #ifdef WIN32
@@ -99,14 +105,15 @@ typedef struct std3DFramebuffer
 } std3DFramebuffer;
 
 GLint std3D_windowFbo = 0;
-std3DFramebuffer std3D_framebuffers[2];
+// Changed: one set of render targets instead of two used on alternate frames. Each frame
+// clears the whole set before drawing into it (std3D_StartScene) and every pass reads only
+// what was drawn into it that frame, so the second set only doubled the video memory.
+std3DFramebuffer std3D_framebuffers[1];
 std3DFramebuffer *std3D_pFb = NULL;
 
 static bool has_initted = false;
 
 static void* last_overlay = NULL;
-
-static int std3D_activeFb = 1;
 
 int init_once = 0;
 GLuint programDefault, programMenu;
@@ -177,7 +184,7 @@ int std3D_bInitted = 0;
 rdColormap std3D_ui_colormap;
 int std3D_bReinitHudElements = 0;
 
-void std3D_generateIntermediateFbo(int32_t width, int32_t height, std3DIntermediateFbo* pFbo, int isFloat)
+void std3D_generateIntermediateFbo(int32_t width, int32_t height, std3DIntermediateFbo* pFbo, int isFloat, int withDepth)
 {
     // Generate the framebuffer
     memset(pFbo, 0, sizeof(*pFbo));
@@ -200,21 +207,31 @@ void std3D_generateIntermediateFbo(int32_t width, int32_t height, std3DIntermedi
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Changed: no second mip level. Level 1 is dropped because every sampler of these
+    // targets is GL_LINEAR (min and mag), which reads only the base level, so the level made
+    // by glGenerateMipmap was never read (the blur shaders' bias 1.0 changes nothing). If a
+    // mipmap min filter is ever used here (upstream's "use mipmaps for blurring"), this change
+    // must go: put back MAX_LEVEL 1, glGenerateMipmap here and gen_mips 1 in std3D_DrawSceneFbo.
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
-    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     
     // Attach fbTex to our currently bound framebuffer fb
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pFbo->tex, 0);
 
-    // Set up our render buffer
-    glGenRenderbuffers(1, &pFbo->rbo);
-    glBindRenderbuffer(GL_RENDERBUFFER, pFbo->rbo);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
-    
-    // Bind it to our framebuffer fb
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, pFbo->rbo);
+    // Changed: a depth buffer only where asked for. The only passes into these targets
+    // (std3D_DrawSimpleTex) draw with GL_ALWAYS and nothing reads their depth, so the bloom
+    // targets go without one. The two SSAO targets keep theirs: Firefox's software renderer
+    // (llvmpipe) gives the SSAO pass slightly different output (1 in 255 on some pixels) when
+    // the target has no depth attachment, even with the depth test off, so dropping it there
+    // would change the picture.
+    if (withDepth)
+    {
+        glGenRenderbuffers(1, &pFbo->rbo);
+        glBindRenderbuffer(GL_RENDERBUFFER, pFbo->rbo);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, pFbo->rbo);
+    }
     if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         stdPlatform_Printf("std3D: ERROR, Framebuffer is incomplete!\n");
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -410,13 +427,19 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    //glGenerateMipmap(GL_TEXTURE_2D);
+    // Changed: was MAX_LEVEL 1 plus glGenerateMipmap. Level 1 is dropped because every sampler
+    // of tex1 is GL_LINEAR, which never reads it; if a mipmap filter is ever used, this must go
+    // (see std3D_generateIntermediateFbo).
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     
     // Attach fbTex to our currently bound framebuffer fb
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, pFb->tex1, 0);
 
+    // Changed: the position and normal targets (tex2, tex3) are read only by SSAO and drawn to
+    // only while it is on (std3D_SetSceneDrawBuffers), so they're only made then. Turning SSAO
+    // on makes the set again (enable_extra & 2, std3D_StartScene).
+    if (jkPlayer_enableSSAO)
+    {
     // Set up our position fb texture
     glGenTextures(1, &pFb->tex2);
     glBindTexture(GL_TEXTURE_2D, pFb->tex2);
@@ -440,6 +463,7 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
     
     // Attach fbTex to our currently bound framebuffer fb
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, pFb->tex3, 0);
+    }
 
     // Set up our render buffer
     glGenRenderbuffers(1, &pFb->rbo);
@@ -460,9 +484,9 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
 
     if (jkPlayer_enableSSAO)
     {
-        std3D_generateIntermediateFbo(width, height, &pFb->ssaoBlur1, 0);
-        std3D_generateIntermediateFbo(pFb->ssaoBlur1.w/2, pFb->ssaoBlur1.h/2, &pFb->ssaoBlur2, 0);
-        //std3D_generateIntermediateFbo(pFb->ssaoBlur2.w/2, pFb->ssaoBlur2.h/2, &pFb->ssaoBlur3, 0);
+        std3D_generateIntermediateFbo(width, height, &pFb->ssaoBlur1, 0, 1);
+        std3D_generateIntermediateFbo(pFb->ssaoBlur1.w/2, pFb->ssaoBlur1.h/2, &pFb->ssaoBlur2, 0, 1);
+        //std3D_generateIntermediateFbo(pFb->ssaoBlur2.w/2, pFb->ssaoBlur2.h/2, &pFb->ssaoBlur3, 0, 1);
 
         pFb->enable_extra |= 2;
     }
@@ -470,11 +494,11 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
     if (jkPlayer_enableBloom)
     {
         pFb->enable_extra |= 1;
-        std3D_generateIntermediateFbo(width, height, &pFb->blur1, 1);
-        //std3D_generateIntermediateFbo(width, height, &pFb->blurBlend, 1);
-        std3D_generateIntermediateFbo(pFb->blur1.w/4, pFb->blur1.h/4, &pFb->blur2, 1);
-        std3D_generateIntermediateFbo(pFb->blur2.w/4, pFb->blur2.h/4, &pFb->blur3, 1);
-        std3D_generateIntermediateFbo(pFb->blur3.w/4, pFb->blur3.h/4, &pFb->blur4, 1);
+        std3D_generateIntermediateFbo(width, height, &pFb->blur1, 1, 0);
+        //std3D_generateIntermediateFbo(width, height, &pFb->blurBlend, 1, 0);
+        std3D_generateIntermediateFbo(pFb->blur1.w/4, pFb->blur1.h/4, &pFb->blur2, 1, 0);
+        std3D_generateIntermediateFbo(pFb->blur2.w/4, pFb->blur2.h/4, &pFb->blur3, 1, 0);
+        std3D_generateIntermediateFbo(pFb->blur3.w/4, pFb->blur3.h/4, &pFb->blur4, 1, 0);
 
         /*pFb->blur1.iw = width;
         pFb->blur1.ih = height;
@@ -523,16 +547,7 @@ void std3D_deleteFramebuffer(std3DFramebuffer* pFb)
 
 void std3D_swapFramebuffers()
 {
-    if (std3D_activeFb == 2)
-    {
-        std3D_activeFb = 1;
-        std3D_pFb = &std3D_framebuffers[0];
-    }
-    else
-    {
-        std3D_activeFb = 2;
-        std3D_pFb = &std3D_framebuffers[1];
-    }
+    std3D_pFb = &std3D_framebuffers[0]; // Changed: one set (see std3D_framebuffers)
 }
 
 GLuint std3D_loadProgram(const char* fpath_base)
@@ -632,9 +647,6 @@ int init_resources()
     std3D_ClampRenderTargetSize(&tex_w, &tex_h); // Added
 
     std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[0]);
-    std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[1]);
-
-    std3D_activeFb = 1;
     std3D_pFb = &std3D_framebuffers[0];
     
     if ((programDefault = std3D_loadProgram("shaders/default")) == 0) return false;
@@ -765,18 +777,20 @@ int init_resources()
     // Tiled random
     // FLEXTODO
     glGenTextures(1, &tiledrand_texture);
-    if (tiledrand_data) {
-        free(tiledrand_data);
-    }
-    tiledrand_data = (rdVector3*)malloc(3 * 4 * 4 * sizeof(float));
-    memset(tiledrand_data, 0, 3 * 4 * 4 * sizeof(float));
+    // Added: made once a session and kept, so the SSAO noise is the same when the graphics
+    // are made again (P22, a lost WebGL context), and that spends none of the game's random
+    // numbers (_frand is rand()). Before, each init_resources drew 32 new ones.
+    if (!tiledrand_data) {
+        tiledrand_data = (rdVector3*)malloc(3 * 4 * 4 * sizeof(float));
+        memset(tiledrand_data, 0, 3 * 4 * 4 * sizeof(float));
 
-    for (int i = 0; i < 4*4; i++)
-    {
-        tiledrand_data[i].x = (_frand() * 2.0) - 1.0;
-        tiledrand_data[i].y = (_frand() * 2.0) - 1.0;
-        tiledrand_data[i].z = 0.0;
-        rdVector_Normalize3Acc(&tiledrand_data[i]);
+        for (int i = 0; i < 4*4; i++)
+        {
+            tiledrand_data[i].x = (_frand() * 2.0) - 1.0;
+            tiledrand_data[i].y = (_frand() * 2.0) - 1.0;
+            tiledrand_data[i].z = 0.0;
+            rdVector_Normalize3Acc(&tiledrand_data[i]);
+        }
     }
 
     glBindTexture(GL_TEXTURE_2D, tiledrand_texture);
@@ -848,7 +862,6 @@ void std3D_FreeResources()
     glDeleteProgram(programDefault);
     glDeleteProgram(programMenu);
     std3D_deleteFramebuffer(&std3D_framebuffers[0]);
-    std3D_deleteFramebuffer(&std3D_framebuffers[1]);
     glDeleteTextures(1, &blank_tex);
     glDeleteTextures(1, &blank_tex_white);
     glDeleteTextures(1, &worldpal_texture);
@@ -906,9 +919,18 @@ int std3D_StartScene()
     ++std3D_frameCount;
 
     //printf("Begin draw\n");
+#ifdef ARCH_WASM
+    // Added: nothing is drawn while the browser has taken the graphics away, and once it
+    // gives them back they're made again here before anything else (P22). The game goes on.
+    if (!std3D_WasmGlReady()) return 1;
+#endif
     if (!has_initted)
     {
         if (!init_resources()) {
+#ifdef ARCH_WASM
+            // Added: taken away while they were being made: made when they're back
+            if (std3D_WasmGlLost()) return 1;
+#endif
             stdPlatform_Printf("std3D: Failed to init resources, exiting...");
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Failed to init resources, exiting...", NULL);
             exit(-1);
@@ -1374,6 +1396,16 @@ static void std3D_PresentSWWorld(void)
 void std3D_DrawMenu()
 {
     if (Main_bHeadless) return;
+#ifdef ARCH_WASM
+    // Added: see std3D_StartScene. What this frame queued is dropped, as drawing it does: the
+    // HUD's quads carry texture names, and a list kept through a loss would be drawn later
+    // with names from the old context.
+    if (!std3D_WasmGlReady() || !has_initted) {
+        std3D_bWasmFrameDrawn = 0;
+        std3D_ResetUIRenderList();
+        return;
+    }
+#endif
 
     std3D_UpdateWindowViewport(); // Added
 
@@ -1739,6 +1771,9 @@ void std3D_DrawMenu()
     std3D_DrawUIRenderList();
 
     last_flags = 0;
+#ifdef ARCH_WASM
+    std3D_WasmGlDrew(); // Added
+#endif
 }
 
 void std3D_DrawMapOverlay()
@@ -2610,7 +2645,7 @@ void std3D_DrawSceneFbo()
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
         std3D_DrawSimpleTex(&std3D_ssaoStage, &std3D_pFb->ssaoBlur1, std3D_pFb->tex2, std3D_pFb->tex3, tiledrand_texture, frameNum, 0.0, 0.0, 0); // test ssao output
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->ssaoBlur2, std3D_pFb->ssaoBlur1.tex, 0, 0, 14.0, 3.0, 1.0 * rad_scale, 1);
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->ssaoBlur2, std3D_pFb->ssaoBlur1.tex, 0, 0, 14.0, 3.0, 1.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
         //std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->ssaoBlur3, std3D_pFb->ssaoBlur2.tex, 0, 0, 8.0, 3.0, 4.0);
 
         glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
@@ -2625,10 +2660,10 @@ void std3D_DrawSceneFbo()
     {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur1, std3D_pFb->tex1, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 1);
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur2, std3D_pFb->blur1.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 1);
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur3, std3D_pFb->blur2.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 1);
-        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur4, std3D_pFb->blur3.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 1);
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur1, std3D_pFb->tex1, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur2, std3D_pFb->blur1.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur3, std3D_pFb->blur2.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
+        std3D_DrawSimpleTex(&std3D_blurStage, &std3D_pFb->blur4, std3D_pFb->blur3.tex, 0, 0, 16.0, 3.0, 2.0 * rad_scale, 0); // Changed: no mips (MAX_LEVEL 0)
 
         float bloom_intensity = 1.0;
         float bloom_gamma = 1.0;
@@ -2730,6 +2765,13 @@ void std3D_DoTex(rdDDrawSurface* tex, rdTri* tri, int tris_left)
 void std3D_DrawRenderList()
 {
     if (Main_bHeadless) return;
+    // Added: nothing to draw with before init_resources has made it (world_data_elements is
+    // NULL then, and std3D_pFb before the first one). In the browser a level can run that way
+    // while the graphics are away (P22); the list is dropped as drawing it would.
+    if (!has_initted) {
+        std3D_ResetRenderList();
+        return;
+    }
 
     //printf("Draw render list\n");
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
@@ -3175,6 +3217,7 @@ int std3D_ClearZBuffer()
     // (scene start + the POV weapon's clear) so the software path stays in lockstep with the HW one.
     rdZRaster_ClearZBuffer();
 #endif
+    if (!has_initted) return 1; // Added: see std3D_DrawRenderList
     glDepthMask(GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -3398,7 +3441,12 @@ int std3D_AddToTextureCache(tVBuffer *vbuf, rdDDrawSurface *texture, int is_alph
 
         texture->pDataDepthConverted = image_data;
 #endif
+        // Added: palette indices are never filtered by the sampler (default_f.glsl filters the
+        // colors itself), but the filter above was picked from is_16bit as the surface's last
+        // image left it: 1 after jkgm replaced it (jkgm.cpp), then purged and loaded as 8-bit
         texture->is_16bit = 0;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, image_8bpp);
 
         texture->pDataDepthConverted = NULL;
@@ -4126,3 +4174,174 @@ int std3D_IsReady()
 {
     return has_initted;
 }
+#ifdef ARCH_WASM
+// Added (P22): getting the graphics back after the browser takes them away (a lost WebGL
+// context: a graphics driver crash, reset or update, a GPU process crash, or low memory). The
+// page cancels the loss (index.html), so the browser gives the canvas a fresh context, the same
+// JS object, once it can. Nothing made on the old one works on it, and the extensions are off
+// again ("The Context Restored Event" in the WebGL spec). The engine keeps running meanwhile,
+// draws nothing, and makes everything again at the first frame after it's back.
+
+// Module.jkGl.down: a loss was seen and the graphics haven't been made again since. Called
+// before the context is made (Window_RecreateSDL2Window), so no loss can come before it.
+EM_JS(void, std3D_wasmGlListen, (), {
+  if (Module.jkGl || !Module.canvas) return;
+  var s = Module.jkGl = { down: 0, losses: 0, rebuilds: 0 };
+  Module.canvas.addEventListener('webglcontextlost', function() { s.losses++; s.down = 1; });
+});
+
+void std3D_WasmGlWatch(void)
+{
+    std3D_wasmGlListen();
+}
+
+// At the start of each scene and menu frame: 1 while the context is lost; 2 once, at the first
+// of them after it came back, by then with Emscripten's tables emptied of the old objects (so
+// no name the engine still holds reaches anything, and deleting one does nothing) and the
+// extensions asked for again; otherwise 0. Emscripten never hands out a name twice
+// (GL.getNewId), so an old name can't reach a new object either. GL, its tables and
+// initExtensions are Emscripten's own (libwebgl.js in emsdk 6.0.12), not its public API;
+// packaging/wasm/test/glrestore-check.mjs checks a built openjkdf2.js for them (CI runs it).
+EM_JS(int, std3D_wasmGlPoll, (), {
+  var s = Module.jkGl, gl = Module.ctx;
+  if (!s || !gl) return 0;
+  if (gl.isContextLost()) { s.down = 1; return 1; }
+  if (!s.down) return 0;
+  s.down = 0;
+  ['buffers', 'programs', 'framebuffers', 'renderbuffers', 'textures', 'shaders', 'vaos', 'queries', 'samplers', 'transformFeedbacks', 'syncs']
+    .forEach(function(n) { if (GL[n]) GL[n].fill(null); });
+  GL.stringCache = {};
+  GL.stringiCache = {};
+  gl.currentProgram = null;
+  gl.currentArrayBufferBinding = gl.currentElementArrayBufferBinding = 0;
+  gl.currentPixelPackBufferBinding = gl.currentPixelUnpackBufferBinding = 0;
+  GL.currentContext.initExtensionsDone = false;
+  GL.initExtensions(GL.currentContext);
+  if (Module.jkPace) Module.jkPace.fences = [];
+  s.rebuilds++;
+  return 2;
+});
+
+EM_JS(int, std3D_wasmGlIsLost, (), {
+  return Module.ctx && Module.ctx.isContextLost() ? 1 : 0;
+});
+
+// Tells the page (index.html), with a 'jkgl' event on the canvas: 1 'rebuilding' (the first
+// frame after the graphics came back), 2 'back' (a frame was drawn with them again), 3 'failed'
+// (the context is there but they couldn't be made again).
+EM_JS(void, std3D_wasmGlSay, (int what), {
+  var name = ["", 'rebuilding', 'back', 'failed'][what];
+  if (Module.jkGl) Module.jkGl[name + 'At'] = performance.now();
+  if (Module.canvas) Module.canvas.dispatchEvent(new CustomEvent('jkgl', { detail: name }));
+});
+
+static int std3D_bWasmGlBack = 0;   // made again: the page hears it after the next frame drawn
+static int std3D_bWasmGlFailed = 0; // couldn't be made again: nothing more until the next loss
+
+// Forgets every GL name the engine holds, without using any of them, and clears the flags that
+// make each thing be made or uploaded again: the scene's shaders, framebuffers, palettes and
+// buffers by init_resources right after this, world and model textures as they're next seen
+// (rdMaterial_AddToTextureCache), UI, font and HUD bitmaps as they're next drawn
+// (std3D_DrawUIBitmapRGBA), the menu and overlay textures now. What was queued to draw with the
+// old names is dropped.
+static void std3D_ForgetGLResources(void)
+{
+    stdPlatform_Printf("std3D: the browser gave the graphics back, making them again\n");
+
+    // World and model textures (and jkgm's emissive and displacement ones)
+    std3D_PurgeEntireTextureCache();
+
+    // UI bitmaps: each mip of a bitmap in the cache uploads again when it's next drawn
+    for (int i = 0; i < STD3D_MAX_TEXTURES; i++)
+    {
+        stdBitmap* pBmp = std3D_aUIBitmaps[i];
+        if (pBmp && pBmp->abLoadedToGPU)
+        {
+            for (int j = 0; j < pBmp->numMips; j++)
+            {
+                pBmp->abLoadedToGPU[j] = 0;
+                pBmp->aTextureIds[j] = 0;
+                if (pBmp->paDataDepthConverted && pBmp->paDataDepthConverted[j]) {
+                    free(pBmp->paDataDepthConverted[j]);
+                    pBmp->paDataDepthConverted[j] = NULL;
+                }
+            }
+        }
+        std3D_aUIBitmaps[i] = NULL;
+        std3D_aUITextures[i] = 0;
+    }
+    std3D_loadedUITexturesAmt = 0;
+    last_ui_tex = 0;
+
+    // Shaders, framebuffers, palettes, buffers; the HUD's bitmaps load again (jkHudInv)
+    if (has_initted)
+        std3D_FreeResources();
+    memset(std3D_framebuffers, 0, sizeof(std3D_framebuffers));
+    std3D_swWorldTexId = 0;
+    std3D_swWorldTexW = std3D_swWorldTexH = 0;
+
+    // The menu and overlay textures stdDisplay_SetMode made: filled from their buffers each frame
+    stdDisplay_RecreateGLTextures();
+
+    // Queued with the old names
+    std3D_ResetRenderList();
+    std3D_ResetUIRenderList();
+}
+
+// 0 while this frame can't draw: the context is lost, or the graphics couldn't be made again.
+// At the first frame after the context came back, everything is made again first.
+static int std3D_WasmGlReady(void)
+{
+    int state = std3D_wasmGlPoll();
+    if (state == 1) return 0;
+    if (state == 2)
+    {
+        std3D_wasmGlSay(1);
+        std3D_ForgetGLResources();
+        std3D_bWasmGlFailed = 0;
+        // A failure here goes to the page's box, not to SDL's message box (see shader_utils.c)
+        shader_utils_bQuiet = 1;
+        int made = init_resources();
+        shader_utils_bQuiet = 0;
+        if (!made)
+        {
+            // Taken away again meanwhile: made when it's back (the next poll sees the loss)
+            if (std3D_wasmGlIsLost()) return 0;
+            stdPlatform_Printf("std3D: the graphics couldn't be made again\n");
+            std3D_bWasmGlFailed = 1;
+            std3D_wasmGlSay(3);
+            return 0;
+        }
+        // The display palette, as std3D_StartScene loads it: init_resources leaves it white, and
+        // std3D_DrawMenu can be the first to draw after this (a menu-only frame), before any
+        // StartScene has loaded it
+        glBindTexture(GL_TEXTURE_2D, displaypal_texture);
+        memcpy(displaypal_data, stdDisplay_masterPalette, 0x300);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGB, GL_UNSIGNED_BYTE, displaypal_data);
+        std3D_bWasmGlBack = 1;
+    }
+    return !std3D_bWasmGlFailed;
+}
+
+// Added: whether the last std3D_DrawMenu drew a frame; none is while the graphics are away,
+// and reading the window then gives nothing (jkGame_UpdateScreenshots waits for one)
+int std3D_WasmFrameDrawn(void)
+{
+    return std3D_bWasmFrameDrawn;
+}
+
+static int std3D_WasmGlLost(void)
+{
+    return std3D_wasmGlIsLost();
+}
+
+// At the end of each std3D_DrawMenu that drew
+static void std3D_WasmGlDrew(void)
+{
+    std3D_bWasmFrameDrawn = 1;
+    if (std3D_bWasmGlBack) {
+        std3D_bWasmGlBack = 0;
+        std3D_wasmGlSay(2);
+    }
+}
+#endif

@@ -252,6 +252,12 @@
         font: 14px/1.4 Arial, Helvetica, sans-serif;
       }
       .slow-note[hidden] { display: none; }
+      /* While the graphics are away (a lost WebGL context): Chromium paints a lost canvas
+         white whatever its background, so it's hidden over a black page, with the shell's
+         controls it covers, until the game draws again. */
+      html.gl-lost body { background-color: #000; }
+      html.gl-lost #canvas { opacity: 0; }
+      html.gl-lost #controls { visibility: hidden; }
       .slow-note p { margin: 0; }
       .slow-note p > b:first-child { color: var(--gold); }
       .slow-note ul { margin: 6px 0 0; padding-left: 20px; }
@@ -2553,20 +2559,101 @@
         canvas: (function() {
           var canvas = document.getElementById('canvas');
 
-          // The browser can take the game's 3D graphics away: after a graphics
-          // driver crash, reset or update, or when the computer runs low on
-          // memory. The game can't build them again by itself, so the player
-          // is told and offered a reload, in a box rather than alert(), which
-          // held up the whole tab (and a host's match with it) until clicked.
-          canvas.addEventListener("webglcontextlost", function(e) {
+          // ---- Lost graphics
+          // The browser can take the game's 3D graphics away (a lost WebGL context):
+          // after a graphics driver crash, reset or update, a crash of its GPU
+          // process, or when the computer runs low on memory. Cancelling the event
+          // asks for them back (WebGL spec, "The Context Lost Event"). Meanwhile the
+          // game goes on, a host's match with it, and a note over the black screen
+          // says what's happening. Once they're back the engine makes them again
+          // (std3D_WasmGlReady in std3D.c) and says so with 'jkgl' events on the
+          // canvas: 'rebuilding' at its first frame after they came back, 'back'
+          // once it has drawn a frame, 'failed' if it couldn't make them. The box
+          // with Reload (not alert(), which held up the whole tab and a host's match
+          // with it) comes only when they don't come back within GL_BACK_MS, the
+          // engine hasn't drawn GL_DRAW_MS after its first frame with them, it
+          // couldn't make them, or they were taken GL_LOSSES_MAX times in
+          // GL_LOSSES_MS (a driver that keeps failing).
+          var GL_BACK_MS = 30000, GL_DRAW_MS = 10000, GL_LOSSES_MAX = 3, GL_LOSSES_MS = 120000;
+          // glBoxed: the box below was shown since the graphics were last drawn.
+          var glLosses = [], glTimer = 0, glNote = null, glBoxed = false;
+          function glNoteShow(on) {
+            if (on && !glNote) {
+              glNote = document.createElement('div');
+              glNote.className = 'slow-note';
+              glNote.setAttribute('role', 'status');
+              glNote.innerHTML = '<p><b>The graphics stopped for a moment.</b> Getting them back...</p>';
+              document.body.appendChild(glNote);
+            }
+            if (glNote) glNote.hidden = !on;
+            // One note at a time, in the same place: frame rates say nothing while the graphics are away.
+            if (on) document.querySelectorAll('.slow-note').forEach(function(n) { if (n !== glNote) n.hidden = true; });
+          }
+          function glGiveUp(why, text) {
+            clearTimeout(glTimer);
+            glNoteShow(false);
+            console.warn('Graphics: ' + why);
+            // The game stopped: its box with Reload says so, and stays.
+            if (typeof engineProblem !== 'undefined' && engineProblem) return;
+            // Otherwise the box comes every time, also after an earlier one was shown and hidden (a 4th
+            // loss, or 30 s without them after it); if it's still up, showProblem just changes its text.
+            glBoxed = true;
+            if (typeof showProblem === 'function')
+              showProblem('The game lost its graphics', text + ' Reload the page to play again.\n\n' +
+                          'Click anywhere else to hide this.', true);
+          }
+          canvas.addEventListener('webglcontextlost', function(e) {
             e.preventDefault();
             console.warn('Graphics: the browser took the WebGL context away');
-            if (typeof showProblem === 'function') {
-              showProblem('The game lost its graphics',
-                          "The browser took the game's 3D graphics away. That happens after a graphics driver " +
-                          'crash, reset or update, or when the computer runs low on memory, and the game ' +
-                          "can't get them back by itself. Reload the page to play again.\n\nClick anywhere else " +
-                          'to hide this.', true);
+            // Black until the engine has drawn again (Chromium shows a lost canvas white)
+            document.documentElement.classList.add('gl-lost');
+            clearTimeout(glTimer);
+            var now = Date.now();
+            glLosses = glLosses.filter(function(t) { return now - t < GL_LOSSES_MS; }).concat(now);
+            if (glLosses.length >= GL_LOSSES_MAX)
+              return glGiveUp('taken away ' + glLosses.length + ' times in ' + GL_LOSSES_MS / 60000 + ' minutes',
+                              "The browser took the game's 3D graphics away " + glLosses.length + ' times in ' +
+                              GL_LOSSES_MS / 60000 + ' minutes. That happens when a graphics driver keeps crashing ' +
+                              'or resetting, or when the computer keeps running low on memory.');
+            glNoteShow(true);
+            glTimer = setTimeout(function() {
+              glGiveUp('not given back in ' + GL_BACK_MS / 1000 + ' s',
+                       "The browser took the game's 3D graphics away and hasn't given them back. That happens " +
+                       'after a graphics driver crash, reset or update, or when the computer runs low on memory.');
+            }, GL_BACK_MS);
+          }, false);
+          canvas.addEventListener('webglcontextrestored', function() {
+            console.warn('Graphics: the browser gave the WebGL context back');
+            clearTimeout(glTimer);
+            // An engine from before this can't make them again (it has no Module.jkGl)
+            if (!Module.jkGl)
+              glGiveUp('this engine can\'t make them again',
+                       "The browser took the game's 3D graphics away, and this version of the game can't get " +
+                       'them back by itself.');
+            // Otherwise GL_DRAW_MS starts at the engine's first frame, which a level load can hold up.
+          }, false);
+          canvas.addEventListener('jkgl', function(e) {
+            if (e.detail === 'rebuilding') {
+              clearTimeout(glTimer);
+              glTimer = setTimeout(function() {
+                glGiveUp('not drawn ' + GL_DRAW_MS / 1000 + ' s after they came back',
+                         "The browser gave the game's 3D graphics back, but the game didn't draw with them again.");
+              }, GL_DRAW_MS);
+            } else if (e.detail === 'failed') {
+              glGiveUp('the engine could not make them again',
+                       "The browser gave the game's 3D graphics back, but the game couldn't set them up again.");
+            } else if (e.detail === 'back') {
+              clearTimeout(glTimer);
+              document.documentElement.classList.remove('gl-lost');
+              glNoteShow(false);
+              console.log('Graphics: back');
+              // Back behind a box of ours: the game plays on, so it can go fullscreen again
+              // (gameLost, set by showProblem), unless the game itself stopped.
+              if (glBoxed) {
+                glBoxed = false;
+                if (typeof gameLost !== 'undefined' && !(typeof engineProblem !== 'undefined' && engineProblem))
+                  gameLost = false;
+              }
             }
           }, false);
 
@@ -7405,7 +7492,7 @@
       function playFullscreen() {
         if (!fullscreenOption.checked || document.fullscreenElement || !document.fullscreenEnabled) return;
         if (!document.getElementById('zone').hidden || document.querySelector('dialog[open]')) return;
-        if (gameLost) return;  // the game stopped or lost its graphics: only a reload helps
+        if (gameLost) return;  // the game stopped, or lost its graphics and they aren't back: only a reload helps
         // Chrome and Edge give these keys to the page this way, only in
         // fullscreen the page asked for: Esc, and W, T and N with any of Ctrl,
         // Shift and Alt, so Ctrl+W (Fire and Forward by default), Ctrl+T and
@@ -8291,6 +8378,13 @@
           if (!frames || document.hidden) return;
           var t = frameTimes(frames, seen), stats = frameStats(t.times, t.work);
           seen = frames.count;
+          // While the browser has taken the graphics away (gl-lost, see Lost graphics) the
+          // frames draw nothing, so their rate says nothing, and the note "The graphics
+          // stopped for a moment" has the place this one would take: they start over.
+          if (document.documentElement.classList.contains('gl-lost')) {
+            streak = 0;
+            return;
+          }
           // Mostly in a menu, or the tab was hidden: no say either way.
           if (!stats || stats.seconds < SLOW_CHECK_MS / 2000) return;
           var settings = displaySettings();

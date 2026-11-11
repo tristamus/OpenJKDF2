@@ -91,6 +91,9 @@ int stdDisplay_DDrawGdiSurfaceFlip();
 int stdDisplay_ddraw_waitforvblank();
 int stdDisplay_ClearRect(tVBuffer *buf, int fillColor, rdRect *rect);
 MATH_FUNC int stdDisplay_SetMode(unsigned int modeIdx, const void *palette, int paged);
+#ifdef ARCH_WASM
+void stdDisplay_RecreateGLTextures(void); // Added
+#endif
 int stdDisplay_FindClosestMode(render_pair *a1, struct StdVideoMode *render_surface, unsigned int numModes);
 int stdDisplay_FindClosestDevice(void* a);
 int stdDisplay_Open(int a); // MOTS altered (added a video mode)

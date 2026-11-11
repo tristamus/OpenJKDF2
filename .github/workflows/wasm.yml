@@ -54,6 +54,14 @@ jobs:
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           node packaging/wasm/test/jspi-check.mjs build_emcc_jspi --reach "$(em-config BINARYEN_ROOT)/bin/wasm-dis"
+      # Both engines: what getting the graphics back after a lost WebGL
+      # context (std3D_wasmGlPoll in std3D.c) takes from Emscripten's own GL
+      # code, which isn't its public API: the GL tables and string caches,
+      # initExtensions and its initExtensionsDone flag, getNewId and
+      # Module.ctx (glrestore-check.mjs). A rename in a later Emscripten would
+      # otherwise only show when a player's graphics are lost.
+      - name: Check the engines' lost-graphics recovery against Emscripten's GL code
+        run: node packaging/wasm/test/glrestore-check.mjs build_emcc build_emcc_jspi
       # Map downloads for joiners, with made-up GOBs (no game files).
       - name: Test map downloads
         run: node packaging/wasm/test/maps-test.mjs
@@ -81,6 +89,14 @@ jobs:
       # box with Reload, with made-up errors from the engine and elsewhere.
       - name: Test the engine's error box
         run: node packaging/wasm/test/errors-test.mjs
+      # The browser taking the graphics away and giving them back: the note, the
+      # timers and the box with Reload, with a made-up canvas and engine events.
+      - name: Test losing the graphics
+        run: node packaging/wasm/test/glloss-test.mjs
+      # What the game reports to the lobby for the match record, and the latest
+      # matches on the page, with a made-up socket and clock.
+      - name: Test the match record
+        run: node packaging/wasm/test/ladder-test.mjs
       # The engine downloading and compiling from when the player asks to
       # play, and what happens when that fails, with tiny made-up wasm.
       - name: Test getting the engine ready early

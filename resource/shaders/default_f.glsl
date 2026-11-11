@@ -2,41 +2,6 @@
 #define HAS_TEXTUREGATHER
 #endif
 
-#ifdef HAS_TEXTUREGATHER
-vec4 impl_textureGather(sampler2D tex, vec2 uv)
-{
-    return textureGather(tex, uv);
-}
-#else
-float modI(float a,float b) {
-    float m=a-floor((a+0.5)/b)*b;
-    return floor(m+0.5);
-}
-
-vec4 impl_textureGather(sampler2D tex, vec2 uv)
-{
-    ivec2 idims = textureSize(tex,0) - ivec2(1, 1);
-    vec2 dims = vec2(idims);
-
-    ivec2 base = ivec2(dims*uv);
-    if (base.x < 0) {
-        //base.x = -base.x;
-    }
-    if (base.y < 0) {
-        //base.y = -base.y;
-    }
-
-    base.x = int(modI(float(base.x), dims.x));
-    base.y = int(modI(float(base.y), dims.y));
-
-    return vec4(texelFetch(tex,base+ivec2(0,1),0).x,
-        texelFetch(tex,base+ivec2(1,1),0).x,
-        texelFetch(tex,base+ivec2(1,0),0).x,
-        texelFetch(tex,base+ivec2(0,0),0).x
-    );
-}
-#endif
-
 #define LIGHT_DIVISOR (6.0)
 #define TEX_MODE_TEST 0
 #define TEX_MODE_WORLDPAL 1
@@ -145,7 +110,10 @@ vec2 parallax_mapping(vec2 tc, vec3 vp_normal, vec3 adjusted_coords)
 }
 
 #ifdef CAN_BILINEAR_FILTER
-vec4 bilinear_paletted()
+// The palette indices of the 2x2 texels that bilinear filtering blends at f_uv, in
+// textureGather's order: x = (i0,j1), y = (i1,j1), z = (i1,j0), w = (i0,j0), and the
+// filter weights. Both filtered functions below use them, so they're read once.
+vec4 gather_indices(out vec2 filterWeight)
 {
     // Get texture size in pixels:
     vec2 colorTextureSize = vec2(textureSize(tex, 0));
@@ -154,11 +122,27 @@ vec4 bilinear_paletted()
     vec2 pixCoord = f_uv * colorTextureSize - 0.5f;    // First pixel goes from -0.5 to +0.4999 (0.0 is center) last pixel goes from (size - 1.5) to (size - 0.5000001)
     vec2 originPixCoord = floor(pixCoord);              // Pixel index coordinates of bottom left pixel of set of 4 we will be blending
 
+    filterWeight = pixCoord - originPixCoord;
+
+#ifdef HAS_TEXTUREGATHER
     // For Gather we want UV coordinates of bottom right corner of top left pixel
     vec2 gUV = (originPixCoord + 1.0f) / colorTextureSize;
+    return textureGather(tex, gUV);
+#else
+    // GLSL ES 3.00 (WebGL 2, GLES 3.0) has no textureGather, so read the four texels
+    // through the sampler at the centre of texel originPixCoord: 8-bit material textures
+    // are NEAREST and GL_REPEAT (std3D.c), so the sampler picks each texel and wraps it
+    // exactly as textureGather would, and the centre is half a texel from any edge.
+    vec2 centreUV = (originPixCoord + 0.5) / colorTextureSize;
+    return vec4(textureLodOffset(tex, centreUV, 0.0, ivec2(0, 1)).x,
+                textureLodOffset(tex, centreUV, 0.0, ivec2(1, 1)).x,
+                textureLodOffset(tex, centreUV, 0.0, ivec2(1, 0)).x,
+                textureLodOffset(tex, centreUV, 0.0, ivec2(0, 0)).x);
+#endif
+}
 
-    vec4 gIndex   = impl_textureGather(tex, gUV);
-
+vec4 bilinear_paletted(vec4 gIndex, vec2 filterWeight)
+{
     vec4 c00   = texture(worldPalette, vec2(gIndex.w, 0.5));
     vec4 c01 = texture(worldPalette, vec2(gIndex.x, 0.5));
     vec4 c11  = texture(worldPalette, vec2(gIndex.y, 0.5));
@@ -179,8 +163,6 @@ vec4 bilinear_paletted()
         }
     }
 
-    vec2 filterWeight = pixCoord - originPixCoord;
- 
     // Bi-linear mixing:
     vec4 temp0 = mix(c01, c11, filterWeight.x);
     vec4 temp1 = mix(c00, c10, filterWeight.x);
@@ -189,53 +171,20 @@ vec4 bilinear_paletted()
     return vec4(blendColor.r, blendColor.g, blendColor.b, blendColor.a);
 }
 
-vec4 bilinear_paletted_light(float index)
+vec4 bilinear_paletted_light(vec4 gIndex, vec2 filterWeight)
 {
     // Makes sure light is in a sane range
     float light = clamp(f_light, 0.0, 1.0);
 
-    // Special case for lightsabers
-    //if (index * 255.0 >= 16.0 && index * 255.0 < 17.0)
-    //    light = 0.0;
-
     // Take the fragment light, and divide by 4.0 to select for colors
     // which glow in the dark
     float light_idx = light / LIGHT_DIVISOR;
-
-    // Get texture size in pixels:
-    vec2 colorTextureSize = vec2(textureSize(tex, 0));
-
-    // Convert UV coordinates to pixel coordinates and get pixel index of top left pixel (assuming UVs are relative to top left corner of texture)
-    vec2 pixCoord = f_uv * colorTextureSize - 0.5f;    // First pixel goes from -0.5 to +0.4999 (0.0 is center) last pixel goes from (size - 1.5) to (size - 0.5000001)
-    vec2 originPixCoord = floor(pixCoord);              // Pixel index coordinates of bottom left pixel of set of 4 we will be blending
-
-    // For Gather we want UV coordinates of bottom right corner of top left pixel
-    vec2 gUV = (originPixCoord + 1.0f) / colorTextureSize;
-
-    vec4 gIndex   = impl_textureGather(tex, gUV);
 
     vec4 c00   = texture(worldPalette, vec2(texture(worldPaletteLights, vec2(gIndex.w, light_idx)).r, 0.5));
     vec4 c01 = texture(worldPalette, vec2(texture(worldPaletteLights, vec2(gIndex.x, light_idx)).r, 0.5));
     vec4 c11  = texture(worldPalette, vec2(texture(worldPaletteLights, vec2(gIndex.y, light_idx)).r, 0.5));
     vec4 c10 = texture(worldPalette, vec2(texture(worldPaletteLights, vec2(gIndex.z, light_idx)).r, 0.5));
 
-    /*if (blend_mode == D3DBLEND_SRCALPHA || blend_mode == D3DBLEND_INVSRCALPHA) {
-        if (gIndex.x == 0.0) {
-            c01.a = 0.0;
-        }
-        if (gIndex.y == 0.0) {
-            c11.a = 0.0;
-        }
-        if (gIndex.z == 0.0) {
-            c10.a = 0.0;
-        }
-        if (gIndex.w == 0.0) {
-            c00.a = 0.0;
-        }
-    }*/
-
-    vec2 filterWeight = pixCoord - originPixCoord;
- 
     // Bi-linear mixing:
     vec4 temp0 = mix(c01, c11, filterWeight.x);
     vec4 temp1 = mix(c00, c10, filterWeight.x);
@@ -312,8 +261,10 @@ void main(void)
 #ifdef CAN_BILINEAR_FILTER
     else if (tex_mode == TEX_MODE_BILINEAR)
     {
-        sampled_color = bilinear_paletted();
-        color_add = bilinear_paletted_light(index);
+        vec2 filterWeight;
+        vec4 gIndex = gather_indices(filterWeight);
+        sampled_color = bilinear_paletted(gIndex, filterWeight);
+        color_add = bilinear_paletted_light(gIndex, filterWeight);
 
         if (sampled_color.a < 0.01) {
             discard;

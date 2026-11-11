@@ -245,6 +245,51 @@ test('the game keeps the frames the page reads, and marks the ones after a break
     assert.match(windowC, /EMSCRIPTEN_KEEPALIVE int Window_WebDisplaySetting\(int which\)/);
 });
 
+// The slow-frame timer as the page runs it, with a made-up clock, frames and page
+// (gl-lost on <html> while the browser has taken the graphics away).
+const timerCode = cut('      (function() {\n        var streak', '      // ---- ?bench in the address');
+function slowTimer() {
+    let tick = null;
+    const classes = new Set(), notes = [];
+    const document = {
+        hidden: false,
+        documentElement: { classList: { contains: c => classes.has(c) } },
+        createElement: () => ({ setAttribute() {}, appendChild() {} }),
+        body: { appendChild: n => notes.push(n) },
+    };
+    const Module = { jkFrames: frames([]) };
+    let t = 1000;
+    new Function('document', 'navigator', 'window', 'Module', 'setInterval', 'clearInterval', 'setTimeout', 'browserKind', 'glRenderer',
+        gfxCode + framesCode + timerCode)(document, { userAgent: 'Mozilla/5.0 Chrome/155.0.0.0', userAgentData: { brands: [] } }, {}, Module,
+        fn => { tick = fn; return 1; }, () => { tick = null; }, () => 0, () => 'chrome', () => '');
+    return {
+        notes, classes,
+        // 5 s of frames at fps, then the page's check
+        async run(fps) {
+            const ms = 1000 / fps;
+            for (let k = 0; k < 5 * fps; k++, t += ms) {
+                const f = Module.jkFrames, i = f.count++ % f.size;
+                f.ends[i] = t + ms - 1; f.resumes[i] = t + ms; f.joined[i] = 1;
+            }
+            if (tick) tick();
+            await new Promise(r => setTimeout(r, 0));
+        },
+    };
+}
+
+test('the slow-frame note waits while the graphics are away (P22): those frames say nothing', async () => {
+    const p = slowTimer();
+    await p.run(20); await p.run(20);
+    p.classes.add('gl-lost');               // lost: the checks start over
+    await p.run(20); await p.run(20); await p.run(20);
+    assert.equal(p.notes.length, 0);
+    p.classes.delete('gl-lost');            // back, and still slow: three checks in a row again
+    await p.run(20); await p.run(20);
+    assert.equal(p.notes.length, 0);
+    await p.run(20);
+    assert.equal(p.notes.length, 1);
+});
+
 let failed = 0;
 for (const t of tests) {
     try {
