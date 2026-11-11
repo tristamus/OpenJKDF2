@@ -74,7 +74,7 @@ test("the real answer: Coruscant, joinable, credited to nobody", () => {
     assert.equal(a.server, 'lobby.jkjunkie.com');
     assert.deepEqual(a.games, [{
         uid: 'i13e5dd93743f59055bbf297508845b2b', key: '13e5dd93743f59055bbf297508845b2b', imperial: true,
-        name: 'Coruscant', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF', mod: '', locked: false, players: 0, max: 31,
+        name: 'Coruscant', game: 'jk1', map: 'c3.jkl', title: '', episode: 'JK1CTF', mod: '', locked: false, players: 0, max: 31,
         names: [], net: 0, dedicated: true, pinned: true, listed: true, joinable: true, why: '' }]);
     assert.equal(p.imperialStop(a.games[0]), null);
     // sithmartyr asked for no credit on the card (31 Oct 2026).

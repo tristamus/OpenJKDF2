@@ -32,14 +32,14 @@ window.jkLobbyMock = (function() {
                  games: [coruscant].concat(hosted || []) };
     }
     var RELAY_HOSTED = [
-        { key: '5a1f0c9e2b7d4e8f9a3c6b0d1e2f3a4b', name: 'Kessel Run FFA', game: 'jk1', map: '01narshadda.jkl',
-          episode: 'JK1MP.gob', mod: '', locked: false, players: 2, max: 8, dedicated: false, pinned: false,
+        { key: '5a1f0c9e2b7d4e8f9a3c6b0d1e2f3a4b', name: 'Kessel Run FFA', game: 'jk1', map: 'm10.jkl',
+          episode: 'JK1MP', mod: '', locked: false, players: 2, max: 8, dedicated: false, pinned: false,
           listed: true, joinable: true, why: '' },
-        { key: '6b2e1d0f3c8e5f9a0b4d7c1e2f3a4b5c', name: 'Old school duels', game: 'jk1', map: '01narshadda.jkl',
-          episode: 'JK1MP.gob', mod: '', locked: false, players: 1, max: 4, dedicated: false, pinned: false,
+        { key: '6b2e1d0f3c8e5f9a0b4d7c1e2f3a4b5c', name: 'Old school duels', game: 'jk1', map: 'm_boss17.jkl',
+          episode: 'JK1MP', mod: '', locked: false, players: 1, max: 4, dedicated: false, pinned: false,
           listed: true, joinable: false, why: 'desktop' },
-        { key: '7c3f2e1a4d9f6a0b1c5e8d2f3a4b5c6d', name: 'Asteroid run', game: 'mots', map: 'jkm_mp.jkl',
-          episode: 'JKM_MP.goo', mod: '', locked: false, players: 2, max: 4, dedicated: false, pinned: false,
+        { key: '7c3f2e1a4d9f6a0b1c5e8d2f3a4b5c6d', name: 'Asteroid run', game: 'mots', map: 'k1.jkl',
+          episode: 'JKM_KFY', mod: '', locked: false, players: 2, max: 4, dedicated: false, pinned: false,
           listed: true, joinable: true, why: '' }
     ];
 
@@ -53,20 +53,21 @@ window.jkLobbyMock = (function() {
             status: {
                 lobby: { jk1: ['DarkJedi_7', 'Tusken_Raider', 'Qu_Rahn'], mots: ['Corran_H', 'Saber_Kyp'] },
                 games: [
-                    { id: 41, name: 'No mods dueling', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                    { id: 41, name: 'No mods dueling', game: 'jk1', map: 'm_boss17.jkl', episode: 'JK1MP.gob',
                       mod: '', locked: false, players: 2, max: 4, names: ['Kyle_K', 'MaraJade'] },
-                    { id: 44, name: 'SBX 3.1 sabers', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                    { id: 44, name: 'SBX 3.1 sabers', game: 'jk1', map: 'jhs.jkl', title: "Jedi's High School", episode: 'jhs.gob',
                       mod: 'Saber Battle X', locked: true, players: 4, max: 4, names: ['Jerec', 'Sariss', 'Yun', 'Gorc'] },
-                    { id: 45, name: 'Asteroid duels', game: 'mots', map: 'jkm_mp.jkl', episode: 'JKM_MP.goo',
+                    { id: 45, name: 'Asteroid duels', game: 'mots', map: 'mdm02_freezer.jkl', episode: 'JKM_MP.goo',
                       mod: '', locked: false, players: 1, max: 4, names: ['Dash_R'] },
-                    { id: 46, name: 'MotS FFA', game: 'mots', map: 'jkm_mp.jkl', episode: 'JKM_MP.goo',
+                    { id: 46, name: 'MotS FFA', game: 'mots', map: 'msb2_gantry.jkl', episode: 'JKM_SABER.goo',
                       mod: '', locked: false, players: 3, max: 8, names: ['Vima_D', 'Rax_J', 'Talon_K'] },
-                    { id: 47, name: 'CTF practice', game: 'jk1', map: 'ctf1.jkl', episode: 'JK1CTF.gob',
+                    { id: 47, name: 'CTF practice', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF.gob',
                       mod: '', locked: false, players: 3, max: 8, names: ['Boc', 'Maw', 'RahnJedi'] },
-                    { id: 52, name: 'Rotating maps', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                    { id: 52, name: 'Rotating maps', game: 'jk1', map: 'APG_Deathmatch_Castle.jkl', title: 'APG_DEATHMATCH_CASTLE',
+                      episode: 'APG_Deathmatch_Castle.gob',
                       mod: '', locked: false, players: 6, max: 8,
                       names: ['Katarn99', 'NightSister', 'ForceGrip', 'Rodian_Ace', 'Gran_Pilot', 'SaberStorm'] },
-                    { id: 53, name: 'newbies welcome', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
+                    { id: 53, name: 'newbies welcome', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1.gob',
                       mod: '', locked: false, players: 1, max: 2, names: ['Ewok_Assassin'] }
                 ]
             }
