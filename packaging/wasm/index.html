@@ -7058,8 +7058,7 @@
         [['Game', g.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight'],
          ['Relay', g.imperial ? 'Imperial (' + (imperialLive.server || 'Unknown') + ')' : 'OpenJKDF2'],
          g.imperial ? ['Server', g.dedicated ? 'Dedicated' : 'Hosted by a player'] : null,
-         ['Map', level || g.map || 'Unknown'], level && g.map ? ['File', g.map] : null,
-         ['Episode', episodeTitle(g) || g.episode || 'Unknown'],
+         ['Map', level || g.map || 'Unknown'], ['Episode', episodeTitle(g) || g.episode || 'Unknown'],
          ['Mod', g.mod || 'None'], ['Password', g.locked ? 'Yes' : 'No']].filter(Boolean).forEach(function(row) {
           dl.append(el('dt', null, row[0]), el('dd', null, row[1]));
         });

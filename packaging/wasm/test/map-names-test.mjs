@@ -100,9 +100,10 @@ check("the page keeps the lobby's name for a level as text, and the relay's game
     assert.equal(levelTitle(i.games[0]), 'The Challenge at Nar Shaddaa');
 });
 
-check("Info shows the name, then the file, and the episode's title; the list's Map column the name", () => {
-    assert.match(html, /\['Map', level \|\| g\.map \|\| 'Unknown'\], level && g\.map \? \['File', g\.map\] : null,/);
-    assert.match(html, /\['Episode', episodeTitle\(g\) \|\| g\.episode \|\| 'Unknown'\]/);
+check("Info shows the name and the episode's title, the list's Map column the name with the file on hover", () => {
+    assert.match(html, /\['Map', level \|\| g\.map \|\| 'Unknown'\], \['Episode', episodeTitle\(g\) \|\| g\.episode \|\| 'Unknown'\]/);
+    assert.doesNotMatch(html, /\['File',/);
+    assert.match(html, /if \(level && g\.map\) map\.title = g\.map;/);
     assert.match(html, /var map = el\('td', null, off \? '–' : level \|\| g\.map \|\| 'Unknown'\);/);
 });
 
