@@ -129,14 +129,14 @@ void sithCogFunctionThing_CreateThingLocal(sithCog *pCog)
 // MOTS added
 void sithCogFunctionThing_CreateThingAtPosMots(sithCog *pCog)
 {
-    sithCogFunctionThing_createThingAtPos_nr_Mots(pCog, 0, NULL);
+    sithCogFunctionThing_createThingAtPos_nr_Mots(pCog, 1, NULL);
 }
 
 // MOTS added
 void sithCogFunctionThing_CreateThingAtPosOwner(sithCog *pCog)
 {
     SithThing* pThingIn = sithCogExec_PopThing(pCog);
-    sithCogFunctionThing_createThingAtPos_nr_Mots(pCog, 0, pThingIn);
+    sithCogFunctionThing_createThingAtPos_nr_Mots(pCog, 1, pThingIn);
 }
 
 void sithCogFunctionThing_CreateThingAtPosNrMots(sithCog *pCog)
@@ -272,6 +272,47 @@ void sithCogFunctionThing_createThingAtPos_nr(sithCog *pCog, int idk)
     }
 }
 
+// MOTS added: "createthingatposold": the third vector is a look direction, and the local
+// player is the new thing's parent (JKM.EXE 0x553070)
+void sithCogFunctionThing_CreateThingAtPosOld(sithCog *pCog)
+{
+    SithSector *popSector;
+    SithThing *popTemplate;
+    SithThing *pThing;
+    rdVector3 offset, pos, look;
+    rdMatrix34 orient;
+
+    sithCogExec_PopVector(pCog, &look);
+    sithCogExec_PopVector(pCog, &pos);
+    popSector = sithCogExec_PopSector(pCog);
+    popTemplate = sithCogExec_PopTemplate(pCog);
+    if ( !popTemplate || !popSector )
+    {
+        sithCogExec_PushInt(pCog, -1);
+        return;
+    }
+    if (popTemplate->renderData.type == RD_THING_MODEL3)
+        offset = popTemplate->renderData.model3->insertOffset;
+    else if (popTemplate->renderData.type == RD_THING_SPRITE3)
+        offset = popTemplate->renderData.sprite3->offset;
+    else
+        rdVector_Zero3(&offset);
+
+    rdVector_Normalize3Acc(&look);
+    rdMatrix_BuildFromLook34(&orient, &look);
+    rdMatrix_TransformVector34Acc(&offset, &orient);
+    rdVector_Add3Acc(&pos, &offset);
+    pThing = sithThing_CreateThingAtPos(popTemplate, &pos, &orient, popSector, sithPlayer_g_pLocalPlayerThing);
+    if ( !pThing )
+    {
+        sithCogExec_PushInt(pCog, -1);
+        return;
+    }
+    if ( COG_SHOULD_SYNC(pCog) )
+        sithDSSThing_CreateThing(popTemplate, pThing, 0, popSector, &pos, &look, 255, 1);
+    sithCogExec_PushInt(pCog, pThing->idx);
+}
+
 void sithCogFunctionThing_DamageThing(sithCog *pCog)
 {
     SithThing* pThing = sithCogExec_PopThing(pCog);
@@ -283,7 +324,7 @@ void sithCogFunctionThing_DamageThing(sithCog *pCog)
     {
         if ( !pThing )
             pThing = pThing2;
-        if ( COG_SHOULD_SYNC(pCog) )
+        if ( COG_SHOULD_SYNC(pCog) && sithNet_isServer )
         {
             sithDSSThing_DamageThing(pThing2, pThing, a5, a4, -1, 1);
         }
@@ -365,10 +406,10 @@ void sithCogFunctionThing_JumpToFrame(sithCog *pCog)
 
 void sithCogFunctionThing_MoveToFrame(sithCog *pCog)
 {
-    cog_flex_t speed = sithCogExec_PopFlex(pCog) * 0.1;
+    cog_flex_t speed = sithCogExec_PopFlex(pCog) * (cog_flex_t)0.1;
     int frame = sithCogExec_PopInt(pCog);
     SithThing* pThing = sithCogExec_PopThing(pCog);
-    if ( pThing && pThing->moveType == SITH_MT_PATH && pThing->trackParams.loadedFrames > frame )
+    if ( pThing && pThing->moveType == SITH_MT_PATH && (uint32_t)pThing->trackParams.loadedFrames > (uint32_t)frame )
     {
         if ( speed == 0.0 )
             speed = 0.5;
@@ -382,10 +423,10 @@ void sithCogFunctionThing_MoveToFrame(sithCog *pCog)
 
 void sithCogFunctionThing_SkipToFrame(sithCog *pCog)
 {
-    cog_flex_t speed = sithCogExec_PopFlex(pCog) * 0.1;
+    cog_flex_t speed = sithCogExec_PopFlex(pCog) * (cog_flex_t)0.1;
     int frame = sithCogExec_PopInt(pCog);
     SithThing* pThing = sithCogExec_PopThing(pCog);
-    if ( pThing && pThing->moveType == SITH_MT_PATH && pThing->trackParams.loadedFrames > frame )
+    if ( pThing && pThing->moveType == SITH_MT_PATH && (uint32_t)pThing->trackParams.loadedFrames > (uint32_t)frame )
     {
         if ( speed == 0.0 )
             speed = 0.5;
@@ -727,7 +768,7 @@ void sithCogFunctionThing_SetThingPosEx(sithCog *pCog)
     SithSector* pSector = sithCogExec_PopSector(pCog);
     sithCogExec_PopVector(pCog, &poppedVec);
     SithThing* pThing = sithCogExec_PopThing(pCog);
-    if (pSector || (pSector == (SithSector *)-1)) {
+    if (!pSector || (pSector == (SithSector *)-1)) {
         pSector = sithSector_FindSectorAtPos(sithWorld_g_pCurrentWorld, &poppedVec);
     }
     if (pThing)
@@ -1046,7 +1087,13 @@ void sithCogFunctionThing_PlayMode(sithCog *pCog)
 {
     int mode = sithCogExec_PopInt(pCog);
     SithThing* pThing = sithCogExec_PopThing(pCog);
-    if ( mode < 43 && pThing && pThing->pPuppetClass && pThing->renderData.puppet)
+    // MOTS added: nothing for the local player once dead
+    if ( Main_bMotsCompat && pThing && pThing == sithPlayer_g_pLocalPlayerThing && pThing->actorParams.health < 1.0 )
+    {
+        sithCogExec_PushInt(pCog, -1);
+        return;
+    }
+    if ( mode < SITHPUPPET_NUMANIMS && pThing && pThing->pPuppetClass && pThing->renderData.puppet)
     {
         int track = sithPuppet_PlayMode(pThing, mode, 0);
         if (track >= 0)
@@ -1056,6 +1103,10 @@ void sithCogFunctionThing_PlayMode(sithCog *pCog)
             {
                 sithDSSThing_PlayKeyMode(pThing, mode, pThing->renderData.puppet->aTracks[track].field_130, -1, 255);
             }
+        }
+        else
+        {
+            sithCogExec_PushInt(pCog, -1);
         }
     }
     else
@@ -1152,7 +1203,12 @@ void sithCogFunctionThing_SetThingModel(sithCog *pCog)
         else
         {
             v5 = v4->id;
-            sithThing_SetThingModel(pThing, model);
+        }
+        // Already that model: -1 and no message
+        if ( !sithThing_SetThingModel(pThing, model) )
+        {
+            sithCogExec_PushInt(pCog, -1);
+            return;
         }
 
         sithCogExec_PushInt(pCog, v5);
@@ -1284,7 +1340,7 @@ void sithCogFunctionThing_SetCollideType(sithCog *pCog)
     int collideType = sithCogExec_PopInt(pCog);
     SithThing* pThing = sithCogExec_PopThing(pCog);
 
-    if ( pThing && collideType < 4)
+    if ( pThing && (uint32_t)collideType < 4)
     {
         pThing->collide = collideType;
 
@@ -1489,11 +1545,8 @@ void sithCogFunctionThing_GetCurInvWeapon(sithCog *pCog)
     SithThing* pThing = sithCogExec_PopThing(pCog);
     if (pThing)
     {
-        int binIdx = sithInventory_GetCurrentWeapon(pThing);
-        if (Main_bMotsCompat) {
-            binIdx = sithInventory_SelectWeaponPrior(binIdx);
-        }
-        sithCogExec_PushInt(pCog, binIdx);
+        // MotS's "getcurinvweapon2" gives the bin as it is, too
+        sithCogExec_PushInt(pCog, sithInventory_GetCurrentWeapon(pThing));
     }
     else
     {
@@ -1653,7 +1706,7 @@ void sithCogFunctionThing_GetLifeleft(sithCog *pCog)
     SithThing* pThing = sithCogExec_PopThing(pCog);
     if (pThing)
     {
-        sithCogExec_PushFlex(pCog, (flex_d_t)(unsigned int)pThing->msecLifeLeft * 0.001);
+        sithCogExec_PushFlex(pCog, (flex_d_t)(unsigned int)pThing->msecLifeLeft * 0.001f);
     }
 }
 
@@ -2399,7 +2452,7 @@ void sithCogFunctionThing_GetThingMaxVelocity(sithCog *pCog)
     {
         sithCogExec_PushFlex(pCog,pThing->physicsParams.maxVelocity);
     }
-    else 
+    else if (pThing) // nothing for no thing
     {
         sithCogExec_PushFlex(pCog,0.0);
     }
@@ -2424,7 +2477,7 @@ void sithCogFunctionThing_GetThingMaxAngularVelocity(sithCog *pCog)
     {
         sithCogExec_PushFlex(pCog,pThing->physicsParams.maxRotationVelocity);
     }
-    else 
+    else if (pThing) // nothing for no thing
     {
         sithCogExec_PushFlex(pCog,0.0);
     }
@@ -2471,7 +2524,7 @@ void sithCogFunctionThing_SetMaxHeadPitch(sithCog *pCog)
 {
     cog_flex_t val = sithCogExec_PopFlex(pCog);
     SithThing* pThing = sithCogExec_PopThing(pCog);
-    if (pThing && pThing->moveType == SITH_MT_PHYSICS) 
+    if (pThing)
     {
         sithCogExec_PushFlex(pCog, pThing->actorParams.maxHeadPitch);
         pThing->actorParams.maxHeadPitch = val;
@@ -2483,7 +2536,7 @@ void sithCogFunctionThing_SetMinHeadPitch(sithCog *pCog)
 {
     cog_flex_t val = sithCogExec_PopFlex(pCog);
     SithThing* pThing = sithCogExec_PopThing(pCog);
-    if (pThing && pThing->moveType == SITH_MT_PHYSICS) 
+    if (pThing) 
     {
         sithCogExec_PushFlex(pCog, pThing->actorParams.minHeadPitch);
         pThing->actorParams.minHeadPitch = val;
@@ -2648,7 +2701,7 @@ void sithCogFunctionThing_Startup(SithCogSymbolTable* pCog)
     if (Main_bMotsCompat) {
         sithCog_RegisterFunction(pCog, sithCogFunctionThing_CreateThingAtPosMots, "createthingatpos");
         sithCog_RegisterFunction(pCog, sithCogFunctionThing_CreateThingAtPosOwner, "createthingatposowner");
-        sithCog_RegisterFunction(pCog, sithCogFunctionThing_CreateThingAtPos, "createthingatposold");
+        sithCog_RegisterFunction(pCog, sithCogFunctionThing_CreateThingAtPosOld, "createthingatposold");
         sithCog_RegisterFunction(pCog, sithCogFunctionThing_CreateThingAtPosNrMots, "createthingatposnr");
     }
     else {

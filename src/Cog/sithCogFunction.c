@@ -382,7 +382,7 @@ void sithCogFunction_SetTimerEx(sithCog *pCog)
     params.timerIdx = sithCogExec_PopInt(pCog);
     params.idx = pCog->idx;
     cog_flex_t a1a = sithCogExec_PopFlex(pCog) * 1000.0;
-    int timerMs = (signed int)a1a;
+    int timerMs = (int)floorf(a1a);
     if ( timerMs >= 0 ) {
         sithEvent_CreateEvent(4, &params, timerMs);
     }
@@ -534,7 +534,7 @@ void sithCogFunction_SendMessage(sithCog *pCog)
     int msgId = sithCogExec_PopInt(pCog);
     sithCog* cog = sithCogExec_PopCog(pCog);
 
-    if (cog && msgId >= 0 && msgId < SITH_MESSAGE_MAX)
+    if (cog && msgId >= 0 && msgId < (Main_bMotsCompat ? SITH_MESSAGE_ENTERBUBBLE : SITH_MESSAGE_MAX))
         sithCog_SendMessage(cog, msgId, SENDERTYPE_COG, pCog->idx, pCog->sourceType, pCog->sourceIdx, 0);
 }
 
@@ -547,7 +547,7 @@ void sithCogFunction_SendMessageEx(struct sithCog *pCog)
     int msgId = sithCogExec_PopInt(pCog);
     sithCog* cog = sithCogExec_PopCog(pCog);
 
-    if (cog && msgId >= 0 && msgId < SITH_MESSAGE_MAX)
+    if (cog && msgId >= 0 && msgId < (Main_bMotsCompat ? SITH_MESSAGE_ENTERBUBBLE : SITH_MESSAGE_MAX))
     {
         cog_flex_t flexRet = sithCog_SendMessageEx(cog, msgId, SENDERTYPE_COG, pCog->idx, pCog->sourceType, pCog->sourceIdx, 0, param0, param1, param2, param3);
         sithCogExec_PushFlex(pCog, flexRet);
@@ -650,7 +650,7 @@ void sithCogFunction_BitClear(sithCog *pCog)
 
 void sithCogFunction_GetLevelTime(sithCog *pCog)
 {
-    sithCogExec_PushFlex(pCog, sithTime_g_msecGameTime * 0.001);
+    sithCogExec_PushFlex(pCog, (flex_d_t)sithTime_g_msecGameTime * (flex_d_t)0.001f);
 }
 
 void sithCogFunction_GetThingCount(sithCog *pCog)
@@ -821,7 +821,7 @@ void sithCogFunction_SetCameraFocus(sithCog *pCog)
 
 #ifdef QOL_IMPROVEMENTS
     // Droidworks tmp
-    if (camIdx == 7)
+    if (Main_bDwCompat && camIdx == 7)
         camIdx = 0;
 #endif
 
@@ -841,7 +841,7 @@ void sithCogFunction_GetPrimaryFocus(sithCog *pCog)
 
 #ifdef QOL_IMPROVEMENTS
     // Droidworks tmp
-    if (camIdx == 7)
+    if (Main_bDwCompat && camIdx == 7)
         camIdx = 0;
 #endif
 
@@ -860,7 +860,7 @@ void sithCogFunction_GetSecondaryFocus(sithCog *pCog)
     
 #ifdef QOL_IMPROVEMENTS
     // Droidworks tmp
-    if (camIdx == 7)
+    if (Main_bDwCompat && camIdx == 7)
         camIdx = 0;
 #endif
     
@@ -1346,7 +1346,7 @@ void sithCogFunction_SetCurWeapon(sithCog *pCog)
     int binIdx = sithCogExec_PopInt(pCog);
     SithThing* player = sithCogExec_PopThing(pCog);
 
-    if (Main_bMotsCompat && binIdx < SITHBIN_ENERGY) {
+    if (Main_bMotsCompat && (uint32_t)binIdx < SITHBIN_ENERGY) {
         binIdx = sithInventory_SelectWeaponFollowing(binIdx);
     }
 
@@ -1498,7 +1498,7 @@ void sithCogFunction_SetTeamScore(sithCog *pCog)
 
 void sithCogFunction_GetTimeLimit(sithCog *pCog)
 {
-    cog_flex_t a2 = (flex_d_t)(unsigned int)sithNet_multiplayer_timelimit * 0.000016666667;
+    cog_flex_t a2 = (flex_d_t)(unsigned int)sithNet_multiplayer_timelimit * 0.000016666667f;
     sithCogExec_PushFlex(pCog, a2);
 }
 
@@ -1555,14 +1555,14 @@ void sithCogFunction_SetCameraFocii(sithCog *pCog)
 // MOTS added
 void sithCogFunction_Pow(sithCog *pCog)
 {
-    cog_flex_t fVar2 = sithCogExec_PopFlex(pCog);
-    cog_flex_t fVar3 = sithCogExec_PopFlex(pCog);
+    cog_flex_t fVar2 = sithCogExec_PopFlex(pCog); // exponent
+    cog_flex_t fVar3 = sithCogExec_PopFlex(pCog); // base
     if ((fVar2 == 0.0) && (fVar3 == 0.0)) {
         SITHLOG_ERROR("Cog %s: 0 to the 0 power is undefined\n", pCog->aName); // Added: J3D log
         sithCogExec_PushFlex(pCog,0.0);
         return;
     }
-    sithCogExec_PushFlex(pCog,stdMath_FlexPower(fVar2, fVar3)); // TODO verify
+    sithCogExec_PushFlex(pCog, (cog_flex_t)pow((flex_d_t)fVar3, (flex_d_t)fVar2));
     return;
 }
 
