@@ -6662,10 +6662,13 @@
       // A status looks like:
       //   { online: 8, lobby: ['DarkJedi_7', 'Dash_R'],
       //     byGame: { jk1: { online: 3, lobby: ['DarkJedi_7'] }, mots: { online: 5, lobby: ['Dash_R'] } },
-      //     games: [{ id: 3, name: 'No mods dueling', game: 'jk1', map: '01narshadda.jkl',
+      //     games: [{ id: 3, name: 'No mods dueling', game: 'jk1', map: 'm10.jkl', title: 'Canyon Oasis',
       //               episode: 'JK1MP.gob', mod: '', locked: false, players: 2, max: 4,
       //               names: ['Kyle_K', 'MaraJade'], net: 0 }] }
-      // id is the lobby's room number, names start with the host's, online
+      // id is the lobby's room number, title the level's name as the host's
+      // game shows it (there once the host's game has reported the level to
+      // the lobby's match record; levelTitle names the retail ones before
+      // that), names start with the host's, online
       // counts everyone with the game running, in a game or not, and net is
       // the netcode the game's host speaks. Names are typed by players, so
       // they only ever go into the page as text. A lobby that keeps a record
@@ -6716,7 +6719,7 @@
           return g && typeof g === 'object';
         }).map(function(g) {
           return { id: num(g.id), name: str(g.name, 32), game: g.game === 'mots' ? 'mots' : 'jk1',
-                   map: str(g.map, 64), episode: str(g.episode, 64), mod: str(g.mod, 64),
+                   map: str(g.map, 64), title: str(g.title, 48), episode: str(g.episode, 64), mod: str(g.mod, 64),
                    locked: !!g.locked, players: num(g.players), max: num(g.max), names: names(g.names),
                    net: num(g.net) };
         });
@@ -6790,7 +6793,7 @@
           var joinable = !!g.joinable && listed && !has(IMPERIAL_STATE, g.why);
           var pinned = !!g.pinned, dedicated = !!g.dedicated;
           return { uid: 'i' + (key || 'pin' + i), key: key, imperial: true, name: str(g.name, 32),
-                   game: g.game === 'mots' ? 'mots' : 'jk1', map: str(g.map, 64), episode: str(g.episode, 64),
+                   game: g.game === 'mots' ? 'mots' : 'jk1', map: str(g.map, 64), title: '', episode: str(g.episode, 64),
                    mod: str(g.mod, 64), locked: !!g.locked, players: listed ? num(g.players) : 0,
                    max: listed ? num(g.max) : 0, names: [], net: NETCODE, dedicated: dedicated, pinned: pinned,
                    listed: listed, joinable: joinable,
@@ -6918,6 +6921,83 @@
 
       function gameNumber(i) { return 'Game ' + (i + 1); }
 
+      // The retail episodes' titles and their levels' names, as the games
+      // have them: the first line of each episode's episode.jk, and the
+      // "Names of Levels" in its misc/cogstrings.uni (the key there is the
+      // level's file without .jkl, in capitals), read from the Steam copies of
+      // JK1MP.GOB, JK1CTF.GOB, JK1.GOB, JKM_MP.GOO, JKM_KFY.GOO, JKM_SABER.GOO
+      // and JKM.GOO. The host's game names its level itself (title, from the
+      // same file); these name the retail levels until it has, and in the
+      // Imperial relay's games, which only give the file. The single-player
+      // episodes are hosted as Co-op.
+      var RETAIL_LEVELS = {
+        jk1mp: { title: 'Jedi Training', levels: {
+          'm2.jkl': 'Nar Shaddaa Loading Terminal', 'm4.jkl': 'Bespin Mining Station', 'm5.jkl': 'Blades of Death',
+          'm10.jkl': 'Canyon Oasis', 'm_boss15.jkl': 'The Valley of the Jedi Tower', 'm_boss17.jkl': 'Battleground Jedi' } },
+        jk1ctf: { title: 'Jedi Capture the Flag', levels: {
+          'c1.jkl': 'The Duel', 'c2.jkl': 'The Arena of Dark and Light', 'c3.jkl': 'The Challenge at Nar Shaddaa' } },
+        jk1: { title: 'The Force Within', levels: {
+          '01narshadda.jkl': '1 - Double-Cross on Nar Shaddaa', '02narshadda.jkl': '2 - The Lost Disk',
+          '03katarn.jkl': '3 - The Return Home to Sulon', '04escapehouse.jkl': "4 - The Jedi's Lightsaber",
+          '06abarons.jkl': '5 - Barons Hed - The Fallen City', '06bbarons.jkl': '6 - Into the Dark Palace',
+          '07yun.jkl': '7 - YUN - The Dark Youth', '08escape88.jkl': '8 - Palace Escape',
+          '09fuelstation.jkl': '9 - Fuel Station Launch', '10cargo.jkl': "10 - 8t88's Reward",
+          '11gorc.jkl': '11 - The Brothers of the Sith', '12escape.jkl': '12 - Escape with the Map',
+          '14tower.jkl': '13 - The Lost Planet of the Jedi', '15maw.jkl': '14 - MAW - The Revenge',
+          '16aescapeship.jkl': '15 - The Falling Ship', '16bescapeship.jkl': '15 - Into the Darkside',
+          '17asarris.jkl': '16 - SARISS - Jedi Battleground', '17bsarris.jkl': '16 - YUN - Battle to the Death',
+          '18ascend.jkl': '17 - The Valley Tower Ascent', '19a.jkl': '18 - Descent into the Valley',
+          '19b.jkl': '19 - The Valley of the Jedi', '20aboc.jkl': '20 - BOC - The Crude',
+          '20bboc.jkl': '20 - BOC - A Nuisance', '21ajerec.jkl': '21 - JEREC - The Force Within',
+          '21bjerec.jkl': '21 - JEREC - Battle for Power' } },
+        jkm_mp: { title: 'Sith Multiplayer Duel', levels: {
+          'mdm02_freezer.jkl': 'Carbon-freeze Chamber', 'mdm03_canopy.jkl': 'Tree Canopy',
+          'mdm04_palace.jkl': 'Hutt Palace', 'mdm05_reactor.jkl': 'Reactor',
+          'mdm07_vaporator.jkl': 'Moisture Vaporator Facility', 'mdm08_cargo.jkl': 'Cargo Ship',
+          'mdm10_gantry.jkl': 'Cloud City Gantry', 'mdm12_spaceport.jkl': 'Spaceport',
+          'mdm14_throne.jkl': 'Imperial Throne Room', 'mdm15_homestead.jkl': 'Tatooine Homestead',
+          'mdm17_bespin.jkl': 'Cloud City', 'k1.jkl': 'Tibanna Mining Outpost', 'k2.jkl': 'Imperial Fortress',
+          'k3.jkl': 'Imperial Training Facility', 'k4.jkl': 'Ruins of the Sith', 'k5.jkl': 'Reactor Coolant Facility' } },
+        jkm_kfy: { title: 'Kill The Fool With The Ysalamiri', levels: {
+          'k1.jkl': 'Tibanna Mining Outpost', 'k2.jkl': 'Imperial Fortress', 'k3.jkl': 'Imperial Training Facility',
+          'k4.jkl': 'Ruins of the Sith', 'k5.jkl': 'Reactor Coolant Facility' } },
+        jkm_saber: { title: 'Sith Lightsaber Training', levels: {
+          'msb1_home.jkl': 'Tatooine Homestead', 'msb2_gantry.jkl': 'Cloud City Gantry',
+          'msb3_throne.jkl': 'Imperial Throne Room', 'msb4_k1.jkl': 'Tibanna Mining Outpost' } },
+        jkm: { title: 'Mysteries of the Sith', levels: {
+          's1l1_rebelbase.jkl': '1 - New Republic Base on Altyr 5', 's1l2_astcrust.jkl': '2 - Asteroid Crust',
+          's1l3_astcore.jkl': '3 - Asteroid Core', 's1l4_astdestruct.jkl': '4 - Self-Destruct & Escape',
+          's2l1_palace.jkl': "5 - Ka' pa the Hutt's Palace", 's2l2a_katraasii.jkl': '6 - Katraasii Space Port',
+          's2l2b_katraasii.jkl': '7 - Katraasii Space Port, Part B', 's2l4_stronghold.jkl': "8 - Takara's Stronghold",
+          's4l1_escortship.jkl': '9 - New Republic Escort Ship', 's4l2_shipyards.jkl': '10 - Orbiting Ship Yards',
+          's4l3_kaerobanibase.jkl': "11 - Kaerobani's Base", 's5l2_darkswamp.jkl': '12 - Dromund Kaas Swamp',
+          's5l3_uppersith.jkl': '13 - Sith Temple', 's5l4_lowersith.jkl': '14 - Sith Temple Catacombs' } }
+      };
+
+      // A game's retail episode in RETAIL_LEVELS, by its GOB's name with or
+      // without .gob or .goo (the Imperial relay gives it without); null for
+      // any other.
+      function retailEpisode(g) {
+        var key = String(g.episode || '').replace(/\.(gob|goo)$/i, '').toLowerCase();
+        return Object.prototype.hasOwnProperty.call(RETAIL_LEVELS, key) ? RETAIL_LEVELS[key] : null;
+      }
+
+      // The name of the level a game is on: the one its host's game gives
+      // it, else the retail level's, else '' (the page shows its file). A
+      // name that's only the file's in capitals is the game's own fallback
+      // for a level with none, so isn't one.
+      function levelTitle(g) {
+        var file = String(g.map || '').toLowerCase();
+        if (g.title && g.title.toLowerCase() !== file.replace(/\.jkl$/, '')) return g.title;
+        var ep = retailEpisode(g);
+        return ep && Object.prototype.hasOwnProperty.call(ep.levels, file) ? ep.levels[file] : '';
+      }
+
+      function episodeTitle(g) {
+        var ep = retailEpisode(g);
+        return ep ? ep.title : '';
+      }
+
       function isFull(g) { return g.max > 0 && g.players >= g.max; }
 
       // 'newer' or 'older' for a game whose host speaks another netcode than
@@ -6974,10 +7054,11 @@
         var summary = el('summary', null, 'Info');
         summary.dataset.key = 'sum-' + g.uid;
         var dl = el('dl');
+        var level = levelTitle(g);
         [['Game', g.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight'],
          ['Relay', g.imperial ? 'Imperial (' + (imperialLive.server || 'Unknown') + ')' : 'OpenJKDF2'],
          g.imperial ? ['Server', g.dedicated ? 'Dedicated' : 'Hosted by a player'] : null,
-         ['Map', g.map || 'Unknown'], ['Episode', g.episode || 'Unknown'],
+         ['Map', level || g.map || 'Unknown'], ['Episode', episodeTitle(g) || g.episode || 'Unknown'],
          ['Mod', g.mod || 'None'], ['Password', g.locked ? 'Yes' : 'No']].filter(Boolean).forEach(function(row) {
           dl.append(el('dt', null, row[0]), el('dd', null, row[1]));
         });
@@ -7119,9 +7200,12 @@
             action.append(b);
           }
           var off = g.imperial && !g.listed;
+          var level = off ? '' : levelTitle(g);
+          var map = el('td', null, off ? '–' : level || g.map || 'Unknown');
+          if (level && g.map) map.title = g.map;
           tr.append(el('td', 'num', no), name, el('td', null, g.imperial ? 'Imperial' : 'OpenJKDF2'),
                     el('td', 'num', off ? '–' : g.max ? g.players + '/' + g.max : String(g.players)),
-                    el('td', null, off ? '–' : g.map || 'Unknown'), el('td', null, off ? '–' : g.mod || 'None'),
+                    map, el('td', null, off ? '–' : g.mod || 'None'),
                     el('td', null, names.length ? names.join(', ') : g.imperial && g.players ? 'Names not shared' : '–'),
                     action);
           tbody.append(tr);
