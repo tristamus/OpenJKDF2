@@ -23,7 +23,7 @@ const code = cut('      var SHOT_GAMES', '      // ---- Your Screenshots on this
     // A worker that never says it's ready is given up on sooner here.
     .replace('SHOT_WORKER_START_MS = 5000', 'SHOT_WORKER_START_MS = 50') +
     '\nreturn { shotLevel, shotName, shotPixels, shotStore, shotSaver, zipFiles, shotImagesInWorker, shotLimits, shotSharer, shotScreenPart, ' +
-    'SHOT_FINAL_WAIT_MS, SHOT_FINAL_SPREAD_MS, SHOT_FINAL_RETRY_MS, SHOT_FINAL_TRIES, SHOT_FINAL_MS };';
+    'SHOT_FINAL_WAIT_MS, SHOT_FINAL_SPREAD_MS, SHOT_FINAL_RETRY_MS, SHOT_FINAL_TRIES, SHOT_FINAL_MS, SHOT_SHARE_RETRY_MS, SHOT_SHARE_GAP_MS };';
 
 // The page's code, with its clock set to the given times, one per new Date(),
 // and a made-up Worker (see fakeWorker).
@@ -323,10 +323,12 @@ const DAY = 24 * 60 * 60 * 1000;
 
 // A sharer over a store with the given screenshots ([key, minutes ago,
 // share]), a made-up lobby (lobby(method, url, body) gives [status, answer]
-// or throws), a clock and timers moved by hand.
+// or throws), a clock and timers moved by hand. level: when the level being
+// played began, 0 while none is. opts.store: another tab's store, shared as
+// two tabs of one browser share theirs. opts.lock: what tells the tabs apart.
 async function sharing(P, shotsIn, lobby, opts = {}) {
-    const store = P.shotStore(makeIDB());
-    const w = { now: 1_800_000_000_000, allowed: true, level: false, calls: [], changed: 0, warned: [], timers: [], random: 0.5 };
+    const store = opts.store || P.shotStore(makeIDB());
+    const w = { now: 1_800_000_000_000, allowed: true, level: 0, calls: [], changed: 0, warned: [], timers: [], random: 0.5 };
     for (const [key, minutesAgo, share, more] of shotsIn) {
         await store.add({ key, game: 'jk1', level: 'm10', time: w.now - minutesAgo * 60000, width: 1920, height: 1080, size: 9,
                           thumb: Uint8Array.of(1), ...(share ? { share } : {}), ...(more || {}) }, Uint8Array.of(0x89, minutesAgo));
@@ -342,7 +344,8 @@ async function sharing(P, shotsIn, lobby, opts = {}) {
         },
         now: () => w.now,
         allowed: () => w.allowed,
-        inLevel: () => w.level,
+        levelSince: () => w.level,
+        lock: opts.lock,
         encode: async (png, width, height, limits) => {
             if (opts.encodeFails) throw new Error('no canvas');
             return { full: 'full of ' + [...png], thumb: 'thumb', for: [width, height, limits.edge] };
@@ -482,7 +485,7 @@ test('a waiting screenshot is asked about, sent once its match is saved, and mar
     assert.deepEqual(w.take(), []);
 });
 
-test('nothing goes for a player who doesn\'t share, during a level, or once the lobby can\'t be reached', async () => {
+test('nothing goes for a player who doesn\'t share, or once the lobby can\'t be reached', async () => {
     const P = page();
     let answer = () => [200, { match: 3, secs: 1, left: 1 }];
     const { sharer, w } = await sharing(P, [['a.png', 3, 'wait'], ['b.png', 2, 'wait'], ['c.png', 1, 'wait']],
@@ -491,24 +494,15 @@ test('nothing goes for a player who doesn\'t share, during a level, or once the 
     w.allowed = false;
     await sharer.run();
     assert.deepEqual(w.take(), [], 'the box is unticked, or the player was never shown it');
+    assert.equal(w.timers.length, 0, 'and nothing is tried again for them');
     w.allowed = true;
-    // In a level nothing is sent: it waits for the level to end.
-    w.level = true;
+    // The box unticked while they go: the one on its way finishes, the rest stay.
+    answer = () => { w.allowed = false; return [200, { match: 3, secs: 1, left: 1 }]; };
     await sharer.run();
-    sharer.tick();
-    await settle();
-    assert.deepEqual(w.take(), []);
-    w.level = false;
-    // A level that begins while they go: the one on its way finishes, the rest wait.
-    answer = () => { w.level = true; return [200, { match: 3, secs: 1, left: 1 }]; };
-    sharer.tick();
-    await settle();
     assert.equal(w.take().length, 2, 'asked and sent, one picture');
     assert.deepEqual(Object.values(await w.shares()).map(v => Array.isArray(v) ? v[0] : v).sort(), ['on', 'wait', 'wait']);
-    sharer.tick();
-    await settle();
-    assert.deepEqual(w.take(), []);
-    w.level = false;
+    assert.equal(w.timers.length, 0);
+    w.allowed = true;
     // No key, the lobby away, with no room left for pictures, or answering something else: nothing more is asked this time, and all
     // of it another time.
     for (const bad of [() => [401, { error: 'key' }], () => [503, { error: 'busy' }], () => [200, { no: 'room' }], () => [404, undefined],
@@ -517,6 +511,7 @@ test('nothing goes for a player who doesn\'t share, during a level, or once the 
         answer = bad;
         await sharer.run();
         assert.equal(w.take().length, 1);
+        assert.deepEqual(w.timers.map(t => t.at - w.now), [P.SHOT_SHARE_RETRY_MS[0]], 'again in a while');
     }
     assert.deepEqual(Object.values(await w.shares()).map(v => Array.isArray(v) ? v[0] : v).sort(), ['on', 'wait', 'wait']);
     // The lobby has one already (sent before, the answer lost): marked without sending it again.
@@ -524,6 +519,218 @@ test('nothing goes for a player who doesn\'t share, during a level, or once the 
     await sharer.run();
     assert.deepEqual(w.take().map(c => c.split(' ')[0]), ['GET', 'GET']);
     assert.deepEqual(Object.values(await w.shares()).map(v => v[1]).sort(), [ID(4), ID(9), ID(9)]);
+    assert.equal(w.timers.length, 0, 'nothing waits any more');
+});
+
+test('what was taken in the level being played waits for its end, and a level before goes while the next is played', async () => {
+    const P = page();
+    let saved = false;
+    // A picture's id: how many minutes before the start it was taken, or 7 for one taken since.
+    const id = url => ID(Math.max(0, Math.round((1_800_000_000_000 - Number(/taken=(\d+)/.exec(url)[1])) / 60000)) || 7);
+    const { store, sharer, w } = await sharing(P, [['a.png', 3, 'wait'], ['b.png', 2, 'wait']],
+        (method, url) => !saved ? [200, { no: 'none', wait: true }]
+                       : method === 'GET' ? [200, { match: 3, secs: 1, left: 9 }] : [200, { id: id(url), match: 3, secs: 1, left: 8 }]);
+    sharer.limits(P.shotLimits(LIMITS));
+    const methods = () => w.take().map(c => c.split(' ')[0]);
+    // Both were taken in the level being played, which began four minutes ago: the lobby isn't asked about them, whatever happens.
+    w.level = w.now - 4 * 60000;
+    sharer.tick();
+    sharer.want();
+    sharer.tick();
+    await sharer.run();
+    assert.deepEqual(w.take(), []);
+    assert.equal(w.timers.length, 0, "nor again in a while: the level's end is what they wait for");
+    // The level ends, and its score screen shows: asked at the next tick. The match isn't saved yet, so again in a while.
+    w.level = 0;
+    sharer.tick();
+    await settle();
+    assert.deepEqual(methods(), ['GET', 'GET']);
+    assert.deepEqual(w.timers.map(t => t.at - w.now), [P.SHOT_SHARE_RETRY_MS[0]]);
+    // The next level begins before the lobby has saved the match. A picture is taken in it.
+    w.now += 3000;
+    w.level = w.now;
+    sharer.tick();
+    w.now += 4000;
+    await store.add({ key: 'next.png', game: 'jk1', level: 'm11', time: w.now, width: 1920, height: 1080, size: 9, thumb: Uint8Array.of(1),
+                      share: 'wait' }, Uint8Array.of(0x89, 7));
+    sharer.want();
+    sharer.tick();
+    await settle();
+    assert.deepEqual(w.take(), [], 'a new picture of this level is no reason to ask about the others again');
+    // The game hears the match was saved: the level before's pictures go while this one is played, with a pause between them.
+    saved = true;
+    sharer.saved();
+    await settle();
+    assert.deepEqual(methods(), ['GET', 'POST']);
+    assert.deepEqual(w.timers.map(t => t.at - w.now), [P.SHOT_SHARE_GAP_MS], 'the pause; the try that was due is off');
+    await w.pass(P.SHOT_SHARE_GAP_MS - 1);
+    await settle();
+    assert.deepEqual(w.take(), []);
+    await w.pass(1);
+    await settle();
+    assert.deepEqual(methods(), ['GET', 'POST']);
+    assert.deepEqual(await w.shares(), { 'a.png': ['on', ID(3), 3], 'b.png': ['on', ID(2), 3], 'next.png': 'wait' });
+    assert.equal(w.timers.length, 0, "this level's own waits for its end, with nothing tried meanwhile");
+    // That level ends and another begins between two ticks: seen all the same, and its picture goes.
+    w.now += 60000;
+    w.level = w.now;
+    sharer.tick();
+    await settle();
+    assert.deepEqual(methods(), ['GET', 'POST']);
+    assert.deepEqual((await w.shares())['next.png'][0], 'on');
+    // On the score screen, or in the lobby, there's no pause between pictures.
+    const lobby = await sharing(P, [['a.png', 3, 'wait'], ['b.png', 2, 'wait']], (method, url) =>
+        method === 'GET' ? [200, { match: 3, secs: 1, left: 9 }] : [200, { id: id(url), match: 3, secs: 1, left: 8 }]);
+    lobby.sharer.limits(P.shotLimits(LIMITS));
+    await lobby.sharer.run();
+    assert.equal(lobby.w.take().length, 4);
+    // A picture stored just after its level ended (taken in its last moment) is asked about at the next tick.
+    const late = await sharing(P, [['a.png', 1, 'wait']], () => [200, { no: 'none', wait: false }]);
+    late.sharer.limits(P.shotLimits(LIMITS));
+    late.sharer.tick();
+    await settle();
+    assert.deepEqual(late.w.take(), []);
+    late.sharer.want();
+    late.sharer.tick();
+    await settle();
+    assert.equal(late.w.take().length, 1);
+});
+
+test('a lobby that says "not yet" is asked again, further and further apart, and then not until something happens', async () => {
+    const P = page();
+    let answer = [200, { no: 'none', wait: true }];
+    const { sharer, w } = await sharing(P, [['a.png', 1, 'wait']], method => method === 'GET' ? answer : [200, { id: ID(1), match: 2, secs: 1, left: 1 }]);
+    sharer.limits(P.shotLimits(LIMITS));
+    await sharer.run();
+    assert.equal(w.take().length, 1);
+    assert.ok(P.SHOT_SHARE_RETRY_MS.length >= 3 && P.SHOT_SHARE_RETRY_MS.every((ms, i, all) => ms >= 5000 && (!i || ms > all[i - 1])));
+    // The lobby closes a match up to 15 s after its level ends: the tries reach well past that.
+    assert.ok(P.SHOT_SHARE_RETRY_MS.reduce((a, b) => a + b) >= 2 * 60 * 1000);
+    for (const ms of P.SHOT_SHARE_RETRY_MS) {
+        await w.pass(ms - 1);
+        await settle();
+        assert.equal(w.take().length, 0);
+        await w.pass(1);
+        await settle();
+        assert.equal(w.take().length, 1, 'after ' + ms);
+    }
+    await w.pass(60 * 60 * 1000);
+    await settle();
+    assert.deepEqual([w.take().length, w.timers.length], [0, 0], 'no more by itself');
+    // The page got the lobby's list again: once more, and that's all.
+    sharer.nudge();
+    await settle();
+    assert.deepEqual([w.take().length, w.timers.length], [1, 0]);
+    // A match was saved: asked, and the tries start over.
+    sharer.saved();
+    await settle();
+    assert.equal(w.take().length, 1);
+    assert.deepEqual(w.timers.map(t => t.at - w.now), [P.SHOT_SHARE_RETRY_MS[0]]);
+    // It goes on one of them, and nothing is asked after that.
+    answer = [200, { match: 2, secs: 1, left: 1 }];
+    await w.pass(P.SHOT_SHARE_RETRY_MS[0]);
+    await settle();
+    assert.deepEqual(w.take().map(c => c.split(' ')[0]), ['GET', 'POST']);
+    assert.deepEqual(await w.shares(), { 'a.png': ['on', ID(1), 2] });
+    await w.pass(60 * 60 * 1000);
+    await settle();
+    assert.deepEqual([w.take().length, w.timers.length], [0, 0]);
+});
+
+test("two tabs of one browser share the screenshots: one sends at a time, and neither takes the other's off the match's page", async () => {
+    const P = page();
+    // A lobby that keeps one picture for each stamp, as the real one does: sent twice, the second gets the first's id.
+    const lobbyOf = () => {
+        const have = {}, deleted = [];
+        let posts = 0;
+        const lobby = async (method, url) => {
+            if (method === 'DELETE') {
+                deleted.push(url.split('/').pop());
+                return [200, { gone: url.split('/').pop() }];
+            }
+            const taken = /taken=(\d+)/.exec(url)[1];
+            if (method === 'GET')
+                return [200, { match: 8, secs: 1, left: 5, ...(have[taken] ? { id: have[taken] } : {}) }];
+            posts++;
+            // On its way.
+            await settle();
+            have[taken] = have[taken] || ID(Object.keys(have).length + 1);
+            return [200, { id: have[taken], match: 8, secs: 1, left: 4 }];
+        };
+        return { lobby, deleted, posts: () => posts };
+    };
+    const shots = [['a.png', 3, 'wait'], ['b.png', 2, 'wait'], ['c.png', 1, 'wait']];
+    const there = { 'a.png': ['on', ID(1), 8], 'b.png': ['on', ID(2), 8], 'c.png': ['on', ID(3), 8] };
+    // In a browser without locks both tabs send the same list when the lobby tells both games their match was saved. Each finds
+    // the other's pictures marked as sent, and leaves them where they are.
+    const plain = lobbyOf();
+    const one = await sharing(P, shots, plain.lobby);
+    const two = await sharing(P, [], plain.lobby, { store: one.store });
+    one.sharer.limits(P.shotLimits(LIMITS));
+    two.sharer.limits(P.shotLimits(LIMITS));
+    one.sharer.saved();
+    two.sharer.saved();
+    for (let i = 0; i < 20; i++)
+        await settle();
+    assert.deepEqual(plain.deleted, [], 'neither undoes the other');
+    assert.deepEqual(await one.w.shares(), there);
+    assert.equal(plain.posts(), 6, 'each sent them all');
+    // The second tab starts a moment later, with a list read before the first marked them: the lobby says it has each, and the
+    // tab leaves them.
+    const stale = lobbyOf();
+    const first = await sharing(P, shots, stale.lobby);
+    first.sharer.limits(P.shotLimits(LIMITS));
+    const list = first.store.list;
+    const listed = await list();
+    await first.sharer.run();
+    const second = await sharing(P, [], stale.lobby, { store: { ...first.store, list: async () => listed.map(m => ({ ...m })) } });
+    second.sharer.limits(P.shotLimits(LIMITS));
+    first.store.list = list;
+    await second.sharer.run();
+    assert.deepEqual([stale.deleted, stale.posts()], [[], 3]);
+    assert.deepEqual(await first.w.shares(), there);
+    // With locks, only one of them sends, and the other asks again later about what's left: nothing.
+    const locked = lobbyOf();
+    let held = false;
+    const lock = async fn => {
+        if (held) return false;
+        held = true;
+        try { await fn(); } finally { held = false; }
+        return true;
+    };
+    const a = await sharing(P, shots, locked.lobby, { lock });
+    const b = await sharing(P, [], locked.lobby, { store: a.store, lock });
+    a.sharer.limits(P.shotLimits(LIMITS));
+    b.sharer.limits(P.shotLimits(LIMITS));
+    a.sharer.saved();
+    b.sharer.saved();
+    for (let i = 0; i < 20; i++)
+        await settle();
+    assert.deepEqual([locked.deleted, locked.posts()], [[], 3]);
+    assert.deepEqual(b.w.take(), [], 'the second tab asked nothing');
+    assert.deepEqual(b.w.timers.map(t => t.at - b.w.now), [P.SHOT_SHARE_RETRY_MS[0]]);
+    assert.deepEqual(await a.w.shares(), there);
+    await b.w.pass(P.SHOT_SHARE_RETRY_MS[0]);
+    await settle();
+    assert.deepEqual([b.w.take(), b.w.timers.length, locked.deleted], [[], 0, []]);
+    // A picture the other tab gave up on (the lobby refused it there) while this one got it there: its record says where it is.
+    const mixed = lobbyOf();
+    const m = await sharing(P, [['a.png', 3, 'wait']], async (method, url) => {
+        if (method === 'POST') await m.store.patch('a.png', { share: 'no' }, 'wait');
+        return mixed.lobby(method, url);
+    });
+    m.sharer.limits(P.shotLimits(LIMITS));
+    await m.sharer.run();
+    assert.deepEqual([await m.w.shares(), mixed.deleted], [{ 'a.png': ['on', ID(1), 8] }, []]);
+    // Deleted from the browser while it went: off the match's page again, as when it's kept back.
+    const gone = lobbyOf();
+    const g = await sharing(P, [['a.png', 3, 'wait']], async (method, url) => {
+        if (method === 'POST') await g.store.remove(['a.png']);
+        return gone.lobby(method, url);
+    });
+    g.sharer.limits(P.shotLimits(LIMITS));
+    await g.sharer.run();
+    assert.deepEqual([await g.w.shares(), gone.deleted], [{}, [ID(1)]]);
 });
 
 test('what the lobby has no place for stops waiting, and so does one too old to ask about', async () => {
@@ -696,6 +903,55 @@ test('the page has what the sharing fills in, and the box is in the prompt a gam
     // Told only by a game started from a prompt that showed the box, or by changing it.
     assert.match(html, /hideZone = function\(\) \{\s+matchesGameStart\(\);[^}]*?shotGameStart\(\);/);
     assert.match(glue, /function shotShareAllowed\(\) \{\s+return shotSharing\.on && shotSharing\.told && !Module\.jkLadderAnon &&/);
+});
+
+test('the page tells the sharer which level is being played, lets one tab send at a time, and asks again when it gets the list', async () => {
+    const glue = cut('      // ---- Sharing them (shotSharer above).', '      function sizeText(bytes)');
+    assert.match(glue, /levelSince: shotPlayingSince,/);
+    assert.match(glue, /setInterval\(shotShare\.tick, 5000\);/);
+    // Pictures go while a game shows now: the list behind it isn't drawn again each time.
+    assert.match(glue, /changed: function\(\) \{ if \(!document\.getElementById\('zone'\)\.hidden\) showShots\(\); \},/);
+    assert.match(html, /function hideZone\(\) \{\s+document\.getElementById\('zone'\)\.hidden = true;/);
+    // When the level began, by the clock screenshots are stamped with, from the reporter's own (ladder.js: L.on, L.lv, L.since).
+    const ladder = readFileSync(new URL('../ladder.js', import.meta.url), 'utf8');
+    for (const has of ['L.lv++;', 'L.since = now();', "return typeof performance !== 'undefined' ? performance.now() : Date.now();"])
+        assert.ok(ladder.includes(has), 'ladder.js has ' + has);
+    const since = glue.substring(glue.indexOf('      var shotPlaying = '), glue.indexOf('      var shotShare = shotSharer({'));
+    assert.ok(since.includes('function shotPlayingSince()'));
+    const clock = { date: 1_800_000_500_000, perf: 500_000.75 };
+    const Module = {};
+    const playingSince = new Function('Module', 'Date', 'performance', since + '\nreturn shotPlayingSince;')(
+        Module, { now: () => clock.date }, { now: () => clock.perf });
+    assert.equal(playingSince(), 0, 'no reporter yet');
+    Module.jkLadder = { on: false, lv: 1, since: 100_000.5 };
+    assert.equal(playingSince(), 0, 'no level is being played');
+    Module.jkLadder.on = true;
+    assert.equal(playingSince(), 1_800_000_100_000 - 1);
+    // The two clocks drift apart: the level's start stays what it was, so the sharer sees one level.
+    clock.date += 60_000;
+    clock.perf += 60_007;
+    assert.equal(playingSince(), 1_800_000_100_000 - 1);
+    Object.assign(Module.jkLadder, { lv: 2, since: clock.perf - 1000 });
+    assert.equal(playingSince(), clock.date - 1000);
+    Module.jkLadder.on = false;
+    assert.equal(playingSince(), 0);
+    // One tab at a time, by the browser's own locks where it has them: a tab that finds the lock held doesn't wait for it.
+    const lock = /lock: (typeof navigator !== 'undefined' && navigator\.locks && navigator\.locks\.request \? function\(fn\) \{[\s\S]*?\} : null),\n/.exec(glue);
+    assert.ok(lock, 'the page gives the sharer a lock');
+    const requests = [];
+    let free = true;
+    const navigator = { locks: { request: async (name, options, fn) => { requests.push([name, options]); return fn(free ? {} : null); } } };
+    const locked = new Function('navigator', 'return ' + lock[1])(navigator);
+    let ran = 0;
+    assert.equal(await locked(async () => { ran++; }), true);
+    free = false;
+    assert.equal(await locked(async () => { ran++; }), false);
+    assert.equal(ran, 1);
+    assert.deepEqual(requests[0], ['jkdf2mp-share-shots', { ifAvailable: true }]);
+    assert.equal(new Function('navigator', 'return ' + lock[1])({}), null, 'none in a browser without them');
+    // The lobby's list came: what waits is asked about, from the start the first time and once with each later list.
+    assert.match(glue, /if \(limits && !was\) shotShare\.run\(\);\s+else if \(limits\) shotShare\.nudge\(\);/);
+    assert.match(html, /Module\.jkLadderSaved = function\(id\) \{[\s\S]{0,400}?shotShare\.saved\(\);\n      \};/);
 });
 
 test("the game asks the page before it reads the final scoreboard back, and only of a score screen's own frame", () => {
