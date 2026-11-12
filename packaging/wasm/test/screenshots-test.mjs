@@ -445,8 +445,8 @@ test('a waiting screenshot is asked about, sent once its match is saved, and mar
     const { sharer, w } = await sharing(P, [['new.png', 2, 'wait'], ['old.png', 30, 'wait'], ['mine.png', 5, ''], ['full.png', 1, 'wait']],
         (method, url) => {
             const taken = Number(/taken=(\d+)/.exec(url)[1]);
-            if (taken === 1_800_000_000_000 - 60000) return [409, { error: 'full' }];
-            if (!saved) return [404, { error: 'none', wait: true }];
+            if (taken === 1_800_000_000_000 - 60000) return [200, { no: 'full' }];
+            if (!saved) return [200, { no: 'none', wait: true }];
             return method === 'GET' ? [200, { match: 12, secs: 40, left: 3 }] : [200, { id: ID(taken % 7), match: 12, secs: 40, left: 2 }];
         });
     // Nothing without the lobby's limits: it takes no pictures.
@@ -511,7 +511,7 @@ test('nothing goes for a player who doesn\'t share, during a level, or once the 
     w.level = false;
     // No key, the lobby away, with no room left for pictures, or answering something else: nothing more is asked this time, and all
     // of it another time.
-    for (const bad of [() => [401, { error: 'key' }], () => [503, { error: 'busy' }], () => [507, { error: 'room' }], () => [404, undefined],
+    for (const bad of [() => [401, { error: 'key' }], () => [503, { error: 'busy' }], () => [200, { no: 'room' }], () => [404, undefined],
                        () => [200, { match: 'x' }],
                        () => { throw new Error('offline'); }]) {
         answer = bad;
@@ -528,8 +528,9 @@ test('nothing goes for a player who doesn\'t share, during a level, or once the 
 
 test('what the lobby has no place for stops waiting, and so does one too old to ask about', async () => {
     const P = page();
-    const answers = { 1: [404, { error: 'none', wait: false }], 2: [409, { error: 'have' }], 3: [403, { error: 'hidden' }],
-                      4: [413, { error: 'big' }], 5: [415, { error: 'jpeg' }], 6: [404, { error: 'none', wait: true }] };
+    // Asked (1, 2, 3, 6), the lobby answers why not. A picture sent anyway (4, 5) is refused with a status.
+    const answers = { 1: [200, { no: 'none', wait: false }], 2: [200, { no: 'have' }], 3: [200, { no: 'hidden' }],
+                      4: [413, { error: 'big' }], 5: [415, { error: 'jpeg' }], 6: [200, { no: 'none', wait: true }] };
     const { sharer, w } = await sharing(P, [1, 2, 3, 6].map(n => [n + '.png', n, 'wait']).concat([['week.png', 8 * 24 * 60, 'wait'],
                                                                                               ['4.png', 4, 'wait'], ['5.png', 5, 'wait']]),
         (method, url) => {
@@ -541,6 +542,17 @@ test('what the lobby has no place for stops waiting, and so does one too old to 
     assert.deepEqual(await w.shares(), { '1.png': 'no', '2.png': 'no', '3.png': 'no', '4.png': 'no', '5.png': 'no', '6.png': 'wait',
                                          'week.png': 'no' });
     assert.equal(w.take().some(c => c.includes('age=' + 8 * DAY)), false, 'the old one was never asked about');
+    // A picture sent after all (asked, then the place went) is refused with a status, which says the same.
+    const late = { 1: [409, { error: 'full' }], 2: [404, { error: 'none', wait: true }], 3: [507, { error: 'room' }], 4: [403, { error: 'hidden' }] };
+    const sent = await sharing(P, [1, 2, 3, 4].map(n => [n + '.png', n, 'wait']),
+        (method, url) => method === 'POST' ? late[Number(/age=(\d+)/.exec(url)[1]) / 60000] : [200, { match: 2, secs: 1, left: 1 }]);
+    sent.sharer.limits(P.shotLimits(LIMITS));
+    await sent.sharer.run();
+    // Oldest first: 4 is refused for good, 3 finds no room and stops the round, so 2 and 1 weren't asked about.
+    assert.deepEqual(await sent.w.shares(), { '1.png': 'wait', '2.png': 'wait', '3.png': 'wait', '4.png': 'no' });
+    late[3] = [404, { error: 'none', wait: true }];
+    await sent.sharer.run();
+    assert.deepEqual(await sent.w.shares(), { '1.png': 'no', '2.png': 'wait', '3.png': 'wait', '4.png': 'no' });
     // One the page can't make into a JPEG isn't tried again either.
     const broken = await sharing(P, [['a.png', 1, 'wait']], () => [200, { match: 2, secs: 1, left: 1 }], { encodeFails: true });
     broken.sharer.limits(P.shotLimits(LIMITS));
@@ -612,7 +624,7 @@ test("the final scoreboard goes from the host at once and from the others a litt
     sharer.limits(P.shotLimits(LIMITS));
     const taken = w.now;
     // The host's: asked at once. Its match isn't saved yet, so again in a while, and at once when the game hears it is.
-    answers = [[404, { error: 'none', wait: true }], [404, { error: 'none', wait: true }], [200, { match: 4, secs: 300, left: 1 }]];
+    answers = [[200, { no: 'none', wait: true }], [200, { no: 'none', wait: true }], [200, { match: 4, secs: 300, left: 1 }]];
     sharer.takeFinal({ full: 'final', thumb: 't' }, taken, true);
     assert.equal(sharer.pendingFinal(), true);
     await w.pass(0);
@@ -629,7 +641,7 @@ test("the final scoreboard goes from the host at once and from the others a litt
     assert.deepEqual(w.take(), [], 'once');
 
     // Another game's: not before the host's has had its chance, and the lobby has one by then.
-    answers = [[409, { error: 'have' }]];
+    answers = [[200, { no: 'have' }]];
     w.random = 0.5;
     sharer.takeFinal({ full: 'final', thumb: 't' }, w.now, false);
     await w.pass(P.SHOT_FINAL_WAIT_MS + P.SHOT_FINAL_SPREAD_MS / 2 - 1);
@@ -638,7 +650,7 @@ test("the final scoreboard goes from the host at once and from the others a litt
     assert.equal(w.take().length, 1);
     assert.equal(sharer.pendingFinal(), false);
     // Refused for good (a player shown as Anonymous in it, a level its host didn't end): dropped.
-    for (const no of [[409, { error: 'anonymous' }], [404, { error: 'none', wait: false }]]) {
+    for (const no of [[200, { no: 'anonymous' }], [200, { no: 'none', wait: false }]]) {
         answers = [no];
         sharer.takeFinal({ full: 'final', thumb: 't' }, w.now, true);
         await w.pass(0);
@@ -646,7 +658,7 @@ test("the final scoreboard goes from the host at once and from the others a litt
         w.take();
     }
     // A match that's never saved: so many tries, then no more.
-    answers = Array.from({ length: 20 }, () => [404, { error: 'none', wait: true }]);
+    answers = Array.from({ length: 20 }, () => [200, { no: 'none', wait: true }]);
     sharer.takeFinal({ full: 'final', thumb: 't' }, w.now, true);
     await w.pass(P.SHOT_FINAL_RETRY_MS * (P.SHOT_FINAL_TRIES + 2));
     assert.equal(w.take().length, P.SHOT_FINAL_TRIES);
@@ -657,7 +669,7 @@ test("the final scoreboard goes from the host at once and from the others a litt
     await w.pass(P.SHOT_FINAL_WAIT_MS + P.SHOT_FINAL_SPREAD_MS);
     assert.deepEqual([w.take().length, sharer.pendingFinal()], [0, false]);
     w.allowed = true;
-    answers = [[404, { error: 'none', wait: true }]];
+    answers = [[200, { no: 'none', wait: true }]];
     sharer.takeFinal({ full: 'final', thumb: 't' }, w.now - P.SHOT_FINAL_MS - 1, true);
     await w.pass(0);
     assert.deepEqual([w.take().length, sharer.pendingFinal()], [0, false]);

@@ -3516,10 +3516,17 @@
             return typeof a.id === 'string' && /^[0-9a-f]{24}$/.test(a.id) ? { state: 'on', id: a.id, match: a.match }
                                                                            : { state: 'go', match: a.match };
           }
-          if (res.status === 404 && a.error === 'none') return { state: a.wait === true ? 'wait' : 'no' };
-          if (res.status === 409 || res.status === 413 || res.status === 415 || (res.status === 403 && a.error === 'hidden'))
-            return { state: 'no' };
-          return { state: 'stop' };
+          // Why there's no place for it: the lobby's answer when asked
+          // (no), or its refusal of a picture sent (the status and error).
+          var why = res.status === 200 && typeof a.no === 'string' ? a.no
+                  : res.status === 404 && a.error === 'none' ? 'none'
+                  : res.status === 507 ? 'room'
+                  : res.status === 409 || res.status === 413 || res.status === 415 || (res.status === 403 && a.error === 'hidden') ? 'other'
+                  : '';
+          if (why === 'none') return { state: a.wait === true ? 'wait' : 'no' };
+          // The lobby has all the pictures it keeps: it may take them later.
+          if (!why || why === 'room') return { state: 'stop' };
+          return { state: 'no' };
         }
 
         // One of the list's screenshots: where it goes, then the picture.
