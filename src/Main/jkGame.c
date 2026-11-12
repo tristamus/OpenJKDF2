@@ -153,6 +153,12 @@ EM_JS(int, jkGame_js_screenshotResult, (), {
     return Module.jkScreenshots ? Module.jkScreenshots.result() : 2;
 });
 
+// Whether the one jkGame_js_screenshotResult just said was saved also goes on
+// its match's page on the lobby, once the match is saved there.
+EM_JS(int, jkGame_js_screenshotShared, (), {
+    return Module.jkScreenshots && Module.jkScreenshots.shared && Module.jkScreenshots.shared() ? 1 : 0;
+});
+
 static int jkGame_bScreenshotQueued = 0;
 static int jkGame_numScreenshotsStoring = 0;
 
@@ -168,8 +174,12 @@ static void jkGame_UpdateScreenshots()
         if (!result)
             break;
         jkGame_numScreenshotsStoring--;
-        jkDev_DebugLog(result == 1 ? "Screenshot saved to Your Screenshots on the main page."
-                                   : "Screenshot not saved: the browser couldn't store it.");
+        if (result != 1)
+            jkDev_DebugLog("Screenshot not saved: the browser couldn't store it.");
+        else if (jkGame_js_screenshotShared())
+            jkDev_DebugLog("Screenshot saved to Your Screenshots. It also goes on this match's page.");
+        else
+            jkDev_DebugLog("Screenshot saved to Your Screenshots on the main page.");
     }
 
     // Added (P22): no frame is drawn while the browser has taken the graphics away; the

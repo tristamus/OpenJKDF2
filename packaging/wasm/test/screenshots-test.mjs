@@ -22,7 +22,7 @@ function cut(from, to) {
 const code = cut('      var SHOT_GAMES', '      // ---- Your Screenshots on this page.')
     // A worker that never says it's ready is given up on sooner here.
     .replace('SHOT_WORKER_START_MS = 5000', 'SHOT_WORKER_START_MS = 50') +
-    '\nreturn { shotLevel, shotName, shotPixels, shotStore, shotSaver, zipFiles, shotImagesInWorker, shotLimits, shotSharer, ' +
+    '\nreturn { shotLevel, shotName, shotPixels, shotStore, shotSaver, zipFiles, shotImagesInWorker, shotLimits, shotSharer, shotScreenPart, ' +
     'SHOT_FINAL_WAIT_MS, SHOT_FINAL_SPREAD_MS, SHOT_FINAL_RETRY_MS, SHOT_FINAL_TRIES, SHOT_FINAL_MS };';
 
 // The page's code, with its clock set to the given times, one per new Date(),
@@ -429,6 +429,16 @@ test("the lobby's limits are taken only as numbers that make sense", () => {
         assert.equal(shotLimits(bad), null, JSON.stringify(bad));
 });
 
+test("only the score screen goes of the final scoreboard, not the bars a wide window has beside it", () => {
+    const { shotScreenPart } = page();
+    assert.deepEqual(shotScreenPart(1920, 1080), [240, 1440]);
+    assert.deepEqual(shotScreenPart(640, 480), [0, 640]);
+    assert.deepEqual(shotScreenPart(3440, 1440), [760, 1920]);
+    assert.deepEqual(shotScreenPart(1001, 750), [0, 1000]);
+    // A window narrower than 4:3 shows less of it: what it shows.
+    assert.deepEqual(shotScreenPart(800, 800), [0, 800]);
+});
+
 test('a waiting screenshot is asked about, sent once its match is saved, and marked with where it went', async () => {
     const P = page();
     let saved = false;
@@ -672,6 +682,31 @@ test('the page has what the sharing fills in, and the box is in the prompt a gam
     // Told only by a game started from a prompt that showed the box, or by changing it.
     assert.match(html, /hideZone = function\(\) \{\s+matchesGameStart\(\);[^}]*?shotGameStart\(\);/);
     assert.match(glue, /function shotShareAllowed\(\) \{\s+return shotSharing\.on && shotSharing\.told && !Module\.jkLadderAnon &&/);
+});
+
+test("the game asks the page before it reads the final scoreboard back, and only of a score screen's own frame", () => {
+    const src = name => readFileSync(new URL('../../../src/' + name, import.meta.url), 'utf8');
+    const tally = src('Gui/jkGUIMultiTally.c'), win = src('Win95/Window.c'), game = src('Main/jkGame.c');
+    // What the engine calls is what the page has.
+    for (const call of ['Module.jkScreenshots.wantsFinal()', 'Module.jkScreenshots.saveFinal('])
+        assert.ok(tally.includes(call), 'jkGUIMultiTally.c has ' + call);
+    assert.ok(game.includes('Module.jkScreenshots.shared()'), 'jkGame.c asks whether a screenshot is shared');
+    const { shotSaver } = page();
+    const saver = shotSaver({}, async () => ({}), {});
+    for (const name of ['wantsFinal', 'saveFinal', 'shared'])
+        assert.equal(typeof saver[name], 'function');
+    // Read between the menu's frame being drawn and the browser showing it.
+    assert.match(win, /std3D_DrawMenu\(\);\n#ifdef ARCH_WASM\n\s+jkGuiMultiTally_MenuFrameDrawn\(\);[^\n]*\n#endif\n\s+std3D_EndScene\(\);/);
+    // One frame after a round of a score screen's own menu, so never a dialog's; the page is asked before the pixels are read.
+    const drawn = tally.substring(tally.indexOf('void jkGuiMultiTally_MenuFrameDrawn(void)'), tally.indexOf('static jkGuiElement jkGuiMultiTally_buttons['));
+    const order = ['jkGuiMultiTally_bPictureDue = 0;', 'std3D_WasmFrameDrawn()', 'jkGuiMultiTally_pictureRounds = -1;',
+                   'jkGuiMultiTally_js_wantsPicture()', 'std3D_ReadWindowRGBA(', 'jkGuiMultiTally_js_takePicture('].map(t => drawn.indexOf(t));
+    assert.ok(order.every((at, i) => at > 0 && (!i || at > order[i - 1])), 'in that order: ' + order);
+    assert.match(tally, /void jkGuiMultiTally_sub_4188B0\(jkGuiMenu \*pMenu\)\n\{[^}]*?jkGuiMultiTally_PictureRound\(\);/);
+    // The page wants one only of a level that ended as a level does, in a match the lobby was told of, once.
+    const glue = cut('      // ---- Sharing them (shotSharer above).', '      function sizeText(bytes)');
+    assert.match(glue, /function shotWantsFinal\(\) \{[^}]*shotShareAllowed\(\) && ended && !ended\.left && ended\.told && !ended\.shot &&/);
+    assert.match(glue, /function shotFinal\(rgba, w, h\) \{[^}]*ended\.shot = 1;/);
 });
 
 let failed = 0;

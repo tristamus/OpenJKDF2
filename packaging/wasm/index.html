@@ -3480,6 +3480,14 @@
         return l;
       }
 
+      // The game's score screen is a 4:3 picture in the middle of the
+      // window: the part of a window w wide and h high that it fills
+      // ([x, width]), which is all that goes of the final scoreboard.
+      function shotScreenPart(w, h) {
+        var width = Math.min(w, Math.round(h * 4 / 3));
+        return [Math.floor((w - width) / 2), width];
+      }
+
       function shotSharer(d) {
         var limits = null;
         var busy = false, wanted = false;
@@ -3841,19 +3849,30 @@
       function shotWantsFinal() {
         var L = Module.jkLadder;
         var ended = L && L.ended;
-        return !!(shotShare.limits() && shotShareAllowed() && ended && !ended.left && ended.told &&
+        return !!(shotShare.limits() && shotShareAllowed() && ended && !ended.left && ended.told && !ended.shot &&
                   performance.now() - ended.at < 60000);
       }
 
       function shotFinal(rgba, w, h) {
         var taken = Date.now();
-        var host = !!Module.jkLadder.ended.host;
+        var ended = Module.jkLadder.ended;
+        var host = !!ended.host;
+        // One of a level.
+        ended.shot = 1;
         var limits = shotShare.limits();
-        var canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext('2d').putImageData(new ImageData(shotPixels(rgba, w, h), w, h), 0, 0);
-        shotJpegs(canvas, w, h, limits).then(function(images) {
+        var whole = document.createElement('canvas');
+        whole.width = w;
+        whole.height = h;
+        whole.getContext('2d').putImageData(new ImageData(shotPixels(rgba, w, h), w, h), 0, 0);
+        var part = shotScreenPart(w, h);
+        var canvas = whole;
+        if (part[1] < w) {
+          canvas = document.createElement('canvas');
+          canvas.width = part[1];
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(whole, part[0], 0, part[1], h, 0, 0, part[1], h);
+        }
+        shotJpegs(canvas, canvas.width, h, limits).then(function(images) {
           shotShare.takeFinal(images, taken, host);
         }, function(err) {
           console.warn('OpenJKDF2: the final scoreboard was not made into a picture (' + err + ')');

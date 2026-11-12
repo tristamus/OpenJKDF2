@@ -471,6 +471,37 @@ test('a page closing in a match says it left', () => {
     assert.equal(g.sent.length, 0, 'once');
 });
 
+test('how the last level ended is there for the page until the next begins', () => {
+    // The page takes the game's picture of the final scoreboard only of a
+    // level that ended as a level does, in a match the lobby was told of.
+    const g = makeGame();
+    assert.equal(g.L.ended, null);
+    start(g, { host: true });
+    g.world.run(4000);
+    assert.equal(g.L.ended, null);
+    g.L.end(false);
+    assert.deepEqual(g.L.ended, { at: g.world.now(), left: false, told: true, host: true });
+    start(g);
+    assert.equal(g.L.ended, null, 'the next level began');
+    g.world.run(1000);
+    g.L.end(true);
+    assert.deepEqual(g.L.ended, { at: g.world.now(), left: true, told: true, host: false });
+    g.L.end(false);
+    assert.equal(g.L.ended.left, true, 'no level to end');
+    // A lobby that keeps no record was told nothing.
+    const quiet = makeGame({ can: ['links'] });
+    start(quiet, { host: true });
+    quiet.world.run(4000);
+    quiet.L.end(false);
+    assert.equal(quiet.L.ended.told, false);
+    // The page closing is the player leaving.
+    const closed = makeGame();
+    start(closed);
+    closed.world.run(4000);
+    closed.listeners.pagehide();
+    assert.equal(closed.L.ended.left, true);
+});
+
 test("the lobby's word that a match was saved reaches the page", () => {
     const g = makeGame();
     const saved = [];
