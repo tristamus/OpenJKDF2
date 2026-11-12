@@ -7,6 +7,7 @@
 #include "Main/jkGame.h"
 #include "Gui/jkGUI.h"
 #include "Gui/jkGUIRend.h"
+#include "Gui/jkGUIMultiTally.h"
 #include "Win95/stdDisplay.h"
 #include "World/jkPlayer.h"
 #include "Platform/stdControl.h"
@@ -1881,6 +1882,9 @@ void Window_SdlUpdate()
             jkQuakeConsole_Render();
 #endif
             std3D_DrawMenu();
+#ifdef ARCH_WASM
+            jkGuiMultiTally_MenuFrameDrawn(); // Added: the picture of the final scoreboard, before the browser shows the frame and clears it
+#endif
             std3D_EndScene();
 #ifdef ARCH_WASM
             if (!bHiddenInMatch) // Added: the swap only yields, with a timer; this frame waits below

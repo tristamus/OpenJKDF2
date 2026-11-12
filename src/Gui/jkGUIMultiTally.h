@@ -18,6 +18,11 @@ void jkGuiMultiTally_Shutdown();
 int jkGuiMultiTally_ShowTeamScores(int a1);
 int jkGuiMultiTally_SortTeamScore(const void* a, const void* b);
 void jkGuiMultiTally_sub_4188B0(jkGuiMenu *pMenu);
+#ifdef ARCH_WASM
+// Added: a menu's frame is drawn and not shown yet; the picture of the final
+// scoreboard is read from it when one is due
+void jkGuiMultiTally_MenuFrameDrawn(void);
+#endif
 
 //static int (*jkGuiMultiTally_ShowTeamScores)(int) = (void*)jkGuiMultiTally_ShowTeamScores_ADDR;
 

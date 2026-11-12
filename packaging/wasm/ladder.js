@@ -47,6 +47,10 @@
 // asked not to be recorded by name, in which case the key isn't sent either.
 // When the lobby has saved a match this game reported, it says "matched
 // <id>", and the page's Module.jkLadderSaved(id), if there, is called with it.
+//
+// The page also reads two things here for the screenshots it sends to match
+// pages (index.html): L.on with L.sentAt, a level the lobby has had a report
+// of is being played, and L.ended, how the last level ended.
 
 (function() {
     var KILL_MS = 2000;
@@ -94,7 +98,11 @@
         sentAt: 0,
         timer: null, soon: null,
         last: null,     // an ended level's last report, still to go (L.keep)
-        lastTimer: null
+        lastTimer: null,
+        // How the last level ended, until the next begins: { at, left (its
+        // player left, the level went on), told (the lobby had a report of
+        // it), host }.
+        ended: null
     };
 
     // Whether a report can go now: the socket is open, this game has a seat in
@@ -229,6 +237,7 @@
 
     L.start = function(map, title, mode, scoreLimit, timeLimitMin, host, idle, build) {
         L.stop();
+        L.ended = null;
         // Its next level: the host has opened the next match by now, so a
         // last report kept from another game than the host's has no match
         // to go to. A host's still closes its own (L.send).
@@ -269,6 +278,7 @@
     L.end = function(left) {
         if (!L.on)
             return;
+        L.ended = { at: now(), left: !!left, told: L.sentAt > 0, host: L.host };
         // A level's end that can't go now is kept for when it can. Not a
         // player's leaving: the seat is given up right after.
         if (!L.send(left ? 'left' : 'level') && !left)

@@ -607,6 +607,9 @@
       .shots .when { margin-top: 4px; font-weight: bold; font-size: 14px; }
       .shots .what { color: var(--muted); }
       .shots .shot-actions { display: flex; gap: 14px; margin-top: 2px; }
+      .shots .shot-share { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 2px; padding-top: 4px;
+        border-top: 1px solid var(--teal-light); color: var(--muted); }
+      .shots-share { margin: 0 0 10px; }
       #zone code { color: var(--gold); font: bold 14px 'Courier New', monospace; }
 
       .footer {
@@ -2381,6 +2384,10 @@
               <h2 class="ruled" id="screenshots-title">Your Screenshots <small id="shots-summary"></small></h2>
               <p class="note">Press F8 or F12 in a game (or your screenshot key) to save a picture here, in this
                 browser. In Edge, use F8.</p>
+              <label class="match-name shots-share" data-shots hidden><input type="checkbox" data-shots-share checked>
+                <span>Share my screenshots on match pages <span class="fine">A screenshot you take in a recorded match
+                  also goes on that match's page, as a smaller copy anyone can see, with your name. You can take any of
+                  them off again. Unticked, they stay in this browser.</span></span></label>
               <div class="shots-bar" id="shots-bar" hidden>
                 <button class="zone-button" type="button" id="shots-zip">Download all (.zip)</button>
                 <button class="zone-button" type="button" id="shots-clear">Delete all</button>
@@ -2488,6 +2495,10 @@
           <label class="picker-option" data-matches hidden><input type="checkbox" data-match-name checked>
             <span>Put my name on match pages <span class="fine">Each match played in the rooms gets a page anyone can
               open, with its scoreboard and who killed whom. Unticked, you're on it as Anonymous.</span></span></label>
+          <label class="picker-option" data-shots hidden><input type="checkbox" data-shots-share checked>
+            <span>Share my screenshots on match pages <span class="fine">A screenshot you take in a recorded match (F8 or
+              F12) also goes on that match's page, as a smaller copy anyone can see, with your name. You can take any
+              of them off again under Your Screenshots. Unticked, they stay in this browser.</span></span></label>
           <div class="actions">
             <button class="play" type="button">Start</button>
             <label class="text-button other-folder" for="gamedir" tabindex="0" role="button" hidden>Check my folder for new mods and maps</label>
@@ -3317,20 +3328,51 @@
           await done(tx);
         }
 
-        return { list: list, keys: keys, read: read, add: add, remove: remove };
+        // Changes part of a screenshot's record, a field set to undefined
+        // being taken out; with only, just while its share is that. Gives
+        // the record as it is then, or null when it's gone or was left alone.
+        async function patch(key, fields, only) {
+          var db = await open();
+          var tx = db.transaction('meta', 'readwrite');
+          var metas = tx.objectStore('meta');
+          var out = null;
+          var req = metas.get(key);
+          req.onsuccess = function() {
+            var meta = req.result;
+            if (!meta || (only !== undefined && meta.share !== only)) return;
+            for (var name in fields) {
+              if (fields[name] === undefined) delete meta[name];
+              else meta[name] = fields[name];
+            }
+            metas.put(meta);
+            out = meta;
+          };
+          await done(tx);
+          return out;
+        }
+
+        return { list: list, keys: keys, read: read, add: add, remove: remove, patch: patch };
       }
 
       // What the engine calls: save() takes a screenshot and stores it in the
       // background, and result() tells it how the oldest one still owed went
       // (0 not done yet, 1 saved, 2 not saved), each one once, in order.
       // makeImages(rgba, w, h) makes the PNG and the small JPEG from the
-      // engine's pixels.
-      function shotSaver(store, makeImages) {
+      // engine's pixels. share, when the page shares screenshots (shotSharer
+      // below): mark() says, as a picture is taken, what its record gets for
+      // that (and tell, whether the game should say it goes on a match's
+      // page, which shared() then answers for the result() just given), and
+      // final(rgba, w, h) takes the game's own picture of the final
+      // scoreboard, which is never stored here (wantsFinal() says whether to
+      // bother reading it back).
+      function shotSaver(store, makeImages, share) {
         var queue = Promise.resolve();
         var results = [];
+        var told = 0;
 
         function save(rgba, w, h, game, level) {
           var date = new Date();
+          var mark = share && share.mark ? share.mark() : null;
           var job = queue.then(async function() {
             var images = await makeImages(rgba, w, h);
             var base = shotName(game, level, date);
@@ -3340,12 +3382,16 @@
             var name = base + '.png';
             for (var n = 2; taken[name]; n++)
               name = base + ' (' + n + ').png';
-            await store.add({ key: name, game: SHOT_GAMES[game] ? game : 'jk1', level: shotLevel(level),
-                              time: date.getTime(), width: w, height: h, size: images.png.length,
-                              thumb: images.thumb }, images.png);
+            var meta = { key: name, game: SHOT_GAMES[game] ? game : 'jk1', level: shotLevel(level),
+                         time: date.getTime(), width: w, height: h, size: images.png.length,
+                         thumb: images.thumb };
+            if (mark && mark.rec) meta.rec = 1;
+            if (mark && mark.share) meta.share = mark.share;
+            await store.add(meta, images.png);
           });
           queue = job.then(function() {
-            results.push(1);
+            results.push(mark && mark.tell ? 3 : 1);
+            if (mark && mark.share && share.added) share.added();
           }, function(err) {
             console.warn('OpenJKDF2: screenshot not saved (' + err + ')');
             results.push(2);
@@ -3353,11 +3399,368 @@
           return true;
         }
 
+        // 3 is a saved one that goes on its match's page: 1 to the engine,
+        // which asks shared() for the rest (one that doesn't know to ask
+        // says what it always said).
         function result() {
-          return results.length ? results.shift() : 0;
+          if (!results.length) return 0;
+          var r = results.shift();
+          told = r === 3 ? 1 : 0;
+          return r === 3 ? 1 : r;
         }
 
-        return { save: save, result: result };
+        function shared() {
+          return told;
+        }
+
+        function wantsFinal() {
+          return !!(share && share.wantsFinal && share.wantsFinal());
+        }
+
+        function saveFinal(rgba, w, h) {
+          if (!wantsFinal()) return false;
+          try {
+            share.final(rgba, w, h);
+          } catch (err) {
+            console.warn('OpenJKDF2: the final scoreboard was not taken (' + err + ')');
+            return false;
+          }
+          return true;
+        }
+
+        return { save: save, result: result, shared: shared, wantsFinal: wantsFinal, saveFinal: saveFinal };
+      }
+
+      // ---- Sharing them on match pages. A lobby that keeps a record of
+      // every match may also take its players' screenshots and show them on
+      // the match's page (ladder-shots.js in jkdf2mp-bb-server). It says so
+      // in /ladder/recent: shots, its limits. A screenshot taken in a level
+      // the game is reporting is marked to go (share: 'wait') and sent once
+      // its match is saved, as a JPEG no bigger than the lobby takes, with a
+      // small copy for the page's grid. The full-size PNG never leaves the
+      // browser. The lobby works out which match a picture is of from how
+      // long ago it was taken and who is asking (the browser's player key,
+      // in its cookie), so the page first asks where one would go and only
+      // sends what has somewhere to go.
+      //
+      // Nothing is sent unless d.allowed() says so (the page: "Share my
+      // screenshots on match pages" is ticked, the player has been shown it,
+      // and they are recorded by name).
+      //
+      // When they go: as soon as the lobby has saved their match, which the
+      // game hears (saved) a moment after a level ends, while its score
+      // screen still shows. What was taken in the level being played waits
+      // for that. The pictures of a level before go also while the next one
+      // is played, since the next begins right after the score screen: one at
+      // a time with a pause between them, so they take little from the
+      // game's own connection. A lobby that says "not yet", or can't be
+      // reached, is asked again a few times, further and further apart, and
+      // then when something happens (a level ends, a match is saved, the
+      // page is opened).
+      //
+      // Two tabs of one browser share the screenshots and the player's key,
+      // so only one sends at a time (d.lock), and a picture the other tab
+      // marked as sent is left on its match's page.
+      //
+      // share on a screenshot's record: 'wait' to go, 'on' there (shared: {
+      // id, match }), 'off' kept back or taken off by the player, 'no' the
+      // lobby had no place for it. rec marks one taken in a reported level,
+      // which the player can still send by hand.
+      //
+      // The final scoreboard is the game's own picture of its score screen
+      // when a level ends (takeFinal). Every game in the match has the same
+      // one and the lobby keeps the first, so the host's goes at once and the
+      // others' a little later, when the lobby usually says it has one. It's
+      // kept here only until it's sent or given up on.
+      //
+      // d: { store, fetch, now(), allowed(), levelSince() (when the level
+      //      being played began by now()'s clock, 0 when none is), lock(fn)
+      //      (runs fn unless another tab is in its own, and says whether it
+      //      ran; without it, always), encode(png, w, h, limits),
+      //      form(images), changed(), warn(text), setTimeout, clearTimeout,
+      //      random() }
+      var SHOT_SHARE_AT_ONCE = 40;      // screenshots looked at in one go
+      // How long after each try the lobby is asked again about what still
+      // waits. After the last, not until something happens.
+      var SHOT_SHARE_RETRY_MS = [5000, 10000, 20000, 40000, 80000];
+      var SHOT_SHARE_GAP_MS = 2000;     // between two pictures sent while a level is played
+      var SHOT_FINAL_WAIT_MS = 3000;    // a final scoreboard not from the host waits this long,
+      var SHOT_FINAL_SPREAD_MS = 9000;  // and up to this much longer
+      var SHOT_FINAL_RETRY_MS = 5000;
+      var SHOT_FINAL_TRIES = 6;
+      var SHOT_FINAL_MS = 2 * 60 * 1000;   // and is given up on after this
+
+      // The lobby's limits as it sent them, or null for anything else.
+      function shotLimits(a) {
+        function num(v, min, max) { return typeof v === 'number' && isFinite(v) && v >= min && v <= max ? Math.floor(v) : 0; }
+        if (!a || typeof a !== 'object') return null;
+        var l = { perPlayer: num(a.perPlayer, 1, 1000), bytes: num(a.bytes, 10000, 5e7), thumbBytes: num(a.thumbBytes, 1000, 5e6),
+                  edge: num(a.edge, 320, 8192), thumbEdge: num(a.thumbEdge, 64, 2048), days: num(a.days, 1, 366) };
+        for (var k in l)
+          if (!l[k]) return null;
+        return l;
+      }
+
+      // The game's score screen is a 4:3 picture in the middle of the
+      // window: the part of a window w wide and h high that it fills
+      // ([x, width]), which is all that goes of the final scoreboard.
+      function shotScreenPart(w, h) {
+        var width = Math.min(w, Math.round(h * 4 / 3));
+        return [Math.floor((w - width) / 2), width];
+      }
+
+      function shotSharer(d) {
+        var limits = null;
+        var busy = false, wanted = false;
+        var retry = null, tries = 0;
+        // The level being played at the last tick (d.levelSince()).
+        var level = 0;
+        var final = null;
+
+        function address(taken, isFinal) {
+          return '/ladder/shot?age=' + Math.max(0, Math.round(d.now() - taken)) + '&taken=' + taken +
+                 (isFinal ? '&final=1' : '');
+        }
+
+        // Asks the lobby, and says what its answer means for the picture:
+        // 'go' it has a match to go to, 'on' it's there ({ id, match }),
+        // 'wait' its match may be saved yet, 'no' there's no place for it,
+        // 'stop' nothing can be sent now (no key, the lobby away, taking
+        // none or with no room left for any, anything unexpected).
+        async function ask(url, init) {
+          var res, a = null;
+          try {
+            res = await d.fetch(url, Object.assign({ cache: 'no-store', credentials: 'same-origin' }, init || {}));
+          } catch (e) {
+            return { state: 'stop' };
+          }
+          try { a = await res.json(); } catch (e) {}
+          if (!a || typeof a !== 'object') a = {};
+          if (res.status === 200 && typeof a.match === 'number' && a.match >= 1 && Math.floor(a.match) === a.match) {
+            return typeof a.id === 'string' && /^[0-9a-f]{24}$/.test(a.id) ? { state: 'on', id: a.id, match: a.match }
+                                                                           : { state: 'go', match: a.match };
+          }
+          // Why there's no place for it: the lobby's answer when asked
+          // (no), or its refusal of a picture sent (the status and error).
+          var why = res.status === 200 && typeof a.no === 'string' ? a.no
+                  : res.status === 404 && a.error === 'none' ? 'none'
+                  : res.status === 507 ? 'room'
+                  : res.status === 409 || res.status === 413 || res.status === 415 || (res.status === 403 && a.error === 'hidden') ? 'other'
+                  : '';
+          if (why === 'none') return { state: a.wait === true ? 'wait' : 'no' };
+          // The lobby has all the pictures it keeps: it may take them later.
+          if (!why || why === 'room') return { state: 'stop' };
+          return { state: 'no' };
+        }
+
+        // One of the list's screenshots: where it goes, then the picture.
+        async function send(meta) {
+          if (d.now() - meta.time > limits.days * 24 * 60 * 60 * 1000) return { state: 'no' };
+          var asked = await ask(address(meta.time, false));
+          if (asked.state !== 'go') return asked;
+          var png = await d.store.read(meta.key);
+          if (!png) return { state: 'no' };
+          var images;
+          try {
+            images = await d.encode(png, meta.width, meta.height, limits);
+          } catch (e) {
+            d.warn('could not make the picture to send (' + e + ')');
+            return { state: 'no' };
+          }
+          var sent = await ask(address(meta.time, false), { method: 'POST', body: d.form(images) });
+          // An answer to a picture sent always has its id. sent: the
+          // picture itself went, not only the question.
+          return Object.assign({ sent: true }, sent.state === 'go' ? { state: 'stop' } : sent);
+        }
+
+        function pause(ms) {
+          return new Promise(function(resolve) { d.setTimeout(resolve, ms); });
+        }
+
+        // What's waiting, the oldest first, one at a time. True when some of
+        // it is worth asking about again soon.
+        async function sendWaiting() {
+          var more = false, changed = false, sent = false;
+          try {
+            var waiting = (await d.store.list()).filter(function(m) { return m.share === 'wait'; }).reverse();
+            for (var meta of waiting.slice(0, SHOT_SHARE_AT_ONCE)) {
+              if (!limits || !d.allowed()) break;
+              // Taken in the level being played: its match isn't saved
+              // before it ends (tick, saved).
+              var playing = d.levelSince();
+              if (playing && meta.time >= playing) continue;
+              if (playing && sent) await pause(SHOT_SHARE_GAP_MS);
+              sent = false;
+              var r = await send(meta);
+              if (r.state === 'stop') {
+                more = true;
+                break;
+              }
+              if (r.state === 'wait') {
+                more = true;
+                continue;
+              }
+              sent = !!r.sent;
+              var to = r.state === 'on' ? { share: 'on', shared: { id: r.id, match: r.match } } : { share: 'no' };
+              var kept = await d.store.patch(meta.key, to, 'wait');
+              if (!kept && r.state === 'on') {
+                // It stopped waiting while it went. Kept back or deleted by
+                // its player: off the match's page again. Marked by another
+                // tab of this browser, which sent the same picture: it's
+                // there, as its record says or should.
+                var is = (await d.store.list()).find(function(m) { return m.key === meta.key; });
+                if (!is || is.share === 'off') await ask('/ladder/shot/' + r.id, { method: 'DELETE' });
+                else if (is.share === 'no') await d.store.patch(meta.key, to, 'no');
+              }
+              changed = true;
+            }
+          } finally {
+            if (changed) d.changed();
+          }
+          return more;
+        }
+
+        // Sends what's waiting. again: this is a try after one that left
+        // some waiting, not something new.
+        async function run(again) {
+          if (busy) {
+            wanted = true;
+            return;
+          }
+          busy = true;
+          wanted = false;
+          d.clearTimeout(retry);
+          retry = null;
+          if (again !== true) tries = 0;
+          var more = false;
+          try {
+            if (!limits || !d.allowed()) return;
+            if (d.lock) {
+              // Another tab is sending them: what it leaves is asked about later.
+              if (!await d.lock(async function() { more = await sendWaiting(); })) more = true;
+            } else {
+              more = await sendWaiting();
+            }
+          } catch (e) {
+            more = true;
+            d.warn('could not send screenshots to the lobby (' + e + ')');
+          } finally {
+            busy = false;
+            if (more && !wanted && tries < SHOT_SHARE_RETRY_MS.length)
+              retry = d.setTimeout(function() { retry = null; run(true); }, SHOT_SHARE_RETRY_MS[tries++]);
+          }
+        }
+
+        // Every few seconds: a level ended (or the next began), so what was
+        // taken in it can go once its match is saved, and anything asked for
+        // while a run was under way.
+        function tick() {
+          var playing = d.levelSince();
+          if (level && playing !== level) wanted = true;
+          level = playing;
+          if (wanted && !busy) run();
+        }
+
+        // Takes one off its match's page. True when it's off (or was already).
+        async function takeOff(meta) {
+          var id = meta.shared && meta.shared.id;
+          if (id) {
+            var res;
+            try {
+              res = await d.fetch('/ladder/shot/' + id, { method: 'DELETE', cache: 'no-store', credentials: 'same-origin' });
+            } catch (e) {
+              return false;
+            }
+            if (res.status !== 200 && res.status !== 404) return false;
+          }
+          await d.store.patch(meta.key, { share: 'off', shared: undefined });
+          d.changed();
+          return true;
+        }
+
+        // Keeps one that hasn't gone yet in the browser. One that got there
+        // a moment before is taken off again.
+        async function keepBack(meta) {
+          if (!await d.store.patch(meta.key, { share: 'off' }, 'wait')) {
+            var is = (await d.store.list()).find(function(m) { return m.key === meta.key; });
+            if (is && is.share === 'on') return takeOff(is);
+          }
+          d.changed();
+          return true;
+        }
+
+        // And all of them: the player unticked the box.
+        async function keepAllBack() {
+          var any = false;
+          for (var meta of await d.store.list()) {
+            if (meta.share !== 'wait') continue;
+            await d.store.patch(meta.key, { share: 'off' }, 'wait');
+            any = true;
+          }
+          if (any) d.changed();
+        }
+
+        // Sends one after all: the player asked for it by hand.
+        async function putUp(meta) {
+          if (meta.share === 'on' || meta.share === 'wait') return;
+          await d.store.patch(meta.key, { share: 'wait' });
+          d.changed();
+          run();
+        }
+
+        function later(ms) {
+          d.clearTimeout(final.timer);
+          final.timer = d.setTimeout(sendFinal, ms);
+        }
+
+        async function sendFinal() {
+          var f = final;
+          if (!f || f.busy) return;
+          if (!limits || !d.allowed() || d.now() - f.taken > SHOT_FINAL_MS) {
+            final = null;
+            return;
+          }
+          f.busy = true;
+          var r = await ask(address(f.taken, true));
+          if (r.state === 'go') r = await ask(address(f.taken, true), { method: 'POST', body: d.form(f.images) });
+          f.busy = false;
+          if (final !== f) return;
+          // Its match isn't saved yet: again in a while, or when the game
+          // hears that it is (saved).
+          if ((r.state === 'wait' || r.state === 'stop') && ++f.tries < SHOT_FINAL_TRIES) return later(SHOT_FINAL_RETRY_MS);
+          final = null;
+        }
+
+        // The game's picture of the final scoreboard, as the lobby takes it
+        // (images), taken at `taken`. host: this game hosts the match.
+        function takeFinal(images, taken, host) {
+          if (final) d.clearTimeout(final.timer);
+          final = { images: images, taken: taken, host: !!host, tries: 0, busy: false, timer: null };
+          later(host ? 0 : SHOT_FINAL_WAIT_MS + Math.floor(d.random() * SHOT_FINAL_SPREAD_MS));
+        }
+
+        // The lobby saved a match of this game's.
+        function saved() {
+          if (final && !final.busy) later(final.host ? 0 : Math.floor(d.random() * SHOT_FINAL_WAIT_MS));
+          run();
+        }
+
+        return {
+          // The lobby's limits, and so whether it takes pictures at all.
+          limits: function(l) {
+            if (arguments.length) limits = l || null;
+            return limits;
+          },
+          // A screenshot was stored that is to go. One of the level being
+          // played goes after it ends (tick, saved); one stored just after
+          // its level ended is asked about at the next tick.
+          want: function() { if (!d.levelSince()) wanted = true; },
+          // One more try at what waits, without starting the tries over.
+          nudge: function() { run(true); },
+          run: run, tick: tick, saved: saved, takeOff: takeOff, keepBack: keepBack, keepAllBack: keepAllBack,
+          putUp: putUp, takeFinal: takeFinal,
+          pendingFinal: function() { return !!final; }
+        };
       }
 
       // ---- A zip of them all, stored rather than compressed: PNGs already are.
@@ -3435,10 +3838,210 @@
       var shots = typeof indexedDB !== 'undefined' ? shotStore(indexedDB) : null;
       var thumbUrls = [];
 
+      // ---- Sharing them (shotSharer above). on: "Share my screenshots on
+      // match pages" is ticked, as it is until a player unticks it. told:
+      // the player has been shown that box, by starting a game from a
+      // prompt that had it or by changing it; nothing is sent before that.
+      var SHOT_SHARE_SETTING = 'jkdf2mp-share-shots';   // 'off': never sent
+      var SHOT_TOLD_SETTING = 'jkdf2mp-share-told';     // '1': the player has seen the box
+      var SHOT_LOBBY_SETTING = 'jkdf2mp-shots';         // 'on': the lobby took pictures at the last visit
+      var SHOT_SHARE_STEPS = [[1, 0.85], [1, 0.7], [0.75, 0.7], [0.5, 0.6]];   // [of the longest side, JPEG quality]
+      var shotSharing = { on: true, told: false };
+      try {
+        shotSharing.on = localStorage.getItem(SHOT_SHARE_SETTING) !== 'off';
+        shotSharing.told = localStorage.getItem(SHOT_TOLD_SETTING) === '1';
+      } catch (e) {}
+
+      // The picture as the lobby takes it: a JPEG no longer than limits.edge
+      // on its longer side and no bigger than limits.bytes, squeezed harder
+      // and then made smaller until it fits, and its small copy. source is
+      // anything a canvas draws, w by h.
+      async function shotJpegs(source, w, h, limits) {
+        function scaled(edge) {
+          var by = Math.min(1, edge / Math.max(w, h));
+          var c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(w * by));
+          c.height = Math.max(1, Math.round(h * by));
+          var ctx = c.getContext('2d');
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(source, 0, 0, c.width, c.height);
+          return c;
+        }
+        var full = null;
+        for (var step of SHOT_SHARE_STEPS) {
+          full = await canvasBytes(scaled(limits.edge * step[0]), 'image/jpeg', step[1]);
+          if (full.length <= limits.bytes) break;
+          full = null;
+        }
+        if (!full) throw new Error('it is too big for the lobby however it is squeezed');
+        var small = scaled(limits.thumbEdge);
+        var thumb = await canvasBytes(small, 'image/jpeg', 0.8);
+        if (thumb.length > limits.thumbBytes) thumb = await canvasBytes(small, 'image/jpeg', 0.5);
+        if (thumb.length > limits.thumbBytes) throw new Error('its small copy is too big for the lobby');
+        return { full: full, thumb: thumb };
+      }
+
+      function shotShareAllowed() {
+        return shotSharing.on && shotSharing.told && !Module.jkLadderAnon && typeof Module.jkLadderKey === 'string' &&
+               !!Module.jkLadderKey;
+      }
+
+      // When the level the game is reporting began (ladder.js, bundled into
+      // the engine), by the clock screenshots are stamped with, or 0 when
+      // none is being played. Worked out once a level: the two clocks it's
+      // made from don't tick as one.
+      var shotPlaying = { lv: 0, at: 0, since: 0 };
+      function shotPlayingSince() {
+        var L = Module.jkLadder;
+        if (!L || !L.on) return 0;
+        if (shotPlaying.lv !== L.lv || shotPlaying.at !== L.since)
+          shotPlaying = { lv: L.lv, at: L.since, since: Math.max(1, Math.floor(Date.now() - (performance.now() - L.since))) };
+        return shotPlaying.since;
+      }
+
+      var shotShare = shotSharer({
+        store: shots || { list: async function() { return []; }, read: async function() { return null; },
+                          patch: async function() { return null; } },
+        fetch: function(url, init) { return fetch(url, init); },
+        now: function() { return Date.now(); },
+        allowed: shotShareAllowed,
+        levelSince: shotPlayingSince,
+        // One tab of this browser sends at a time: they share the
+        // screenshots, and two that sent the same list would each upload it.
+        lock: typeof navigator !== 'undefined' && navigator.locks && navigator.locks.request ? function(fn) {
+          return navigator.locks.request('jkdf2mp-share-shots', { ifAvailable: true }, async function(held) {
+            if (!held) return false;
+            await fn();
+            return true;
+          });
+        } : null,
+        encode: async function(png, w, h, limits) {
+          var bitmap = await createImageBitmap(new Blob([png], { type: 'image/png' }));
+          try {
+            return await shotJpegs(bitmap, bitmap.width, bitmap.height, limits);
+          } finally {
+            if (bitmap.close) bitmap.close();
+          }
+        },
+        form: function(images) {
+          var form = new FormData();
+          form.append('full', new Blob([images.full], { type: 'image/jpeg' }), 'full.jpg');
+          form.append('thumb', new Blob([images.thumb], { type: 'image/jpeg' }), 'thumb.jpg');
+          return form;
+        },
+        // The list under Your Screenshots, when it shows: behind a game it
+        // would be drawn again for nobody, and the page loads anew after one.
+        changed: function() { if (!document.getElementById('zone').hidden) showShots(); },
+        warn: function(text) { console.warn('OpenJKDF2: ' + text); },
+        setTimeout: function(fn, ms) { return setTimeout(fn, ms); },
+        clearTimeout: function(t) { clearTimeout(t); },
+        random: Math.random
+      });
+      setInterval(shotShare.tick, 5000);
+
+      // What the game's reporter (ladder.js) says of the level it's in: on
+      // while it's played, sentAt once the lobby has had a report of it, so
+      // only a level in a room of a lobby that keeps a record counts.
+      function shotMark() {
+        var L = Module.jkLadder;
+        if (!L || !L.on || !L.sentAt) return null;
+        var share = shotSharing.on && !Module.jkLadderAnon && !!shotShare.limits();
+        return { rec: 1, share: share ? 'wait' : '', tell: share && shotShareAllowed() };
+      }
+
+      // The game took its picture of the final scoreboard: wanted only of a
+      // level that just ended as a level does (not this player leaving), in
+      // a match the lobby was told of, from a player who shares theirs.
+      function shotWantsFinal() {
+        var L = Module.jkLadder;
+        var ended = L && L.ended;
+        return !!(shotShare.limits() && shotShareAllowed() && ended && !ended.left && ended.told && !ended.shot &&
+                  performance.now() - ended.at < 60000);
+      }
+
+      function shotFinal(rgba, w, h) {
+        var taken = Date.now();
+        var ended = Module.jkLadder.ended;
+        var host = !!ended.host;
+        // One of a level.
+        ended.shot = 1;
+        var limits = shotShare.limits();
+        var whole = document.createElement('canvas');
+        whole.width = w;
+        whole.height = h;
+        whole.getContext('2d').putImageData(new ImageData(shotPixels(rgba, w, h), w, h), 0, 0);
+        var part = shotScreenPart(w, h);
+        var canvas = whole;
+        if (part[1] < w) {
+          canvas = document.createElement('canvas');
+          canvas.width = part[1];
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(whole, part[0], 0, part[1], h, 0, 0, part[1], h);
+        }
+        shotJpegs(canvas, canvas.width, h, limits).then(function(images) {
+          shotShare.takeFinal(images, taken, host);
+        }, function(err) {
+          console.warn('OpenJKDF2: the final scoreboard was not made into a picture (' + err + ')');
+        });
+      }
+
       Module.jkScreenshots = shotSaver(shots || {
         keys: async function() { return []; },
         add: async function() { throw new Error('this browser has no IndexedDB'); }
-      }, shotImagesInWorker(shotImages));
+      }, shotImagesInWorker(shotImages), { mark: shotMark, added: shotShare.want, wantsFinal: shotWantsFinal, final: shotFinal });
+
+      // The lobby's /ladder/recent came (askMatches): its shots, or none
+      // from a lobby that takes no pictures. Shows or hides what's about
+      // sharing, remembers it for the next visit so the page doesn't shift,
+      // and sends what's waiting.
+      function shotLobby(a) {
+        var limits = shotLimits(a);
+        var was = !!shotShare.limits();
+        shotShare.limits(limits);
+        try {
+          if (limits) localStorage.setItem(SHOT_LOBBY_SETTING, 'on');
+          else localStorage.removeItem(SHOT_LOBBY_SETTING);
+        } catch (e) {}
+        document.querySelectorAll('[data-shots]').forEach(function(e) { e.hidden = !limits; });
+        if (!!limits !== was) showShots();
+        // What waits is asked about when the page learns the lobby takes
+        // pictures, and once more with each later list (a match was saved).
+        if (limits && !was) shotShare.run();
+        else if (limits) shotShare.nudge();
+      }
+
+      // A game is starting from a prompt that showed the box: the player
+      // has been told.
+      function shotGameStart() {
+        var box = document.querySelector('#picker [data-shots-share]');
+        if (shotSharing.told || !box || box.closest('[data-shots]').hidden) return;
+        shotSharing.told = true;
+        try { localStorage.setItem(SHOT_TOLD_SETTING, '1'); } catch (e) {}
+      }
+
+      (function() {
+        var boxes = document.querySelectorAll('[data-shots-share]');
+        var shown = false;
+        try { shown = localStorage.getItem(SHOT_LOBBY_SETTING) === 'on'; } catch (e) {}
+        if (shown && /^https?:$/.test(location.protocol))
+          document.querySelectorAll('[data-shots]').forEach(function(e) { e.hidden = false; });
+        boxes.forEach(function(box) {
+          box.checked = shotSharing.on;
+          box.addEventListener('change', function() {
+            shotSharing.on = box.checked;
+            shotSharing.told = true;
+            boxes.forEach(function(other) { other.checked = box.checked; });
+            try {
+              localStorage.setItem(SHOT_SHARE_SETTING, box.checked ? 'on' : 'off');
+              localStorage.setItem(SHOT_TOLD_SETTING, '1');
+            } catch (e) {}
+            // Unticked, what was waiting to go stays here. Ticked, what is
+            // marked to go goes; the ones kept back before stay back.
+            if (box.checked) shotShare.run();
+            else shotShare.keepAllBack().catch(function(err) { console.warn('OpenJKDF2: ' + err); });
+          });
+        });
+      })();
 
       function sizeText(bytes) {
         return bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB'
@@ -3484,6 +4087,40 @@
         b.setAttribute('aria-label', ariaLabel);
         b.addEventListener('click', onClick);
         return b;
+      }
+
+      // Where a screenshot is as far as match pages go, with what the player
+      // can do about it, or null when there's nothing to say: one that's on
+      // a match's page, one waiting to go, and one from a recorded match
+      // that isn't shared, while the lobby would still take it.
+      function shotShareLine(meta, when) {
+        var limits = shotShare.limits();
+        if (!limits) return null;
+        function act(fn) {
+          return function() {
+            fn(meta).catch(function(err) { console.warn('OpenJKDF2: ' + err); });
+          };
+        }
+        var line = document.createElement('span');
+        line.className = 'shot-share';
+        if (meta.share === 'on' && meta.shared) {
+          var a = document.createElement('a');
+          a.href = '/match/' + meta.shared.match + '#screenshots';
+          a.textContent = 'On match ' + meta.shared.match + '\'s page';
+          line.append(a, textButton('Take it off', 'Take the screenshot from ' + when + ' off its match\'s page', act(async function(m) {
+            if (!await shotShare.takeOff(m)) alert('That didn\'t work just now. Try again in a moment.');
+          })));
+        } else if (meta.share === 'wait') {
+          var text = document.createElement('span');
+          text.textContent = 'Goes on its match\'s page';
+          line.append(text, textButton('Keep it here', 'Keep the screenshot from ' + when + ' in this browser only', act(shotShare.keepBack)));
+        } else if (meta.rec && meta.share !== 'no' && Date.now() - meta.time < limits.days * 24 * 60 * 60 * 1000) {
+          line.append(textButton('Put it on its match\'s page', 'Put the screenshot from ' + when + ' on its match\'s page',
+                                 act(shotShare.putUp)));
+        } else {
+          return null;
+        }
+        return line;
       }
 
       async function showShots() {
@@ -3536,13 +4173,19 @@
                 downloadShot(key).catch(function(err) { console.warn('OpenJKDF2: ' + err); });
               };
             })(meta.key)),
-            textButton('Delete', 'Delete the screenshot from ' + when, (function(key) {
+            textButton('Delete', 'Delete the screenshot from ' + when, (function(meta) {
               return async function() {
-                try { await shots.remove([key]); } catch (err) { console.warn('OpenJKDF2: ' + err); }
+                // Its copy on a match's page isn't this one.
+                if (meta.share === 'on' && meta.shared &&
+                    !confirm('Delete this screenshot from this browser? Its copy stays on match ' + meta.shared.match +
+                             '\'s page: use "Take it off" first if you want that gone too.')) return;
+                try { await shots.remove([meta.key]); } catch (err) { console.warn('OpenJKDF2: ' + err); }
                 showShots();
               };
-            })(meta.key)));
+            })(meta)));
           li.append(view, whenEl, what, actions);
+          var share = shotShareLine(meta, when);
+          if (share) li.appendChild(share);
           list.appendChild(li);
         }
         document.getElementById('shots-bar').hidden = !metas.length;
@@ -3576,7 +4219,9 @@
         var metas = await shots.list();
         if (!metas.length) return;
         var what = metas.length === 1 ? 'your screenshot' : 'all ' + metas.length + ' screenshots';
-        if (!confirm('Delete ' + what + ' from this browser? This can\'t be undone.')) return;
+        var up = metas.filter(function(m) { return m.share === 'on'; }).length;
+        if (!confirm('Delete ' + what + ' from this browser? This can\'t be undone.' +
+                     (up ? ' The ' + (up === 1 ? 'one' : up) + ' on match pages ' + (up === 1 ? 'stays' : 'stay') + ' there.' : ''))) return;
         try {
           await shots.remove(metas.map(function(m) { return m.key; }));
         } catch (err) {
@@ -8099,6 +8744,8 @@
           matchesLive.recent = recent;
           matchesLive.top = cleanTop(a);
           renderMatches();
+          // Whether the lobby takes screenshots for its match pages.
+          shotLobby(a.shots);
           if (matchesLive.again) {
             matchesLive.again = false;
             askMatches();
@@ -8118,6 +8765,8 @@
         matchesLive.shown = on;
         document.querySelectorAll('[data-matches]').forEach(function(e) { e.hidden = !on; });
         if (on) renderMatches();
+        // A lobby without a record takes no screenshots either.
+        else shotLobby(null);
       }
 
       // Takes the lobby's latest status (lobbyShow), or null when there's
@@ -8209,6 +8858,8 @@
       Module.jkLadderSaved = function(id) {
         if (!matchId(id)) return;
         try { localStorage.setItem(MATCH_MINE_SETTING, JSON.stringify({ id: id, at: Date.now() })); } catch (e) {}
+        // Its screenshots can go on its page now.
+        shotShare.saved();
       };
 
       (function() {
@@ -8264,6 +8915,9 @@
       var hideZoneBeforeLobby = hideZone;
       hideZone = function() {
         matchesGameStart();
+        // The prompt it starts from showed "Share my screenshots on match
+        // pages", where the lobby takes them.
+        shotGameStart();
         clearTimeout(matchesLive.retry);
         stopLobbyWatch();
         stopImperialWatch();

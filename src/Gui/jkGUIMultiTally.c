@@ -18,6 +18,62 @@
 #include "General/stdString.h"
 #include "Dss/sithMulti.h"
 
+#ifdef ARCH_WASM
+#include <emscripten.h>
+#include "Platform/std3D.h"
+
+// Added: the browser build's picture of the final scoreboard, for the match's
+// page on the lobby. The page (index.html, Module.jkScreenshots) says whether
+// one is wanted: only of a level that ended as a level does, not of this
+// player leaving one, in a match the lobby keeps a record of, from a player
+// who shares their screenshots. It's taken of the first score screen shown
+// (the teams' in a team game) once that has been up for a few rounds, and
+// never of a dialog over it. WebGL clears the window as soon as the browser
+// shows it, so it's read back between a frame's drawing and its showing
+// (jkGuiMultiTally_MenuFrameDrawn, called by Window_SdlUpdate), as a
+// screenshot in a level is (jkGame_UpdateScreenshots).
+EM_JS(int, jkGuiMultiTally_js_wantsPicture, (), {
+    return Module.jkScreenshots && Module.jkScreenshots.wantsFinal && Module.jkScreenshots.wantsFinal() ? 1 : 0;
+});
+
+EM_JS(int, jkGuiMultiTally_js_takePicture, (const uint8_t* pRgba, int w, int h), {
+    return Module.jkScreenshots.saveFinal(HEAPU8.slice(pRgba, pRgba + w * h * 4), w, h) ? 1 : 0;
+});
+
+#define JKGUIMULTITALLY_PICTURE_ROUNDS (3)
+
+static int jkGuiMultiTally_pictureRounds = -1; // rounds a score screen has been up, or -1: no picture is owed
+static int jkGuiMultiTally_bPictureDue = 0;    // the next frame drawn is a score screen's
+
+// A round of a score screen's menu (jkGuiMultiTally_sub_4188B0): the frame
+// drawn next is still its own, whatever was clicked in it.
+static void jkGuiMultiTally_PictureRound(void)
+{
+    if (jkGuiMultiTally_pictureRounds >= 0 && ++jkGuiMultiTally_pictureRounds >= JKGUIMULTITALLY_PICTURE_ROUNDS)
+        jkGuiMultiTally_bPictureDue = 1;
+}
+
+void jkGuiMultiTally_MenuFrameDrawn(void)
+{
+    if (!jkGuiMultiTally_bPictureDue)
+        return;
+    // Only this frame: a later one may be a dialog's, and the next round says so again
+    jkGuiMultiTally_bPictureDue = 0;
+    // None was drawn while the browser has taken the graphics away
+    if (!std3D_WasmFrameDrawn())
+        return;
+    jkGuiMultiTally_pictureRounds = -1;
+    if (!jkGuiMultiTally_js_wantsPicture())
+        return;
+
+    int w = 0, h = 0;
+    uint8_t* pRgba = std3D_ReadWindowRGBA(&w, &h);
+    if (pRgba)
+        jkGuiMultiTally_js_takePicture(pRgba, w, h);
+    free(pRgba);
+}
+#endif
+
 static jkGuiElement jkGuiMultiTally_buttons[92] = {
     { ELEMENT_TEXT, 0, 2, "GUI_MULTIPLAYER_SCORE", 3, { 90, 20, 460, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT, 0, 2, NULL, 3, { 0, 50, 640, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -202,11 +258,22 @@ int jkGuiMultiTally_Show(int a1)
     memset(jkGuiMultiTally_waTmp, 0, 0x40u);
     jkGuiMultiTally_msStart = stdPlatform_GetTimeMsec();
     jkGuiMultiTally_idkType = a1;
+#ifdef ARCH_WASM
+    // Added: the picture of the final scoreboard, of the first screen shown
+    jkGuiMultiTally_pictureRounds = 0;
+    jkGuiMultiTally_bPictureDue = 0;
+#endif
     if ( (sithNet_MultiModeFlags & MULTIMODEFLAG_TEAMS) != 0 )
     {
         result = jkGuiMultiTally_ShowTeamScores(a1);
         if ( result == -1 )
+        {
+#ifdef ARCH_WASM
+            jkGuiMultiTally_pictureRounds = -1; // Added
+            jkGuiMultiTally_bPictureDue = 0;
+#endif
             return result;
+        }
     }
 
     // Added
@@ -432,6 +499,11 @@ LABEL_50:
         jkPlayer_playerInfos[0].flags = hack;
 #endif
 
+#ifdef ARCH_WASM
+    jkGuiMultiTally_pictureRounds = -1; // Added: no picture after the score screens
+    jkGuiMultiTally_bPictureDue = 0;
+#endif
+
     jkGui_SetModeGame();
     return v17;
 }
@@ -490,6 +562,10 @@ void jkGuiMultiTally_Shutdown()
 void jkGuiMultiTally_sub_4188B0(jkGuiMenu *pMenu)
 {
     uint32_t v1; // ecx
+
+#ifdef ARCH_WASM
+    jkGuiMultiTally_PictureRound(); // Added
+#endif
 
     if ( jkGuiMultiTally_idkType )
     {
