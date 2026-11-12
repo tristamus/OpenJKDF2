@@ -3890,12 +3890,12 @@
       // the engine), by the clock screenshots are stamped with, or 0 when
       // none is being played. Worked out once a level: the two clocks it's
       // made from don't tick as one.
-      var shotPlaying = { lv: 0, since: 0 };
+      var shotPlaying = { lv: 0, at: 0, since: 0 };
       function shotPlayingSince() {
         var L = Module.jkLadder;
         if (!L || !L.on) return 0;
-        if (shotPlaying.lv !== L.lv)
-          shotPlaying = { lv: L.lv, since: Math.max(1, Math.floor(Date.now() - (performance.now() - L.since))) };
+        if (shotPlaying.lv !== L.lv || shotPlaying.at !== L.since)
+          shotPlaying = { lv: L.lv, at: L.since, since: Math.max(1, Math.floor(Date.now() - (performance.now() - L.since))) };
         return shotPlaying.since;
       }
 
