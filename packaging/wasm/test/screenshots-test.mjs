@@ -509,8 +509,10 @@ test('nothing goes for a player who doesn\'t share, during a level, or once the 
     await settle();
     assert.deepEqual(w.take(), []);
     w.level = false;
-    // No key, the lobby away or answering something else: nothing more is asked this time, and all of it another time.
-    for (const bad of [() => [401, { error: 'key' }], () => [503, { error: 'busy' }], () => [404, undefined], () => [200, { match: 'x' }],
+    // No key, the lobby away, with no room left for pictures, or answering something else: nothing more is asked this time, and all
+    // of it another time.
+    for (const bad of [() => [401, { error: 'key' }], () => [503, { error: 'busy' }], () => [507, { error: 'room' }], () => [404, undefined],
+                       () => [200, { match: 'x' }],
                        () => { throw new Error('offline'); }]) {
         answer = bad;
         await sharer.run();

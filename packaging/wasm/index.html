@@ -3501,8 +3501,8 @@
         // Asks the lobby, and says what its answer means for the picture:
         // 'go' it has a match to go to, 'on' it's there ({ id, match }),
         // 'wait' its match may be saved yet, 'no' there's no place for it,
-        // 'stop' nothing can be sent now (no key, the lobby away or taking
-        // none, anything unexpected).
+        // 'stop' nothing can be sent now (no key, the lobby away, taking
+        // none or with no room left for any, anything unexpected).
         async function ask(url, init) {
           var res, a = null;
           try {
