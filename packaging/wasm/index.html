@@ -4498,7 +4498,28 @@
           await done(tx);
         }
 
-        return { info: info, index: index, load: load, save: save, forget: forget };
+        // One saved file, by its path in the game's folder (any case; also
+        // when the folder picked was one above the game's), as a Blob, or null.
+        async function file(game, rel) {
+          var meta = await info(game);
+          if (!meta) return null;
+          rel = rel.toLowerCase();
+          var fits = function(p) { p = p.toLowerCase(); return p === rel || p.slice(-rel.length - 1) === '/' + rel; };
+          var shortest = function(a, b) { return a.length - b.length; };
+          var db = await open();
+          var data = db.transaction('data').objectStore('data');
+          if (meta.list) {
+            var path = meta.list.map(function(e) { return e.path; }).filter(fits).sort(shortest)[0];
+            var r = path && await request(data.get(dataKey(game, path)));
+            return r ? r.file : null;
+          }
+          var saved = (await request(data.get(game))) || [];
+          var hit = saved.filter(function(s) { return fits(inFolder(s.path)); })
+                         .sort(function(a, b) { return a.path.length - b.path.length; })[0];
+          return hit ? hit.file : null;
+        }
+
+        return { info: info, index: index, load: load, save: save, forget: forget, file: file };
       }
 
       // ---- A folder the browser keeps for the page (Chrome, Edge and
@@ -6998,6 +7019,39 @@
       }, function(err) {
         console.warn('OpenJKDF2: could not look for kept folders (' + err + ')');
       });
+
+      // For the 3D view (preview3d.js), the other game's textures: one of a
+      // game's files, by its path in the game's folder (any case), from its
+      // files saved in this browser, else from its kept folder when the
+      // browser already lets the page read it (never a prompt). A Blob, or
+      // null.
+      Module.jkSavedGameFile = async function(game, rel) {
+        try {
+          var f = gameFiles && await gameFiles.file(game, rel);
+          if (f) return f;
+        } catch (err) {}
+        try {
+          await keptReady;
+          var k = keptFolder[game];
+          if (!k || !k.handle || !k.handle.queryPermission || await k.handle.queryPermission({ mode: 'read' }) !== 'granted')
+            return null;
+          var dir = k.handle, parts = rel.toLowerCase().split('/');
+          for (var i = 0; i < parts.length; i++) {
+            var next = null;
+            for await (var h of dir.values()) {
+              if (h.name.toLowerCase() === parts[i] && h.kind === (i < parts.length - 1 ? 'directory' : 'file')) {
+                next = h;
+                break;
+              }
+            }
+            if (!next) return null;
+            dir = next;
+          }
+          return await dir.getFile();
+        } catch (err) {
+          return null;
+        }
+      };
       var SAVE_SETTING = 'jkdf2mp-save-game-files';
       // How long saving waits once the engine has its files, so the copy
       // doesn't compete with the game starting.

@@ -50,11 +50,13 @@ macro(plat_initialize)
     # player's own game files into MEMFS before main() runs. maps.js (map
     # downloads for joiners), mods.js (the host's mod, built on maps.js, so
     # it comes second), netstats.js (network measurements and ?netsim) and
-    # ladder.js (the match record's reports to the lobby) are
+    # ladder.js (the match record's reports to the lobby), preview3d.js (the
+    # Level Library's 3D view) and library.js (the Level Library, which the
+    # Host screen opens) are
     # bundled in, so they always match the engine. --profiling-funcs keeps the
     # wasm's function names, so crash stacks stay readable, but unlike
     # --profiling it lets the JS be minified and drops the other debug names.
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling-funcs -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/ladder.js ")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${USE_FLAGS} --profiling-funcs -s FORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/ladder.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/preview3d.js --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/library.js ")
     set(CMAKE_EXECUTABLE_SUFFIX .js)
     # audio.js tunes the Web Audio graph Emscripten's OpenAL builds (k-rate panners).
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/audio.js")
@@ -76,7 +78,7 @@ endmacro()
 
 macro(plat_link_and_package)
     target_link_libraries(${BIN_NAME} PRIVATE -lm -lSDL3 -lGL -lGLEW -lopenal -lidbfs.js)
-    set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js ${PROJECT_SOURCE_DIR}/packaging/wasm/ladder.js)
+    set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js ${PROJECT_SOURCE_DIR}/packaging/wasm/ladder.js ${PROJECT_SOURCE_DIR}/packaging/wasm/preview3d.js ${PROJECT_SOURCE_DIR}/packaging/wasm/library.js)
     set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/audio.js)
     target_link_libraries(sith_engine PRIVATE nlohmann_json::nlohmann_json)
     if(TARGET_CAN_JKGM)

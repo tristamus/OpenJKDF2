@@ -71,6 +71,14 @@ jobs:
       # The page's mod list and zipped mods, with made-up files.
       - name: Test the mod list
         run: node packaging/wasm/test/picker-test.mjs
+      # The Level Library's game menu (src/Gui/jkGUILibrary.c) on its own,
+      # with Emscripten and AddressSanitizer, on a made-up menu system and a
+      # made-up page: what it shows, what it tells the page, what it gives the
+      # Host screen back.
+      - name: Test the Level Library menu
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          sh packaging/wasm/test/library-menu-test.sh build_emcc
       # unzip.js, the zip methods the browser can't unpack: zips made by
       # PKZIP, 7-Zip, xz, zstd and others (packaging/wasm/test/fixtures).
       - name: Test unzipping

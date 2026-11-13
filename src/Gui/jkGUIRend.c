@@ -63,6 +63,23 @@ int jkGuiRend_IsMenuActive(void)
 {
     return jkGuiRend_HandlerIsSet > 0;
 }
+
+// Added: the mouse wheel for one menu, while it's the one shown.
+static jkGuiMenu *jkGuiRend_pWheelMenu = NULL;
+static int (*jkGuiRend_fnWheel)(jkGuiMenu *pMenu, int32_t notches) = NULL;
+
+void jkGuiRend_SetMouseWheelHandler(jkGuiMenu *pMenu, int (*fn)(jkGuiMenu *pMenu, int32_t notches))
+{
+    jkGuiRend_pWheelMenu = fn ? pMenu : NULL;
+    jkGuiRend_fnWheel = fn;
+}
+
+int jkGuiRend_MouseWheel(int32_t notches)
+{
+    if (!jkGuiRend_fnWheel || !jkGuiRend_activeMenu || jkGuiRend_activeMenu != jkGuiRend_pWheelMenu)
+        return 0;
+    return jkGuiRend_fnWheel(jkGuiRend_activeMenu, notches);
+}
 static int32_t jkGuiRend_fillColor = 0;
 static int32_t jkGuiRend_paletteChecksum = 0;
 static int32_t jkGuiRend_dword_85620C = 0;
@@ -1095,6 +1112,12 @@ void jkGuiRend_RenderIdk2_alt(jkGuiMenu *menu)
     {
 #if !defined(SDL2_RENDER) && !defined(TARGET_RETRO_HOMEBREW)
         menu->focusedElement = element;
+#else
+        // Added: a focused element that was hidden gives the focus up. It's
+        // drawn again below, and drawing a hidden element calls this again: with
+        // the focus left on it, that never ended (a stack overflow).
+        if ( focusedElement && !focusedElement->bIsVisible )
+            menu->focusedElement = element;
 #endif
         if ( focusedElement )
         {

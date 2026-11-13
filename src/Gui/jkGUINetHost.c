@@ -21,12 +21,19 @@
 #include "Main/jkEpisode.h"
 #include "Gui/jkGUISingleplayer.h"
 
+#ifdef PLATFORM_WSRELAY
+#include "Gui/jkGUILibrary.h"
+#endif
+
 enum jkGuiNetHostButton_t
 {
     GUI_OK = 1,
     GUI_CANCEL = -1,
 
     GUI_ADVANCED = 200,
+#ifdef PLATFORM_WSRELAY
+    GUI_LIBRARY = 201, // Added: Level Library... (jkGuiNetHost_OpenLibrary)
+#endif
 };
 
 enum jkGuiNetHostElement_t
@@ -65,6 +72,8 @@ enum jkGuiNetHostElement_t
     NETHOST_HITRULES_TEXT = NETHOST_JEDIONLY_CHECKBOX + 1,
     NETHOST_CLASSICHITS_CHECKBOX = NETHOST_JEDIONLY_CHECKBOX + 2,
     NETHOST_HWYSHITS_CHECKBOX = NETHOST_JEDIONLY_CHECKBOX + 3,
+    // Added: Level Library..., on the Choose Episode line, last in both lists.
+    NETHOST_LIBRARY_BUTTON = NETHOST_JEDIONLY_CHECKBOX + 4,
 #endif
 };
 
@@ -93,6 +102,7 @@ static int32_t jkGuiNetHost_aIdk[2] = {0xd, 0xe};
 
 #ifdef PLATFORM_WSRELAY
 static int jkGuiNetHost_HitRulesClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, int redraw);
+static void jkGuiNetHost_SmallButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw);
 #endif
 
 // MOTS altered
@@ -116,7 +126,14 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     { ELEMENT_PICBUTTON,    2, 0, NULL, 34, { 340, 120, 30, 30 }, 1, 0, NULL, NULL, &jkGuiNetHost_sub_411AE0, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, "GUINET_PASSWORD", 2, { 20, 340, 270, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBOX,      0, 0, NULL, 16, { 20, 380, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: ends before Level Library..., which is after it on its line: the
+    // mouse finds the first element under it, and this one took the button's
+    // left half.
+    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 150, 145, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#else
     { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 150, 240, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
 #ifdef PLATFORM_WSRELAY
     // Added: the lists are a row shorter each, for the hit rules under them.
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 175, 320, 66 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -146,6 +163,11 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Level Library..., at the right end of the Choose Episode line, in
+    // the small font of the labels beside it (2 higher: drawn at 150 it showed
+    // 2 lower than "Choose Episode:" in the game). Its text ends at 630, the
+    // right edge of the Episode list and the Server Port box.
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 490, 148, 140, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -178,7 +200,14 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_PICBUTTON,    2, 0, NULL, 34, { 365, 130, 30, 30 }, 1, 0, NULL, NULL, &jkGuiNetHost_sub_411AE0, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, "GUINET_PASSWORD", 2, { 20, 360, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBOX,      0, 0, NULL, 16, { 20, 380, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: ends before Level Library..., which is after it on its line: the
+    // mouse finds the first element under it, and this one took the button's
+    // left half.
+    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 173, 145, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#else
     { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 173, 240, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
 #ifdef PLATFORM_WSRELAY
     // Added: the lists are a row shorter each, for the hit rules under them.
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 195, 320, 51 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -204,6 +233,8 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Level Library..., as in JK's list (2 higher, as there).
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 490, 171, 140, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -309,6 +340,65 @@ static void jkGuiNetHost_ShowHitReach()
 static void jkGuiNetHost_TakeHitReach()
 {
     stdComm_WSRelay_hitReachMs = wstr_to_int_clamped(jkGuiNetHost_hitReachText, STDCOMM_WSRELAY_REACH_MIN, STDCOMM_WSRELAY_REACH_MAX);
+}
+
+// Added: the Level Library (Gui/jkGUILibrary.c), which Level Library... on
+// the Choose Episode line opens. A level the host takes there is saved in the
+// browser and written into episode/ by the page, and the library gives back
+// its episode's name, for Choose Episode to pick.
+static void jkGuiNetHost_EnumEpisodes();
+
+// Level Library... in the small font, as the labels and checkboxes around it
+// are: the button font next to "Choose Episode" was a size too big. A text
+// button's font goes up by one with the mouse over it and by two while it's
+// pressed (med0, med1, med2); the small font has two (small0, small1), so
+// pressed stays on small1. Its text ends where the Episode list's box and the
+// Server Port box end (the right edge of its rect), measured in the font it's
+// drawn in, so it stays put when the mouse is over it.
+static void jkGuiNetHost_SmallButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw)
+{
+    int32_t font = pElement->textType;
+    rdRect rect = pElement->rect;
+    if (pMenu->lastMouseOverClickable == pElement)
+        font++;
+    if (redraw)
+        jkGuiRend_CopyVBuffer(pMenu, &pElement->rect);
+    int flags = pElement->selectedTextEntry;
+    if (pElement->wstr)
+    {
+        int w = stdFont_sub_4355F0(pMenu->fonts[font], pElement->wstr);
+        if (w < rect.width)
+        {
+            // Drawn from the left at right - w, in a rect a little wider
+            // than the text: one exactly as wide wraps it onto two lines.
+            rect.x += rect.width - w;
+            rect.width = w + 8;
+            flags &= ~1;
+        }
+    }
+    stdFont_Draw3(pVbuf, pMenu->fonts[font], rect.y, &rect, flags, pElement->wstr, 1);
+}
+
+static void jkGuiNetHost_OpenLibrary()
+{
+    char name[32];
+    jkGuiElement* pList = &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX];
+
+    if (!jkGuiLibrary_Show(Main_bMotsCompat, name, sizeof(name)))
+        return;
+
+    // The level is in episode/ now: list the episodes again, with it picked.
+    jkGuiNetHost_EnumEpisodes();
+    for (int i = 0; i < (int)jkGuiNetHost_dArray1.total; i++)
+    {
+        jkGuiStringEntry* pEntry = jkGuiRend_GetStringEntry(&jkGuiNetHost_dArray1, i);
+        if (pEntry && pEntry->str && pEntry->c_str && !__strnicmp(pEntry->c_str, name, 0x20u))
+        {
+            pList->selectedTextEntry = i;
+            break;
+        }
+    }
+    jkGuiNetHost_sub_4119D0(pList, jkGuiNetHost_pMenu, -1, -1, 0);
 }
 #endif
 
@@ -509,6 +599,20 @@ static void jkGuiNetHost_SetRankVisible(int bVisible)
     jkGuiNetHost_aElementsMots[NETHOST_STARS_RIGHT_BUTTON].bIsVisible = bVisible;
 }
 
+// Added: the episodes the Host screen lists, into Choose Episode. It was
+// written out where the screen opens and after Advanced.
+static void jkGuiNetHost_EnumEpisodes()
+{
+    jkEpisodeTypeFlags_t loadMask = (JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF);
+    if (Main_bMotsCompat)
+        loadMask |= JKM_EPISODE_SABER; // Added: list MotS's saber-only episodes (Sith Lightsaber Training)
+#ifdef QOL_IMPROVEMENTS
+    if (jkGuiNetHost_bIsCoop)
+        loadMask |= JK_EPISODE_SINGLEPLAYER;
+#endif
+    jkGuiSingleplayer_EnumEpisodes(&jkGuiNetHost_dArray1, &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], 0, loadMask);
+}
+
 // MOTS altered
 int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
 {
@@ -591,14 +695,7 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
     jkGuiNetHost_pElements[NETHOST_PASSWORD_TEXTBOX].selectedTextEntry = 16;
     jkGuiRend_DarrayNewStr(&jkGuiNetHost_dArray1, jkEpisode_var2 + 1, 1);
 
-    jkEpisodeTypeFlags_t loadMask = (JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF);
-    if (Main_bMotsCompat)
-        loadMask |= JKM_EPISODE_SABER; // Added: list MotS's saber-only episodes (Sith Lightsaber Training)
-#ifdef QOL_IMPROVEMENTS
-    if (jkGuiNetHost_bIsCoop)
-        loadMask |= JK_EPISODE_SINGLEPLAYER;
-#endif
-    jkGuiSingleplayer_EnumEpisodes(&jkGuiNetHost_dArray1, &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], 0, loadMask);
+    jkGuiNetHost_EnumEpisodes();
     jkGuiRend_DarrayNewStr(&jkGuiNetHost_dArray2, 10, 1);
     jkGuiRend_DarrayReallocStr(&jkGuiNetHost_dArray2, 0, 0);
     jkGuiRend_SetClickableString(&jkGuiNetHost_pElements[NETHOST_LEVEL_LISTBOX], &jkGuiNetHost_dArray2);
@@ -609,6 +706,9 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
     
     jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX].selectedTextEntry = 0;
     jkGuiNetHost_sub_4119D0(&jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], jkGuiNetHost_pMenu, -1, -1, 0);
+#ifdef PLATFORM_WSRELAY
+    jkGuiNetHost_pElements[NETHOST_LIBRARY_BUTTON].bIsVisible = jkGuiLibrary_IsAvailable();
+#endif
 
     do
     {
@@ -738,16 +838,20 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
             jkGuiNetHost_bIsDedicated = !!jkGuiNetHost_aSettingsElements[NETHOST_DEDICATED_CHECKBOX].selectedTextEntry;
             jkGuiNetHost_bIsCoop = !!jkGuiNetHost_aSettingsElements[NETHOST_COOP_CHECKBOX].selectedTextEntry;
 
-            jkEpisodeTypeFlags_t loadMask = (JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF);
-            if (Main_bMotsCompat)
-                loadMask |= JKM_EPISODE_SABER; // Added: list MotS's saber-only episodes (Sith Lightsaber Training)
-            if (jkGuiNetHost_bIsCoop)
-                loadMask |= JK_EPISODE_SINGLEPLAYER;
-            jkGuiSingleplayer_EnumEpisodes(&jkGuiNetHost_dArray1, &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], 0, loadMask);
+            jkGuiNetHost_EnumEpisodes();
 #endif
         }
+#ifdef PLATFORM_WSRELAY
+        else if ( v4 == GUI_LIBRARY )
+        {
+            jkGuiNetHost_OpenLibrary();
+        }
+    }
+    while ( v4 == GUI_ADVANCED || v4 == GUI_LIBRARY );
+#else
     }
     while ( v4 == GUI_ADVANCED );
+#endif
 
     jkGuiNetHost_SaveSettings(); // Added: Make sure stuff actually gets into the registry
     jkGuiRend_DarrayFree(&jkGuiNetHost_dArray1);

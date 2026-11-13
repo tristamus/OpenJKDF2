@@ -193,6 +193,15 @@
 #define MAXPLAYERS_DEFAULT MAXPLAYERS_ORIGINAL_DEFAULT
 #endif
 
+// How many episodes (episode/ folders and GOBs) the game lists. JK.EXE's
+// table holds 64. The browser build also lists the levels a host saves from
+// the Level Library (packaging/wasm/library.js), so it holds 512.
+#ifdef ARCH_WASM
+#define JKEPISODE_MAX (512)
+#else
+#define JKEPISODE_MAX (64)
+#endif
+
 // The most supersampling (Display > SSAA Multiplier) the browser build draws at. Each
 // step multiplies the pixels on both sides, so 2 is already four times the work.
 #define WASM_MAX_SSAA_MULTIPLE (2.0)

@@ -100,6 +100,10 @@ void jkGuiRend_sub_50FDB0();
 void jkGuiRend_Startup();
 void jkGuiRend_Shutdown();
 int jkGuiRend_IsMenuActive(void);
+// Added: a menu that takes the mouse wheel itself (fn returns 1 when it did);
+// otherwise the wheel does what the arrow keys do (Window.c).
+void jkGuiRend_SetMouseWheelHandler(jkGuiMenu *pMenu, int (*fn)(jkGuiMenu *pMenu, int32_t notches));
+int jkGuiRend_MouseWheel(int32_t notches);
 #ifdef QOL_IMPROVEMENTS
 int jkGuiRend_IsEscapeKeyClick(jkGuiElement *pElement); // Added
 #endif

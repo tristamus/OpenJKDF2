@@ -77,7 +77,7 @@ int jkEpisode_LoadVerify()
         {
             if ( v30.is_subdirectory )
             {
-                if ( jkEpisode_var2 < 0x40 )
+                if ( jkEpisode_var2 < JKEPISODE_MAX )
                 {
                     v2 = 0;
                     if ( jkEpisode_var2 )
@@ -109,7 +109,7 @@ LABEL_11:
         if ( v30.fpath[0] != '.' )
         {
             stdFnames_StripExtAndDot(v30.fpath);
-            if ( jkEpisode_var2 < 0x40 )
+            if ( jkEpisode_var2 < JKEPISODE_MAX )
             {
                 v7 = 0;
                 if ( jkEpisode_var2 )
@@ -143,7 +143,7 @@ LABEL_20:
             if ( v30.fpath[0] != '.' )
             {
                 stdFnames_StripExtAndDot(v30.fpath);
-                if ( jkEpisode_var2 < 0x40 )
+                if ( jkEpisode_var2 < JKEPISODE_MAX )
                 {
                     v12 = 0;
                     if ( jkEpisode_var2 )
@@ -678,7 +678,7 @@ int jkEpisode_idk6(const char *pName)
     int v5; // edx
 
     v1 = jkEpisode_var2;
-    if ( (unsigned int)jkEpisode_var2 >= 0x40 )
+    if ( (unsigned int)jkEpisode_var2 >= JKEPISODE_MAX )
         return 0;
     v3 = 0;
     if ( jkEpisode_var2 )
