@@ -284,10 +284,9 @@
             return 'The Level Library can\'t be reached right now. Close it and try again in a moment.';
         if (!have)
             return 'Getting the list of levels...';
-        var data = have.data, n = data.levels.length, listed = data.listed || n;
+        var data = have.data, n = data.levels.length;
         return n.toLocaleString('en-US') + (n === 1 ? ' level' : ' levels') + ' from Massassi.net' +
-            (data.left ? ', with ' + data.left.toLocaleString('en-US') + ' more of its ' +
-             listed.toLocaleString('en-US') + ' still being copied' : '');
+            (data.left ? ' so far, ' + data.left.toLocaleString('en-US') + ' more coming' : '');
     }
 
     // Letters the game's fonts may not have, as the nearest ones they do
@@ -302,12 +301,15 @@
             .replace(/\r\n?/g, '\n').replace(/\t/g, '    ').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
     }
 
-    // A row: the title, a tab, then the year and the size. The menu cuts
-    // the title to fit and puts the rest in its own column.
+    // A row: the title, a tab, then the kind, the year and the size. The
+    // menu cuts the title to fit and puts the rest in its own column, which
+    // has room for "CTF 2000 12 MB".
     function rowText(l) {
         var mark = savedName(l, L.game) ? '* ' : '';
         var kind = l.k === 'ctf' ? 'CTF ' : l.k === 'kfy' ? 'KFY ' : l.k === 'sp' ? 'SP ' : '';
-        return plain(mark + l.t).replace(/\n/g, ' ') + '\t' + kind + year(l) + '  ' + size(l.sz);
+        var mb = (l.sz || 0) / (1024 * 1024);
+        return plain(mark + l.t).replace(/\n/g, ' ') + '\t' + kind + year(l) + ' ' +
+            (mb >= 10 ? Math.round(mb) + ' MB' : size(l.sz));
     }
 
     function selected() { return L.sel != null ? byId(L.sel) : null; }
@@ -320,17 +322,18 @@
         var src = sourceText(l);
         fact('Author', l.a || 'unknown');
         fact('Released', dateText(l.rel || l.add, l.rel ? l.rp : 'd') + (src ? ' (' + src + ')' : ''));
-        fact('Download', size(l.sz) + ' zip');
+        fact('Size', size(l.sz) + ' zip');
         fact('Type', KINDS[l.k] || l.k);
         var gobs = episodeGobs(l, L.game);
         if (gobs.length) {
             var g = gobs[0];
             fact('Episode', g.ep + (g.lv && g.lv.length ? ' (' + g.lv.length + ' level' + (g.lv.length === 1 ? '' : 's') + ')' : ''));
         }
+        var dls = l.dl ? l.dl.toLocaleString('en-US') + ' downloads on Massassi' : '';
         if (l.r != null)
-            fact('Rating', l.r + ' of 10' + (l.v ? ' (' + l.v + ' votes)' : ''));
-        if (l.dl)
-            fact('Downloads', l.dl.toLocaleString('en-US') + ' on Massassi');
+            fact('Rating', l.r + ' of 10' + (l.v ? ' (' + l.v + ' votes)' : '') + (dls ? ', ' + dls : ''));
+        else if (dls)
+            fact('Rating', 'none yet, ' + dls);
         var notes = [];
         if (!gobs.length)
             notes.push('This level has no episode GOB for ' + (L.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight') +
@@ -477,7 +480,7 @@
             return L.msg;
         if (L.error)
             return L.error;
-        return 'One download at a time. Levels are saved in this browser, never in your game folder.';
+        return 'Levels you use are saved in this browser, not in your game folder.';
     }
 
     // ---- The screenshot: a picture the page puts over the menu's frame for

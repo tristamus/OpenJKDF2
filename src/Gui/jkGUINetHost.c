@@ -125,7 +125,14 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     { ELEMENT_PICBUTTON,    2, 0, NULL, 34, { 340, 120, 30, 30 }, 1, 0, NULL, NULL, &jkGuiNetHost_sub_411AE0, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, "GUINET_PASSWORD", 2, { 20, 340, 270, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBOX,      0, 0, NULL, 16, { 20, 380, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: ends before Level Library..., which is after it on its line: the
+    // mouse finds the first element under it, and this one took the button's
+    // left half.
+    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 150, 145, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#else
     { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 150, 240, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
 #ifdef PLATFORM_WSRELAY
     // Added: the lists are a row shorter each, for the hit rules under them.
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 175, 320, 66 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -189,7 +196,14 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_PICBUTTON,    2, 0, NULL, 34, { 365, 130, 30, 30 }, 1, 0, NULL, NULL, &jkGuiNetHost_sub_411AE0, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, "GUINET_PASSWORD", 2, { 20, 360, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBOX,      0, 0, NULL, 16, { 20, 380, 270, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: ends before Level Library..., which is after it on its line: the
+    // mouse finds the first element under it, and this one took the button's
+    // left half.
+    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 173, 145, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#else
     { ELEMENT_TEXT,         0, 0, "GUI_CHOOSEEPISODE", 2, { 310, 173, 240, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
 #ifdef PLATFORM_WSRELAY
     // Added: the lists are a row shorter each, for the hit rules under them.
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 195, 320, 51 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },

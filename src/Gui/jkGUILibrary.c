@@ -99,10 +99,10 @@ enum jkGuiLibraryTab_t
 // (from the row's left edge, as the list draws it). The list draws what's
 // after a row's last tab at the first of these stops past what's before it,
 // and cuts it at the list's edge.
-#define LIB_LIST_TITLE_W (156)
-static int32_t jkGuiLibrary_listPaddings[2] = {162, 0};
+#define LIB_LIST_TITLE_W (144)
+static int32_t jkGuiLibrary_listPaddings[2] = {150, 0};
 // Labels in the Overview (Author:, Released:...), sizes in Files.
-static int32_t jkGuiLibrary_factsPaddings[2] = {72, 0};
+static int32_t jkGuiLibrary_factsPaddings[2] = {80, 0};
 static int32_t jkGuiLibrary_filesPaddings[2] = {58, 0};
 
 static int32_t jkGuiLibrary_listBitmaps[2] = {JKGUI_BM_UP_15, JKGUI_BM_DOWN_15};
@@ -142,10 +142,10 @@ static jkGuiElement jkGuiLibrary_aElements[] =
     { ELEMENT_TEXTBUTTON, 0, 2, u"Overview", 3, { 310, 78, 104, 24 }, 1, 0, NULL, NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Readme", 3, { 418, 78, 104, 24 }, 1, 0, u"The text files in the level's zip.", NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Files", 3, { 526, 78, 104, 24 }, 1, 0, u"What's in the level's zip.", NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_CUSTOM,     0, 0, NULL, 0, { 310, 104, 320, 180 }, 1, 0, NULL, jkGuiLibrary_ShotDraw, jkGuiLibrary_ShotClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,       0, 0, u"No screenshot for this level", 3, { 310, 104, 320, 180 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,       0, 2, NULL, 2, { 310, 286, 320, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_LISTBOX,    0, 0, NULL, 0, { 310, 310, 320, 76 }, 1, 0, NULL, jkGuiLibrary_PlainListDraw, NULL, jkGuiLibrary_listBitmaps, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CUSTOM,     0, 0, NULL, 0, { 382, 104, 176, 132 }, 1, 0, NULL, jkGuiLibrary_ShotDraw, jkGuiLibrary_ShotClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, u"No screenshot for this level", 3, { 382, 104, 176, 132 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 2, NULL, 3, { 310, 238, 320, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_LISTBOX,    0, 0, NULL, 0, { 310, 260, 320, 128 }, 1, 0, NULL, jkGuiLibrary_PlainListDraw, NULL, jkGuiLibrary_listBitmaps, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_LISTBOX,    0, 0, NULL, 0, { 310, 104, 320, 282 }, 0, 0, NULL, jkGuiLibrary_PlainListDraw, NULL, jkGuiLibrary_listBitmaps, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 20, 390, 600, 18 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, NULL, NULL, jkGuiLibrary_CancelClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -265,8 +265,47 @@ static char16_t* jkGuiLibrary_GetText(int what, int arg)
     return pText;
 }
 
+static int jkGuiLibrary_TextWidth(stdFont* pFont, const char16_t* pText, int len);
+static int jkGuiLibrary_CharWidth(stdFont* pFont, char16_t c);
+
+// A line of text for a text element, cut with "..." to the element's width:
+// the game's text drawing wraps what doesn't fit, which a one-line element
+// shows cut in half.
+static char16_t* jkGuiLibrary_Fit(jkGuiElement* pElement, char16_t* pText)
+{
+    static const char16_t dots[4] = {'.', '.', '.', 0};
+    stdFont* pFont = jkGui_stdFonts[pElement->textType];
+    int width = pElement->rect.width - 4;
+    int len = 0;
+
+    if (!pText || !pFont)
+        return pText;
+    while (pText[len])
+        len++;
+    if (jkGuiLibrary_TextWidth(pFont, pText, len) <= width)
+        return pText;
+    char16_t* pOut = (char16_t*)malloc(sizeof(char16_t) * (len + 4));
+    if (!pOut)
+        return pText;
+    int w = jkGuiLibrary_TextWidth(pFont, dots, 3), n = 0;
+    for (int i = 0; i < len; i++)
+    {
+        int cw = jkGuiLibrary_CharWidth(pFont, pText[i]);
+        if (w + cw > width)
+            break;
+        w += cw;
+        pOut[n++] = pText[i];
+    }
+    while (n > 0 && pOut[n - 1] == ' ')
+        n--;
+    memcpy(pOut + n, dots, sizeof(dots));
+    free(pText);
+    return pOut;
+}
+
 static void jkGuiLibrary_SetText(jkGuiElement* pElement, char16_t** ppKeep, char16_t* pText)
 {
+    pText = jkGuiLibrary_Fit(pElement, pText);
     if (*ppKeep)
         free(*ppKeep);
     *ppKeep = pText;
@@ -518,6 +557,11 @@ static void jkGuiLibrary_ShowTab(jkGuiMenu* pMenu)
     el[LIB_LEVEL_TITLE].bIsVisible = bOverview;
     el[LIB_FACTS].bIsVisible = bOverview;
     el[LIB_TEXT].bIsVisible = !bOverview;
+    // A text box the player clicked in (which focuses it) that's now hidden
+    // gives the focus to the list of levels: the menu system, drawing it
+    // hidden, would otherwise look for where the focus goes next forever.
+    if (pMenu && pMenu->focusedElement && !pMenu->focusedElement->bIsVisible)
+        pMenu->focusedElement = &el[LIB_LIST];
     jkGuiLibrary_js_shot(bOverview && bShots, el[LIB_SHOT].rect.x + 1, el[LIB_SHOT].rect.y + 1,
                          el[LIB_SHOT].rect.width - 2, el[LIB_SHOT].rect.height - 2);
 }

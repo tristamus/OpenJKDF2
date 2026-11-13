@@ -230,12 +230,12 @@ await test('the list: multiplayer and CTF levels, by name, with the counts', asy
     await page.waitForFunction(() => Module.jkLibrary.number(1) > 0);
     assert.deepEqual(await rows(page), [501, 502, 506, 505, 503, 507, 508].sort((a, b) =>
         byId[a].entry.t.localeCompare(byId[b].entry.t)));
-    assert.equal(await libText(page, T.STATUS), '8 levels from Massassi.net, with 3 more of its 12 still being copied');
+    assert.equal(await libText(page, T.STATUS), '8 levels from Massassi.net so far, 3 more coming');
     assert.equal(await libText(page, T.SORT), 'Name');
     // A row: the title, a tab, then the kind, the year and the size.
     const r = await rowTexts(page);
-    assert.match(r[0], /^Alpha Arena\t1999  \d+ KB$/);
-    assert.match(r[1], /^Beta Base CTF\tCTF 2001  \d+ KB$/);
+    assert.match(r[0], /^Alpha Arena\t1999 \d+ KB$/);
+    assert.match(r[1], /^Beta Base CTF\tCTF 2001 \d+ KB$/);
     // The first level is picked, with its Overview: a label, a tab, its value.
     assert.equal(await number(page, N.SELECTED), 0);
     assert.equal(await libText(page, T.TITLE), 'Alpha Arena');
@@ -245,7 +245,8 @@ await test('the list: multiplayer and CTF levels, by name, with the counts', asy
     assert.equal(facts[1], 'Released:\tMay 2, 1999 (from its readme; Massassi says added Jun 2, 2000, the day it imported most older levels)');
     assert.ok(facts.includes('Episode:\tAlpha Arena (1 level)'));
     assert.ok(facts.includes('Type:\tMultiplayer'));
-    assert.ok(facts.includes('Rating:\t7.5 of 10 (4 votes)'));
+    assert.ok(facts.includes('Rating:\t7.5 of 10 (4 votes), 499 downloads on Massassi'));
+    assert.ok(facts.some(f => /^Size:\t\d+ KB zip$/.test(f)));
     assert.deepEqual(facts.slice(-2), ['The description of Alpha Arena.', 'Second line.']);
     assert.equal(await number(page, N.SHOTS), 2);
     assert.equal(await number(page, N.CAN_USE), 1);
@@ -253,7 +254,7 @@ await test('the list: multiplayer and CTF levels, by name, with the counts', asy
     // Once it has all come in and been asked for, nothing is new.
     assert.notEqual(await number(page, N.CHANGED), 0);
     assert.equal(await number(page, N.CHANGED), 0);
-    assert.equal(await libText(page, T.MESSAGE), 'One download at a time. Levels are saved in this browser, never in your game folder.');
+    assert.equal(await libText(page, T.MESSAGE), 'Levels you use are saved in this browser, not in your game folder.');
 });
 
 await test('the screenshot goes over the menu\'s frame for it, and only while the menu asks', async () => {
@@ -425,7 +426,7 @@ await test('a level with no episode GOB can\'t be used; a bad download is refuse
     assert.equal(await page.evaluate(() => !!Module.FS.files.get('/jk1/episode/broken.gob')), false);
     // Picking another level clears it.
     await pick(page, 501);
-    assert.match(await libText(page, T.MESSAGE), /^One download at a time/);
+    assert.match(await libText(page, T.MESSAGE), /^Levels you use are saved in this browser/);
     // Cancel with nothing coming in closes the menu: nothing taken.
     assert.equal(await call(page, 'cancel'), false);
     assert.equal(await call(page, 'take'), '');
@@ -443,7 +444,7 @@ await test('Cancel while a level comes in stops it and keeps the library open', 
     assert.equal(await number(page, N.BUSY), 1);
     assert.equal(await call(page, 'cancel'), true);
     await page.waitForFunction(() => Module.jkLibrary.number(4) === 0);
-    assert.match(await libText(page, T.MESSAGE), /^One download at a time/);
+    assert.match(await libText(page, T.MESSAGE), /^Levels you use are saved in this browser/);
     assert.equal(await number(page, N.CAN_USE), 1);
     await page.waitForTimeout(1800);
     assert.equal(await page.evaluate(() => !!Module.FS.files.get('/jk1/episode/delta.gob')), false);
@@ -466,7 +467,7 @@ await test('Mysteries of the Sith: Kill the Fool, and GOO files', async () => {
     await open(m.page, 'mots');
     const r = await rowTexts(m.page);
     assert.deepEqual(r.map(idOf), [601]);
-    assert.match(r[0], /^Fool Yard\tKFY 1999  /);
+    assert.match(r[0], /^Fool Yard\tKFY 1999 /);
     assert.ok((await libText(m.page, T.OVERVIEW)).split('\n').includes('Type:\tKill the Fool'));
     assert.equal(await useLevel(m.page, 601), 'foolyard');
     assert.equal(await fileSha(m.page, '/mots/episode/foolyard.goo'), sha(kfy));

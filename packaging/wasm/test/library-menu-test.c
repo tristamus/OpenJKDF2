@@ -201,12 +201,72 @@ void jkGui_InitMenu(jkGuiMenu *menu, stdBitmap *bgBitmap)
 void jkGuiRend_MenuSetReturnKeyShortcutElement(jkGuiMenu *menu, jkGuiElement *element) { menu->pReturnKeyShortcutElement = element; }
 void jkGuiRend_MenuSetEscapeKeyShortcutElement(jkGuiMenu *menu, jkGuiElement *element) { menu->pEscapeKeyShortcutElement = element; }
 
+static void drawElement(jkGuiElement* el, jkGuiMenu* menu);
+
+// What drawing a hidden element does in the game (jkGuiRend_RenderIdk2_alt
+// in jkGUIRend.c, as SDL builds have it, before the guard added there for
+// this): it looks for the next text box or list after the focused one, and
+// draws the focused one again. With the focus on a hidden element, that
+// drew it again forever. Counted here instead of overflowing the stack.
+static int focusDepth = 0;
+static int focusRunaway = 0;
+
+static void drawHidden(jkGuiMenu* menu)
+{
+    if (focusDepth > 20)
+    {
+        focusRunaway = 1;
+        return;
+    }
+    focusDepth++;
+    jkGuiElement* focused = menu->focusedElement;
+    int idx = focused ? (int)(focused - menu->paElements) : 0;
+    int other = idx + 1;
+    int found = 0;
+    while (1)
+    {
+        jkGuiElement* it = &menu->paElements[other];
+        if (it->type != ELEMENT_END)
+        {
+            if (it->bIsVisible && !it->enableHover && !(it->type < ELEMENT_LISTBOX || it->type > ELEMENT_TEXTBOX))
+            {
+                found = 1;
+                break;
+            }
+        }
+        else
+        {
+            other = -1;
+        }
+        if (++other == idx)
+            break;
+    }
+    if (found)
+    {
+        jkGuiElement* el = &menu->paElements[other];
+        if (focused && focused != el)
+            drawElement(focused, menu);
+        if (focused != el)
+            drawElement(el, menu);
+    }
+    focusDepth--;
+}
+
 static void drawElement(jkGuiElement* el, jkGuiMenu* menu)
 {
     CHECK(menu == displayed && menu, "draws only while the menu is up");
     draws++;
-    if (el->bIsVisible && el->drawFuncOverride)
-        el->drawFuncOverride(el, menu, NULL, 1);
+    if (el->bIsVisible)
+    {
+        if (el->drawFuncOverride)
+            el->drawFuncOverride(el, menu, NULL, 1);
+    }
+    else
+    {
+        if (menu->lastMouseOverClickable == el)
+            menu->lastMouseOverClickable = NULL;
+        drawHidden(menu);
+    }
 }
 
 void jkGuiRend_UpdateAndDrawClickable(jkGuiElement *clickable, jkGuiMenu *menu, BOOL forceRedraw)
@@ -225,10 +285,7 @@ void jkGuiRend_Paint(jkGuiMenu *menu)
     CHECK(menu == displayed && menu, "paints only while the menu is up");
     paints++;
     for (jkGuiElement* el = menu->paElements; el->type != ELEMENT_END; el++)
-    {
-        if (el->bIsVisible && el->drawFuncOverride)
-            el->drawFuncOverride(el, menu, NULL, 0);
-    }
+        drawElement(el, menu);
 }
 
 void jkGuiRend_CopyVBuffer(jkGuiMenu *menu, rdRect *rect) {}
@@ -363,6 +420,8 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         // What it shows once the page has the list.
         CHECK(wis(el[E_TITLE].wstr, "Level Library"), "title %s", show(el[E_TITLE].wstr));
         CHECK(wis(el[E_STATUS].wstr, "3 levels from Massassi.net"), "status %s", show(el[E_STATUS].wstr));
+        // A message wider than its line is cut with "..." (the game would wrap it).
+        CHECK(width(el[E_MESSAGE].wstr, wlen(el[E_MESSAGE].wstr)) <= el[E_MESSAGE].rect.width - 4, "the message fits its line");
         CHECK(wis(el[E_SORT_NAME].wstr, "Name"), "sort %s", show(el[E_SORT_NAME].wstr));
         CHECK(wis(el[E_CANCEL].wstr, "Cancel"), "Cancel's text from the string table");
         CHECK(wis(el[E_CTF].wstr, "CTF"), "Jedi Knight's CTF");
@@ -377,7 +436,7 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         while (r1[tab] && r1[tab] != '\t')
             tab++;
         CHECK(tab > 3 && r1[tab - 1] == '.' && r1[tab - 2] == '.' && r1[tab - 3] == '.' && r1[tab - 4] != ' ', "row 1 cut: %s", show(r1));
-        CHECK(width(r1, tab) <= 156, "row 1's title fits its column (%d)", width(r1, tab));
+        CHECK(width(r1, tab) <= 144, "row 1's title fits its column (%d)", width(r1, tab));
         CHECK(wstarts(r1, "* A Very Long"), "row 1 keeps its saved mark: %s", show(r1));
         CHECK(wis(r1 + tab, "\tCTF 2003  3.4 MB"), "row 1 keeps the rest: %s", show(r1 + tab));
         CHECK(el[E_LIST].selectedTextEntry == 0, "row 0 picked");
@@ -395,7 +454,7 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
               "Released wraps after its label, its next lines in the value's column");
         CHECK(hasLine(&el[E_FACTS], "Last line."), "the last line");
         CHECK(hasLine(&el[E_FACTS], ""), "blank lines kept");
-        checkLinesFit(&el[E_FACTS], 72, "facts");
+        checkLinesFit(&el[E_FACTS], 80, "facts");
         int longWord = 0;
         for (int i = 0; el[E_FACTS].unistr[i].str; i++)
             longWord += wstarts(el[E_FACTS].unistr[i].str, "xxxxxxxxxx");
@@ -403,7 +462,7 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(el[E_SHOT].bIsVisible && !el[E_NO_SHOT].bIsVisible && el[E_FACTS].bIsVisible && !el[E_TEXT].bIsVisible,
               "Overview: the screenshot frame and the facts");
         CHECK(el[E_SHOT].wHintText != NULL, "a hint for the next screenshot");
-        CHECK(js("var s = Module.jkLibrary._M.lastShot; s && s.join() === '1,311,105,318,178' ? 1 : 0"),
+        CHECK(js("var s = Module.jkLibrary._M.lastShot; s && s.join() === '1,383,105,174,130' ? 1 : 0"),
               "the screenshot asked for inside the frame: %s", jsText("String(Module.jkLibrary._M.lastShot)"));
         CHECK(el[E_TAB_OVERVIEW].type == ELEMENT_TEXT && el[E_TAB_OVERVIEW].textType == 3, "Overview is the open tab");
         CHECK(el[E_TAB_README].type == ELEMENT_TEXTBUTTON && el[E_TAB_README].textType == 2, "Readme is a button");
@@ -411,11 +470,11 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(wis(el[E_MESSAGE].wstr, "One download at a time."), "message %s", show(el[E_MESSAGE].wstr));
         CHECK(menu->pReturnKeyShortcutElement == &el[E_USE] && menu->pEscapeKeyShortcutElement == &el[E_CANCEL],
               "Return is Use Level, Escape is Cancel");
-        // The facts are text, not things to pick: no line lit, labels at 72.
+        // The facts are text, not things to pick: no line lit, labels at 80.
         listDraws = 0;
         jkGuiRend_UpdateAndDrawClickable(&el[E_FACTS], menu, 1);
         CHECK(listDraws == 1 && listFonts[0] == listFonts[1], "the facts draw with no line lit");
-        CHECK(listPaddings && listPaddings[0] == 72, "the facts' labels end at 72");
+        CHECK(listPaddings && listPaddings[0] == 80, "the facts' labels end at 80");
         jkGuiRend_UpdateAndDrawClickable(&el[E_LIST], menu, 1);
         forgetCalls();
         int before = draws;
@@ -466,7 +525,8 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         break;
     case 6:
     {
-        CHECK(wis(el[E_LEVEL_TITLE].wstr, "A Very Long Level Title That Goes On And On Past The Column"), "the new level's title");
+        CHECK(wis(el[E_LEVEL_TITLE].wstr, "A Very Long Level Title That Goes On And On Past The Co..."), "the new level's title, cut to its line: %s",
+              show(el[E_LEVEL_TITLE].wstr));
         CHECK(el[E_FACTS].texInfo.textScrollY == 0, "its facts from the top");
         // A row the page won't pick (busy, say): the list goes back to its pick.
         js("Module.jkLibrary._M.busy = true, 0");
@@ -474,10 +534,14 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         click(menu, &el[E_LIST], 0);
         CHECK(el[E_LIST].selectedTextEntry == 1, "the list stays on the page's pick");
         js("Module.jkLibrary._M.busy = false, 0");
-        // Readme.
+        // Readme, after a click in the facts (which focuses them): the
+        // hidden facts give the focus to the list.
         int before = paints;
+        menu->focusedElement = &el[E_FACTS];
         click(menu, &el[E_TAB_README], 0);
         CHECK(paints > before, "a tab paints the menu again");
+        CHECK(!focusRunaway, "no endless focus search with the facts hidden");
+        CHECK(menu->focusedElement == &el[E_LIST], "the focus on the list");
         CHECK(el[E_TAB_README].type == ELEMENT_TEXT && el[E_TAB_OVERVIEW].type == ELEMENT_TEXTBUTTON, "Readme is the open tab");
         CHECK(!el[E_SHOT].bIsVisible && !el[E_FACTS].bIsVisible && el[E_TEXT].bIsVisible && !el[E_LEVEL_TITLE].bIsVisible,
               "Readme: the text, no screenshot");
@@ -490,13 +554,16 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         break;
     }
     case 7:
+        menu->focusedElement = &el[E_TEXT];
         click(menu, &el[E_TAB_FILES], 0);
+        CHECK(menu->focusedElement == &el[E_TEXT], "the text keeps the focus from Readme to Files");
         CHECK(hasLine(&el[E_TEXT], "12 KB\talpha.gob  (episode: Alpha Arena)"), "the files");
         listDraws = 0;
         jkGuiRend_UpdateAndDrawClickable(&el[E_TEXT], menu, 1);
         CHECK(listPaddings && listPaddings[0] == 58, "the names after the sizes, at 58");
         click(menu, &el[E_TAB_OVERVIEW], 0);
         CHECK(el[E_SHOT].bIsVisible && el[E_FACTS].bIsVisible && !el[E_TEXT].bIsVisible, "back to Overview");
+        CHECK(!focusRunaway && menu->focusedElement == &el[E_LIST], "the hidden text gives the focus to the list");
         break;
     case 8:
         CHECK(js("Module.jkLibrary._M.lastShot[0]") == 1, "the screenshot back");
@@ -521,6 +588,8 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(!el[E_USE].bIsVisible && !el[E_PAGE].bIsVisible, "no Use Level or Massassi Page while it comes in");
         CHECK(wis(el[E_MESSAGE].wstr, "Getting A Very Long Level Title That Goes On And On Past The Column (50%)"),
               "progress %s", show(el[E_MESSAGE].wstr));
+        CHECK(wis(el[E_LEVEL_TITLE].wstr, "A Very Long Level Title That Goes On And On Past The Co..."), "the title still cut: %s",
+              show(el[E_LEVEL_TITLE].wstr));
         click(menu, &el[E_CANCEL], 0);
         CHECK(menu->lastClicked == 0, "Cancel stops it and the library stays");
         break;
@@ -606,6 +675,7 @@ int main()
     script = firstOpen;
     int got = jkGuiLibrary_Show(0, name, sizeof(name));
     CHECK(frames >= 14, "the first open ran its frames (%d)", frames);
+    CHECK(!focusRunaway, "no endless focus search");
     CHECK(got == 1 && !strcmp(name, "alpha"), "gives back the level it got: %d \"%s\"", got, name);
     CHECK(called("'end'"), "the page told it's closed");
     CHECK(js("Module.jkLibrary._M.lastShot[0]") == 0, "no screenshot once it's closed");

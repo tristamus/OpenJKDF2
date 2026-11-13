@@ -1095,6 +1095,12 @@ void jkGuiRend_RenderIdk2_alt(jkGuiMenu *menu)
     {
 #if !defined(SDL2_RENDER) && !defined(TARGET_RETRO_HOMEBREW)
         menu->focusedElement = element;
+#else
+        // Added: a focused element that was hidden gives the focus up. It's
+        // drawn again below, and drawing a hidden element calls this again: with
+        // the focus left on it, that never ended (a stack overflow).
+        if ( focusedElement && !focusedElement->bIsVisible )
+            menu->focusedElement = element;
 #endif
         if ( focusedElement )
         {
