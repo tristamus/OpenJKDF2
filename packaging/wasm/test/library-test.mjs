@@ -1,15 +1,18 @@
-// Tests for packaging/wasm/library.js, the Level Library screen the Host
-// screen opens, in a real browser. Needs Playwright with Chromium, as
-// move-test.mjs does: node packaging/wasm/test/library-test.mjs
+// Tests for packaging/wasm/library.js, the page's half of the Level Library
+// (src/Gui/jkGUILibrary.c is the game menu that draws it), in a real browser.
+// Needs Playwright with Chromium, as move-test.mjs does:
+// node packaging/wasm/test/library-test.mjs
 //
-// The levels are made up by the test and served the way the site's Worker
-// serves them (src/levels.js in jkdf2mp-bb-server: /levels/jk1.json,
-// /levels/d/<id>.json, /levels/z/<id>.zip, /levels/s/<id>-<n>.jpg). maps.js
-// runs as it is, on a stand-in for Emscripten's FS and the browser's own
-// IndexedDB; the game doesn't run. With --shots <folder>, it saves pictures
-// of the screen there.
+// The test calls Module.jkLibrary as the menu does: begin(), then text() and
+// number() for what to draw, query(), select(), use(), cancel() and shot()
+// for what the player does, then take() and end(). The levels are made up by
+// the test and served the way the site's Worker serves them (src/levels.js
+// in jkdf2mp-bb-server: /levels/jk1.json, /levels/d/<id>.json,
+// /levels/z/<id>.zip, /levels/s/<id>-<n>.jpg). maps.js runs as it is, on a
+// stand-in for Emscripten's FS and the browser's own IndexedDB; the game
+// doesn't run.
 
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
@@ -18,10 +21,6 @@ import { makeGob, makeZip, makeFS } from './helpers.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
-
-const shotsAt = process.argv.indexOf('--shots') > 0 ? process.argv[process.argv.indexOf('--shots') + 1] : null;
-if (shotsAt)
-    mkdirSync(shotsAt, { recursive: true });
 
 const PORT = 8972, ORIGIN = 'http://127.0.0.1:' + PORT;
 const mapsJs = readFileSync(new URL('../maps.js', import.meta.url), 'utf8');
@@ -92,6 +91,10 @@ const LEVELS = [
     level(601, 'kfy', 'Fool Yard', 'mots', [{ n: 'foolyard.goo', bytes: kfy, ep: 'Fool Yard', ty: 2, lv: ['fool.jkl'] }]),
 ];
 const byId = Object.fromEntries(LEVELS.map(l => [l.entry.id, l]));
+const byTitle = Object.fromEntries(LEVELS.map(l => [l.entry.t, l.entry.id]));
+// Letters the game's fonts don't have, in a description and a title.
+byId[507].detail.desc = 'It\u2019s \u201ctaken\u201d\tfor sure\u2026 Caf\u00e9 \u2013 \u00a0done';
+byId[507].detail.files[0].n = 'taken.gob';
 
 // A 4x3 PNG, for the screenshots.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAFklEQVR4nGP4z8DwHwyBNCMDhPQPABqkB/k8OVZ+AAAAAElFTkSuQmCC', 'base64');
@@ -127,8 +130,7 @@ await new Promise(resolve => server.listen(PORT, '127.0.0.1', resolve));
 
 const browser = await chromium.launch();
 
-// A page with maps.js and library.js on a made-up game folder, and a
-// stand-in for SDL's key listener on the window.
+// A page with maps.js and library.js on a made-up game folder.
 async function game({ mots = false, files = {} } = {}) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     const errors = [];
@@ -141,8 +143,6 @@ async function game({ mots = false, files = {} } = {}) {
         const files = Object.fromEntries(fileList.map(([p, b]) => [p, new Uint8Array(b)]));
         window.Module = { arguments: mots ? ['-motsCompat'] : [], preRun: [], FS: makeFS(files, cwd),
                           addRunDependency() {}, removeRunDependency() {} };
-        window.gameKeys = [];
-        window.addEventListener('keydown', e => window.gameKeys.push(e.key));
     }, [makeFS.toString(), fileList, cwd, mots]);
     await page.goto(ORIGIN + '/', { waitUntil: 'load' });
     await page.evaluate(([maps, library]) => {
@@ -155,22 +155,57 @@ async function game({ mots = false, files = {} } = {}) {
     return { page, errors };
 }
 
-const openLib = (page, which) => page.evaluate(g => Module.jkLibrary.open(g), which);
-const state = page => page.evaluate(() => Module.jkLibrary.state());
-const take = page => page.evaluate(() => Module.jkLibrary.take());
-const rows = page => page.$$eval('#jk-lib [data-level]', bs => bs.map(b => Number(b.dataset.level)));
+// What the menu does, through Module.jkLibrary.
+const call = (page, fn, ...args) => page.evaluate(([fn, args]) => Module.jkLibrary[fn](...args), [fn, args]);
+const libText = (page, what, arg = 0) => call(page, 'text', what, arg);
+const number = (page, what) => call(page, 'number', what);
+const T = { STATUS: 0, ROW: 1, SORT: 2, TITLE: 3, OVERVIEW: 4, README: 5, FILES: 6, MESSAGE: 7 };
+const N = { CHANGED: 0, COUNT: 1, SELECTED: 2, CAN_USE: 3, BUSY: 4, DONE: 5, SHOTS: 6 };
+const F = { MP: 1, CTF: 2, SP: 4 };
+
+const rowTexts = page => page.evaluate(() => {
+    const out = [];
+    for (let i = 0; i < Module.jkLibrary.number(1); i++)
+        out.push(Module.jkLibrary.text(1, i));
+    return out;
+});
+const idOf = row => byTitle[row.replace(/^\* /, '').split('\t')[0]];
+const rows = async page => (await rowTexts(page)).map(idOf);
+async function open(page, g = 'jk1', query = ['', F.MP | F.CTF, 0]) {
+    assert.equal(await call(page, 'begin', g), true);
+    await call(page, 'query', ...query);
+    await page.waitForFunction(() => Module.jkLibrary.number(1) > 0, null, { timeout: 10000 });
+}
+async function pick(page, id) {
+    const at = (await rows(page)).indexOf(id);
+    assert.ok(at >= 0, id + ' is in the list');
+    await call(page, 'select', at);
+    assert.equal(await number(page, N.SELECTED), at);
+}
+const details = page => page.waitForFunction(() => !/^Getting /m.test(Module.jkLibrary.text(4)) &&
+                                                  !/^Getting /.test(Module.jkLibrary.text(5)));
+// Use Level, as the menu waits for it: done, then take() and end().
+async function useLevel(page, id) {
+    await pick(page, id);
+    assert.equal(await number(page, N.CAN_USE), 1);
+    assert.equal(await call(page, 'use'), true);
+    await page.waitForFunction(() => Module.jkLibrary.number(5) === 1, null, { timeout: 15000 });
+    const name = await call(page, 'take');
+    await call(page, 'end');
+    return name;
+}
 const fileSha = (page, path) => page.evaluate(async p => {
     const b = Module.FS.readFile(p);
     const h = await crypto.subtle.digest('SHA-256', b);
     return Array.from(new Uint8Array(h), x => x.toString(16).padStart(2, '0')).join('');
 }, path);
-async function waitClosed(page) {
-    await page.waitForFunction(() => Module.jkLibrary.state() === 1, null, { timeout: 15000 });
-}
-async function useLevel(page, id) {
-    await page.click(`#jk-lib [data-level="${id}"]`);
-    await page.click('#jk-lib [data-id="use"]');
-}
+const shotBox = page => page.evaluate(() => {
+    const img = document.getElementById('jk-lib-shot');
+    if (!img || img.style.display === 'none')
+        return null;
+    const r = img.getBoundingClientRect();
+    return { src: new URL(img.src).pathname, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+});
 
 let failed = 0;
 async function test(name, fn) {
@@ -188,193 +223,237 @@ const jk = await game({ files: { '/jk1/episode/JK1MP.gob': text('the original'),
 const page = jk.page;
 
 await test('the list: multiplayer and CTF levels, by name, with the counts', async () => {
-    assert.equal(await state(page), 1);
-    assert.equal(await openLib(page, 'jk1'), true);
-    assert.equal(await state(page), 0);
-    await page.waitForSelector('#jk-lib [data-level]');
+    assert.equal(await call(page, 'begin', 'jk1'), true);
+    // Everything is new to a menu that just opened.
+    assert.equal(await number(page, N.CHANGED), 31);
+    await call(page, 'query', '', F.MP | F.CTF, 0);
+    await page.waitForFunction(() => Module.jkLibrary.number(1) > 0);
     assert.deepEqual(await rows(page), [501, 502, 506, 505, 503, 507, 508].sort((a, b) =>
         byId[a].entry.t.localeCompare(byId[b].entry.t)));
-    assert.match(await page.textContent('#jk-lib [data-id="sub"]'), /^8 levels from Massassi\.net, with 3 more of its 12 still being copied$/);
-    assert.equal(await page.textContent('#jk-lib [data-id="sortName"]'), 'Name');
-    // The first level is picked, with its Overview.
-    await page.waitForSelector('#jk-lib .desc');
-    assert.match(await page.textContent('#jk-lib .p-title'), /Alpha Arena/);
-    const facts = await page.textContent('#jk-lib .facts');
-    assert.match(facts, /Released:May 2, 1999 \(from its readme; Massassi says added Jun 2, 2000, the day it imported most older levels\)/);
-    assert.match(facts, /Episode:Alpha Arena \(1 level\)/);
-    assert.equal(await page.getAttribute('#jk-lib .shot img', 'src'), '/levels/s/501-1.jpg');
-    if (shotsAt)
-        await page.screenshot({ path: shotsAt + '/library-jk.png' });
+    assert.equal(await libText(page, T.STATUS), '8 levels from Massassi.net, with 3 more of its 12 still being copied');
+    assert.equal(await libText(page, T.SORT), 'Name');
+    // A row: the title, a tab, then the kind, the year and the size.
+    const r = await rowTexts(page);
+    assert.match(r[0], /^Alpha Arena\t1999  \d+ KB$/);
+    assert.match(r[1], /^Beta Base CTF\tCTF 2001  \d+ KB$/);
+    // The first level is picked, with its Overview: a label, a tab, its value.
+    assert.equal(await number(page, N.SELECTED), 0);
+    assert.equal(await libText(page, T.TITLE), 'Alpha Arena');
+    await details(page);
+    const facts = (await libText(page, T.OVERVIEW)).split('\n');
+    assert.equal(facts[0], 'Author:\tTester 501');
+    assert.equal(facts[1], 'Released:\tMay 2, 1999 (from its readme; Massassi says added Jun 2, 2000, the day it imported most older levels)');
+    assert.ok(facts.includes('Episode:\tAlpha Arena (1 level)'));
+    assert.ok(facts.includes('Type:\tMultiplayer'));
+    assert.ok(facts.includes('Rating:\t7.5 of 10 (4 votes)'));
+    assert.deepEqual(facts.slice(-2), ['The description of Alpha Arena.', 'Second line.']);
+    assert.equal(await number(page, N.SHOTS), 2);
+    assert.equal(await number(page, N.CAN_USE), 1);
+    assert.equal(await number(page, N.BUSY), 0);
+    // Once it has all come in and been asked for, nothing is new.
+    assert.notEqual(await number(page, N.CHANGED), 0);
+    assert.equal(await number(page, N.CHANGED), 0);
+    assert.equal(await libText(page, T.MESSAGE), 'One download at a time. Levels are saved in this browser, never in your game folder.');
+});
+
+await test('the screenshot goes over the menu\'s frame for it, and only while the menu asks', async () => {
+    // The canvas is 1280x800: the menu is 800 high and 1066.67 wide in the
+    // middle, so a menu pixel is 1.667 of the page's, from x 106.67.
+    await call(page, 'shot', 1, 311, 105, 318, 178);
+    await page.waitForFunction(() => document.getElementById('jk-lib-shot').style.display === 'block');
+    const box = await shotBox(page);
+    assert.equal(box.src, '/levels/s/501-1.jpg');
+    assert.deepEqual([box.x, box.y, box.w, box.h], [625, 175, 530, 297]);
+    await call(page, 'nextShot');
+    await page.waitForFunction(() => /501-2\.jpg$/.test(document.getElementById('jk-lib-shot').src));
+    await call(page, 'nextShot');
+    await page.waitForFunction(() => /501-1\.jpg$/.test(document.getElementById('jk-lib-shot').src));
+    // The canvas grows: the picture follows.
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await call(page, 'shot', 1, 311, 105, 318, 178);
+    await page.waitForFunction(() => Math.round(document.getElementById('jk-lib-shot').getBoundingClientRect().height) === 334);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // A menu that stops asking (it closed, or the game stopped) loses it.
+    await page.waitForFunction(() => document.getElementById('jk-lib-shot').style.display === 'none', null, { timeout: 2000 });
+    await call(page, 'shot', 1, 311, 105, 318, 178);
+    await page.waitForFunction(() => document.getElementById('jk-lib-shot').style.display === 'block');
+    await call(page, 'shot', 0, 0, 0, 0, 0);
+    await page.waitForFunction(() => document.getElementById('jk-lib-shot').style.display === 'none');
+    // The picture never takes the mouse from the game.
+    assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('jk-lib-shot')).pointerEvents), 'none');
 });
 
 await test('sorts: newest and oldest by the real release date, then most downloaded', async () => {
-    await page.click('#jk-lib [data-id="sortNext"]');
-    assert.equal(await page.textContent('#jk-lib [data-id="sortName"]'), 'Newest first');
+    await call(page, 'query', '', F.MP | F.CTF, 1);
+    assert.equal(await libText(page, T.SORT), 'Newest first');
     const newest = await rows(page);
     assert.equal(newest[0], 503);  // 2003-11-20
     assert.equal(newest[1], 502);  // 2001-03
     assert.equal(newest[newest.length - 1], 505);  // 1998
-    await page.click('#jk-lib [data-id="sortNext"]');
-    assert.equal(await page.textContent('#jk-lib [data-id="sortName"]'), 'Oldest first');
+    await call(page, 'query', '', F.MP | F.CTF, 2);
+    assert.equal(await libText(page, T.SORT), 'Oldest first');
     assert.deepEqual(await rows(page), newest.slice().reverse().sort((a, b) => {
         const d = l => byId[l].entry.rel;
         return d(a).localeCompare(d(b)) || byId[a].entry.t.localeCompare(byId[b].entry.t);
     }));
-    await page.click('#jk-lib [data-id="sortNext"]');
-    assert.equal(await page.textContent('#jk-lib [data-id="sortName"]'), 'Most downloaded');
+    await call(page, 'query', '', F.MP | F.CTF, 3);
+    assert.equal(await libText(page, T.SORT), 'Most downloaded');
     assert.deepEqual(await rows(page), [501, 502, 503, 505, 506, 507, 508]);
-    await page.click('#jk-lib [data-id="sortPrev"]');
-    await page.click('#jk-lib [data-id="sortPrev"]');
-    await page.click('#jk-lib [data-id="sortPrev"]');
-    assert.equal(await page.textContent('#jk-lib [data-id="sortName"]'), 'Name');
+    await call(page, 'query', '', F.MP | F.CTF, 4);
+    assert.equal(await libText(page, T.SORT), 'Top rated');
+    await call(page, 'query', '', F.MP | F.CTF, 5);
+    assert.equal(await libText(page, T.SORT), 'Smallest first');
+    const sizes = (await rows(page)).map(id => byId[id].entry.sz);
+    assert.deepEqual(sizes, sizes.slice().sort((a, b) => a - b));
+    await call(page, 'query', '', F.MP | F.CTF, 0);
+    assert.equal(await libText(page, T.SORT), 'Name');
+    // The pick stays where it was.
+    assert.equal(await libText(page, T.TITLE), 'Alpha Arena');
 });
 
-await test('filters and search; keys typed there never reach the game', async () => {
-    await page.click('#jk-lib [data-filter="ctf"]');
+await test('filters and search', async () => {
+    await call(page, 'number', N.CHANGED);
+    await call(page, 'query', '', F.MP, 0);
     assert.ok(!(await rows(page)).includes(502));
-    await page.click('#jk-lib [data-filter="sp"]');
+    assert.equal((await number(page, N.CHANGED)) & 2, 2);
+    await call(page, 'query', '', F.MP | F.CTF | F.SP, 0);
     assert.ok((await rows(page)).includes(504));
-    await page.click('#jk-lib [data-filter="ctf"]');
-    await page.click('#jk-lib [data-filter="sp"]');
-    await page.evaluate(() => { window.gameKeys = []; });
-    await page.click('#jk-lib [data-id="q"]');
-    await page.keyboard.type('beta');
+    await call(page, 'query', 'beta', F.MP | F.CTF, 0);
     assert.deepEqual(await rows(page), [502]);
-    await page.keyboard.press('Backspace');
-    await page.keyboard.press('Backspace');
-    await page.keyboard.press('Backspace');
-    await page.keyboard.press('Backspace');
+    // A pick that's no longer listed gives way to the first that is.
+    assert.equal(await libText(page, T.TITLE), 'Beta Base CTF');
+    await call(page, 'query', 'TESTER 503', F.MP | F.CTF, 0);
+    assert.deepEqual(await rows(page), [503]);
+    await call(page, 'query', 'nothing like this', F.MP | F.CTF, 0);
+    assert.deepEqual(await rows(page), []);
+    assert.equal(await number(page, N.SELECTED), -1);
+    await call(page, 'query', '', F.MP | F.CTF, 0);
     assert.equal((await rows(page)).length, 7);
-    assert.deepEqual(await page.evaluate(() => window.gameKeys), []);
-    // The arrow keys move through the list from the search box.
-    const list = await rows(page), sel = () => page.getAttribute('#jk-lib [aria-selected="true"][data-level]', 'data-level');
-    const at = list.indexOf(Number(await sel()));
-    await page.keyboard.press('ArrowDown');
-    assert.equal(await sel(), String(list[at + 1]));
-    await page.keyboard.press('ArrowUp');
-    assert.equal(await sel(), String(list[at]));
-    assert.deepEqual(await page.evaluate(() => window.gameKeys), []);
+    // Nothing asked again: nothing changed.
+    await call(page, 'number', N.CHANGED);
+    await call(page, 'query', '', F.MP | F.CTF, 0);
+    assert.equal(await number(page, N.CHANGED), 0);
 });
 
 await test('Readme and Files', async () => {
-    await page.click('#jk-lib [data-level="502"]');
-    await page.click('#jk-lib [data-tab="readme"]');
-    await page.waitForSelector('#jk-lib .readme');
-    assert.match(await page.textContent('#jk-lib .readme'), /Title: Beta Base CTF/);
-    await page.click('#jk-lib [data-tab="files"]');
-    const files = await page.textContent('#jk-lib .tree');
-    assert.match(files, /Beta\/beta\.gob episode: Beta Base/);
-    assert.match(files, /readme\.txt/);
-    if (shotsAt)
-        await page.screenshot({ path: shotsAt + '/library-files.png' });
-    await page.click('#jk-lib [data-tab="lib"]');
-    const facts = await page.textContent('#jk-lib .facts');
-    assert.match(facts, /Released:March 2001 \(the date of the level files in its zip; Massassi says added Apr 10, 2001\)/);
-    assert.match(facts, /Type:Capture the Flag/);
+    await pick(page, 502);
+    await details(page);
+    assert.match(await libText(page, T.README), /^--- readme\.txt ---\n\nTitle: Beta Base CTF\nAuthor: Tester/);
+    const files = (await libText(page, T.FILES)).split('\n');
+    assert.ok(files.some(f => /^\d+ KB\tBeta\/beta\.gob  \(episode: Beta Base\)$/.test(f)), files.join('|'));
+    assert.ok(files.some(f => /^\d+ KB\treadme\.txt$/.test(f)));
+    const facts = (await libText(page, T.OVERVIEW)).split('\n');
+    assert.ok(facts.includes('Released:\tMarch 2001 (the date of the level files in its zip; Massassi says added Apr 10, 2001)'));
+    assert.ok(facts.includes('Type:\tCapture the Flag'));
+    assert.equal(await number(page, N.SHOTS), 2);
+});
+
+await test('text the game\'s fonts can draw: no curly quotes, accents or tabs in a description', async () => {
+    await pick(page, 507);
+    await details(page);
+    const desc = (await libText(page, T.OVERVIEW)).split('\n').pop();
+    assert.equal(desc, 'It\'s "taken"    for sure... Cafe -  done');
+    assert.ok(!/[^\x00-\x7f]/.test(await libText(page, T.OVERVIEW)));
 });
 
 await test('Use Level: gets the zip, checks it, saves the GOB and writes it into episode/', async () => {
     requests.length = 0;
-    await useLevel(page, 501);
-    await waitClosed(page);
-    assert.equal(await take(page), 'alpha');
-    assert.equal(await take(page), '');
+    await pick(page, 501);
+    assert.equal(await call(page, 'use'), true);
+    // While it comes in: no other level, no second Use, and it says how far it is.
+    assert.equal(await number(page, N.BUSY), 1);
+    assert.equal(await number(page, N.CAN_USE), 0);
+    assert.equal(await call(page, 'use'), false);
+    await call(page, 'select', 1);
+    assert.equal(await libText(page, T.TITLE), 'Alpha Arena');
+    assert.match(await libText(page, T.MESSAGE), /^Getting Alpha Arena|^Opening |^Checking |^Saved in this browser/);
+    await page.waitForFunction(() => Module.jkLibrary.number(5) === 1, null, { timeout: 15000 });
+    assert.equal(await call(page, 'take'), 'alpha');
+    assert.equal(await call(page, 'take'), '');
+    await call(page, 'end');
     assert.equal(await fileSha(page, '/jk1/episode/alpha.gob'), sha(alpha));
     assert.deepEqual(requests.filter(r => r.includes('/levels/z/')), ['GET /levels/z/501.zip?h=' + byId[501].entry.h]);
     const saved = await page.evaluate(async () => (await Module.jkMaps.core.store.list('jk1')).map(m => [m.name, m.ext, m.sha256, m.lib]));
     assert.deepEqual(saved, [['alpha', 'gob', sha(alpha), 501]]);
-    assert.equal(await page.evaluate(() => document.activeElement === Module.canvas), true);
 });
 
 await test('a saved level has a mark, and comes from the browser the next time', async () => {
-    await openLib(page, 'jk1');
-    await page.waitForSelector('#jk-lib [data-level="501"] .mark');
+    await open(page);
+    const r = await rowTexts(page);
+    assert.ok(r.some(x => x.startsWith('* Alpha Arena\t')), r.join('|'));
+    await pick(page, 501);
+    assert.match(await libText(page, T.OVERVIEW), /Saved in this browser as alpha\./);
     await page.evaluate(() => Module.FS.unlink('/jk1/episode/alpha.gob'));
     requests.length = 0;
-    await useLevel(page, 501);
-    await waitClosed(page);
-    assert.equal(await take(page), 'alpha');
+    assert.equal(await useLevel(page, 501), 'alpha');
     assert.equal(await fileSha(page, '/jk1/episode/alpha.gob'), sha(alpha));
     assert.deepEqual(requests.filter(r => r.includes('/levels/z/')), []);
 });
 
 await test('a GOB in a zip in the zip; a subfolder in the zip', async () => {
-    await openLib(page, 'jk1');
-    await page.waitForSelector('#jk-lib [data-level="503"]');
-    await useLevel(page, 503);
-    await waitClosed(page);
-    assert.equal(await take(page), 'gamma');
+    await open(page);
+    assert.equal(await useLevel(page, 503), 'gamma');
     assert.equal(await fileSha(page, '/jk1/episode/gamma.gob'), sha(gamma));
-    await openLib(page, 'jk1');
-    await page.waitForSelector('#jk-lib [data-level="502"]');
-    await useLevel(page, 502);
-    await waitClosed(page);
-    assert.equal(await take(page), 'beta');
+    await open(page);
+    assert.equal(await useLevel(page, 502), 'beta');
     assert.equal(await fileSha(page, '/jk1/episode/beta.gob'), sha(beta));
 });
 
 await test('names: an original episode\'s, or one the player has, get the level\'s number', async () => {
-    await openLib(page, 'jk1');
-    await page.waitForSelector('#jk-lib [data-level="506"]');
-    await useLevel(page, 506);
-    await waitClosed(page);
-    assert.equal(await take(page), 'JK1MP_506');
+    await open(page);
+    assert.equal(await useLevel(page, 506), 'JK1MP_506');
     assert.equal(await fileSha(page, '/jk1/episode/JK1MP_506.gob'), sha(clash));
     assert.equal(new TextDecoder().decode(new Uint8Array(await page.evaluate(() => Array.from(Module.FS.readFile('/jk1/episode/JK1MP.gob'))))), 'the original');
-    await openLib(page, 'jk1');
-    await page.waitForSelector('#jk-lib [data-level="507"]');
-    await useLevel(page, 507);
-    await waitClosed(page);
-    assert.equal(await take(page), 'taken_507');
+    await open(page);
+    assert.equal(await useLevel(page, 507), 'taken_507');
     assert.equal(await fileSha(page, '/jk1/episode/taken.gob'), sha(theTaken));
     assert.equal(await fileSha(page, '/jk1/episode/taken_507.gob'), sha(taken));
 });
 
 await test('a level with no episode GOB can\'t be used; a bad download is refused and said so', async () => {
-    await openLib(page, 'jk1');
-    await page.waitForSelector('#jk-lib [data-level="505"]');
-    await page.click('#jk-lib [data-level="505"]');
-    assert.equal(await page.isDisabled('#jk-lib [data-id="use"]'), true);
-    assert.match(await page.textContent('#jk-lib .panel'), /no episode GOB for Jedi Knight/);
-    await useLevel(page, 508);
-    await page.waitForSelector('#jk-lib[data-error]');
-    assert.match(await page.textContent('#jk-lib [data-id="ptext"]'), /didn't come through whole/);
-    assert.equal(await state(page), 0);
+    await open(page);
+    await pick(page, 505);
+    assert.equal(await number(page, N.CAN_USE), 0);
+    assert.equal(await call(page, 'use'), false);
+    assert.match(await libText(page, T.OVERVIEW), /no episode GOB for Jedi Knight/);
+    await pick(page, 508);
+    assert.equal(await call(page, 'use'), true);
+    await page.waitForFunction(() => Module.jkLibrary.number(4) === 0 && /come through/.test(Module.jkLibrary.text(7)), null, { timeout: 15000 });
+    assert.equal(await libText(page, T.MESSAGE), "The download didn't come through whole. Try again.");
+    assert.equal(await number(page, N.DONE), 0);
+    assert.equal(await number(page, N.CAN_USE), 1);
     assert.equal(await page.evaluate(() => !!Module.FS.files.get('/jk1/episode/broken.gob')), false);
-    if (shotsAt)
-        await page.screenshot({ path: shotsAt + '/library-error.png' });
-    // Escape closes it with nothing picked, and isn't the game's.
-    await page.evaluate(() => { window.gameKeys = []; });
-    await page.keyboard.press('Escape');
-    await waitClosed(page);
-    assert.equal(await take(page), '');
-    assert.deepEqual(await page.evaluate(() => window.gameKeys), []);
+    // Picking another level clears it.
+    await pick(page, 501);
+    assert.match(await libText(page, T.MESSAGE), /^One download at a time/);
+    // Cancel with nothing coming in closes the menu: nothing taken.
+    assert.equal(await call(page, 'cancel'), false);
+    assert.equal(await call(page, 'take'), '');
+    await call(page, 'end');
 });
 
 await test('Cancel while a level comes in stops it and keeps the library open', async () => {
-    await openLib(page, 'jk1');
-    await page.waitForSelector('#jk-lib [data-level]');
     await page.route('**/levels/z/504.zip*', async route => {
         await new Promise(r => setTimeout(r, 1500));
         route.continue().catch(() => {});
     });
-    await page.click('#jk-lib [data-filter="sp"]');
-    await page.waitForSelector('#jk-lib [data-level="504"]');
-    await useLevel(page, 504);
-    await page.waitForSelector('#jk-lib[data-busy]');
-    // Keys while it comes in are the library's too.
-    await page.evaluate(() => { window.gameKeys = []; });
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('a');
-    assert.deepEqual(await page.evaluate(() => window.gameKeys), []);
-    await page.click('#jk-lib [data-id="cancel"]');
-    await page.waitForFunction(() => !('busy' in document.getElementById('jk-lib').dataset));
-    assert.equal(await state(page), 0);
+    await open(page, 'jk1', ['', F.MP | F.CTF | F.SP, 0]);
+    await pick(page, 504);
+    assert.equal(await call(page, 'use'), true);
+    assert.equal(await number(page, N.BUSY), 1);
+    assert.equal(await call(page, 'cancel'), true);
+    await page.waitForFunction(() => Module.jkLibrary.number(4) === 0);
+    assert.match(await libText(page, T.MESSAGE), /^One download at a time/);
+    assert.equal(await number(page, N.CAN_USE), 1);
     await page.waitForTimeout(1800);
     assert.equal(await page.evaluate(() => !!Module.FS.files.get('/jk1/episode/delta.gob')), false);
-    await page.click('#jk-lib [data-id="cancel"]');
-    await waitClosed(page);
-    assert.equal(await take(page), '');
+    assert.equal(await number(page, N.DONE), 0);
+    // Closing while one comes in stops it too.
+    assert.equal(await call(page, 'use'), true);
+    await call(page, 'end');
+    await page.waitForTimeout(1800);
+    assert.equal(await page.evaluate(() => !!Module.FS.files.get('/jk1/episode/delta.gob')), false);
+    assert.equal(await call(page, 'take'), '');
 });
 
 await test('no errors on the page', async () => {
@@ -382,18 +461,14 @@ await test('no errors on the page', async () => {
 });
 await page.close();
 
-await test('Mysteries of the Sith: its colors and Kill the Fool, and GOO files', async () => {
+await test('Mysteries of the Sith: Kill the Fool, and GOO files', async () => {
     const m = await game({ mots: true });
-    await openLib(m.page, 'mots');
-    await m.page.waitForSelector('#jk-lib [data-level="601"]');
-    assert.equal(await m.page.getAttribute('#jk-lib', 'data-game'), 'mots');
-    assert.equal(await m.page.textContent('#jk-lib [data-filter="ctf"] span'), 'Kill the Fool');
-    assert.match(await m.page.textContent('#jk-lib [data-level="601"] .s'), /^KFY/);
-    if (shotsAt)
-        await m.page.screenshot({ path: shotsAt + '/library-mots.png' });
-    await useLevel(m.page, 601);
-    await waitClosed(m.page);
-    assert.equal(await take(m.page), 'foolyard');
+    await open(m.page, 'mots');
+    const r = await rowTexts(m.page);
+    assert.deepEqual(r.map(idOf), [601]);
+    assert.match(r[0], /^Fool Yard\tKFY 1999  /);
+    assert.ok((await libText(m.page, T.OVERVIEW)).split('\n').includes('Type:\tKill the Fool'));
+    assert.equal(await useLevel(m.page, 601), 'foolyard');
     assert.equal(await fileSha(m.page, '/mots/episode/foolyard.goo'), sha(kfy));
     assert.deepEqual(m.errors.filter(e => !/Failed to load resource/.test(e)), []);
     await m.page.close();
@@ -413,6 +488,18 @@ await test('not where the site has no library', async () => {
     await page2.waitForTimeout(500);
     assert.equal(await page2.evaluate(() => Module.jkLibrary.available()), false);
     await page2.close();
+});
+
+await test('a list that can\'t be got says so', async () => {
+    const m = await game();
+    await m.page.route('**/levels/jk1.json', route => route.fulfill({ status: 500, body: 'no' }));
+    await m.page.evaluate(() => { Module.jkLibrary._L.index = {}; });
+    assert.equal(await call(m.page, 'begin', 'jk1'), true);
+    await m.page.waitForFunction(() => /can't be reached/.test(Module.jkLibrary.text(0)));
+    assert.equal(await number(m.page, N.COUNT), 0);
+    assert.equal(await number(m.page, N.CAN_USE), 0);
+    await call(m.page, 'end');
+    await m.page.close();
 });
 
 await browser.close();

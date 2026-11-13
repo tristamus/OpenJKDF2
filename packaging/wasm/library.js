@@ -1,30 +1,31 @@
-// The Level Library for the browser build: a game screen the page draws over
-// the game when a host presses Level Library... on the Host screen
-// (src/Gui/jkGUINetHost.c). Bundled into openjkdf2.js with --pre-js
-// (cmake_modules/plat_wasm.cmake), so it always matches the engine it ships
-// with.
+// The Level Library for the browser build: the community levels the site
+// keeps a copy of, in a game menu (src/Gui/jkGUILibrary.c) that opens from
+// Level Library... on the Host screen (src/Gui/jkGUINetHost.c). Bundled into
+// openjkdf2.js with --pre-js (cmake_modules/plat_wasm.cmake), so it always
+// matches the engine it ships with.
 //
-// It lists the community levels the site keeps a copy of. The site's Worker
-// (src/levels.js in the jkdf2mp-bb-server repository) copies Massassi.net's
-// level lists, pages, zips and screenshots, slowly, and serves
+// The site's Worker (src/levels.js in the jkdf2mp-bb-server repository)
+// copies Massassi.net's level lists, pages, zips and screenshots, slowly, and
+// serves
 //
 //   /levels/jk1.json, /levels/mots.json  the levels that are ready, per game
 //   /levels/d/<id>.json                  one level's description, readmes, files
 //   /levels/z/<id>.zip?h=<sha256>        its zip
 //   /levels/s/<id>-<n>.jpg               its screenshots, from 1
 //
+// This file is the menu's other half: it gets the list and the details, keeps
+// the search, filters and sort, and gives the menu its text (text(), number(),
+// what changed since it last asked). The menu draws everything in the game's
+// own fonts and colors; the one thing it can't draw, a level's screenshot in
+// full color, the page puts over the frame the menu leaves for it (shot()).
+//
 // Use Level gets the zip from the site, checks it and each GOB in it against
 // the SHA-256s in the list, saves the GOBs in this browser (maps.js's store,
 // where maps from hosts go too, so they're written into episode/ each time
 // the game starts) and writes them into episode/ now. Nothing goes to the
-// player's game folder. The Host screen waits while the library is open
-// (jkGuiNetHost_OpenLibrary), then lists the episodes again with the new one
-// picked. Players who join get the level from the host, as any other map.
-//
-// The engine calls in here: available() when the Host screen opens, to show
-// the button only where the site serves the library; open(game) for the
-// button; state() until it isn't OPEN; take() for the episode to pick, "" if
-// none.
+// player's game folder. The menu closes when it's done, and the Host screen
+// lists the episodes again with the new one picked. Players who join get the
+// level from the host, as any other map.
 
 (function() {
     var STATE_OPEN = 0, STATE_CLOSED = 1;
@@ -43,11 +44,11 @@
                  ['dl', 'Most downloaded'], ['rating', 'Top rated'], ['size', 'Smallest first']];
 
     var L = {
-        state: STATE_CLOSED, result: '', game: 'jk1',
+        state: STATE_CLOSED, result: '', done: false, game: 'jk1',
         avail: {}, checkedAt: {},
         index: {}, details: {}, saved: {},
-        sel: null, q: '', filters: { mp: true, ctf: true, sp: false }, sort: 0, tab: 'lib', shot: 1,
-        job: null, el: null
+        rows: [], sel: null, q: '', filters: { mp: true, ctf: true, sp: false }, sort: 0, shot: 1,
+        job: null, msg: '', error: '', loadFailed: false, changed: 0
     };
 
     function core() { return Module.jkMaps && Module.jkMaps.core; }
@@ -79,12 +80,6 @@
     }
 
     // ---- Small helpers
-
-    function esc(s) {
-        return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-        });
-    }
 
     function size(bytes) {
         if (!bytes)
@@ -273,369 +268,113 @@
         return list.sort(by);
     }
 
-    // ---- The screen
+    // ---- What the game's menu shows (src/Gui/jkGUILibrary.c asks for it
+    // as text, every frame it has changed)
 
-    var CSS =
-        '#jk-lib{position:fixed;inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;padding:0;border:0;' +
-        'overflow:hidden;color-scheme:dark;display:flex;align-items:center;justify-content:center;' +
-        '--g-bg1:#24110a;--g-bg2:#5a2a14;--g-bg3:#7a3c1c;--g-side:rgba(160,80,30,.45);--g-glow:rgba(140,170,255,.32);' +
-        '--g-label:#f0302a;--g-text:#ffd84a;--g-sel:#fff;--g-line:#f4efe6;--g-check:#c9a47a;--g-btn1:#ffd36b;--g-btn2:#e98a1c;' +
-        '--g-t1:#ffe39a;--g-t2:#f2a23a;--g-t3:#b8561a;--g-well:rgba(0,0,0,.28);' +
-        'background:radial-gradient(60% 55% at 50% 72%,var(--g-glow),transparent 62%),' +
-        'radial-gradient(40% 40% at 18% 40%,var(--g-side),transparent 70%),radial-gradient(40% 40% at 82% 40%,var(--g-side),transparent 70%),' +
-        'linear-gradient(180deg,var(--g-bg1),var(--g-bg2) 40%,var(--g-bg3) 70%,var(--g-bg1));' +
-        '--f:"Arial Narrow","Roboto Condensed","Helvetica Neue",Arial,sans-serif;' +
-        'font-family:var(--f);font-stretch:condensed}' +
-        '#jk-lib:not([open]){display:none}' +
-        '#jk-lib::backdrop{background:#000}' +
-        '#jk-lib[data-game="mots"]{--g-bg1:#0d0614;--g-bg2:#2a0f38;--g-bg3:#43195a;--g-side:rgba(150,70,190,.40);' +
-        '--g-glow:rgba(220,200,255,.30);--g-label:#e43ce4;--g-text:#ea5cea;--g-line:#f6ecf8;--g-check:#c463c4;' +
-        '--g-btn1:#ffe0ff;--g-btn2:#d98ad9;--g-t1:#ffe2ff;--g-t2:#e07ae6;--g-t3:#8a2fa6}' +
-        '#jk-lib .stage{--u:calc(min(100vw,133.333vh)/640);position:relative;flex:none;width:calc(640*var(--u));' +
-        'height:calc(480*var(--u));color:var(--g-text);user-select:none}' +
-        '#jk-lib .abs{position:absolute;left:calc(var(--x)*var(--u));top:calc(var(--y)*var(--u));width:calc(var(--w)*var(--u));' +
-        'height:calc(var(--h)*var(--u));box-sizing:border-box;margin:0}' +
-        '#jk-lib .title{text-align:center;font:800 calc(44*var(--u))/1 var(--f);letter-spacing:.01em;' +
-        'background:linear-gradient(180deg,var(--g-t1),var(--g-t2) 55%,var(--g-t3));-webkit-background-clip:text;' +
-        'background-clip:text;color:transparent;filter:drop-shadow(0 calc(2*var(--u)) 0 rgba(0,0,0,.6))}' +
-        '#jk-lib .lbl{color:var(--g-label);font:700 calc(15*var(--u))/1.15 var(--f);letter-spacing:.04em;text-shadow:0 1px 0 rgba(0,0,0,.8)}' +
-        '#jk-lib .val{color:var(--g-text);font:700 calc(15*var(--u))/1.15 var(--f);letter-spacing:.04em;text-shadow:0 1px 0 rgba(0,0,0,.8);' +
-        'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-        '#jk-lib .box{border:max(1px,calc(1.5*var(--u))) solid var(--g-line);color:var(--g-text);font:700 calc(14*var(--u))/1 var(--f);' +
-        'letter-spacing:.04em;padding:0 calc(5*var(--u));display:flex;align-items:center;text-shadow:0 1px 0 rgba(0,0,0,.8);' +
-        'background:rgba(0,0,0,.32);border-radius:0}' +
-        '#jk-lib input.box{outline:none;caret-color:var(--g-sel);user-select:text}' +
-        '#jk-lib input.box:focus{border-color:var(--g-sel)}' +
-        '#jk-lib input.box::placeholder{color:var(--g-text);opacity:.45}' +
-        '#jk-lib input.box:focus-visible,#jk-lib button:focus-visible,#jk-lib .rows:focus-visible,#jk-lib .panel:focus-visible' +
-        '{outline:calc(2*var(--u)) solid var(--g-sel);outline-offset:calc(2*var(--u))}' +
-        '#jk-lib input.box:focus-visible{outline:none}' +
-        '#jk-lib .filters{display:flex;gap:calc(9*var(--u))}' +
-        '#jk-lib .chk{display:flex;align-items:flex-start;gap:calc(5*var(--u));background:none;border:0;padding:0;text-align:left;' +
-        'cursor:pointer;white-space:nowrap;font-size:calc(13*var(--u))}' +
-        '#jk-lib .chk i{flex:none;width:calc(13*var(--u));height:calc(13*var(--u));margin-top:calc(1*var(--u));background:var(--g-check);' +
-        'box-shadow:inset 0 0 0 calc(1*var(--u)) rgba(0,0,0,.4);position:relative}' +
-        '#jk-lib .chk[aria-pressed="true"] i::before,#jk-lib .chk[aria-pressed="true"] i::after{content:"";position:absolute;left:45%;top:-10%;' +
-        'width:14%;height:120%;background:#fff;transform:rotate(45deg)}' +
-        '#jk-lib .chk[aria-pressed="true"] i::after{transform:rotate(-45deg)}' +
-        '#jk-lib .list{border:max(1px,calc(1.5*var(--u))) solid var(--g-line);background:rgba(0,0,0,.32)}' +
-        '#jk-lib .arrow{justify-content:center;padding:0;cursor:pointer}' +
-        '#jk-lib .gbtn{display:flex;align-items:center;justify-content:center;background:none;border:0;cursor:pointer;padding:0;' +
-        'font:800 calc(30*var(--u))/1 var(--f);letter-spacing:.02em;background-image:linear-gradient(180deg,var(--g-btn1),var(--g-btn2));' +
-        '-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 calc(1.5*var(--u)) 0 rgba(0,0,0,.7))}' +
-        '#jk-lib .gbtn:hover{filter:drop-shadow(0 calc(1.5*var(--u)) 0 rgba(0,0,0,.7)) brightness(1.25)}' +
-        '#jk-lib .gbtn:disabled{opacity:.35;cursor:not-allowed;filter:none}' +
-        '#jk-lib .small-btn{display:inline-flex;align-items:center;background:none;border:0;padding:0;cursor:pointer;' +
-        'font:700 calc(15*var(--u))/1 var(--f);letter-spacing:.04em;color:var(--g-btn1);text-shadow:0 1px 0 rgba(0,0,0,.85)}' +
-        '#jk-lib .small-btn:hover{color:var(--g-sel)}' +
-        '#jk-lib .tabs{display:flex;gap:calc(18*var(--u))}' +
-        '#jk-lib .tab[aria-selected="true"]{color:var(--g-sel);text-decoration:underline;text-decoration-color:var(--g-label);' +
-        'text-decoration-thickness:calc(2*var(--u));text-underline-offset:calc(4*var(--u))}' +
-        '#jk-lib .hint{text-align:center;color:var(--g-label);font:700 calc(11.5*var(--u))/1.2 var(--f);letter-spacing:.04em;' +
-        'text-shadow:0 1px 0 rgba(0,0,0,.9),0 0 calc(4*var(--u)) rgba(0,0,0,.9)}' +
-        '#jk-lib .rows{overflow-y:auto;padding:calc(3*var(--u)) calc(4*var(--u));list-style:none;scrollbar-width:thin;' +
-        'scrollbar-color:var(--g-label) transparent}' +
-        '#jk-lib .rows button{width:100%;display:grid;grid-template-columns:1fr auto;gap:calc(8*var(--u));align-items:baseline;' +
-        'background:none;border:0;padding:0 calc(3*var(--u));cursor:pointer;text-align:left;color:var(--g-text);' +
-        'font:700 calc(14*var(--u))/calc(19*var(--u)) var(--f);letter-spacing:.04em;text-shadow:0 1px 0 rgba(0,0,0,.8)}' +
-        '#jk-lib .rows .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-        '#jk-lib .rows .s{font-size:calc(11.5*var(--u));opacity:.8;font-variant-numeric:tabular-nums;white-space:nowrap}' +
-        '#jk-lib .rows button:hover .t{text-decoration:underline;text-decoration-color:var(--g-label)}' +
-        '#jk-lib .rows button[aria-selected="true"]{color:var(--g-sel);background:var(--g-well)}' +
-        '#jk-lib .rows .mark{color:var(--g-sel);margin-left:calc(4*var(--u))}' +
-        '#jk-lib .more{color:var(--g-label);font:700 calc(11.5*var(--u))/1.3 var(--f);letter-spacing:.04em;padding:calc(6*var(--u)) calc(3*var(--u));' +
-        'white-space:normal}' +
-        '#jk-lib[data-busy] .rows button:not([aria-selected="true"]){opacity:.4;cursor:not-allowed}' +
-        '#jk-lib .panel{overflow-y:auto;padding:calc(6*var(--u));display:grid;grid-auto-rows:max-content;gap:calc(6*var(--u));' +
-        'align-content:start;scrollbar-width:thin;scrollbar-color:var(--g-label) transparent;user-select:text}' +
-        '#jk-lib .panel>*{min-width:0}' +
-        '#jk-lib .shot{position:relative;width:100%;aspect-ratio:308/176;border:calc(1*var(--u)) solid var(--g-line);background:#000;overflow:hidden}' +
-        '#jk-lib .shot img{width:100%;height:100%;object-fit:contain;display:block}' +
-        '#jk-lib .shot .none{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:calc(10*var(--u));' +
-        'background:var(--g-well);white-space:normal}' +
-        '#jk-lib .pager{position:absolute;right:calc(5*var(--u));bottom:calc(4*var(--u));display:flex;gap:calc(8*var(--u))}' +
-        '#jk-lib .pager button{background:none;border:0;padding:0 calc(2*var(--u));cursor:pointer;font:800 calc(15*var(--u))/1 var(--f);' +
-        'color:var(--g-btn1);text-shadow:0 1px 2px #000,0 0 calc(3*var(--u)) #000}' +
-        '#jk-lib .pager button[aria-pressed="true"]{color:var(--g-sel);text-decoration:underline;text-decoration-color:var(--g-label)}' +
-        '#jk-lib .p-title{color:var(--g-sel);font:800 calc(19*var(--u))/1.05 var(--f);letter-spacing:.03em;text-shadow:0 1px 0 rgba(0,0,0,.8);' +
-        'overflow-wrap:anywhere}' +
-        '#jk-lib .facts{display:grid;grid-template-columns:auto 1fr;gap:calc(1*var(--u)) calc(8*var(--u));margin:0}' +
-        '#jk-lib .facts dt{color:var(--g-label);font:700 calc(13*var(--u))/1.25 var(--f);letter-spacing:.04em;text-shadow:0 1px 0 rgba(0,0,0,.8)}' +
-        '#jk-lib .facts dd{margin:0;color:var(--g-text);font:700 calc(13*var(--u))/1.25 var(--f);letter-spacing:.04em;' +
-        'text-shadow:0 1px 0 rgba(0,0,0,.8);overflow-wrap:anywhere}' +
-        '#jk-lib .facts small{font-size:calc(10.5*var(--u));opacity:.8}' +
-        '#jk-lib .desc{margin:0;color:var(--g-text);font:600 calc(12.5*var(--u))/1.3 var(--f);letter-spacing:.03em;' +
-        'text-shadow:0 1px 0 rgba(0,0,0,.8);white-space:pre-line;overflow-wrap:anywhere}' +
-        '#jk-lib .note{margin:0;color:var(--g-label);font:700 calc(11.5*var(--u))/1.3 var(--f);letter-spacing:.04em}' +
-        '#jk-lib .note a{color:var(--g-btn1)}' +
-        '#jk-lib .readme{margin:0;font:calc(8.5*var(--u))/1.4 Consolas,"Courier New",monospace;white-space:pre-wrap;overflow-wrap:anywhere;' +
-        'color:var(--g-text);text-shadow:0 1px 0 rgba(0,0,0,.6)}' +
-        '#jk-lib .rname{color:var(--g-label);font:700 calc(12*var(--u))/1.3 var(--f);letter-spacing:.04em}' +
-        '#jk-lib .tree{margin:0;padding:0;list-style:none;font:700 calc(12*var(--u))/1.45 var(--f);letter-spacing:.03em;color:var(--g-text);' +
-        'text-shadow:0 1px 0 rgba(0,0,0,.8)}' +
-        '#jk-lib .tree li{display:grid;grid-template-columns:1fr auto;gap:calc(8*var(--u))}' +
-        '#jk-lib .tree li>span:first-child{overflow-wrap:anywhere}' +
-        '#jk-lib .tree .why{color:var(--g-label);font-size:calc(10.5*var(--u))}' +
-        '#jk-lib .tree .sz{text-align:right;font-variant-numeric:tabular-nums}' +
-        '#jk-lib .progress{display:none}' +
-        '#jk-lib[data-busy] .progress,#jk-lib[data-error] .progress{display:block}' +
-        '#jk-lib[data-busy] .foot,#jk-lib[data-error] .foot{display:none}' +
-        '#jk-lib .bar{position:absolute;left:calc(170*var(--u));top:calc(406*var(--u));width:calc(300*var(--u));height:calc(9*var(--u));' +
-        'border:calc(1*var(--u)) solid var(--g-line);box-sizing:border-box;background:rgba(0,0,0,.4)}' +
-        '#jk-lib[data-error] .bar{display:none}' +
-        '#jk-lib .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--g-btn2),var(--g-btn1))}' +
-        '#jk-lib .ptext{position:absolute;left:0;width:100%;top:calc(417*var(--u));text-align:center;color:var(--g-text);' +
-        'font:700 calc(11.5*var(--u))/1 var(--f);letter-spacing:.04em;text-shadow:0 1px 0 rgba(0,0,0,.8)}' +
-        '#jk-lib[data-error] .ptext{top:calc(410*var(--u));color:var(--g-sel)}' +
-        '#jk-lib .ptext b{color:var(--g-sel)}' +
-        '@media (prefers-reduced-motion:no-preference){#jk-lib .bar i{transition:width .2s linear}}';
+    // What changed since the menu last asked: CH_STATUS the line under the
+    // title, CH_ROWS the list, CH_PANEL the level's details, CH_MSG the line
+    // over the buttons, CH_USE whether Use Level can be pressed.
+    var CH_STATUS = 1, CH_ROWS = 2, CH_PANEL = 4, CH_MSG = 8, CH_USE = 16, CH_ALL = 31;
 
-    function pos(x, y, w, h) {
-        return 'style="--x:' + x + ';--y:' + y + ';--w:' + w + ';--h:' + h + '"';
+    function touch(bits) { L.changed |= bits; }
+
+    function statusText() {
+        var game = L.game, have = L.index[game];
+        if (L.loadFailed)
+            return 'The Level Library can\'t be reached right now. Close it and try again in a moment.';
+        if (!have)
+            return 'Getting the list of levels...';
+        var data = have.data, n = data.levels.length, listed = data.listed || n;
+        return n.toLocaleString('en-US') + (n === 1 ? ' level' : ' levels') + ' from Massassi.net' +
+            (data.left ? ', with ' + data.left.toLocaleString('en-US') + ' more of its ' +
+             listed.toLocaleString('en-US') + ' still being copied' : '');
     }
 
-    function make() {
-        if (L.el)
-            return true;
-        if (typeof document === 'undefined' || !document.body)
-            return false;
-        var style = document.createElement('style');
-        style.textContent = CSS;
-        document.head.appendChild(style);
-        var el = document.createElement('dialog');
-        el.id = 'jk-lib';
-        el.setAttribute('aria-labelledby', 'jk-lib-title');
-        el.innerHTML =
-            '<div class="stage">' +
-            '<h2 class="abs title" id="jk-lib-title" ' + pos(20, 10, 600, 46) + '>Level Library</h2>' +
-            '<p class="abs hint" data-id="sub" ' + pos(20, 56, 600, 14) + '></p>' +
-            '<label class="abs lbl" for="jk-lib-q" ' + pos(20, 82, 60, 20) + '>Search:</label>' +
-            '<input class="abs box" id="jk-lib-q" data-id="q" type="search" ' + pos(82, 79, 208, 22) +
-            ' placeholder="title or author" autocomplete="off" spellcheck="false">' +
-            '<div class="abs filters" ' + pos(20, 110, 285, 20) + '>' +
-            '<button type="button" class="lbl chk" data-filter="mp"><i></i><span>Multiplayer</span></button>' +
-            '<button type="button" class="lbl chk" data-filter="ctf"><i></i><span>CTF</span></button>' +
-            '<button type="button" class="lbl chk" data-filter="sp"' +
-            ' title="Single-player levels, which the Host screen lists with Experimental Co-op ticked under Advanced"><i></i><span>Co-op</span></button>' +
-            '</div>' +
-            '<span class="abs lbl" ' + pos(20, 138, 44, 20) + '>Sort:</span>' +
-            '<button type="button" class="abs box arrow" data-id="sortPrev" ' + pos(66, 135, 24, 22) + ' aria-label="Previous sort">&lsaquo;</button>' +
-            '<button type="button" class="abs box arrow" data-id="sortNext" ' + pos(90, 135, 24, 22) + ' aria-label="Next sort">&rsaquo;</button>' +
-            '<span class="abs val" data-id="sortName" aria-live="polite" ' + pos(122, 138, 168, 20) + '></span>' +
-            '<ul class="abs list rows" data-id="rows" role="listbox" aria-label="Levels" tabindex="0" ' + pos(20, 164, 270, 238) + '></ul>' +
-            '<div class="abs tabs" role="tablist" aria-label="Level details" ' + pos(310, 79, 320, 22) + '>' +
-            '<button type="button" class="small-btn tab" role="tab" data-tab="lib">Overview</button>' +
-            '<button type="button" class="small-btn tab" role="tab" data-tab="readme">Readme</button>' +
-            '<button type="button" class="small-btn tab" role="tab" data-tab="files">Files</button></div>' +
-            '<div class="abs list panel" data-id="panel" role="tabpanel" tabindex="0" ' + pos(310, 104, 320, 298) + '></div>' +
-            '<p class="abs hint foot" ' + pos(0, 410, 640, 16) + '>One download at a time. Levels are saved in this browser, never in your game folder.</p>' +
-            '<div class="progress" aria-live="polite"><div class="bar"><i data-id="fill"></i></div><p class="ptext" data-id="ptext"></p></div>' +
-            '<button type="button" class="abs gbtn" data-id="cancel" ' + pos(20, 430, 200, 40) + '>Cancel</button>' +
-            '<button type="button" class="abs gbtn" data-id="use" ' + pos(420, 430, 200, 40) + '>Use Level</button>' +
-            '</div>';
-        document.body.appendChild(el);
-        L.el = el;
-        wire(el);
-        return true;
+    // Letters the game's fonts may not have, as the nearest ones they do
+    // (accents dropped; anything else is drawn as the font's stand-in).
+    function plain(s) {
+        s = String(s == null ? '' : s);
+        if (s.normalize)
+            s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        return s
+            .replace(/[\u2018\u2019\u201a\u2032]/g, "'").replace(/[\u201c\u201d\u201e\u2033]/g, '"')
+            .replace(/[\u2013\u2014\u2212]/g, '-').replace(/\u2026/g, '...').replace(/\u00a0/g, ' ')
+            .replace(/\r\n?/g, '\n').replace(/\t/g, '    ').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
     }
 
-    function part(id) { return L.el.querySelector('[data-id="' + id + '"]'); }
-
-    function wire(el) {
-        // Keys and clicks here are the library's, never the game's: the game's
-        // own listeners (SDL's, on the window and the document) and the page's
-        // would otherwise take them too, and Enter would press Ok on the Host
-        // screen once it's back.
-        ['keydown', 'keyup', 'keypress', 'wheel', 'pointerdown', 'mousedown', 'touchstart', 'contextmenu'].forEach(function(type) {
-            el.addEventListener(type, function(ev) { ev.stopPropagation(); });
-        });
-        el.addEventListener('cancel', function(ev) {
-            ev.preventDefault();
-            cancel();
-        });
-        el.addEventListener('keydown', onKey);
-        // And keys that land outside it while it's open (on the page, when a
-        // button that had the focus was turned off): the game's listeners are
-        // on the window, after these.
-        var guard = function(ev) {
-            if (L.state !== STATE_OPEN || !el.open || el.contains(ev.target))
-                return;
-            ev.stopPropagation();
-            if (ev.type === 'keydown')
-                onKey(ev);
-        };
-        ['keydown', 'keyup', 'keypress'].forEach(function(type) {
-            window.addEventListener(type, guard, true);
-        });
-        // A screenshot the site doesn't have after all.
-        part('panel').addEventListener('error', function(ev) {
-            var img = ev.target;
-            if (img && img.tagName === 'IMG' && img.parentNode)
-                img.outerHTML = '<div class="none val">No screenshot</div>';
-        }, true);
-        part('q').addEventListener('input', function(ev) {
-            L.q = ev.target.value;
-            renderRows(true);
-        });
-        el.addEventListener('click', function(ev) {
-            var b = ev.target.closest('button');
-            if (!b || !el.contains(b))
-                return;
-            if (b.dataset.filter) {
-                L.filters[b.dataset.filter] = !L.filters[b.dataset.filter];
-                renderRows(true);
-            } else if (b.dataset.tab) {
-                L.tab = b.dataset.tab;
-                renderPanel();
-            } else if (b.dataset.level) {
-                pick(Number(b.dataset.level));
-            } else if (b.dataset.shot) {
-                L.shot = Number(b.dataset.shot);
-                renderPanel(true);
-            } else if (b.dataset.id === 'sortPrev' || b.dataset.id === 'sortNext') {
-                L.sort = (L.sort + (b.dataset.id === 'sortNext' ? 1 : SORTS.length - 1)) % SORTS.length;
-                renderRows(true);
-            } else if (b.dataset.id === 'cancel') {
-                cancel();
-            } else if (b.dataset.id === 'use') {
-                use();
-            } else if (b.dataset.id === 'retry') {
-                load();
-            }
-        });
+    // A row: the title, a tab, then the year and the size. The menu cuts
+    // the title to fit and puts the rest in its own column.
+    function rowText(l) {
+        var mark = savedName(l, L.game) ? '* ' : '';
+        var kind = l.k === 'ctf' ? 'CTF ' : l.k === 'kfy' ? 'KFY ' : l.k === 'sp' ? 'SP ' : '';
+        return plain(mark + l.t).replace(/\n/g, ' ') + '\t' + kind + year(l) + '  ' + size(l.sz);
     }
 
-    function onKey(ev) {
-        if (ev.key === 'Escape') {
-            ev.preventDefault();
-            cancel();
-            return;
+    function selected() { return L.sel != null ? byId(L.sel) : null; }
+
+    // Lines for the Overview, Readme and Files tabs, '\n' between them. A
+    // line with a tab has a label before it; the menu wraps what's after it.
+    function overviewText(l, d) {
+        var out = [];
+        var fact = function(label, value) { out.push(label + ':\t' + plain(value).replace(/\n/g, ' ')); };
+        var src = sourceText(l);
+        fact('Author', l.a || 'unknown');
+        fact('Released', dateText(l.rel || l.add, l.rel ? l.rp : 'd') + (src ? ' (' + src + ')' : ''));
+        fact('Download', size(l.sz) + ' zip');
+        fact('Type', KINDS[l.k] || l.k);
+        var gobs = episodeGobs(l, L.game);
+        if (gobs.length) {
+            var g = gobs[0];
+            fact('Episode', g.ep + (g.lv && g.lv.length ? ' (' + g.lv.length + ' level' + (g.lv.length === 1 ? '' : 's') + ')' : ''));
         }
-        var inText = ev.target && ev.target.tagName === 'INPUT';
-        if (ev.key === 'Enter' && (inText || ev.target === part('rows'))) {
-            ev.preventDefault();
-            use();
-            return;
-        }
-        if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp' || ev.key === 'PageDown' || ev.key === 'PageUp') &&
-            (inText || ev.target === part('rows') || (ev.target.closest && ev.target.closest('.rows')))) {
-            ev.preventDefault();
-            var list = visible();
-            if (!list.length || L.job)
-                return;
-            var at = list.findIndex(function(l) { return l.id === L.sel; });
-            var step = { ArrowDown: 1, ArrowUp: -1, PageDown: 10, PageUp: -10 }[ev.key];
-            at = Math.max(0, Math.min(list.length - 1, (at < 0 ? 0 : at + step)));
-            pick(list[at].id, true);
-        }
+        if (l.r != null)
+            fact('Rating', l.r + ' of 10' + (l.v ? ' (' + l.v + ' votes)' : ''));
+        if (l.dl)
+            fact('Downloads', l.dl.toLocaleString('en-US') + ' on Massassi');
+        var notes = [];
+        if (!gobs.length)
+            notes.push('This level has no episode GOB for ' + (L.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight') +
+                       ', so the game can\'t list it.');
+        else if (l.k === 'sp')
+            notes.push('A single-player level: the Host screen lists it with Experimental Co-op ticked under Advanced.');
+        var saved = savedName(l, L.game);
+        if (saved)
+            notes.push('Saved in this browser as ' + saved + '.');
+        if (notes.length)
+            out.push('', plain(notes.join(' ')));
+        out.push('');
+        if (d && d.desc)
+            out.push(plain(d.desc));
+        else if (!d)
+            out.push('Getting the description...');
+        else if (!d.failed)
+            out.push('No description.');
+        return out.join('\n');
     }
 
-    function show() {
-        var el = L.el;
-        el.dataset.game = L.game;
-        delete el.dataset.busy;
-        delete el.dataset.error;
-        var mots = L.game === 'mots';
-        el.querySelector('[data-filter="ctf"] span').textContent = mots ? 'Kill the Fool' : 'CTF';
-        if (!el.open) {
-            if (el.showModal)
-                el.showModal();
-            else
-                el.setAttribute('open', '');
-        }
-        part('q').value = L.q;
-        part('q').focus();
+    function readmeText(d) {
+        if (!d)
+            return 'Getting the readme...';
+        if (d.failed)
+            return 'The readme can\'t be shown right now.';
+        if (!d.texts || !d.texts.length)
+            return 'This level\'s zip has no readme.';
+        return plain(d.texts.map(function(t) { return '--- ' + t.n + ' ---\n\n' + String(t.t || '').replace(/\s+$/, ''); }).join('\n\n'));
     }
 
-    function hide() {
-        var el = L.el;
-        if (el && el.open) {
-            if (el.close)
-                el.close();
-            else
-                el.removeAttribute('open');
-        }
-        if (Module.canvas && Module.canvas.focus)
-            Module.canvas.focus();
-    }
-
-    async function load() {
-        var game = L.game;
-        part('sub').textContent = 'Getting the list...';
-        part('rows').innerHTML = '';
-        renderPanel();
-        try {
-            var data = await loadIndex(game);
-            await loadSaved(game);
-            if (game !== L.game || L.state !== STATE_OPEN)
-                return;
-            var n = data.levels.length, listed = data.listed || n;
-            part('sub').textContent = n.toLocaleString('en-US') + (n === 1 ? ' level' : ' levels') + ' from Massassi.net' +
-                (data.left ? ', with ' + data.left.toLocaleString('en-US') + ' more of its ' +
-                 listed.toLocaleString('en-US') + ' still being copied' : '');
-            if (L.sel == null || !byId(L.sel)) {
-                var first = visible()[0];
-                L.sel = first ? first.id : null;
-            }
-            renderRows(true);
-            renderPanel();
-        } catch (e) {
-            if (game !== L.game)
-                return;
-            part('sub').textContent = '';
-            part('rows').innerHTML = '<li class="more">The library can\'t be reached right now.' +
-                ' <button type="button" class="small-btn" data-id="retry">Try again</button></li>';
-            console.warn('OpenJKDF2: the Level Library list did not load: ' + e);
-        }
-    }
-
-    function renderRows(scroll) {
-        if (!L.el)
-            return;
-        var list = visible(), game = L.game;
-        if (list.length && !list.some(function(l) { return l.id === L.sel; }) && !L.job) {
-            L.sel = list[0].id;
-            renderPanel();
-        }
-        var html = list.map(function(l) {
-            var mark = savedName(l, game) ? '<span class="mark" title="Saved in this browser">&#10003;</span>' : '';
-            var kind = l.k === 'ctf' ? 'CTF &middot; ' : l.k === 'kfy' ? 'KFY &middot; ' : l.k === 'sp' ? 'SP &middot; ' : '';
-            return '<li><button type="button" role="option" tabindex="-1" data-level="' + l.id + '" aria-selected="' + (l.id === L.sel) + '">' +
-                '<span class="t">' + esc(l.t) + mark + '</span>' +
-                '<span class="s">' + kind + esc(year(l)) + ' &middot; ' + size(l.sz) + '</span></button></li>';
-        }).join('');
-        if (!list.length && levels().length)
-            html = '<li class="more">No levels match.</li>';
-        else if (!levels().length && L.index[game])
-            html = '<li class="more">No levels are ready yet. The site is still copying them from Massassi.net.</li>';
-        part('rows').innerHTML = html;
-        part('sortName').textContent = SORTS[L.sort][1];
-        Array.prototype.forEach.call(L.el.querySelectorAll('[data-filter]'), function(b) {
-            b.setAttribute('aria-pressed', String(!!L.filters[b.dataset.filter]));
-        });
-        if (scroll)
-            scrollToSel();
-        renderUse();
-    }
-
-    function scrollToSel() {
-        var b = part('rows').querySelector('[aria-selected="true"]');
-        if (b && b.scrollIntoView)
-            b.scrollIntoView({ block: 'nearest' });
-    }
-
-    function pick(id, scroll) {
-        if (L.job || id === L.sel)
-            return;
-        L.sel = id;
-        L.shot = 1;
-        delete L.el.dataset.error;
-        Array.prototype.forEach.call(part('rows').querySelectorAll('[data-level]'), function(b) {
-            b.setAttribute('aria-selected', String(Number(b.dataset.level) === id));
-        });
-        if (scroll)
-            scrollToSel();
-        renderPanel();
+    // A size, a tab, then the file's name.
+    function filesText(l, d) {
+        if (!d)
+            return 'Getting the file list...';
+        if (d.failed || !d.files)
+            return 'The file list can\'t be shown right now.';
+        var eps = {};
+        for (var e of episodeGobs(l, L.game))
+            eps[((e.in ? e.in + '/' : '') + e.n).toLowerCase()] = e;
+        return d.files.map(function(f) {
+            var g = eps[String(f.n).toLowerCase()];
+            return size(f.b) + '\t' + plain(f.n + (g ? '  (episode: ' + g.ep + ')' : '')).replace(/\n/g, ' ');
+        }).join('\n');
     }
 
     // One level's description, readmes and files, the first time it's picked.
@@ -650,8 +389,8 @@
             d.data = { failed: true };
             console.warn('OpenJKDF2: the Level Library has no details for ' + l.id + ': ' + e);
         }).then(function() {
-            if (L.sel === l.id && L.state === STATE_OPEN)
-                renderPanel(true);
+            if (L.sel === l.id)
+                touch(CH_PANEL);
         });
         return null;
     }
@@ -666,166 +405,217 @@
         return note;
     }
 
-    function renderPanel(keepScroll) {
-        if (!L.el)
+    function canUse() {
+        var l = selected();
+        return !L.job && !!l && episodeGobs(l, L.game).length > 0;
+    }
+
+    function setQuery(q, mask, sort) {
+        var f = { mp: !!(mask & 1), ctf: !!(mask & 2), sp: !!(mask & 4) };
+        sort = Math.max(0, Math.min(SORTS.length - 1, sort | 0));
+        q = String(q || '');
+        if (q === L.q && sort === L.sort && f.mp === L.filters.mp && f.ctf === L.filters.ctf && f.sp === L.filters.sp)
             return;
-        Array.prototype.forEach.call(L.el.querySelectorAll('.tab'), function(b) {
-            b.setAttribute('aria-selected', String(b.dataset.tab === L.tab));
-        });
-        var panel = part('panel');
-        var l = L.sel != null ? byId(L.sel) : null;
-        var top = panel.scrollTop;
-        if (!l) {
-            panel.innerHTML = '';
-            renderUse();
+        L.q = q;
+        L.filters = f;
+        L.sort = sort;
+        refreshRows();
+    }
+
+    function refreshRows() {
+        L.rows = visible();
+        if (!L.job && L.rows.length && !L.rows.some(function(l) { return l.id === L.sel; }))
+            pickId(L.rows[0].id);
+        touch(CH_ROWS);
+    }
+
+    function pickId(id) {
+        if (L.job || id === L.sel)
+            return;
+        L.sel = id;
+        L.shot = 1;
+        L.error = '';
+        var l = selected();
+        if (l)
+            detail(l);
+        touch(CH_PANEL | CH_USE | CH_MSG);
+    }
+
+    async function load() {
+        var game = L.game;
+        L.loadFailed = false;
+        touch(CH_ALL);
+        try {
+            await loadIndex(game);
+            await loadSaved(game);
+            if (game !== L.game || L.state !== STATE_OPEN)
+                return;
+            if (L.sel != null && !byId(L.sel))
+                L.sel = null;
+            refreshRows();
+            if (L.sel == null && L.rows.length)
+                pickId(L.rows[0].id);
+            else if (selected())
+                detail(selected());
+        } catch (e) {
+            if (game !== L.game)
+                return;
+            L.loadFailed = true;
+            console.warn('OpenJKDF2: the Level Library list did not load: ' + e);
+        }
+        touch(CH_ALL);
+    }
+
+    // The line over the buttons: what's being got, or what went wrong.
+    function progress(fraction, text) {
+        L.msg = plain(text) + (fraction != null ? ' (' + Math.round(Math.max(0, Math.min(1, fraction)) * 100) + '%)' : '');
+        touch(CH_MSG);
+    }
+
+    function messageText() {
+        if (L.job || L.msg)
+            return L.msg;
+        if (L.error)
+            return L.error;
+        return 'One download at a time. Levels are saved in this browser, never in your game folder.';
+    }
+
+    // ---- The screenshot: a picture the page puts over the menu's frame for
+    // it (the menu draws in the game's 256 colors), where the game draws its
+    // 640x480 menus: the canvas's full height, 4:3, in the middle
+    // (std3D_DrawMenu).
+
+    var shot = { on: false, x: 0, y: 0, w: 0, h: 0, img: null, src: '', polled: 0, raf: 0 };
+
+    function shotImg() {
+        if (shot.img || typeof document === 'undefined' || !document.body)
+            return shot.img;
+        var img = document.createElement('img');
+        img.id = 'jk-lib-shot';
+        img.alt = '';
+        img.style.cssText = 'position:fixed;z-index:1;pointer-events:none;object-fit:contain;background:#000;display:none;';
+        img.addEventListener('error', function() { img.style.visibility = 'hidden'; });
+        img.addEventListener('load', function() { img.style.visibility = ''; });
+        document.body.appendChild(img);
+        shot.img = img;
+        return img;
+    }
+
+    function shotSrc() {
+        var l = selected();
+        if (!l || !(l.sh > 0) || L.state !== STATE_OPEN)
+            return '';
+        return BASE + 's/' + l.id + '-' + Math.min(Math.max(1, L.shot), l.sh) + '.jpg';
+    }
+
+    function shotLayout() {
+        shot.raf = 0;
+        var img = shot.img;
+        if (!img)
+            return;
+        var c = Module.canvas;
+        var want = shot.on && shotSrc() && c && c.getBoundingClientRect && Date.now() - shot.polled < 500;
+        if (!want) {
+            img.style.display = 'none';
             return;
         }
-        var d = detail(l);
-        var h = '';
-        if (L.tab === 'lib') {
-            h += '<div class="shot">';
-            if (l.sh > 0) {
-                var n = Math.min(L.shot, l.sh);
-                h += '<img src="' + BASE + 's/' + l.id + '-' + n + '.jpg" alt="Screenshot ' + n + ' of ' + l.sh + ' of ' + esc(l.t) + '">';
-                if (l.sh > 1) {
-                    h += '<div class="pager">';
-                    for (var i = 1; i <= l.sh; i++)
-                        h += '<button type="button" data-shot="' + i + '" aria-pressed="' + (i === n) + '" aria-label="Screenshot ' + i + '">' + i + '</button>';
-                    h += '</div>';
-                }
-            } else {
-                h += '<div class="none val">No screenshots for this level</div>';
-            }
-            h += '</div>';
-            h += '<div class="p-title">' + esc(l.t) + '</div>';
-            var gobs = episodeGobs(l, L.game);
-            var src = sourceText(l);
-            h += '<dl class="facts"><dt>Author:</dt><dd>' + esc(l.a || 'unknown') + '</dd>' +
-                 '<dt>Released:</dt><dd>' + esc(dateText(l.rel || l.add, l.rel ? l.rp : 'd')) +
-                 (src ? ' <small>(' + esc(src) + ')</small>' : '') + '</dd>' +
-                 '<dt>Download:</dt><dd>' + size(l.sz) + ' zip</dd>' +
-                 '<dt>Type:</dt><dd>' + esc(KINDS[l.k] || l.k) + '</dd>';
-            if (gobs.length) {
-                var g = gobs[0];
-                h += '<dt>Episode:</dt><dd>' + esc(g.ep) + (g.lv && g.lv.length ? ' <small>(' + g.lv.length + ' level' +
-                     (g.lv.length === 1 ? '' : 's') + ')</small>' : '') + '</dd>';
-            }
-            if (l.r != null)
-                h += '<dt>Rating:</dt><dd>' + esc(l.r) + ' of 10' + (l.v ? ' <small>(' + l.v + ' votes)</small>' : '') + '</dd>';
-            if (l.dl)
-                h += '<dt>Downloads:</dt><dd>' + l.dl.toLocaleString('en-US') + ' <small>(on Massassi)</small></dd>';
-            h += '</dl>';
-            if (!gobs.length)
-                h += '<p class="note">This level has no episode GOB for ' + (L.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight') +
-                     ', so the game can\'t list it.</p>';
-            else if (l.k === 'sp')
-                h += '<p class="note">A single-player level: the Host screen lists it with Experimental Co-op ticked under Advanced.</p>';
-            if (savedName(l, L.game))
-                h += '<p class="note">Saved in this browser as ' + esc(savedName(l, L.game)) + '.</p>';
-            if (d && d.desc)
-                h += '<p class="desc">' + esc(d.desc) + '</p>';
-            else if (!d)
-                h += '<p class="note">Getting the description...</p>';
-            h += '<p class="note">From <a href="https://www.massassi.net/levels/files/' + l.id + '.shtml" target="_blank" rel="noopener">' +
-                 'its page on Massassi.net</a>.</p>';
-        } else if (L.tab === 'readme') {
-            if (!d)
-                h = '<p class="note">Getting the readme...</p>';
-            else if (d.failed)
-                h = '<p class="note">The readme can\'t be shown right now.</p>';
-            else if (!d.texts || !d.texts.length)
-                h = '<p class="note">This level\'s zip has no readme.</p>';
-            else
-                h = d.texts.map(function(t) {
-                    return '<div class="rname">' + esc(t.n) + '</div><pre class="readme">' + esc(t.t) + '</pre>';
-                }).join('');
-        } else {
-            if (!d)
-                h = '<p class="note">Getting the file list...</p>';
-            else if (d.failed || !d.files)
-                h = '<p class="note">The file list can\'t be shown right now.</p>';
-            else {
-                var eps = {};
-                for (var e of episodeGobs(l, L.game))
-                    eps[((e.in ? e.in + '/' : '') + e.n).toLowerCase()] = e;
-                h = '<ul class="tree">' + d.files.map(function(f) {
-                    var g = eps[String(f.n).toLowerCase()];
-                    return '<li><span>' + esc(f.n) + (g ? ' <span class="why">episode: ' + esc(g.ep) + '</span>' : '') +
-                           '</span><span class="sz">' + size(f.b) + '</span></li>';
-                }).join('') + '</ul>';
-            }
+        var src = shotSrc();
+        if (src !== shot.src) {
+            shot.src = src;
+            img.style.visibility = 'hidden';
+            img.src = src;
         }
-        panel.innerHTML = h;
-        panel.scrollTop = keepScroll ? top : 0;
-        renderUse();
+        var r = c.getBoundingClientRect();
+        var scale = r.height / 480, left = r.left + (r.width - r.height * 4 / 3) / 2;
+        img.style.left = (left + shot.x * scale) + 'px';
+        img.style.top = (r.top + shot.y * scale) + 'px';
+        img.style.width = (shot.w * scale) + 'px';
+        img.style.height = (shot.h * scale) + 'px';
+        img.style.display = 'block';
+        shot.raf = requestAnimationFrame(shotLayout);
     }
 
-    function renderUse() {
-        var l = L.sel != null ? byId(L.sel) : null;
-        part('use').disabled = !!L.job || !l || !episodeGobs(l, L.game).length;
-    }
-
-    function progress(fraction, html) {
-        part('fill').style.width = Math.round(Math.max(0, Math.min(1, fraction)) * 100) + '%';
-        part('ptext').innerHTML = html;
-    }
-
-    function setBusy(on) {
-        if (on) {
-            L.el.dataset.busy = '';
-            delete L.el.dataset.error;
-        } else {
-            delete L.el.dataset.busy;
-        }
-        Array.prototype.forEach.call(L.el.querySelectorAll('[data-filter],[data-id="sortPrev"],[data-id="sortNext"],[data-id="q"]'),
-                                     function(b) { b.disabled = on; });
-        renderUse();
-        // Keys stay with the library: Cancel, never turned off, takes the
-        // focus from what was.
-        if (on || !L.el.contains(document.activeElement) || document.activeElement.disabled)
-            part(on ? 'cancel' : 'q').focus();
-    }
-
-    function showError(text) {
-        L.el.dataset.error = '';
-        part('ptext').innerHTML = esc(text);
+    function setShot(on, x, y, w, h) {
+        shot.on = !!on;
+        shot.x = x; shot.y = y; shot.w = w; shot.h = h;
+        shot.polled = Date.now();
+        if (!shotImg())
+            return;
+        if (!shot.raf && typeof requestAnimationFrame === 'function')
+            shot.raf = requestAnimationFrame(shotLayout);
     }
 
     // ---- Getting a level
 
-    function cancel() {
-        if (L.job) {
-            L.job.abort.abort();
-            return;
-        }
-        close('');
+    function use() {
+        var l = selected();
+        if (!l || L.job || !episodeGobs(l, L.game).length || L.done)
+            return false;
+        run(l);
+        return true;
     }
 
-    async function use() {
-        var l = L.sel != null ? byId(L.sel) : null;
-        if (!l || L.job || !episodeGobs(l, L.game).length)
-            return;
+    async function run(l) {
         var job = L.job = { l: l, game: L.game, abort: new AbortController() };
-        setBusy(true);
-        progress(0, '<b>Getting ' + esc(l.t) + '</b>');
+        L.error = '';
+        progress(0, 'Getting ' + l.t);
+        touch(CH_USE);
         var name;
         try {
             name = await getLevel(job);
         } catch (e) {
             L.job = null;
-            setBusy(false);
+            L.msg = '';
+            touch(CH_MSG | CH_USE);
             if (job.abort.signal.aborted)
                 return;
             console.warn('OpenJKDF2: the Level Library could not get ' + l.id + ': ' + (e && e.stack || e));
-            showError(e && e.shown ? e.message : 'The level could not be got: ' + (e && e.message || e));
+            L.error = plain(e && e.shown ? e.message : 'The level could not be got: ' + (e && e.message || e));
             return;
         }
-        progress(1, '<b>Saved in this browser</b> &middot; adding it to Choose Episode');
-        renderRows();
-        await new Promise(function(resolve) { setTimeout(resolve, 500); });
+        progress(null, 'Saved in this browser. Adding it to Choose Episode...');
+        touch(CH_ROWS | CH_PANEL);
+        await new Promise(function(resolve) { setTimeout(resolve, 400); });
         L.job = null;
-        setBusy(false);
-        close(name);
+        L.result = name;
+        L.done = true;
+        touch(CH_MSG | CH_USE);
+    }
+
+    // Cancel: stops a download if one is going (true), else nothing (false),
+    // and the menu closes.
+    function cancel() {
+        if (!L.job)
+            return false;
+        L.job.abort.abort();
+        return true;
+    }
+
+    function openPage() {
+        var l = selected();
+        if (!l || typeof window === 'undefined' || !window.open)
+            return false;
+        try {
+            window.open('https://www.massassi.net/levels/files/' + l.id + '.shtml', '_blank', 'noopener');
+        } catch (e) {
+            return false;
+        }
+        return true;
+    }
+
+    function textOf(what, arg) {
+        var l = selected();
+        switch (what) {
+        case 0: return statusText();
+        case 1: return L.rows[arg] ? rowText(L.rows[arg]) : '';
+        case 2: return SORTS[L.sort][1];
+        case 3: return l ? plain(l.t) : '';
+        case 4: return l ? overviewText(l, detail(l)) : '';
+        case 5: return l ? readmeText(detail(l)) : '';
+        case 6: return l ? filesText(l, detail(l)) : '';
+        case 7: return messageText();
+        }
+        return '';
     }
 
     // A name for the GOB in episode/: its own, unless something else there
@@ -878,7 +668,7 @@
         if (left.length) {
             var zip = await download(job);
             alive(job);
-            progress(1, '<b>Opening the zip</b> &middot; ' + esc(l.z || l.id + '.zip'));
+            progress(null, 'Opening ' + (l.z || l.id + '.zip'));
             var outer = zipEntries(zip);
             var inner = {};
             for (var g of left) {
@@ -899,7 +689,7 @@
                         list.find(function(z) { return /\.(gob|goo)$/i.test(z.name) && z.size === g.b; });
                 if (!e)
                     throw fail("The zip doesn't have " + g.n + ' in it.');
-                progress(1, '<b>Checking ' + esc(g.n) + '</b> &middot; episode &ldquo;' + esc(g.ep) + '&rdquo;');
+                progress(null, 'Checking ' + g.n + ', episode "' + g.ep + '"');
                 var data = await zipData(from, e);
                 alive(job);
                 if (await sha256(data) !== g.h)
@@ -957,7 +747,7 @@
             got += r.value.length;
             if (got > MAX_ZIP_BYTES)
                 throw fail('This level is too big for the browser.');
-            progress(total ? got / total : 0, '<b>Getting ' + esc(l.t) + '</b> &middot; ' + size(got) + ' of ' + size(total));
+            progress(total ? got / total : 0, 'Getting ' + l.t + ': ' + size(got) + ' of ' + size(total));
         }
         var bytes = new Uint8Array(got), at = 0;
         for (var p of parts) {
@@ -971,36 +761,86 @@
 
     // ---- The engine's side
 
-    function open(game) {
-        if (L.state === STATE_OPEN)
-            return true;
-        if (!core() || !make())
+    function begin(game) {
+        if (!core())
             return false;
         L.game = game === 'mots' ? 'mots' : 'jk1';
         L.state = STATE_OPEN;
         L.result = '';
-        show();
+        L.done = false;
+        L.msg = '';
+        L.error = '';
+        L.rows = [];
+        L.changed = CH_ALL;
         load();
         return true;
     }
 
-    function close(name) {
-        L.result = name || '';
+    function end() {
+        if (L.job)
+            L.job.abort.abort();
+        L.job = null;
         L.state = STATE_CLOSED;
-        hide();
+        shot.on = false;
+        if (shot.img)
+            shot.img.style.display = 'none';
+        if (Module.canvas && Module.canvas.focus)
+            Module.canvas.focus();
+    }
+
+    function number(what) {
+        switch (what) {
+        case 0: { var c = L.changed; L.changed = 0; return c; }
+        case 1: return L.rows.length;
+        case 2: {
+            for (var i = 0; i < L.rows.length; i++) {
+                if (L.rows[i].id === L.sel)
+                    return i;
+            }
+            return -1;
+        }
+        case 3: return canUse() ? 1 : 0;
+        case 4: return L.job ? 1 : 0;
+        case 5: return L.done ? 1 : 0;
+        case 6: { var l = selected(); return l && l.sh > 0 ? l.sh : 0; }
+        }
+        return 0;
     }
 
     Module.jkLibrary = {
         available: available,
-        open: open,
-        state: function() { return L.state; },
+        begin: begin,
+        end: end,
+        // Text for the menu (textOf's numbers), and numbers (number's).
+        text: textOf,
+        number: number,
+        query: setQuery,
+        select: function(i) {
+            var l = L.rows[i | 0];
+            if (l)
+                pickId(l.id);
+        },
+        use: use,
+        cancel: cancel,
+        page: openPage,
+        shot: setShot,
+        nextShot: function() {
+            var l = selected();
+            if (l && l.sh > 1) {
+                L.shot = L.shot % l.sh + 1;
+                if (shot.raf === 0 && typeof requestAnimationFrame === 'function')
+                    shot.raf = requestAnimationFrame(shotLayout);
+            }
+        },
+        // The episode the library installed, '' if none.
         take: function() {
             var name = L.result;
             L.result = '';
             return name;
         },
         // For tests.
-        _L: L, _zipEntries: zipEntries, _dateText: dateText
+        _L: L, _zipEntries: zipEntries, _dateText: dateText, _shot: shot,
+        _ch: { STATUS: CH_STATUS, ROWS: CH_ROWS, PANEL: CH_PANEL, MSG: CH_MSG, USE: CH_USE }
     };
 
     // Asks the site whether it serves the library as the engine starts, so

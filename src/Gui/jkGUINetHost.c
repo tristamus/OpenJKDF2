@@ -22,7 +22,7 @@
 #include "Gui/jkGUISingleplayer.h"
 
 #ifdef PLATFORM_WSRELAY
-#include <emscripten.h>
+#include "Gui/jkGUILibrary.h"
 #endif
 
 enum jkGuiNetHostButton_t
@@ -324,31 +324,10 @@ static void jkGuiNetHost_TakeHitReach()
     stdComm_WSRelay_hitReachMs = wstr_to_int_clamped(jkGuiNetHost_hitReachText, STDCOMM_WSRELAY_REACH_MIN, STDCOMM_WSRELAY_REACH_MAX);
 }
 
-// Added: the Level Library (packaging/wasm/library.js), which Level
-// Library... on the Choose Episode line opens. The page draws it over the
-// game, and the Host screen waits for it here. A level the host takes there
-// is saved in the browser and written into episode/ by the page, which then
-// gives back its episode's name, for Choose Episode to pick.
-#define JKGUINETHOST_LIBRARY_OPEN (0)
-
-// Only where the site serves the library (library.js asks it as the engine starts).
-EM_JS(int, jkGuiNetHost_js_libraryAvailable, (), {
-    return Module.jkLibrary && Module.jkLibrary.available() ? 1 : 0;
-});
-
-EM_JS(int, jkGuiNetHost_js_libraryOpen, (int bMots), {
-    return Module.jkLibrary && Module.jkLibrary.open(bMots ? 'mots' : 'jk1') ? 1 : 0;
-});
-
-EM_JS(int, jkGuiNetHost_js_libraryState, (), {
-    return Module.jkLibrary ? Module.jkLibrary.state() : 1;
-});
-
-// The episode the library installed, "" if none.
-EM_JS(void, jkGuiNetHost_js_libraryTake, (char* pOut, int outLen), {
-    stringToUTF8(Module.jkLibrary ? Module.jkLibrary.take() : "", pOut, outLen);
-});
-
+// Added: the Level Library (Gui/jkGUILibrary.c), which Level Library... on
+// the Choose Episode line opens. A level the host takes there is saved in the
+// browser and written into episode/ by the page, and the library gives back
+// its episode's name, for Choose Episode to pick.
 static void jkGuiNetHost_EnumEpisodes();
 
 static void jkGuiNetHost_OpenLibrary()
@@ -356,13 +335,7 @@ static void jkGuiNetHost_OpenLibrary()
     char name[32];
     jkGuiElement* pList = &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX];
 
-    if (!jkGuiNetHost_js_libraryOpen(Main_bMotsCompat))
-        return;
-    while (jkGuiNetHost_js_libraryState() == JKGUINETHOST_LIBRARY_OPEN)
-        emscripten_sleep(50);
-
-    jkGuiNetHost_js_libraryTake(name, sizeof(name));
-    if (!name[0])
+    if (!jkGuiLibrary_Show(Main_bMotsCompat, name, sizeof(name)))
         return;
 
     // The level is in episode/ now: list the episodes again, with it picked.
@@ -685,7 +658,7 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
     jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX].selectedTextEntry = 0;
     jkGuiNetHost_sub_4119D0(&jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], jkGuiNetHost_pMenu, -1, -1, 0);
 #ifdef PLATFORM_WSRELAY
-    jkGuiNetHost_pElements[NETHOST_LIBRARY_BUTTON].bIsVisible = jkGuiNetHost_js_libraryAvailable();
+    jkGuiNetHost_pElements[NETHOST_LIBRARY_BUTTON].bIsVisible = jkGuiLibrary_IsAvailable();
 #endif
 
     do
