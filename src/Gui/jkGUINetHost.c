@@ -165,8 +165,9 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Added: Level Library..., at the right end of the Choose Episode line, in
     // the small font of the labels beside it (2 higher: drawn at 150 it showed
-    // 2 lower than "Choose Episode:" in the game).
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 148, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // 2 lower than "Choose Episode:" in the game). Its text ends at 630, the
+    // right edge of the Episode list and the Server Port box.
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 490, 148, 140, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -233,7 +234,7 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Added: Level Library..., as in JK's list (2 higher, as there).
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 171, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 490, 171, 140, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -351,15 +352,27 @@ static void jkGuiNetHost_EnumEpisodes();
 // are: the button font next to "Choose Episode" was a size too big. A text
 // button's font goes up by one with the mouse over it and by two while it's
 // pressed (med0, med1, med2); the small font has two (small0, small1), so
-// pressed stays on small1.
+// pressed stays on small1. Its text ends where the Episode list's box and the
+// Server Port box end (the right edge of its rect), measured in the font it's
+// drawn in, so it stays put when the mouse is over it.
 static void jkGuiNetHost_SmallButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw)
 {
     int32_t font = pElement->textType;
+    rdRect rect = pElement->rect;
     if (pMenu->lastMouseOverClickable == pElement)
         font++;
     if (redraw)
         jkGuiRend_CopyVBuffer(pMenu, &pElement->rect);
-    stdFont_Draw3(pVbuf, pMenu->fonts[font], pElement->rect.y, &pElement->rect, pElement->selectedTextEntry, pElement->wstr, 1);
+    if (pElement->wstr)
+    {
+        int w = stdFont_sub_4355F0(pMenu->fonts[font], pElement->wstr);
+        if (w < rect.width)
+        {
+            rect.x += rect.width - w;
+            rect.width = w;
+        }
+    }
+    stdFont_Draw3(pVbuf, pMenu->fonts[font], rect.y, &rect, pElement->selectedTextEntry, pElement->wstr, 1);
 }
 
 static void jkGuiNetHost_OpenLibrary()
