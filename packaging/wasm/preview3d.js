@@ -249,7 +249,10 @@
         var own = {};
         for (var n of (tex && tex.own) || [])
             own[String(n).toLowerCase()] = true;
-        var cmpName = tex && tex.cmp ? (tex.cmp[mapName] || tex.cmp[String(mapName).toLowerCase()] || null) : null;
+        // Its master colormap, by the level's name (its .jkl's, without the
+        // .jkl, as the site keeps them).
+        var key = String(mapName || '').toLowerCase().replace(/^.*[\/\\]/, '').replace(/\.jkl$/, '');
+        var cmpName = tex && tex.cmp ? (tex.cmp[mapName] || tex.cmp[key] || null) : null;
         var pal = null;
         if (tex && cmpName) {
             if (tex.pal && tex.pal[cmpName])

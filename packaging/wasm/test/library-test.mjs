@@ -155,11 +155,11 @@ const MATS = [
 const PV = {
     '501-0.map.json': [200, MAP],
     '501-0.mat.json': [200, MATS.slice(0, 2)],
-    '501.tex.json': [200, { own: ['mat/own.mat'], cmp: { 'alpha.jkl': 'alpha.cmp' }, pal: { 'alpha.cmp': Buffer.from(makeCmp(LEVEL_PAL).subarray(64, 64 + 768)).toString('base64') } }],
+    '501.tex.json': [200, { own: ['mat/own.mat'], cmp: { alpha: 'alpha.cmp' }, pal: { 'alpha.cmp': Buffer.from(makeCmp(LEVEL_PAL).subarray(64, 64 + 768)).toString('base64') } }],
     '502-0.map.json': [200, MAP],
     '502-0.mat.json': [200, MATS],
     '502-1.map.json': [500, 'no'],
-    '502.tex.json': [200, { own: ['mat/own.mat'], cmp: { 'beta1.jkl': 'dflt.cmp', 'beta2.jkl': 'dflt.cmp' } }],
+    '502.tex.json': [200, { own: ['mat/own.mat'], cmp: { beta1: 'dflt.cmp', beta2: 'dflt.cmp' } }],
 };
 
 const alpha = episode('Alpha Arena', 2, ['alpha.jkl']);
@@ -173,9 +173,9 @@ const kfy = episode('Fool Yard', 2, ['fool.jkl']);
 const broken = episode('Broken', 2, ['b.jkl']);
 
 const LEVELS = [
-    level(501, 'mp', 'Alpha Arena', 'jk1', [{ n: 'alpha.gob', bytes: alpha, ep: 'Alpha Arena', ty: 2, lv: ['alpha.jkl'] }], { pv: ['alpha.jkl'] }),
+    level(501, 'mp', 'Alpha Arena', 'jk1', [{ n: 'alpha.gob', bytes: alpha, ep: 'Alpha Arena', ty: 2, lv: ['alpha.jkl'] }], { pv: ['alpha'] }),
     level(502, 'ctf', 'Beta Base CTF', 'jk1', [{ n: 'Beta/beta.gob', bytes: beta, ep: 'Beta Base', ty: 8, lv: ['beta1.jkl', 'beta2.jkl'] }],
-          { rel: '2001-03', rp: 'm', src: 'f', add: '2001-04-10', pv: ['beta1.jkl', 'beta2.jkl'] }),
+          { rel: '2001-03', rp: 'm', src: 'f', add: '2001-04-10', pv: ['beta1', 'beta2'] }),
     level(503, 'mp', 'Gamma Nested', 'jk1', [{ n: 'gamma.gob', bytes: gamma, ep: 'Gamma Nested', ty: 2, lv: ['gamma.jkl'], in: 'inner.zip' }],
           { rel: '2003-11-20', sh: 0 }),
     level(504, 'sp', 'Delta Story', 'jk1', [{ n: 'delta.gob', bytes: delta, ep: 'Delta Story', ty: 1, lv: ['d1.jkl'] }]),
@@ -440,13 +440,13 @@ await test('the 3D view\'s pieces: MATs, colormaps, GOBs, the map\'s triangles, 
         const list = [{ name: 'mat/own.mat', data: 'x' }, { name: 'MAT\\Vanilla.MAT', data: 'x' }, { name: 'mat/gone.mat', data: 'x' },
                       { name: '3do/mat/vanilla.mat', data: 'x' }, { name: 'mat/own2.mat', data: 'x' }, ''];
         const src = r => r.list.map(e => e.src);
-        const withPal = P._textureSources(list, { own: ['mat/own.mat', '3do/mat/own2.mat'], cmp: { 'a.jkl': 'a.cmp' }, pal: { 'a.cmp': btoa(String.fromCharCode(...palette)) } }, 'a.jkl', files);
+        const withPal = P._textureSources(list, { own: ['mat/own.mat', '3do/mat/own2.mat'], cmp: { a: 'a.cmp' }, pal: { 'a.cmp': btoa(String.fromCharCode(...palette)) } }, 'a', files);
         out.withPal = { src: src(withPal), cmp: withPal.cmp, pal: Array.from(withPal.pal.slice(0, 6)), names: withPal.list.map(e => e.name) };
-        const gamePal = P._textureSources(list, { own: [], cmp: { 'a.jkl': 'dflt.cmp' } }, 'A.JKL', files);
+        const gamePal = P._textureSources(list, { own: [], cmp: { a: 'dflt.cmp' } }, 'jkl/A.JKL', files);
         out.gamePal = { src: src(gamePal), pal: Array.from(gamePal.pal.slice(0, 6)) };
-        out.noTex = src(P._textureSources(list, null, 'a.jkl', files));
-        out.noPal = src(P._textureSources(list, { own: [], cmp: { 'a.jkl': 'missing.cmp' } }, 'a.jkl', files));
-        out.noFiles = src(P._textureSources(list, { own: ['mat/own.mat'], cmp: { 'a.jkl': 'a.cmp' }, pal: withPal.pal && { 'a.cmp': btoa(String.fromCharCode(...palette)) } }, 'a.jkl', null));
+        out.noTex = src(P._textureSources(list, null, 'a', files));
+        out.noPal = src(P._textureSources(list, { own: [], cmp: { a: 'missing.cmp' } }, 'a', files));
+        out.noFiles = src(P._textureSources(list, { own: ['mat/own.mat'], cmp: { a: 'a.cmp' }, pal: withPal.pal && { 'a.cmp': btoa(String.fromCharCode(...palette)) } }, 'a', null));
         return P._pngPixels(pngUrl).then(r => (out.png = px(r), out));
     }, [[makeMat({ w: 2, h: 2, pixels: VANILLA }), makeMat({ w: 2, h: 1, pixels: [0, 5], transparent: 0, hasT: 1 }),
          makeMat({ w: 2, h: 1, pixels: [0, 5], transparent: 0, hasT: 0 }),
@@ -806,7 +806,7 @@ await test('the big 3D view of a level with two maps: Next Map, a texture not in
     // Opened straight away, it doesn't wait for the pick to rest.
     await keep(page, 'view', 1, 21, 59, 598, 310);
     await page.waitForFunction(() => Module.jkLibrary.number(7) === 2, null, { timeout: 10000 });
-    assert.equal(await libText(page, T.VIEW_TITLE), 'Beta Base CTF: beta1.jkl (1 of 2)');
+    assert.equal(await libText(page, T.VIEW_TITLE), 'Beta Base CTF: beta1 (1 of 2)');
     assert.equal(await libText(page, T.VIEW_NEXT), 'Next Map');
     await page.waitForFunction(() => /isn't in your game files/.test(Module.jkLibrary.text(11)));
     assert.equal(await libText(page, T.VIEW_NOTE), '1 of the game\'s own textures isn\'t in your game files: shown blurred.');
@@ -817,7 +817,7 @@ await test('the big 3D view of a level with two maps: Next Map, a texture not in
     // The second map doesn't load: it says so, and Next Map goes on.
     await call(page, 'viewCommand', 2);
     await page.waitForFunction(() => Module.jkLibrary.number(7) === 3, null, { timeout: 10000 });
-    assert.equal(await libText(page, T.VIEW_TITLE), 'Beta Base CTF: beta2.jkl (2 of 2)');
+    assert.equal(await libText(page, T.VIEW_TITLE), 'Beta Base CTF: beta2 (2 of 2)');
     assert.equal(await libText(page, T.PV), 'The 3D view didn\'t load. Click to try again.');
     assert.equal(await libText(page, T.VIEW_MODE), '');
     assert.equal(await libText(page, T.VIEW_NEXT), 'Next Map');
@@ -829,7 +829,7 @@ await test('the big 3D view of a level with two maps: Next Map, a texture not in
     // Next Map: the first again.
     await call(page, 'viewCommand', 2);
     await page.waitForFunction(() => Module.jkLibrary.number(7) === 2, null, { timeout: 10000 });
-    assert.equal(await libText(page, T.VIEW_TITLE), 'Beta Base CTF: beta1.jkl (1 of 2)');
+    assert.equal(await libText(page, T.VIEW_TITLE), 'Beta Base CTF: beta1 (1 of 2)');
     // Another level starts from its first map.
     await stop(page);
     await call(page, 'view', 0, 0, 0, 0, 0);
