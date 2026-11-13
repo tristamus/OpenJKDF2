@@ -21,12 +21,19 @@
 #include "Main/jkEpisode.h"
 #include "Gui/jkGUISingleplayer.h"
 
+#ifdef PLATFORM_WSRELAY
+#include <emscripten.h>
+#endif
+
 enum jkGuiNetHostButton_t
 {
     GUI_OK = 1,
     GUI_CANCEL = -1,
 
     GUI_ADVANCED = 200,
+#ifdef PLATFORM_WSRELAY
+    GUI_LIBRARY = 201, // Added: Level Library... (jkGuiNetHost_OpenLibrary)
+#endif
 };
 
 enum jkGuiNetHostElement_t
@@ -65,6 +72,8 @@ enum jkGuiNetHostElement_t
     NETHOST_HITRULES_TEXT = NETHOST_JEDIONLY_CHECKBOX + 1,
     NETHOST_CLASSICHITS_CHECKBOX = NETHOST_JEDIONLY_CHECKBOX + 2,
     NETHOST_HWYSHITS_CHECKBOX = NETHOST_JEDIONLY_CHECKBOX + 3,
+    // Added: Level Library..., on the Choose Episode line, last in both lists.
+    NETHOST_LIBRARY_BUTTON = NETHOST_JEDIONLY_CHECKBOX + 4,
 #endif
 };
 
@@ -146,6 +155,8 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Level Library..., at the right end of the Choose Episode line.
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 150, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -204,6 +215,8 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Level Library..., as in JK's list.
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 173, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -309,6 +322,61 @@ static void jkGuiNetHost_ShowHitReach()
 static void jkGuiNetHost_TakeHitReach()
 {
     stdComm_WSRelay_hitReachMs = wstr_to_int_clamped(jkGuiNetHost_hitReachText, STDCOMM_WSRELAY_REACH_MIN, STDCOMM_WSRELAY_REACH_MAX);
+}
+
+// Added: the Level Library (packaging/wasm/library.js), which Level
+// Library... on the Choose Episode line opens. The page draws it over the
+// game, and the Host screen waits for it here. A level the host takes there
+// is saved in the browser and written into episode/ by the page, which then
+// gives back its episode's name, for Choose Episode to pick.
+#define JKGUINETHOST_LIBRARY_OPEN (0)
+
+// Only where the site serves the library (library.js asks it as the engine starts).
+EM_JS(int, jkGuiNetHost_js_libraryAvailable, (), {
+    return Module.jkLibrary && Module.jkLibrary.available() ? 1 : 0;
+});
+
+EM_JS(int, jkGuiNetHost_js_libraryOpen, (int bMots), {
+    return Module.jkLibrary && Module.jkLibrary.open(bMots ? 'mots' : 'jk1') ? 1 : 0;
+});
+
+EM_JS(int, jkGuiNetHost_js_libraryState, (), {
+    return Module.jkLibrary ? Module.jkLibrary.state() : 1;
+});
+
+// The episode the library installed, "" if none.
+EM_JS(void, jkGuiNetHost_js_libraryTake, (char* pOut, int outLen), {
+    stringToUTF8(Module.jkLibrary ? Module.jkLibrary.take() : "", pOut, outLen);
+});
+
+static void jkGuiNetHost_EnumEpisodes();
+
+static void jkGuiNetHost_OpenLibrary()
+{
+    char name[32];
+    jkGuiElement* pList = &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX];
+
+    if (!jkGuiNetHost_js_libraryOpen(Main_bMotsCompat))
+        return;
+    while (jkGuiNetHost_js_libraryState() == JKGUINETHOST_LIBRARY_OPEN)
+        emscripten_sleep(50);
+
+    jkGuiNetHost_js_libraryTake(name, sizeof(name));
+    if (!name[0])
+        return;
+
+    // The level is in episode/ now: list the episodes again, with it picked.
+    jkGuiNetHost_EnumEpisodes();
+    for (int i = 0; i < (int)jkGuiNetHost_dArray1.total; i++)
+    {
+        jkGuiStringEntry* pEntry = jkGuiRend_GetStringEntry(&jkGuiNetHost_dArray1, i);
+        if (pEntry && pEntry->str && pEntry->c_str && !__strnicmp(pEntry->c_str, name, 0x20u))
+        {
+            pList->selectedTextEntry = i;
+            break;
+        }
+    }
+    jkGuiNetHost_sub_4119D0(pList, jkGuiNetHost_pMenu, -1, -1, 0);
 }
 #endif
 
@@ -509,6 +577,20 @@ static void jkGuiNetHost_SetRankVisible(int bVisible)
     jkGuiNetHost_aElementsMots[NETHOST_STARS_RIGHT_BUTTON].bIsVisible = bVisible;
 }
 
+// Added: the episodes the Host screen lists, into Choose Episode. It was
+// written out where the screen opens and after Advanced.
+static void jkGuiNetHost_EnumEpisodes()
+{
+    jkEpisodeTypeFlags_t loadMask = (JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF);
+    if (Main_bMotsCompat)
+        loadMask |= JKM_EPISODE_SABER; // Added: list MotS's saber-only episodes (Sith Lightsaber Training)
+#ifdef QOL_IMPROVEMENTS
+    if (jkGuiNetHost_bIsCoop)
+        loadMask |= JK_EPISODE_SINGLEPLAYER;
+#endif
+    jkGuiSingleplayer_EnumEpisodes(&jkGuiNetHost_dArray1, &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], 0, loadMask);
+}
+
 // MOTS altered
 int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
 {
@@ -591,14 +673,7 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
     jkGuiNetHost_pElements[NETHOST_PASSWORD_TEXTBOX].selectedTextEntry = 16;
     jkGuiRend_DarrayNewStr(&jkGuiNetHost_dArray1, jkEpisode_var2 + 1, 1);
 
-    jkEpisodeTypeFlags_t loadMask = (JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF);
-    if (Main_bMotsCompat)
-        loadMask |= JKM_EPISODE_SABER; // Added: list MotS's saber-only episodes (Sith Lightsaber Training)
-#ifdef QOL_IMPROVEMENTS
-    if (jkGuiNetHost_bIsCoop)
-        loadMask |= JK_EPISODE_SINGLEPLAYER;
-#endif
-    jkGuiSingleplayer_EnumEpisodes(&jkGuiNetHost_dArray1, &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], 0, loadMask);
+    jkGuiNetHost_EnumEpisodes();
     jkGuiRend_DarrayNewStr(&jkGuiNetHost_dArray2, 10, 1);
     jkGuiRend_DarrayReallocStr(&jkGuiNetHost_dArray2, 0, 0);
     jkGuiRend_SetClickableString(&jkGuiNetHost_pElements[NETHOST_LEVEL_LISTBOX], &jkGuiNetHost_dArray2);
@@ -609,6 +684,9 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
     
     jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX].selectedTextEntry = 0;
     jkGuiNetHost_sub_4119D0(&jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], jkGuiNetHost_pMenu, -1, -1, 0);
+#ifdef PLATFORM_WSRELAY
+    jkGuiNetHost_pElements[NETHOST_LIBRARY_BUTTON].bIsVisible = jkGuiNetHost_js_libraryAvailable();
+#endif
 
     do
     {
@@ -738,16 +816,20 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
             jkGuiNetHost_bIsDedicated = !!jkGuiNetHost_aSettingsElements[NETHOST_DEDICATED_CHECKBOX].selectedTextEntry;
             jkGuiNetHost_bIsCoop = !!jkGuiNetHost_aSettingsElements[NETHOST_COOP_CHECKBOX].selectedTextEntry;
 
-            jkEpisodeTypeFlags_t loadMask = (JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF);
-            if (Main_bMotsCompat)
-                loadMask |= JKM_EPISODE_SABER; // Added: list MotS's saber-only episodes (Sith Lightsaber Training)
-            if (jkGuiNetHost_bIsCoop)
-                loadMask |= JK_EPISODE_SINGLEPLAYER;
-            jkGuiSingleplayer_EnumEpisodes(&jkGuiNetHost_dArray1, &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], 0, loadMask);
+            jkGuiNetHost_EnumEpisodes();
 #endif
         }
+#ifdef PLATFORM_WSRELAY
+        else if ( v4 == GUI_LIBRARY )
+        {
+            jkGuiNetHost_OpenLibrary();
+        }
+    }
+    while ( v4 == GUI_ADVANCED || v4 == GUI_LIBRARY );
+#else
     }
     while ( v4 == GUI_ADVANCED );
+#endif
 
     jkGuiNetHost_SaveSettings(); // Added: Make sure stuff actually gets into the registry
     jkGuiRend_DarrayFree(&jkGuiNetHost_dArray1);

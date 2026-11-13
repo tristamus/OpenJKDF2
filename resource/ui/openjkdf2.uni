@@ -1,4 +1,4 @@
-MSGS 124          # <--- DON'T FORGET TO UPDATE THIS COUNT
+MSGS 126          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
 #  "<key>"     <unused number>   "<string>"
 
@@ -90,6 +90,8 @@ MSGS 124          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_HWYS_HITS_HINT"          0 "Hits count where the attacker sees them, checked by the target's game."
    "GUIEXT_HIT_REACH"               0 "Hit reach (ms):"
    "GUIEXT_HIT_REACH_HINT"          0 "With Hit what you see: how far back a hit can count, 150 to 500 ms."
+   "GUIEXT_LEVEL_LIBRARY"           0 "Level Library..."
+   "GUIEXT_LEVEL_LIBRARY_HINT"      0 "Community levels from Massassi.net, saved in this browser for hosting."
 
    #"GUIEXT_"                0 ""
 

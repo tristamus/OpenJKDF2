@@ -2478,7 +2478,9 @@
             askInfo: askInfo, checkInfo: checkInfo, download: download, receive: receive,
             waitForDirect: waitForDirect, directUp: directUp, fail: fail, check: check, sleep: sleep, ui: ui,
             findPath: findPath, isFile: isFile, fileBytes: fileBytes, gameRoot: gameRoot,
-            retailSources: retailSources, makeStore: makeStore
+            retailSources: retailSources, makeStore: makeStore,
+            // What library.js saves the levels it gets with.
+            store: store, install: install, validEpisodeName: validEpisodeName, validExt: validExt
         }
     };
 
