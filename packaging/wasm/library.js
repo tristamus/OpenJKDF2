@@ -445,7 +445,31 @@
             touch(CH_STATUS);
         if (!L.job && L.rows.length && !L.rows.some(function(l) { return l.id === L.sel; }))
             pickId(L.rows[0].id);
+        // Nothing in the list: nothing picked, so the details don't show a
+        // level that isn't in it.
+        if (!L.job && !L.rows.length && L.sel != null) {
+            L.sel = null;
+            L.shot = 1;
+            L.pvMap = 0;
+            L.error = '';
+            wantPreview();
+            touch(CH_PANEL | CH_USE | CH_MSG | CH_PV);
+        }
         touch(CH_ROWS);
+    }
+
+    // What the details say when the list is empty because of My levels.
+    function emptyTitle() {
+        return L.filters.mine && !L.rows.length && L.index[L.game] ? 'My levels' : '';
+    }
+
+    function emptyText() {
+        if (!emptyTitle())
+            return '';
+        if (L.q.trim())
+            return 'None of the levels saved in this browser match the search.';
+        return 'No levels saved in this browser yet.\n\nA level you get here with Use Level, or from a host when you join their game, ' +
+            'is saved in this browser and shows here.';
     }
 
     function pickId(id) {
@@ -653,7 +677,7 @@
         if (!p || previewState() !== 2)
             return '';
         if (p.mode() === 'walk')
-            return 'Drag to look. W A S D to move, E and Q up and down, Shift faster, the wheel a step.';
+            return 'Drag to look, W A S D to move, E Q up and down, Shift faster.';
         return 'Drag to turn it, right-drag to move it, the wheel to zoom.';
     }
 
@@ -661,7 +685,12 @@
         var p = P();
         if (!p || previewState() !== 2)
             return '';
-        var missing = p.missing();
+        var missing = p.missing(), from = p.missingFrom ? p.missingFrom() : '';
+        // The other game's (Massassi's preview reads both games' resources),
+        // and this browser doesn't have its files saved.
+        if (missing && from)
+            return missing + (missing === 1 ? ' texture here is from ' : ' textures here are from ') +
+                (from === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight') + ': shown blurred.';
         if (missing)
             return missing + (missing === 1 ? ' of the game\'s own textures isn\'t' : ' of the game\'s own textures aren\'t') +
                 ' in your game files: shown blurred.';
@@ -677,10 +706,11 @@
         return p.mode() === 'walk' ? 'Orbit' : 'Walk';
     }
 
-    // A map that didn't load still has Next Map, to the level's others.
+    // A map that didn't load still has Next Map, to the level's others, and
+    // so does one that's still loading.
     function viewNextLabel() {
         var p = P(), l = selected(), st = previewState();
-        if (!p || (st !== 2 && st !== 3))
+        if (!p || st === 0)
             return '';
         if (st === 2 && p.mode() === 'walk')
             return p.starts() > 1 ? 'Next Start' : '';
@@ -751,8 +781,8 @@
         case 0: return statusText();
         case 1: return L.rows[arg] ? rowText(L.rows[arg]) : '';
         case 2: return SORTS[L.sort][1];
-        case 3: return l ? plain(l.t) : '';
-        case 4: return l ? overviewText(l, detail(l)) : '';
+        case 3: return l ? plain(l.t) : emptyTitle();
+        case 4: return l ? overviewText(l, detail(l)) : emptyText();
         case 5: return l ? readmeText(detail(l)) : '';
         case 6: return l ? filesText(l, detail(l)) : '';
         case 7: return messageText();

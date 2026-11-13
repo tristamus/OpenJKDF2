@@ -60,7 +60,7 @@
             case 10: return M.walk ? 'Walk: W A S D, drag to look.' : 'Orbit: drag to turn, wheel to zoom.';
             case 11: return M.walk ? 'Starting place 1 of 3' : '3D view from the test.';
             case 12: return pv() === 2 ? (M.walk ? 'Orbit' : 'Walk') : '';
-            case 13: return pv() === 2 ? (M.walk ? 'Next Start' : 'Next Map') : pv() === 3 ? 'Next Map' : '';
+            case 13: return pv() === 2 ? (M.walk ? 'Next Start' : 'Next Map') : pv() ? 'Next Map' : '';
             }
             return '';
         },

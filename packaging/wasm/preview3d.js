@@ -30,6 +30,14 @@
         jk1: ['resource/Res2.gob', 'resource/Res1hi.gob', 'episode/JK1MP.gob', 'episode/JK1CTF.gob', 'episode/JK1.gob'],
         mots: ['resource/Jkmres.goo', 'episode/JKM_MP.goo', 'episode/JKM_KFY.goo', 'episode/JKM_SABER.goo', 'episode/JKM.goo']
     };
+    // Massassi's preview takes a level's textures from both games' resources
+    // (Res1hi.gob, Res2.gob and JKMRES.GOO), so a Jedi Knight level can show a
+    // texture of Mysteries of the Sith's, and the other way round: those come
+    // from the other game's files when this browser has them saved.
+    var OTHER = {
+        jk1: { game: 'mots', gobs: ['resource/jkmres.goo'], own: ['resource/res2.gob', 'resource/res1hi.gob'] },
+        mots: { game: 'jk1', gobs: ['resource/res1hi.gob', 'resource/res2.gob'], own: ['resource/jkmres.goo'] }
+    };
     var REST_MS = 600;
     var TURN_S = 48;
     var FOV = 70 * Math.PI / 180;
@@ -139,7 +147,7 @@
         if (gameCache[game])
             return gameCache[game];
         var c = Module.jkMaps && Module.jkMaps.core;
-        var gobs = [];
+        var gobs = [], found = [];
         if (c && c.findPath && c.fileBytes && Module.FS) {
             var root = c.gameRoot();
             for (var rel of GAME_GOBS[game] || []) {
@@ -149,13 +157,18 @@
                 try {
                     var bytes = c.fileBytes(path);
                     var files = gobFiles(bytes);
-                    if (files)
+                    if (files) {
                         gobs.push({ bytes: bytes, files: files });
+                        found.push(rel.toLowerCase());
+                    }
                 } catch (e) {}
             }
         }
         var api = {
             count: gobs.length,
+            // Whether the game's resources that Massassi's preview reads are
+            // all here: then a texture that isn't is the other game's.
+            whole: !!OTHER[game] && OTHER[game].own.every(function(r) { return found.indexOf(r) >= 0; }),
             find: function(name) {
                 for (var g of gobs) {
                     var f = g.files[name];
@@ -176,6 +189,70 @@
         return files.find(name) || files.find('mat/' + base) || files.find('3do/mat/' + base);
     }
 
+    // A GOB the page has as a Blob (a game file saved in this browser),
+    // read in pieces: its list of files, then only the files asked for.
+    async function blobGob(blob) {
+        var part = async function(at, n) { return new Uint8Array(await blob.slice(at, at + n).arrayBuffer()); };
+        var head = await part(0, 12);
+        if (head.length < 12 || head[0] !== 0x47 || head[1] !== 0x4f || head[2] !== 0x42 || head[3] !== 0x20 || u32(head, 4) !== 20)
+            return null;
+        var table = u32(head, 8), count = u32(await part(table, 4), 0);
+        if (table + 4 + count * 136 > blob.size)
+            return null;
+        var dir = await part(table + 4, count * 136), files = {};
+        for (var i = 0; i < count; i++) {
+            var at = i * 136, offset = u32(dir, at), size = u32(dir, at + 4);
+            if (offset + size > blob.size)
+                continue;
+            var name = '';
+            for (var j = 0; j < 128 && dir[at + 8 + j]; j++)
+                name += String.fromCharCode(dir[at + 8 + j]);
+            files[name.replace(/\\/g, '/').toLowerCase()] = [offset, size];
+        }
+        return { files: files, read: function(f) { return part(f[0], f[1]); } };
+    }
+
+    var otherCache = {};
+
+    // The other game's resources, from its files saved in this browser
+    // (Module.jkSavedGameFile, index.html): { findMat(name) -> bytes or
+    // null }, or null when it has none of them.
+    function otherFiles(game) {
+        var o = OTHER[game];
+        if (!o || typeof Module.jkSavedGameFile !== 'function')
+            return Promise.resolve(null);
+        if (!otherCache[game]) {
+            otherCache[game] = (async function() {
+                var gobs = [];
+                for (var rel of o.gobs) {
+                    try {
+                        var blob = await Module.jkSavedGameFile(o.game, rel);
+                        var g = blob && await blobGob(blob);
+                        if (g)
+                            gobs.push(g);
+                    } catch (e) {}
+                }
+                if (!gobs.length)
+                    return null;
+                return {
+                    findMat: async function(name) {
+                        var base = name.split('/').pop();
+                        for (var n of [name, 'mat/' + base, '3do/mat/' + base]) {
+                            for (var g of gobs) {
+                                if (g.files[n])
+                                    return g.read(g.files[n]);
+                            }
+                        }
+                        return null;
+                    }
+                };
+            })();
+            // Nothing found: asked again next time (the player may add them).
+            otherCache[game].then(function(r) { if (!r) delete otherCache[game]; }, function() { delete otherCache[game]; });
+        }
+        return otherCache[game];
+    }
+
     // ---- A level's map, ready to draw
 
     function b64bytes(s) {
@@ -186,7 +263,7 @@
     }
 
     // Surfaces as triangles (fans, as the preview's own viewer makes them),
-    // one draw a texture: { verts: [x, y, z, u, v, light]..., index, draws:
+    // one draw a texture: { verts: [x, y, z, u, v]..., index, draws:
     // [{ mat, first, count }], min, max }.
     function buildGeometry(groups) {
         var nv = 0, ni = 0;
@@ -196,7 +273,7 @@
                 if (k >= 3) { nv += k; ni += (k - 2) * 3; }
             }
         }
-        var verts = new Float32Array(nv * 6), byMat = new Map();
+        var verts = new Float32Array(nv * 5), byMat = new Map();
         var min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
         var v0 = 0;
         for (var g2 of groups) {
@@ -205,10 +282,9 @@
                 if (vs.length < 3)
                     continue;
                 for (var i = 0; i < vs.length; i++) {
-                    var p = vs[i][0] || [0, 0, 0], t = vs[i][1] || [0, 0], o = (v0 + i) * 6;
+                    var p = vs[i][0] || [0, 0, 0], t = vs[i][1] || [0, 0], o = (v0 + i) * 5;
                     verts[o] = +p[0] || 0; verts[o + 1] = +p[1] || 0; verts[o + 2] = +p[2] || 0;
                     verts[o + 3] = +t[0] || 0; verts[o + 4] = +t[1] || 0;
-                    verts[o + 5] = vs[i][2] == null ? 1 : +vs[i][2];
                     for (var a = 0; a < 3; a++) {
                         if (verts[o + a] < min[a]) min[a] = verts[o + a];
                         if (verts[o + a] > max[a]) max[a] = verts[o + a];
@@ -302,21 +378,20 @@
     // ---- Drawing
 
     var VS = '#version 300 es\n' +
-        'in vec3 aPos; in vec2 aUv; in float aLight;\n' +
+        'in vec3 aPos; in vec2 aUv;\n' +
         'uniform mat4 uMvp;\n' +
-        'out vec2 vUv; out float vLight;\n' +
-        'void main() { gl_Position = uMvp * vec4(aPos, 1.0); vUv = aUv; vLight = aLight; }\n';
-    // The surface's light as the level has it, with a floor so that a dark
-    // corner still shows from outside.
+        'out vec2 vUv;\n' +
+        'void main() { gl_Position = uMvp * vec4(aPos, 1.0); vUv = aUv; }\n';
+    // Each texture as it is, with no light, as Massassi's preview draws it
+    // (the level's light made the view too dark to see from outside).
     var FS = '#version 300 es\n' +
         'precision mediump float;\n' +
-        'uniform sampler2D uTex; uniform vec3 uColor; uniform float uUseTex; uniform float uLit;\n' +
-        'in vec2 vUv; in float vLight; out vec4 o;\n' +
+        'uniform sampler2D uTex; uniform vec3 uColor; uniform float uUseTex;\n' +
+        'in vec2 vUv; out vec4 o;\n' +
         'void main() {\n' +
         '  vec4 c = uUseTex > 0.5 ? texture(uTex, vUv) : vec4(uColor, 1.0);\n' +
         '  if (c.a < 0.5) discard;\n' +
-        '  float l = mix(1.0, 0.3 + 0.7 * clamp(vLight, 0.0, 1.0), uLit);\n' +
-        '  o = vec4(c.rgb * l, 1.0);\n' +
+        '  o = vec4(c.rgb, 1.0);\n' +
         '}\n';
 
     function Renderer(canvas) {
@@ -339,14 +414,13 @@
         gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
         gl.bindAttribLocation(prog, 0, 'aPos');
         gl.bindAttribLocation(prog, 1, 'aUv');
-        gl.bindAttribLocation(prog, 2, 'aLight');
         gl.linkProgram(prog);
         if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
             throw new Error(gl.getProgramInfoLog(prog));
         this.gl = gl;
         this.prog = prog;
         this.u = {};
-        for (var n of ['uMvp', 'uTex', 'uColor', 'uUseTex', 'uLit'])
+        for (var n of ['uMvp', 'uTex', 'uColor', 'uUseTex'])
             this.u[n] = gl.getUniformLocation(prog, n);
         this.meshes = [];
         this.textures = [];
@@ -364,11 +438,9 @@
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geo.index, gl.STATIC_DRAW);
         gl.enableVertexAttribArray(0);
-        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
         gl.enableVertexAttribArray(1);
-        gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 24, 12);
-        gl.enableVertexAttribArray(2);
-        gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 24, 20);
+        gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 12);
         gl.bindVertexArray(null);
         var m = { vao: vao, vb: vb, ib: ib, draws: geo.draws };
         this.meshes.push(m);
@@ -413,13 +485,19 @@
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         gl.enable(gl.DEPTH_TEST);
-        gl.disable(gl.CULL_FACE);
+        // One side of each surface, the front (corners counterclockwise), as
+        // the game and Massassi's preview draw them (a surface seen from both
+        // sides is in the data twice). From outside, the walls' backs let you
+        // see in; at a starting place, the player's model standing there
+        // isn't drawn from the inside.
+        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.BACK);
+        gl.frontFace(gl.CCW);
         gl.useProgram(this.prog);
         gl.uniformMatrix4fv(this.u.uMvp, false, mvp);
         gl.uniform1i(this.u.uTex, 0);
         gl.activeTexture(gl.TEXTURE0);
         for (var e of meshes) {
-            gl.uniform1f(this.u.uLit, e.lit ? 1 : 0);
             gl.bindVertexArray(e.mesh.vao);
             for (var d of e.mesh.draws) {
                 var t = this.textures[d.mat];
@@ -709,6 +787,23 @@
         var files = tex ? gameFiles(w.game) : null;
         var srcs = textureSources(mats, tex, w.name, files && files.count ? files : null);
         scene.total = srcs.list.length;
+        scene.game = w.game;
+        scene.whole = !!(files && files.whole);
+        // The game's textures that aren't in its own files: from the other
+        // game's, as Massassi's preview has them.
+        if (tex && srcs.pal && srcs.list.some(function(e) { return e.src === 'standin'; })) {
+            var other = await otherFiles(w.game);
+            if (signal.aborted || V.scene !== scene)
+                return;
+            for (var i0 = 0; other && i0 < srcs.list.length; i0++) {
+                var e0 = srcs.list[i0];
+                if (e0.src !== 'standin')
+                    continue;
+                var b0 = await other.findMat(e0.name);
+                if (b0)
+                    srcs.list[i0] = { src: 'game', name: e0.name, bytes: b0, other: true };
+            }
+        }
         for (var at = 0; at < srcs.list.length; at += TEXTURE_BATCH) {
             if (signal.aborted || V.scene !== scene)
                 return;
@@ -908,14 +1003,15 @@
             eye = [o.target[0] - dir[0] * o.dist, o.target[1] - dir[1] * o.dist, o.target[2] - dir[2] * o.dist];
             near = Math.max(0.01, o.dist - radius(s) * 1.5) * 0.5;
             far = o.dist + radius(s) * 3;
-            list = [{ mesh: s.world, lit: true }];
+            list = [{ mesh: s.world }];
         } else {
             var wk = V.walk;
             eye = wk.pos;
             dir = direction(wk.yaw, wk.pitch);
-            near = 0.005;
+            // As close as Massassi's preview draws (0.01).
+            near = 0.01;
             far = radius(s) * 8 + 100;
-            list = s.sky ? [{ mesh: s.sky, lit: false }, { mesh: s.world, lit: true }] : [{ mesh: s.world, lit: true }];
+            list = s.sky ? [{ mesh: s.sky }, { mesh: s.world }] : [{ mesh: s.world }];
         }
         var mvp = mul(perspective(FOV, aspect, Math.min(near, 1), far), lookDir(eye, dir));
         V.renderer.draw(w, h, mvp, list);
@@ -993,11 +1089,18 @@
         start: function() { return V.start; },
         // How many of the game's own textures weren't in the player's files.
         missing: function() { return V.scene ? V.scene.missing : 0; },
+        // The game the missing textures are from, when the player's own
+        // game's resources are all here (so they're the other game's): 'jk1'
+        // or 'mots', else ''.
+        missingFrom: function() {
+            var s = V.scene;
+            return s && s.missing && s.whole && OTHER[s.game] ? OTHER[s.game].game : '';
+        },
         swapped: function() { return V.scene ? V.scene.swapped : 0; },
         // Whether something the menu shows changed since it last asked.
         changed: function() { var c = V.changed; V.changed = false; return c; },
         // For tests.
-        _decodeMat: decodeMat, _cmpColors: cmpColors, _gobFiles: gobFiles, _buildGeometry: buildGeometry, _prepareMap: prepareMap, _worker: worker,
+        _decodeMat: decodeMat, _cmpColors: cmpColors, _gobFiles: gobFiles, _blobGob: blobGob, _forgetOther: function() { otherCache = {}; }, _buildGeometry: buildGeometry, _prepareMap: prepareMap, _worker: worker,
         _textureSources: textureSources, _pngPixels: pngPixels, _V: V, _gameCache: gameCache
     };
 })();

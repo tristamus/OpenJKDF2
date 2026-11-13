@@ -789,6 +789,7 @@ static void viewOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
             CHECK(js("Module.jkLibrary._M.views") == 1, "once");
             CHECK(!wheelFn, "the library's wheel off while the big view is up");
             CHECK(wis(el[V_TITLE].wstr, "Alpha Arena"), "the level's name over it: %s", show(el[V_TITLE].wstr));
+            CHECK(el[V_TITLE].textType == 6, "in the big font (%d)", el[V_TITLE].textType);
             CHECK(wis(el[V_HELP].wstr, "Orbit: drag to turn, wheel to zoom."), "how to move: %s", show(el[V_HELP].wstr));
             CHECK(wis(el[V_NOTE].wstr, "3D view from the test."), "the note: %s", show(el[V_NOTE].wstr));
             CHECK(!el[V_TEXT].bIsVisible, "no text over the level");
@@ -811,10 +812,19 @@ static void viewOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
             break;
         case 1:
             menu->focusedElement = &el[V_MODE];
-            js("Module.jkLibrary._M.pv = 1, Module.jkLibrary._M.changed |= 32, 0");
+            // The next map, with a title too long for the big font.
+            js("var M = Module.jkLibrary._M; M.pv = 1; M.titles[0] = M.titles[1] + ': ' + M.titles[1] + ' (2 of 3)'; M.changed |= 32; 0");
             break;
         case 2:
-            CHECK(!el[V_MODE].bIsVisible && !el[V_NEXT].bIsVisible, "while another map comes: no Walk, no Next");
+            CHECK(!el[V_MODE].bIsVisible, "while another map comes: no Walk");
+            CHECK(el[V_NEXT].bIsVisible && wis(el[V_NEXT].wstr, "Next Map"), "Next Map stays: %s", show(el[V_NEXT].wstr));
+            forgetCalls();
+            click(menu, &el[V_NEXT], 0);
+            CHECK(called("'viewCommand 2'") && menu->lastClicked == 0, "a press while it loads goes on to the next map");
+            CHECK(el[V_TITLE].textType == 3, "the long title in the medium font (%d)", el[V_TITLE].textType);
+            CHECK(width(el[V_TITLE].wstr, wlen(el[V_TITLE].wstr)) <= el[V_TITLE].rect.width - 4 && wlen(el[V_TITLE].wstr) > 0,
+                  "and it fits: %s", show(el[V_TITLE].wstr));
+            js("Module.jkLibrary._M.titles[0] = 'Alpha Arena', 0");
             CHECK(el[V_TEXT].bIsVisible && wis(el[V_TEXT].wstr, "Loading the 3D view..."), "and it says so: %s", show(el[V_TEXT].wstr));
             CHECK(menu->focusedElement == &el[V_BACK], "the focus from the hidden button to Back");
             // The map comes, and the library's list changes meanwhile.
@@ -823,6 +833,7 @@ static void viewOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
             break;
         case 3:
             CHECK(el[V_MODE].bIsVisible && el[V_NEXT].bIsVisible && !el[V_TEXT].bIsVisible, "the map there: Walk and Next again");
+            CHECK(el[V_TITLE].textType == 6 && wis(el[V_TITLE].wstr, "Alpha Arena"), "a short title back in the big font");
             CHECK(rowCount(&libEl[E_LIST]) == 3, "the library waits for the big view to close");
             CHECK(js("Module.jkLibrary._M.lastView[0]") == 1, "the big view kept up");
             click(menu, menu->pEscapeKeyShortcutElement, 0);
@@ -873,8 +884,9 @@ static void viewOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         if (frame == 0)
         {
             CHECK(js("Module.jkLibrary._M.views") == 2, "the big view again");
-            CHECK(el[V_TEXT].bIsVisible && wis(el[V_TEXT].wstr, "Loading the 3D view...") && !el[V_MODE].bIsVisible && !el[V_NEXT].bIsVisible,
+            CHECK(el[V_TEXT].bIsVisible && wis(el[V_TEXT].wstr, "Loading the 3D view...") && !el[V_MODE].bIsVisible,
                   "it says it's coming: %s", show(el[V_TEXT].wstr));
+            CHECK(el[V_NEXT].bIsVisible && wis(el[V_NEXT].wstr, "Next Map"), "with Next Map");
             CHECK(!el[V_FRAME].wHintText, "nothing to click in the frame");
             js("Module.jkLibrary._M.pv = 3, Module.jkLibrary._M.changed |= 32, 0");
         }
@@ -923,8 +935,9 @@ static void emptyOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         click(menu, &el[E_SHOT], 0);
         click(menu, &el[E_PAGE], 0);
         click(menu, &el[E_TAB_OVERVIEW], 0);
-        CHECK(el[E_PV].bIsVisible && el[E_PV_TEXT].bIsVisible && wis(el[E_PV_TEXT].wstr, "No 3D view for this level yet"),
-              "no level, no 3D view: it says so: %s", show(el[E_PV_TEXT].wstr));
+        CHECK(!el[E_PV].bIsVisible && !el[E_PV_TEXT].bIsVisible && !el[E_SHOT].bIsVisible && !el[E_NO_SHOT].bIsVisible,
+              "no level: no screenshot or 3D view frames");
+        CHECK(js("Module.jkLibrary._M.lastShot[0]") == 0 && js("Module.jkLibrary._M.lastPreview[0]") == 0, "and the page draws neither");
         js("Module.jkLibrary._M.pv = 2, 0");
         click(menu, &el[E_PV], 0);
         CHECK(menu->lastClicked == 0, "and there's none to open");

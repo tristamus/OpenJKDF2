@@ -432,8 +432,8 @@ await test('the 3D view\'s pieces: MATs, colormaps, GOBs, the map\'s triangles, 
         const quad = { vertices: [[[0, 0, 0], [0, 0], 1], [[2, 0, 0], [1, 0], 0.5], [[2, 3, 0], [1, 1]], [[0, 3, 0], [0, 1], 0]], material: 0 };
         const tri = { vertices: [[[0, 0, -1], [0, 0], 1], [[1, 0, 4], [1, 0], 1], [[0, 1, 0], [0, 1], 1]], material: 1 };
         const geo = P._buildGeometry([[quad, tri, quad], [{ vertices: [[[9, 9, 9], [0, 0], 1], [[9, 9, 9], [0, 0], 1]], material: 2 }], null]);
-        out.geo = { n: geo.verts.length / 6, index: Array.from(geo.index), draws: geo.draws, min: geo.min, max: geo.max, empty: geo.empty,
-                    v2: Array.from(geo.verts.slice(12, 18)) };
+        out.geo = { n: geo.verts.length / 5, index: Array.from(geo.index), draws: geo.draws, min: geo.min, max: geo.max, empty: geo.empty,
+                    v2: Array.from(geo.verts.slice(10, 15)) };
         out.emptyGeo = P._buildGeometry([[]]).empty;
         // Which texture comes from where.
         const files = { find: n => n === 'mat/vanilla.mat' ? b(mats[0]) : n === 'misc/cmp/dflt.cmp' ? b(cmp) : null };
@@ -474,7 +474,7 @@ await test('the 3D view\'s pieces: MATs, colormaps, GOBs, the map\'s triangles, 
     assert.deepEqual(got.geo.index, [0, 1, 2, 0, 2, 3, 7, 8, 9, 7, 9, 10, 4, 5, 6]);
     assert.deepEqual(got.geo.draws, [{ mat: 0, first: 0, count: 12 }, { mat: 1, first: 12, count: 3 }]);
     assert.deepEqual([got.geo.min, got.geo.max], [[0, 0, -1], [2, 3, 4]]);
-    assert.deepEqual(got.geo.v2, [2, 3, 0, 1, 1, 1], 'a corner with no light: full light');
+    assert.deepEqual(got.geo.v2, [2, 3, 0, 1, 1], 'each corner: where it is, and where on its texture');
     assert.equal(got.geo.empty, false);
     assert.equal(got.emptyGeo, true);
     // The level's own textures as the preview has them; the game's own from
@@ -714,6 +714,11 @@ await test('the 3D view in the Overview\'s frame: the level\'s own textures exac
     await page.waitForFunction(() => Module.jkPreview3d._V.scene && Module.jkPreview3d._V.scene.total === 2 &&
                                      Module.jkPreview3d._V.renderer.textures.filter(Boolean).length === 2);
     assert.deepEqual(await page.evaluate(() => [Module.jkPreview3d.swapped(), Module.jkPreview3d.missing()]), [1, 0]);
+    // One side of each surface, the front, as Massassi's preview draws them.
+    assert.deepEqual(await page.evaluate(() => {
+        const gl = Module.jkPreview3d._V.renderer.gl;
+        return [gl.isEnabled(gl.CULL_FACE), gl.getParameter(gl.CULL_FACE_MODE) === gl.BACK, gl.getParameter(gl.FRONT_FACE) === gl.CCW];
+    }), [true, true, true]);
     // Its own texture is the preview's PNG, rows bottom first ...
     assert.deepEqual(await texels(page, 0), [[[0, 0, 255, 255], [255, 255, 255, 255]], [[255, 0, 0, 255], [0, 255, 0, 255]]]);
     // ... the game's is the player's own, through the level's own master
@@ -751,7 +756,7 @@ await test('the big 3D view: orbit, walk from the starting places, the keys and 
     assert.equal(await libText(page, T.VIEW_MODE), 'Orbit');
     assert.equal(await libText(page, T.VIEW_NEXT), 'Next Start');
     assert.equal(await libText(page, T.VIEW_NOTE), 'Starting place 1 of 2.');
-    assert.match(await libText(page, T.VIEW_HELP), /^Drag to look\. W A S D to move/);
+    assert.match(await libText(page, T.VIEW_HELP), /^Drag to look, W A S D to move/);
     const walk = () => page.evaluate(() => { const w = Module.jkPreview3d._V.walk; return { pos: w.pos.slice(), yaw: w.yaw, pitch: w.pitch }; });
     let w = await walk();
     assert.deepEqual(w.pos, [0.5, 0.5, 1 / 16]);
@@ -814,8 +819,11 @@ await test('the big 3D view of a level with two maps: Next Map, a texture not in
     assert.deepEqual(await texels(page, 1), [[through(GAME_PAL, 10), through(GAME_PAL, 20)], [through(GAME_PAL, 30), through(GAME_PAL, 40)]]);
     assert.deepEqual(await texels(page, 2), [[[128, 128, 128, 255], [128, 128, 128, 255]], [[128, 128, 128, 255], [128, 128, 128, 255]]]);
     assert.equal(await texels(page, 3), null, 'no picture: its color');
-    // The second map doesn't load: it says so, and Next Map goes on.
+    // The second map doesn't load: it says so, and Next Map goes on. While
+    // it's coming, Next Map is there too.
     await call(page, 'viewCommand', 2);
+    if (await number(page, N.PV) === 1)
+        assert.equal(await libText(page, T.VIEW_NEXT), 'Next Map', 'while the next map loads');
     await page.waitForFunction(() => Module.jkLibrary.number(7) === 3, null, { timeout: 10000 });
     assert.equal(await libText(page, T.VIEW_TITLE), 'Beta Base CTF: beta2 (2 of 2)');
     assert.equal(await libText(page, T.PV), 'The 3D view didn\'t load. Click to try again.');
@@ -837,6 +845,57 @@ await test('the big 3D view of a level with two maps: Next Map, a texture not in
     assert.equal(await libText(page, T.VIEW_TITLE), 'Alpha Arena');
     await call(page, 'end');
     await page.evaluate(() => { Module.jkPreview3d._worker.off = false; });
+});
+
+await test('a game texture that isn\'t in its own files: from the other game\'s files saved in this browser, else blurred and said whose', async () => {
+    const res1hi = makeGob([{ name: 'misc\\x.txt', bytes: text('x') }]);
+    const m = await game({ files: { '/jk1/resource/Res2.gob': res2, '/jk1/resource/Res1hi.gob': res1hi } });
+    // This browser has no Mysteries of the Sith files saved.
+    await m.page.evaluate(() => { Module.jkSavedGameFile = async () => null; });
+    await open(m.page);
+    await pick(m.page, 502);
+    await keep(m.page, 'view', 1, 21, 59, 598, 310);
+    await m.page.waitForFunction(() => /from Mysteries of the Sith/.test(Module.jkLibrary.text(11)), null, { timeout: 10000 });
+    assert.equal(await libText(m.page, T.VIEW_NOTE), '1 texture here is from Mysteries of the Sith: shown blurred.');
+    assert.deepEqual(await texels(m.page, 2), [[[128, 128, 128, 255], [128, 128, 128, 255]], [[128, 128, 128, 255], [128, 128, 128, 255]]]);
+    await stop(m.page);
+    await call(m.page, 'view', 0, 0, 0, 0, 0);
+    await call(m.page, 'end');
+    // Now it has: the texture comes from MotS's JKMRES.GOO, through the
+    // level's colormap, read from the saved file in pieces.
+    const gone = [50, 60, 70, 80];
+    const jkmres = makeGob([{ name: 'misc\\y.txt', bytes: text('y') }, { name: '3do\\mat\\gone.mat', bytes: makeMat({ w: 2, h: 2, pixels: gone }) }]);
+    const asked = await m.page.evaluate(async bytes => {
+        const asked = [];
+        Module.jkPreview3d._forgetOther();
+        const blob = new Blob([new Uint8Array(bytes)]);
+        Module.jkSavedGameFile = async (game, rel) => { asked.push(game + ' ' + rel); return rel === 'resource/jkmres.goo' ? blob : null; };
+        window.__asked = asked;
+        return asked;
+    }, Array.from(jkmres));
+    assert.deepEqual(asked, []);
+    await open(m.page);
+    const loaded = id => m.page.waitForFunction(id => { const s = Module.jkPreview3d._V.scene; return s && s.id === id && s.loaded; }, id, { timeout: 10000 });
+    await pick(m.page, 501);
+    await keep(m.page, 'view', 1, 21, 59, 598, 310);
+    await loaded(501);
+    await pick(m.page, 502);
+    await loaded(502);
+    assert.deepEqual(await m.page.evaluate(() => window.__asked), ['mots resource/jkmres.goo']);
+    assert.deepEqual(await m.page.evaluate(() => [Module.jkPreview3d.swapped(), Module.jkPreview3d.missing()]), [2, 0]);
+    assert.deepEqual(await texels(m.page, 2), [[through(GAME_PAL, 50), through(GAME_PAL, 60)], [through(GAME_PAL, 70), through(GAME_PAL, 80)]]);
+    assert.equal(await libText(m.page, T.VIEW_NOTE), '3D view from Massassi.net\'s 3D Preview (jkview, by Stephan Reiter).');
+    // The GOB's pieces only, not all of it.
+    assert.deepEqual(await m.page.evaluate(async bytes => {
+        const g = await Module.jkPreview3d._blobGob(new Blob([new Uint8Array(bytes)]));
+        return [Object.keys(g.files).sort(), Array.from(await g.read(g.files['misc/y.txt']))];
+    }, Array.from(jkmres)), [['3do/mat/gone.mat', 'misc/y.txt'], Array.from(text('y'))]);
+    assert.equal(await m.page.evaluate(() => Module.jkPreview3d._blobGob(new Blob([new Uint8Array([1, 2, 3])]))), null);
+    await stop(m.page);
+    await call(m.page, 'view', 0, 0, 0, 0, 0);
+    await call(m.page, 'end');
+    assert.deepEqual(m.errors.filter(e => !/Failed to load resource/.test(e)), []);
+    await m.page.close();
 });
 
 await test('no errors on the page', async () => {
@@ -881,6 +940,23 @@ await test('My levels with nothing saved yet says so', async () => {
     assert.equal(await libText(m.page, T.STATUS), 'No levels saved in this browser yet.');
     assert.equal(await number(m.page, N.COUNT), 0);
     assert.equal(await number(m.page, N.SELECTED), -1);
+    assert.equal(await libText(m.page, T.TITLE), 'My levels');
+    assert.match(await libText(m.page, T.OVERVIEW), /^No levels saved in this browser yet\.\n\n/);
+    // Searched: says none match.
+    await call(m.page, 'query', 'zzz', F.MP | F.CTF | F.MINE, 0);
+    assert.equal(await libText(m.page, T.OVERVIEW), 'None of the levels saved in this browser match the search.');
+    // Unticked, the first level is picked again; ticked with one picked, the
+    // pick goes with the list, and so does what the details showed.
+    await call(m.page, 'query', '', F.MP | F.CTF, 0);
+    await m.page.waitForFunction(() => Module.jkLibrary.number(1) > 0 && Module.jkLibrary.number(2) === 0);
+    assert.notEqual(await libText(m.page, T.TITLE), '');
+    await m.page.evaluate(() => Module.jkLibrary.number(0));
+    await call(m.page, 'query', '', F.MP | F.CTF | F.MINE, 0);
+    assert.equal(await number(m.page, N.SELECTED), -1);
+    assert.ok((await number(m.page, N.CHANGED)) & 4, 'the details told to change');
+    assert.equal(await libText(m.page, T.TITLE), 'My levels');
+    assert.equal(await number(m.page, N.SHOTS), 0);
+    assert.equal(await number(m.page, N.PV), 0);
     await call(m.page, 'end');
     await m.page.close();
 });

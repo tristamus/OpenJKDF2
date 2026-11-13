@@ -397,6 +397,19 @@ static char16_t* jkGuiLibrary_Fit(jkGuiElement* pElement, char16_t* pText)
     return pOut;
 }
 
+// Whether a line of text fits in a text element's width, in its font.
+static int jkGuiLibrary_Fits(jkGuiElement* pElement, const char16_t* pText)
+{
+    stdFont* pFont = jkGui_stdFonts[pElement->textType];
+    int len = 0;
+
+    if (!pText || !pFont)
+        return 1;
+    while (pText[len])
+        len++;
+    return jkGuiLibrary_TextWidth(pFont, pText, len) <= pElement->rect.width - 4;
+}
+
 static void jkGuiLibrary_SetText(jkGuiElement* pElement, char16_t** ppKeep, char16_t* pText)
 {
     pText = jkGuiLibrary_Fit(pElement, pText);
@@ -745,6 +758,9 @@ static void jkGuiLibrary_ShowTab(jkGuiMenu* pMenu)
     jkGuiElement* el = jkGuiLibrary_aElements;
     int bOverview = jkGuiLibrary_tab == LIB_TAB_IS_OVERVIEW;
     int bShots = jkGuiLibrary_js_number(LIB_NUM_SHOTS) > 0;
+    // With no level picked (an empty list), the details' text says why, with
+    // no picture frames beside it.
+    int bPicked = jkGuiLibrary_js_number(LIB_NUM_SELECTED) >= 0;
 
     // The tab that's open is drawn lit and isn't a button.
     for (int i = 0; i < 3; i++)
@@ -754,15 +770,15 @@ static void jkGuiLibrary_ShowTab(jkGuiMenu* pMenu)
         pTab->type = bOpen ? ELEMENT_TEXT : ELEMENT_TEXTBUTTON;
         pTab->textType = bOpen ? 3 : 2;
     }
-    el[LIB_SHOT].bIsVisible = bOverview;
-    el[LIB_NO_SHOT].bIsVisible = bOverview && !bShots;
+    el[LIB_SHOT].bIsVisible = bOverview && bPicked;
+    el[LIB_NO_SHOT].bIsVisible = bOverview && bPicked && !bShots;
     el[LIB_SHOT].wHintText = bShots && jkGuiLibrary_js_number(LIB_NUM_SHOTS) > 1 ? u"Click the picture for the next screenshot." : NULL;
     el[LIB_LEVEL_TITLE].bIsVisible = bOverview;
     el[LIB_FACTS].bIsVisible = bOverview;
     el[LIB_TEXT].bIsVisible = !bOverview;
     int pv = jkGuiLibrary_js_number(LIB_NUM_PV);
-    el[LIB_PV].bIsVisible = bOverview;
-    el[LIB_PV_TEXT].bIsVisible = bOverview && pv != 2;
+    el[LIB_PV].bIsVisible = bOverview && bPicked;
+    el[LIB_PV_TEXT].bIsVisible = bOverview && bPicked && pv != 2;
     el[LIB_PV].wHintText = pv == 1 || pv == 2 ? u"Click for a bigger 3D view you can move around in."
                          : pv == 3 ? u"Click to try the 3D view again." : NULL;
     // A text box the player clicked in (which focuses it) that's now hidden
@@ -770,9 +786,9 @@ static void jkGuiLibrary_ShowTab(jkGuiMenu* pMenu)
     // hidden, would otherwise look for where the focus goes next forever.
     if (pMenu && pMenu->focusedElement && !pMenu->focusedElement->bIsVisible)
         pMenu->focusedElement = &el[LIB_LIST];
-    jkGuiLibrary_js_shot(bOverview && bShots, el[LIB_SHOT].rect.x + 1, el[LIB_SHOT].rect.y + 1,
+    jkGuiLibrary_js_shot(bOverview && bPicked && bShots, el[LIB_SHOT].rect.x + 1, el[LIB_SHOT].rect.y + 1,
                          el[LIB_SHOT].rect.width - 2, el[LIB_SHOT].rect.height - 2);
-    jkGuiLibrary_js_preview(bOverview, el[LIB_PV].rect.x + 1, el[LIB_PV].rect.y + 1,
+    jkGuiLibrary_js_preview(bOverview && bPicked, el[LIB_PV].rect.x + 1, el[LIB_PV].rect.y + 1,
                             el[LIB_PV].rect.width - 2, el[LIB_PV].rect.height - 2);
 }
 
@@ -1033,7 +1049,13 @@ static void jkGuiLibrary_ViewRefresh(jkGuiMenu* pMenu)
     jkGuiElement* v = jkGuiLibrary_aViewElements;
     int pv = jkGuiLibrary_js_number(LIB_NUM_PV);
 
-    jkGuiLibrary_SetText(&v[VIEW_TITLE], &jkGuiLibrary_pViewTitle, jkGuiLibrary_GetText(LIB_TEXT_VIEW_TITLE, 0));
+    // A title too long for the big font (a long name, or a map's name and
+    // number after it) is drawn in the medium one, before it's cut.
+    char16_t* pTitle = jkGuiLibrary_GetText(LIB_TEXT_VIEW_TITLE, 0);
+    v[VIEW_TITLE].textType = 6;
+    if (!jkGuiLibrary_Fits(&v[VIEW_TITLE], pTitle))
+        v[VIEW_TITLE].textType = 3;
+    jkGuiLibrary_SetText(&v[VIEW_TITLE], &jkGuiLibrary_pViewTitle, pTitle);
     if (jkGuiLibrary_pViewText)
         free(jkGuiLibrary_pViewText);
     jkGuiLibrary_pViewText = jkGuiLibrary_GetText(LIB_TEXT_PV, 0);
@@ -1044,8 +1066,9 @@ static void jkGuiLibrary_ViewRefresh(jkGuiMenu* pMenu)
     jkGuiLibrary_SetText(&v[VIEW_MODE], &jkGuiLibrary_pViewMode, jkGuiLibrary_GetText(LIB_TEXT_VIEW_MODE, 0));
     jkGuiLibrary_SetText(&v[VIEW_NEXT], &jkGuiLibrary_pViewNext, jkGuiLibrary_GetText(LIB_TEXT_VIEW_NEXT, 0));
     v[VIEW_MODE].bIsVisible = pv == 2 && jkGuiLibrary_pViewMode && jkGuiLibrary_pViewMode[0];
-    // A map that didn't load still has Next Map, to the level's other maps.
-    v[VIEW_NEXT].bIsVisible = (pv == 2 || pv == 3) && jkGuiLibrary_pViewNext && jkGuiLibrary_pViewNext[0];
+    // Next Map stays while a map loads (a press goes on to the one after) and
+    // when one didn't load, to the level's other maps.
+    v[VIEW_NEXT].bIsVisible = pv >= 1 && pv <= 3 && jkGuiLibrary_pViewNext && jkGuiLibrary_pViewNext[0];
     v[VIEW_FRAME].wHintText = pv == 3 ? u"Click to try the 3D view again." : NULL;
     // A button that went away gives the focus back.
     if (pMenu && pMenu->focusedElement && !pMenu->focusedElement->bIsVisible)
