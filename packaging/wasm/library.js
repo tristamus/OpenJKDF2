@@ -301,15 +301,17 @@
             .replace(/\r\n?/g, '\n').replace(/\t/g, '    ').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
     }
 
-    // A row: the title, a tab, then the kind, the year and the size. The
-    // menu cuts the title to fit and puts the rest in its own column, which
-    // has room for "CTF 2000 12 MB".
+    // A row: the title, a tab, the year and the size, then for a level that
+    // isn't plain multiplayer a tab and its kind. The menu cuts the title to
+    // fit, puts the kind at the end of the title's column, just before the
+    // year, and the year and size in their own column, which has room for
+    // "2000 12 MB" (whole MB from 10 MB) but not for the kind as well.
     function rowText(l) {
         var mark = savedName(l, L.game) ? '* ' : '';
-        var kind = l.k === 'ctf' ? 'CTF ' : l.k === 'kfy' ? 'KFY ' : l.k === 'sp' ? 'SP ' : '';
+        var kind = l.k === 'ctf' ? 'CTF' : l.k === 'kfy' ? 'KFY' : l.k === 'sp' ? 'SP' : '';
         var mb = (l.sz || 0) / (1024 * 1024);
-        return plain(mark + l.t).replace(/\n/g, ' ') + '\t' + kind + year(l) + ' ' +
-            (mb >= 10 ? Math.round(mb) + ' MB' : size(l.sz));
+        return plain(mark + l.t).replace(/[\n\t]/g, ' ') + '\t' + year(l) + ' ' +
+            (mb >= 10 ? Math.round(mb) + ' MB' : size(l.sz)) + (kind ? '\t' + kind : '');
     }
 
     function selected() { return L.sel != null ? byId(L.sel) : null; }

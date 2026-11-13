@@ -453,46 +453,84 @@ static void jkGuiLibrary_FillLines(Darray* pArray, jkGuiElement* pElement, const
     jkGuiRend_SetClickableString(pElement, pArray);
 }
 
-// A list row: the title, cut with "..." to fit its column, a tab, the rest.
+// Copies pText[0..len) to pOut, cut with "..." to maxW if it's wider, and
+// returns how many letters it wrote (at most len + 3).
+static int jkGuiLibrary_CutTo(stdFont* pFont, const char16_t* pText, int len, int maxW, char16_t* pOut)
+{
+    int n = 0;
+    if (jkGuiLibrary_TextWidth(pFont, pText, len) <= maxW)
+    {
+        memcpy(pOut, pText, sizeof(char16_t) * len);
+        return len;
+    }
+    static const char16_t dots[4] = {'.', '.', '.', 0};
+    int dotsW = jkGuiLibrary_TextWidth(pFont, dots, 3);
+    int w = 0;
+    for (int i = 0; i < len; i++)
+    {
+        int cw = jkGuiLibrary_CharWidth(pFont, pText[i]);
+        if (w + cw + dotsW > maxW)
+            break;
+        w += cw;
+        pOut[n++] = pText[i];
+    }
+    while (n > 0 && pOut[n - 1] == ' ')
+        n--;
+    pOut[n++] = '.';
+    pOut[n++] = '.';
+    pOut[n++] = '.';
+    return n;
+}
+
+// A list row from the page: the title, a tab, the year and size, and for a
+// level that isn't plain multiplayer, a tab and its kind (CTF, KFY, SP). The
+// list draws what's after the row's last tab at the column's stop, so the
+// title, cut with "..." to fit, and the kind, at the end of the title's column
+// just before the year, go before the one tab left.
 static void jkGuiLibrary_AddRow(stdFont* pFont, const char16_t* pRow)
 {
-    static const char16_t dots[4] = {'.', '.', '.', 0};
     char16_t line[LIB_LINE_MAX];
     int tabAt = 0;
     while (pRow[tabAt] && pRow[tabAt] != '\t')
         tabAt++;
+    int restAt = tabAt, restEnd = tabAt, kindAt = -1, kindLen = 0;
+    if (pRow[tabAt] == '\t')
+    {
+        restAt = tabAt + 1;
+        restEnd = restAt;
+        while (pRow[restEnd] && pRow[restEnd] != '\t')
+            restEnd++;
+        if (pRow[restEnd] == '\t')
+        {
+            kindAt = restEnd + 1;
+            while (pRow[kindAt + kindLen] && kindLen < 8)
+                kindLen++;
+        }
+    }
     int titleLen = tabAt;
     if (titleLen > LIB_LINE_MAX / 2)
         titleLen = LIB_LINE_MAX / 2;
-    int n = 0;
-    if (jkGuiLibrary_TextWidth(pFont, pRow, titleLen) <= LIB_LIST_TITLE_W)
+    int spaceW = pFont->marginX > 0 ? pFont->marginX : 1;
+    int kindW = kindLen ? jkGuiLibrary_TextWidth(pFont, pRow + kindAt, kindLen) + spaceW : 0;
+    int n = jkGuiLibrary_CutTo(pFont, pRow, titleLen, LIB_LIST_TITLE_W - kindW - (kindLen ? spaceW : 0), line);
+    if (kindLen)
     {
-        memcpy(line, pRow, sizeof(char16_t) * titleLen);
-        n = titleLen;
-    }
-    else
-    {
-        int dotsW = jkGuiLibrary_TextWidth(pFont, dots, 3);
-        int w = 0;
-        for (int i = 0; i < titleLen; i++)
-        {
-            int cw = jkGuiLibrary_CharWidth(pFont, pRow[i]);
-            if (w + cw + dotsW > LIB_LIST_TITLE_W)
-                break;
-            w += cw;
-            line[n++] = pRow[i];
-        }
-        while (n > 0 && line[n - 1] == ' ')
-            n--;
-        line[n++] = '.';
-        line[n++] = '.';
-        line[n++] = '.';
+        // Spaces up to where the kind and a space end at the column's stop.
+        int w = jkGuiLibrary_TextWidth(pFont, line, n);
+        int spaces = (jkGuiLibrary_listPaddings[0] - w - kindW) / spaceW;
+        if (spaces < 1)
+            spaces = 1;
+        while (spaces-- > 0 && n < LIB_LINE_MAX / 2 + 32)
+            line[n++] = ' ';
+        for (int i = 0; i < kindLen; i++)
+            line[n++] = pRow[kindAt + i];
+        line[n++] = ' ';
     }
     if (pRow[tabAt] == '\t')
     {
-        const char16_t* pRest = pRow + tabAt;
-        while (*pRest && n < LIB_LINE_MAX - 1)
-            line[n++] = *pRest++;
+        line[n++] = '\t';
+        for (int i = restAt; i < restEnd && n < LIB_LINE_MAX - 1; i++)
+            line[n++] = pRow[i];
     }
     line[n] = 0;
     jkGuiRend_DarrayReallocStr(&jkGuiLibrary_rows, line, 0);

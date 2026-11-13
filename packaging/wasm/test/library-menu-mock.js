@@ -6,7 +6,7 @@
     var LONG = 'A Very Long Level Title That Goes On And On Past The Column';
     var M = {
         calls: [], game: '', open: false, available: true, beginOk: true,
-        rows: ['Alpha Arena\t1999  12 KB', '* ' + LONG + '\tCTF 2003  3.4 MB', 'Gamma\tSP 2001  80 KB'],
+        rows: ['Alpha Arena\t1999 12 KB', '* ' + LONG + '\t2003 3.4 MB\tCTF', 'Gamma\t2001 80 KB\tSP'],
         titles: ['Alpha Arena', LONG, 'Gamma'],
         sel: 0, changed: 0, busy: false, done: false, result: '', shots: 2, msg: '',
         q: null, mask: -1, sort: 0, lastShot: null, nextShots: 0, pages: 0, doneIn: -1,

@@ -232,10 +232,11 @@ await test('the list: multiplayer and CTF levels, by name, with the counts', asy
         byId[a].entry.t.localeCompare(byId[b].entry.t)));
     assert.equal(await libText(page, T.STATUS), '8 levels from Massassi.net so far, 3 more coming');
     assert.equal(await libText(page, T.SORT), 'Name');
-    // A row: the title, a tab, then the kind, the year and the size.
+    // A row: the title, a tab, the year and the size, and a tab and the kind
+    // for a level that isn't plain multiplayer.
     const r = await rowTexts(page);
     assert.match(r[0], /^Alpha Arena\t1999 \d+ KB$/);
-    assert.match(r[1], /^Beta Base CTF\tCTF 2001 \d+ KB$/);
+    assert.match(r[1], /^Beta Base CTF\t2001 \d+ KB\tCTF$/);
     // The first level is picked, with its Overview: a label, a tab, its value.
     assert.equal(await number(page, N.SELECTED), 0);
     assert.equal(await libText(page, T.TITLE), 'Alpha Arena');
@@ -467,7 +468,7 @@ await test('Mysteries of the Sith: Kill the Fool, and GOO files', async () => {
     await open(m.page, 'mots');
     const r = await rowTexts(m.page);
     assert.deepEqual(r.map(idOf), [601]);
-    assert.match(r[0], /^Fool Yard\tKFY 1999 /);
+    assert.match(r[0], /^Fool Yard\t1999 [^\t]+\tKFY$/);
     assert.ok((await libText(m.page, T.OVERVIEW)).split('\n').includes('Type:\tKill the Fool'));
     assert.equal(await useLevel(m.page, 601), 'foolyard');
     assert.equal(await fileSha(m.page, '/mots/episode/foolyard.goo'), sha(kfy));

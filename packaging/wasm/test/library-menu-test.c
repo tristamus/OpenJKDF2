@@ -429,16 +429,32 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
               "Multiplayer and CTF on, Co-op off, at first");
         CHECK(called("'query \"\" 3 0'"), "asked for the multiplayer and CTF levels by name");
         CHECK(rowCount(&el[E_LIST]) == 3, "3 rows, has %d", rowCount(&el[E_LIST]));
-        CHECK(wis(el[E_LIST].unistr[0].str, "Alpha Arena\t1999  12 KB"), "row 0 %s", show(el[E_LIST].unistr[0].str));
-        // A title too wide for its column ends in "..." in it.
+        CHECK(wis(el[E_LIST].unistr[0].str, "Alpha Arena\t1999 12 KB"), "row 0 %s", show(el[E_LIST].unistr[0].str));
+        // A title too wide for its column ends in "..." in it, then the
+        // level's kind ends at the column's stop, just before the year.
         const char16_t* r1 = el[E_LIST].unistr[1].str;
         int tab = 0;
         while (r1[tab] && r1[tab] != '\t')
             tab++;
-        CHECK(tab > 3 && r1[tab - 1] == '.' && r1[tab - 2] == '.' && r1[tab - 3] == '.' && r1[tab - 4] != ' ', "row 1 cut: %s", show(r1));
-        CHECK(width(r1, tab) <= 144, "row 1's title fits its column (%d)", width(r1, tab));
+        int dots = 0;
+        while (r1[dots] && !(r1[dots] == '.' && r1[dots + 1] == '.' && r1[dots + 2] == '.'))
+            dots++;
+        CHECK(r1[dots] && dots > 0 && r1[dots - 1] != ' ', "row 1 cut: %s", show(r1));
+        CHECK(width(r1, dots + 3) <= 144 - width(u"CTF ", 4) - SPACE_W, "row 1's title leaves room for its kind (%d)", width(r1, dots + 3));
+        CHECK(tab > 4 && r1[tab - 1] == ' ' && r1[tab - 2] == 'F' && r1[tab - 3] == 'T' && r1[tab - 4] == 'C' && r1[tab - 5] == ' ',
+              "row 1's kind before the tab: %s", show(r1));
+        CHECK(width(r1, tab) <= 150 && width(r1, tab) > 150 - SPACE_W, "row 1's kind ends at the column's stop (%d)", width(r1, tab));
         CHECK(wstarts(r1, "* A Very Long"), "row 1 keeps its saved mark: %s", show(r1));
-        CHECK(wis(r1 + tab, "\tCTF 2003  3.4 MB"), "row 1 keeps the rest: %s", show(r1 + tab));
+        CHECK(wis(r1 + tab, "\t2003 3.4 MB"), "row 1 keeps the rest, without the kind: %s", show(r1 + tab));
+        {
+            const char16_t* r2 = el[E_LIST].unistr[2].str;
+            int t2 = 0;
+            while (r2[t2] && r2[t2] != '\t')
+                t2++;
+            CHECK(wstarts(r2, "Gamma ") && r2[t2 - 1] == ' ' && r2[t2 - 2] == 'P' && r2[t2 - 3] == 'S' && r2[t2 - 4] == ' ' &&
+                  width(r2, t2) <= 150 && width(r2, t2) > 150 - SPACE_W && wis(r2 + t2, "\t2001 80 KB"),
+                  "a short title: spaces up to its kind: %s", show(r2));
+        }
         CHECK(el[E_LIST].selectedTextEntry == 0, "row 0 picked");
         // Its Overview.
         CHECK(wis(el[E_LEVEL_TITLE].wstr, "Alpha Arena"), "level title %s", show(el[E_LEVEL_TITLE].wstr));

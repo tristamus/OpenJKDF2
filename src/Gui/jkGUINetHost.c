@@ -102,6 +102,7 @@ static int32_t jkGuiNetHost_aIdk[2] = {0xd, 0xe};
 
 #ifdef PLATFORM_WSRELAY
 static int jkGuiNetHost_HitRulesClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, int redraw);
+static void jkGuiNetHost_SmallButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw);
 #endif
 
 // MOTS altered
@@ -162,8 +163,9 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    // Added: Level Library..., at the right end of the Choose Episode line.
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 150, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Level Library..., at the right end of the Choose Episode line, in
+    // the small font of the labels beside it.
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 150, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -230,7 +232,7 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Added: Level Library..., as in JK's list.
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 173, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 173, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -343,6 +345,21 @@ static void jkGuiNetHost_TakeHitReach()
 // browser and written into episode/ by the page, and the library gives back
 // its episode's name, for Choose Episode to pick.
 static void jkGuiNetHost_EnumEpisodes();
+
+// Level Library... in the small font, as the labels and checkboxes around it
+// are: the button font next to "Choose Episode" was a size too big. A text
+// button's font goes up by one with the mouse over it and by two while it's
+// pressed (med0, med1, med2); the small font has two (small0, small1), so
+// pressed stays on small1.
+static void jkGuiNetHost_SmallButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw)
+{
+    int32_t font = pElement->textType;
+    if (pMenu->lastMouseOverClickable == pElement)
+        font++;
+    if (redraw)
+        jkGuiRend_CopyVBuffer(pMenu, &pElement->rect);
+    stdFont_Draw3(pVbuf, pMenu->fonts[font], pElement->rect.y, &pElement->rect, pElement->selectedTextEntry, pElement->wstr, 1);
+}
 
 static void jkGuiNetHost_OpenLibrary()
 {
