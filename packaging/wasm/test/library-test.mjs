@@ -435,6 +435,12 @@ await test('the 3D view\'s pieces: MATs, colormaps, GOBs, the map\'s triangles, 
         out.geo = { n: geo.verts.length / 5, index: Array.from(geo.index), draws: geo.draws, min: geo.min, max: geo.max, empty: geo.empty,
                     v2: Array.from(geo.verts.slice(10, 15)) };
         out.emptyGeo = P._buildGeometry([[]]).empty;
+        // The player standing at a starting place isn't drawn; a model beside
+        // it, or reaching past it, is.
+        const tri3 = (x, y, z, h) => ({ vertices: [[[x, y, z], [0, 0]], [[x + 0.03, y, z], [1, 0]], [[x, y + 0.03, z + h], [0, 1]]], material: 0 });
+        const atStart = P._prepareMap({ surfaces: [], sky_surfaces: [], spawn_points: [{ pos: [1, 1, 1], rot: [0, 0, 0] }],
+                                        model_surfaces: [tri3(0.97, 0.97, 0.89, 0.15), tri3(1.2, 1, 1, 0.05), tri3(1, 1, 0.9, 0.3)] });
+        out.startTris = atStart.world.index.length / 3;
         // Which texture comes from where.
         const files = { find: n => n === 'mat/vanilla.mat' ? b(mats[0]) : n === 'misc/cmp/dflt.cmp' ? b(cmp) : null };
         const list = [{ name: 'mat/own.mat', data: 'x' }, { name: 'MAT\\Vanilla.MAT', data: 'x' }, { name: 'mat/gone.mat', data: 'x' },
@@ -477,6 +483,7 @@ await test('the 3D view\'s pieces: MATs, colormaps, GOBs, the map\'s triangles, 
     assert.deepEqual(got.geo.v2, [2, 3, 0, 1, 1], 'each corner: where it is, and where on its texture');
     assert.equal(got.geo.empty, false);
     assert.equal(got.emptyGeo, true);
+    assert.equal(got.startTris, 2, 'the player at the starting place left out, the two others drawn');
     // The level's own textures as the preview has them; the game's own from
     // the player's files (by name, in mat/ or 3do/mat/); one in neither a
     // stand-in; no picture, a color.

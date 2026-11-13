@@ -310,8 +310,28 @@
     // A map as it's drawn: the world's triangles, the sky's, a color for
     // each texture, the starting places.
     function prepareMap(map) {
+        var spawns = map.spawn_points || [];
+        // The player standing at each starting place (a thing of the
+        // player's model, in the preview's data with the rest): the game
+        // switches off a starting place's player until someone takes it,
+        // and draws none of them. A surface all of whose corners are close
+        // around one is left out (Kyle reaches 0.04 to the sides, 0.12
+        // down and 0.07 up from where he stands).
+        var atStart = function(s) {
+            var vs = s.vertices || [];
+            for (var k = 0; k < spawns.length; k++) {
+                var p = spawns[k].pos || [0, 0, 0], all = vs.length > 0;
+                for (var i = 0; all && i < vs.length; i++) {
+                    var v = vs[i][0] || [0, 0, 0], dz = v[2] - p[2];
+                    all = Math.abs(v[0] - p[0]) <= 0.06 && Math.abs(v[1] - p[1]) <= 0.06 && dz >= -0.14 && dz <= 0.09;
+                }
+                if (all)
+                    return true;
+            }
+            return false;
+        };
         return {
-            world: buildGeometry([map.surfaces, map.model_surfaces]),
+            world: buildGeometry([map.surfaces, (map.model_surfaces || []).filter(function(s) { return !atStart(s); })]),
             sky: buildGeometry([map.sky_surfaces]),
             colors: map.material_colors || [],
             spawns: map.spawn_points || []
