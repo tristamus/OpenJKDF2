@@ -1721,6 +1721,13 @@ void Window_SdlUpdate()
                 // Send wheel movement to the active game menu.
                 if (jkGuiRend_IsMenuActive())
                 {
+                    // Added: unless the menu takes the wheel itself.
+                    if (wheelY && jkGuiRend_MouseWheel(wheelY))
+                    {
+                        Window_mouseWheelY = 0;
+                        Window_mouseWheelX = 0;
+                        break;
+                    }
                     int steps = wheelY > 0 ? wheelY : -wheelY;
                     int key = wheelY > 0 ? VK_UP : VK_DOWN;
 

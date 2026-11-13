@@ -164,8 +164,9 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Added: Level Library..., at the right end of the Choose Episode line, in
-    // the small font of the labels beside it.
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 150, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // the small font of the labels beside it (2 higher: drawn at 150 it showed
+    // 2 lower than "Choose Episode:" in the game).
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 148, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -231,8 +232,8 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    // Added: Level Library..., as in JK's list.
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 173, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Level Library..., as in JK's list (2 higher, as there).
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 171, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };

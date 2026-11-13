@@ -100,7 +100,10 @@ enum jkGuiLibraryTab_t
 // after a row's last tab at the first of these stops past what's before it,
 // and cuts it at the list's edge.
 #define LIB_LIST_TITLE_W (144)
-static int32_t jkGuiLibrary_listPaddings[2] = {150, 0};
+#define LIB_LIST_YEAR_X (150)
+// The year's stop, and before it the kinds' (CTF, KFY, SP), set for each list
+// by jkGuiLibrary_FillRows.
+static int32_t jkGuiLibrary_listPaddings[3] = {LIB_LIST_YEAR_X, 0, 0};
 // Labels in the Overview (Author:, Released:...), sizes in Files.
 static int32_t jkGuiLibrary_factsPaddings[2] = {80, 0};
 static int32_t jkGuiLibrary_filesPaddings[2] = {58, 0};
@@ -482,18 +485,14 @@ static int jkGuiLibrary_CutTo(stdFont* pFont, const char16_t* pText, int len, in
     return n;
 }
 
-// A list row from the page: the title, a tab, the year and size, and for a
-// level that isn't plain multiplayer, a tab and its kind (CTF, KFY, SP). The
-// list draws what's after the row's last tab at the column's stop, so the
-// title, cut with "..." to fit, and the kind, at the end of the title's column
-// just before the year, go before the one tab left.
-static void jkGuiLibrary_AddRow(stdFont* pFont, const char16_t* pRow)
+// Where a row's parts are: its title [0, tabAt), the year and size
+// [restAt, restEnd), and its kind, if it has one, kindLen letters at kindAt.
+static void jkGuiLibrary_SplitRow(const char16_t* pRow, int* pTabAt, int* pRestAt, int* pRestEnd, int* pKindAt, int* pKindLen)
 {
-    char16_t line[LIB_LINE_MAX];
     int tabAt = 0;
     while (pRow[tabAt] && pRow[tabAt] != '\t')
         tabAt++;
-    int restAt = tabAt, restEnd = tabAt, kindAt = -1, kindLen = 0;
+    int restAt = tabAt, restEnd = tabAt, kindAt = 0, kindLen = 0;
     if (pRow[tabAt] == '\t')
     {
         restAt = tabAt + 1;
@@ -507,31 +506,62 @@ static void jkGuiLibrary_AddRow(stdFont* pFont, const char16_t* pRow)
                 kindLen++;
         }
     }
+    *pTabAt = tabAt;
+    *pRestAt = restAt;
+    *pRestEnd = restEnd;
+    *pKindAt = kindAt;
+    *pKindLen = kindLen;
+}
+
+// A list row from the page: the title, a tab, the year and size, and for a
+// level that isn't plain multiplayer, a tab and its kind (CTF, KFY, SP). The
+// list draws what's after a row's last tab at the first stop past what's
+// before it. With kinds in the list (kindX > 0), the stops are kindX and the
+// year's: a row with a kind is its title, cut to end before kindX, a tab, and
+// the kind with spaces up to the year; a row without one has spaces after its
+// title, so it ends past kindX and its year goes to the year's stop.
+static void jkGuiLibrary_AddRow(stdFont* pFont, const char16_t* pRow, int kindX)
+{
+    char16_t line[LIB_LINE_MAX];
+    int tabAt = 0, restAt, restEnd, kindAt = 0, kindLen = 0;
+    jkGuiLibrary_SplitRow(pRow, &tabAt, &restAt, &restEnd, &kindAt, &kindLen);
     int titleLen = tabAt;
     if (titleLen > LIB_LINE_MAX / 2)
         titleLen = LIB_LINE_MAX / 2;
     int spaceW = pFont->marginX > 0 ? pFont->marginX : 1;
-    int kindW = kindLen ? jkGuiLibrary_TextWidth(pFont, pRow + kindAt, kindLen) + spaceW : 0;
-    int n = jkGuiLibrary_CutTo(pFont, pRow, titleLen, LIB_LIST_TITLE_W - kindW - (kindLen ? spaceW : 0), line);
-    if (kindLen)
+    int n;
+    if (kindLen && kindX > 0)
     {
-        // Spaces up to where the kind and a space end at the column's stop.
-        int w = jkGuiLibrary_TextWidth(pFont, line, n);
-        int spaces = (jkGuiLibrary_listPaddings[0] - w - kindW) / spaceW;
-        if (spaces < 1)
-            spaces = 1;
-        while (spaces-- > 0 && n < LIB_LINE_MAX / 2 + 32)
-            line[n++] = ' ';
+        n = jkGuiLibrary_CutTo(pFont, pRow, titleLen, kindX - (LIB_LIST_YEAR_X - LIB_LIST_TITLE_W), line);
+        line[n++] = '\t';
         for (int i = 0; i < kindLen; i++)
             line[n++] = pRow[kindAt + i];
+        // As many spaces as fit before the year's stop, one at least.
+        int w = kindX + jkGuiLibrary_TextWidth(pFont, pRow + kindAt, kindLen) + spaceW;
         line[n++] = ' ';
+        while (w + spaceW <= LIB_LIST_YEAR_X && n < LIB_LINE_MAX / 2 + 64)
+        {
+            line[n++] = ' ';
+            w += spaceW;
+        }
     }
-    if (pRow[tabAt] == '\t')
+    else
     {
-        line[n++] = '\t';
-        for (int i = restAt; i < restEnd && n < LIB_LINE_MAX - 1; i++)
-            line[n++] = pRow[i];
+        n = jkGuiLibrary_CutTo(pFont, pRow, titleLen, LIB_LIST_TITLE_W, line);
+        if (kindX > 0 && pRow[tabAt] == '\t')
+        {
+            int w = jkGuiLibrary_TextWidth(pFont, line, n);
+            while (w <= kindX && n < LIB_LINE_MAX / 2 + 64)
+            {
+                line[n++] = ' ';
+                w += spaceW;
+            }
+        }
+        if (pRow[tabAt] == '\t')
+            line[n++] = '\t';
     }
+    for (int i = restAt; i < restEnd && n < LIB_LINE_MAX - 1; i++)
+        line[n++] = pRow[i];
     line[n] = 0;
     jkGuiRend_DarrayReallocStr(&jkGuiLibrary_rows, line, 0);
 }
@@ -565,6 +595,32 @@ static void jkGuiLibrary_PlainListDraw(jkGuiElement *pElement, jkGuiMenu *pMenu,
     else
         tmp.paddings = 0;
     jkGuiRend_ListBoxDraw(pElement, &tmp, vbuf, redraw);
+}
+
+// The mouse wheel over the details or the Readme/Files text scrolls that
+// text, 3 lines a notch, whichever list has the focus. Elsewhere it does what
+// the arrow keys do: on the list of levels, the next or previous level.
+static int jkGuiLibrary_Wheel(jkGuiMenu* pMenu, int32_t notches)
+{
+    jkGuiElement* el = jkGuiLibrary_aElements;
+    jkGuiElement* pOver = pMenu ? pMenu->lastMouseOverClickable : NULL;
+    if (!notches || !pOver || !pOver->bIsVisible || (pOver != &el[LIB_FACTS] && pOver != &el[LIB_TEXT]))
+        return 0;
+    // When a list scrolls, its arrows take its first and last lines.
+    int maxScroll = pOver->texInfo.numTextEntries - (pOver->texInfo.maxTextEntries - 2);
+    if (pOver->texInfo.numTextEntries <= pOver->texInfo.maxTextEntries || maxScroll <= 0)
+        return 1;
+    int scroll = pOver->texInfo.textScrollY - notches * 3;
+    if (scroll > maxScroll)
+        scroll = maxScroll;
+    if (scroll < 0)
+        scroll = 0;
+    if (scroll == pOver->texInfo.textScrollY)
+        return 1;
+    pOver->texInfo.textScrollY = scroll;
+    pOver->selectedTextEntry = scroll;
+    jkGuiRend_UpdateAndDrawClickable(pOver, pMenu, 1);
+    return 1;
 }
 
 static void jkGuiLibrary_Draw(jkGuiMenu* pMenu, int idx)
@@ -639,13 +695,32 @@ static void jkGuiLibrary_FillRows()
     int count = jkGuiLibrary_js_number(LIB_NUM_COUNT);
 
     jkGuiRend_DarrayFreeEntry(&jkGuiLibrary_rows);
-    for (int i = 0; i < count; i++)
+    char16_t** ppRows = count > 0 ? (char16_t**)calloc(count, sizeof(char16_t*)) : NULL;
+    int kindW = 0;
+    for (int i = 0; ppRows && i < count; i++)
     {
-        char16_t* pRow = jkGuiLibrary_GetText(LIB_TEXT_ROW, i);
-        if (pRow && pFont)
-            jkGuiLibrary_AddRow(pFont, pRow);
-        free(pRow);
+        ppRows[i] = jkGuiLibrary_GetText(LIB_TEXT_ROW, i);
+        int tabAt, restAt, restEnd, kindAt, kindLen;
+        if (ppRows[i] && pFont)
+        {
+            jkGuiLibrary_SplitRow(ppRows[i], &tabAt, &restAt, &restEnd, &kindAt, &kindLen);
+            int w = kindLen ? jkGuiLibrary_TextWidth(pFont, ppRows[i] + kindAt, kindLen) + (pFont->marginX > 0 ? pFont->marginX : 1) : 0;
+            if (w > kindW)
+                kindW = w;
+        }
     }
+    // The kinds' stop: the widest kind and a space end at the year's.
+    int kindX = kindW ? LIB_LIST_YEAR_X - kindW : 0;
+    jkGuiLibrary_listPaddings[0] = kindX ? kindX : LIB_LIST_YEAR_X;
+    jkGuiLibrary_listPaddings[1] = kindX ? LIB_LIST_YEAR_X : 0;
+    jkGuiLibrary_listPaddings[2] = 0;
+    for (int i = 0; ppRows && i < count; i++)
+    {
+        if (ppRows[i] && pFont)
+            jkGuiLibrary_AddRow(pFont, ppRows[i], kindX);
+        free(ppRows[i]);
+    }
+    free(ppRows);
     jkGuiRend_DarrayReallocStr(&jkGuiLibrary_rows, NULL, 0);
     jkGuiRend_SetClickableString(pList, &jkGuiLibrary_rows);
 
@@ -869,7 +944,9 @@ int jkGuiLibrary_Show(int bMots, char* pOutName, int outLen)
     // The Host screen's menu mode and palette are already up.
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiLibrary_menu, &el[LIB_USE_BUTTON]);
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiLibrary_menu, &el[LIB_CANCEL_BUTTON]);
+    jkGuiRend_SetMouseWheelHandler(&jkGuiLibrary_menu, jkGuiLibrary_Wheel);
     result = jkGuiRend_DisplayAndReturnClicked(&jkGuiLibrary_menu);
+    jkGuiRend_SetMouseWheelHandler(NULL, NULL);
 
     jkGuiLibrary_js_shot(0, 0, 0, 0, 0);
     if (result == LIB_DONE && outLen > 0)

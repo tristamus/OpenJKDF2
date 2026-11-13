@@ -198,6 +198,9 @@ void jkGui_InitMenu(jkGuiMenu *menu, stdBitmap *bgBitmap)
     }
 }
 
+static int (*wheelFn)(jkGuiMenu *pMenu, int32_t notches);
+static jkGuiMenu* wheelMenu;
+void jkGuiRend_SetMouseWheelHandler(jkGuiMenu *pMenu, int (*fn)(jkGuiMenu *pMenu, int32_t notches)) { wheelMenu = pMenu; wheelFn = fn; }
 void jkGuiRend_MenuSetReturnKeyShortcutElement(jkGuiMenu *menu, jkGuiElement *element) { menu->pReturnKeyShortcutElement = element; }
 void jkGuiRend_MenuSetEscapeKeyShortcutElement(jkGuiMenu *menu, jkGuiElement *element) { menu->pEscapeKeyShortcutElement = element; }
 
@@ -429,31 +432,42 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
               "Multiplayer and CTF on, Co-op off, at first");
         CHECK(called("'query \"\" 3 0'"), "asked for the multiplayer and CTF levels by name");
         CHECK(rowCount(&el[E_LIST]) == 3, "3 rows, has %d", rowCount(&el[E_LIST]));
-        CHECK(wis(el[E_LIST].unistr[0].str, "Alpha Arena\t1999 12 KB"), "row 0 %s", show(el[E_LIST].unistr[0].str));
-        // A title too wide for its column ends in "..." in it, then the
-        // level's kind ends at the column's stop, just before the year.
-        const char16_t* r1 = el[E_LIST].unistr[1].str;
-        int tab = 0;
-        while (r1[tab] && r1[tab] != '\t')
-            tab++;
-        int dots = 0;
-        while (r1[dots] && !(r1[dots] == '.' && r1[dots + 1] == '.' && r1[dots + 2] == '.'))
-            dots++;
-        CHECK(r1[dots] && dots > 0 && r1[dots - 1] != ' ', "row 1 cut: %s", show(r1));
-        CHECK(width(r1, dots + 3) <= 144 - width(u"CTF ", 4) - SPACE_W, "row 1's title leaves room for its kind (%d)", width(r1, dots + 3));
-        CHECK(tab > 4 && r1[tab - 1] == ' ' && r1[tab - 2] == 'F' && r1[tab - 3] == 'T' && r1[tab - 4] == 'C' && r1[tab - 5] == ' ',
-              "row 1's kind before the tab: %s", show(r1));
-        CHECK(width(r1, tab) <= 150 && width(r1, tab) > 150 - SPACE_W, "row 1's kind ends at the column's stop (%d)", width(r1, tab));
-        CHECK(wstarts(r1, "* A Very Long"), "row 1 keeps its saved mark: %s", show(r1));
-        CHECK(wis(r1 + tab, "\t2003 3.4 MB"), "row 1 keeps the rest, without the kind: %s", show(r1 + tab));
         {
+            // With kinds in the list, two stops: the kinds' and the year's, at
+            // 150, which the widest kind and a space end at.
+            const int32_t* pads = (const int32_t*)menu->paddings;
+            int kindX = 150 - width(u"CTF ", 4);
+            CHECK(pads[0] == kindX && pads[1] == 150 && pads[2] == 0, "the stops: %d %d %d", pads[0], pads[1], pads[2]);
+            // A row without a kind: its title, spaces past the kinds' stop,
+            // then its year and size at the year's.
+            const char16_t* r0 = el[E_LIST].unistr[0].str;
+            int t0 = 0;
+            while (r0[t0] && r0[t0] != '\t')
+                t0++;
+            CHECK(wstarts(r0, "Alpha Arena ") && width(r0, t0) > kindX && width(r0, t0) <= 150 && wis(r0 + t0, "\t1999 12 KB"),
+                  "row 0: past the kinds' stop: %s", show(r0));
+            // A title too wide for its column ends in "..." before the kinds'
+            // stop; after the tab, the kind and spaces up to the year.
+            const char16_t* r1 = el[E_LIST].unistr[1].str;
+            int tab = 0;
+            while (r1[tab] && r1[tab] != '\t')
+                tab++;
+            CHECK(tab > 3 && r1[tab - 1] == '.' && r1[tab - 2] == '.' && r1[tab - 3] == '.' && r1[tab - 4] != ' ', "row 1 cut: %s", show(r1));
+            CHECK(width(r1, tab) <= kindX - 6, "row 1's title ends before the kinds' stop (%d)", width(r1, tab));
+            CHECK(wstarts(r1, "* A Very Long"), "row 1 keeps its saved mark: %s", show(r1));
+            CHECK(wis(r1 + tab, "\tCTF 2003 3.4 MB"), "row 1: its kind, a space, the year: %s", show(r1 + tab));
+            CHECK(kindX + width(u"CTF ", 4) == 150, "so its year is at the year's stop");
+            // A shorter kind: spaces up to the year's stop, as near as they go.
             const char16_t* r2 = el[E_LIST].unistr[2].str;
             int t2 = 0;
             while (r2[t2] && r2[t2] != '\t')
                 t2++;
-            CHECK(wstarts(r2, "Gamma ") && r2[t2 - 1] == ' ' && r2[t2 - 2] == 'P' && r2[t2 - 3] == 'S' && r2[t2 - 4] == ' ' &&
-                  width(r2, t2) <= 150 && width(r2, t2) > 150 - SPACE_W && wis(r2 + t2, "\t2001 80 KB"),
-                  "a short title: spaces up to its kind: %s", show(r2));
+            int y2 = t2 + 1;
+            while (r2[y2] && !(r2[y2] >= '0' && r2[y2] <= '9'))
+                y2++;
+            int yearAt = kindX + width(r2 + t2 + 1, y2 - t2 - 1);
+            CHECK(wis(r2, "Gamma") == 0 && wstarts(r2, "Gamma\tSP ") && yearAt <= 150 && yearAt > 150 - SPACE_W && wis(r2 + y2, "2001 80 KB"),
+                  "row 2: SP and spaces, its year at %d: %s", yearAt, show(r2));
         }
         CHECK(el[E_LIST].selectedTextEntry == 0, "row 0 picked");
         // Its Overview.
@@ -567,6 +581,31 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         listDraws = 0;
         jkGuiRend_UpdateAndDrawClickable(&el[E_TEXT], menu, 1);
         CHECK(listDraws == 1 && listFonts[0] == listFonts[1] && !listPaddings, "the readme draws plain, no columns");
+        // The wheel over the readme scrolls it, though the list has the focus.
+        CHECK(wheelFn && wheelMenu == menu, "the menu takes the wheel");
+        {
+            jkGuiElement* t = &el[E_TEXT];
+            int n = t->texInfo.numTextEntries, m = t->texInfo.maxTextEntries;
+            t->texInfo.numTextEntries = 40;
+            t->texInfo.maxTextEntries = 16;
+            menu->lastMouseOverClickable = t;
+            CHECK(wheelFn(menu, -1) == 1 && t->texInfo.textScrollY == 3 && t->selectedTextEntry == 3, "a notch down: 3 lines (%d)",
+                  t->texInfo.textScrollY);
+            CHECK(menu->focusedElement == &el[E_LIST], "the focus stays on the list");
+            wheelFn(menu, -20);
+            CHECK(t->texInfo.textScrollY == 40 - 14, "no further than its last line (%d)", t->texInfo.textScrollY);
+            wheelFn(menu, 2);
+            CHECK(t->texInfo.textScrollY == 40 - 14 - 6, "back up 2 notches (%d)", t->texInfo.textScrollY);
+            wheelFn(menu, 50);
+            CHECK(t->texInfo.textScrollY == 0 && t->selectedTextEntry == 0, "to the top");
+            menu->lastMouseOverClickable = &el[E_LIST];
+            CHECK(wheelFn(menu, -1) == 0, "over the list of levels: the arrow keys' way");
+            menu->lastMouseOverClickable = &el[E_FACTS];
+            CHECK(wheelFn(menu, -1) == 0, "the hidden facts: not");
+            menu->lastMouseOverClickable = NULL;
+            t->texInfo.numTextEntries = n;
+            t->texInfo.maxTextEntries = m;
+        }
         break;
     }
     case 7:
@@ -690,6 +729,7 @@ int main()
 
     script = firstOpen;
     int got = jkGuiLibrary_Show(0, name, sizeof(name));
+    CHECK(!wheelFn, "the wheel let go when the library closes");
     CHECK(frames >= 14, "the first open ran its frames (%d)", frames);
     CHECK(!focusRunaway, "no endless focus search");
     CHECK(got == 1 && !strcmp(name, "alpha"), "gives back the level it got: %d \"%s\"", got, name);
