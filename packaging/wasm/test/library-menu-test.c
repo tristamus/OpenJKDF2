@@ -24,7 +24,13 @@ enum
 {
     E_HINT, E_TITLE, E_STATUS, E_SEARCH_LABEL, E_SEARCH, E_MP, E_CTF, E_COOP, E_SORT_LABEL, E_SORT_PREV,
     E_SORT_NEXT, E_SORT_NAME, E_LIST, E_TAB_OVERVIEW, E_TAB_README, E_TAB_FILES, E_SHOT, E_NO_SHOT,
-    E_LEVEL_TITLE, E_FACTS, E_TEXT, E_MESSAGE, E_CANCEL, E_PAGE, E_USE, E_COUNT
+    E_LEVEL_TITLE, E_FACTS, E_TEXT, E_MESSAGE, E_CANCEL, E_PAGE, E_USE, E_PV, E_PV_TEXT, E_MINE, E_COUNT
+};
+
+// The big 3D view's.
+enum
+{
+    V_HINT, V_TITLE, V_FRAME, V_TEXT, V_HELP, V_NOTE, V_BACK, V_MODE, V_NEXT, V_COUNT
 };
 
 static int failures = 0;
@@ -325,10 +331,17 @@ typedef void (*script_t)(jkGuiMenu* menu, jkGuiElement* el, int frame);
 static script_t script = NULL;
 static int frames = 0;
 
+static int displays = 0;
+
 int32_t jkGuiRend_DisplayAndReturnClicked(jkGuiMenu *menu)
 {
+    // As the game's (jkGuiRend_sub_50FAD0): no focus, nothing under the mouse.
+    CHECK(!displayed, "one menu up at a time");
     displayed = menu;
+    displays++;
     menu->lastClicked = 0;
+    menu->focusedElement = NULL;
+    menu->lastMouseOverClickable = NULL;
     jkGuiRend_Paint(menu);
     for (frames = 0; frames < 200 && !menu->lastClicked; frames++)
     {
@@ -492,8 +505,23 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(el[E_SHOT].bIsVisible && !el[E_NO_SHOT].bIsVisible && el[E_FACTS].bIsVisible && !el[E_TEXT].bIsVisible,
               "Overview: the screenshot frame and the facts");
         CHECK(el[E_SHOT].wHintText != NULL, "a hint for the next screenshot");
-        CHECK(js("var s = Module.jkLibrary._M.lastShot; s && s.join() === '1,383,105,174,130' ? 1 : 0"),
+        CHECK(js("var s = Module.jkLibrary._M.lastShot; s && s.join() === '1,311,105,154,115' ? 1 : 0"),
               "the screenshot asked for inside the frame: %s", jsText("String(Module.jkLibrary._M.lastShot)"));
+        // The 3D view's frame beside it, the same size, lined up with the
+        // facts on the left and the tabs on the right.
+        CHECK(el[E_SHOT].rect.x == el[E_FACTS].rect.x && el[E_PV].rect.x + el[E_PV].rect.width == el[E_FACTS].rect.x + el[E_FACTS].rect.width &&
+              el[E_PV].rect.y == el[E_SHOT].rect.y && el[E_PV].rect.width == el[E_SHOT].rect.width && el[E_PV].rect.height == el[E_SHOT].rect.height &&
+              el[E_PV].rect.x > el[E_SHOT].rect.x + el[E_SHOT].rect.width && el[E_LEVEL_TITLE].rect.y >= el[E_PV].rect.y + el[E_PV].rect.height,
+              "the screenshot and the 3D view side by side, over the title");
+        CHECK(el[E_TAB_FILES].rect.x + el[E_TAB_FILES].rect.width == el[E_PV].rect.x + el[E_PV].rect.width, "the 3D view ends where the tabs do");
+        CHECK(el[E_PV].bIsVisible && el[E_PV_TEXT].bIsVisible && wis(el[E_PV_TEXT].wstr, "No 3D view for this level yet"),
+              "no 3D view yet: it says so: %s", show(el[E_PV_TEXT].wstr));
+        CHECK(el[E_PV].wHintText == NULL, "and no hint to click it");
+        CHECK(js("var s = Module.jkLibrary._M.lastPreview; s && s.join() === '1,475,105,154,115' ? 1 : 0"),
+              "the 3D view asked for inside its frame: %s", jsText("String(Module.jkLibrary._M.lastPreview)"));
+        CHECK(wis(el[E_MINE].wstr, "My levels") && el[E_MINE].selectedTextEntry == 0 && el[E_MINE].wHintText,
+              "My levels, off at first");
+        CHECK(el[E_MINE].rect.x == el[E_CTF].rect.x && el[E_MINE].rect.y == el[E_COOP].rect.y, "My levels beside Co-op, under CTF");
         CHECK(el[E_TAB_OVERVIEW].type == ELEMENT_TEXT && el[E_TAB_OVERVIEW].textType == 3, "Overview is the open tab");
         CHECK(el[E_TAB_README].type == ELEMENT_TEXTBUTTON && el[E_TAB_README].textType == 2, "Readme is a button");
         CHECK(el[E_USE].bIsVisible && el[E_PAGE].bIsVisible, "Use Level and Massassi Page");
@@ -543,6 +571,10 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         click(menu, &el[E_COOP], 0);
         click(menu, &el[E_CTF], 0);
         CHECK(called("'query \"al\" 3 0'"), "filters: back");
+        // My levels: the levels saved here, of the kinds ticked.
+        click(menu, &el[E_MINE], 0);
+        CHECK(el[E_MINE].selectedTextEntry == 1 && called("'query \"al\" 11 0'"), "My levels on: %s",
+              jsText("JSON.stringify(Module.jkLibrary._M.calls)"));
         break;
     case 5:
         // Picking a row.
@@ -598,13 +630,36 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
             CHECK(t->texInfo.textScrollY == 40 - 14 - 6, "back up 2 notches (%d)", t->texInfo.textScrollY);
             wheelFn(menu, 50);
             CHECK(t->texInfo.textScrollY == 0 && t->selectedTextEntry == 0, "to the top");
-            menu->lastMouseOverClickable = &el[E_LIST];
-            CHECK(wheelFn(menu, -1) == 0, "over the list of levels: the arrow keys' way");
             menu->lastMouseOverClickable = &el[E_FACTS];
             CHECK(wheelFn(menu, -1) == 0, "the hidden facts: not");
             menu->lastMouseOverClickable = NULL;
             t->texInfo.numTextEntries = n;
             t->texInfo.maxTextEntries = m;
+        }
+        {
+            // Over the list of levels, without its focus: a notch is the next
+            // or the previous level, as far as the ends.
+            jkGuiElement* l = &el[E_LIST];
+            l->texInfo.numTextEntries = rowCount(l);
+            menu->focusedElement = NULL;
+            menu->lastMouseOverClickable = l;
+            forgetCalls();
+            sounds = 0;
+            CHECK(wheelFn(menu, -1) == 1 && l->selectedTextEntry == 2 && called("'select 2'"), "a notch down over the list: the next level (%d)",
+                  l->selectedTextEntry);
+            CHECK(sounds == 0, "no click sound for it");
+            forgetCalls();
+            CHECK(wheelFn(menu, -3) == 1 && l->selectedTextEntry == 2 && !called("'select 2'"), "no further than the last");
+            CHECK(wheelFn(menu, 5) == 1 && l->selectedTextEntry == 0 && called("'select 0'"), "up to the first");
+            CHECK(wheelFn(menu, 1) == 1 && l->selectedTextEntry == 0, "and no further");
+            wheelFn(menu, -1);
+            CHECK(l->selectedTextEntry == 1 && called("'select 1'"), "back to the one it was on");
+            js("Module.jkLibrary._M.busy = true, 0");
+            wheelFn(menu, -1);
+            CHECK(l->selectedTextEntry == 1, "while a level comes in, the list stays on it");
+            js("Module.jkLibrary._M.busy = false, 0");
+            menu->lastMouseOverClickable = NULL;
+            menu->focusedElement = &el[E_LIST];
         }
         break;
     }
@@ -675,12 +730,171 @@ static void secondOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
     if (frame == 0)
     {
         CHECK(wis(el[E_SEARCH].wstr, "al"), "the search kept: %s", show(el[E_SEARCH].wstr));
-        CHECK(called("'query \"al\" 3 0'"), "and asked again with it");
+        CHECK(el[E_MINE].selectedTextEntry == 1, "My levels kept");
+        CHECK(called("'query \"al\" 11 0'"), "and asked again with them");
+        click(menu, &el[E_MINE], 0);
+        CHECK(called("'query \"al\" 3 0'"), "My levels off");
         CHECK(wis(el[E_SORT_NAME].wstr, "Name"), "the sort kept");
         CHECK(el[E_TAB_OVERVIEW].type == ELEMENT_TEXT, "the tab kept");
         click(menu, &el[E_CANCEL], 0);
         CHECK(menu->lastClicked == -1, "Cancel with nothing coming in closes it");
     }
+}
+
+// The 3D view's frame, then the big 3D view and back.
+static jkGuiElement* libEl = NULL;
+static int viewStep = 0;
+
+static void viewOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
+{
+    if (!libEl)
+        libEl = el;
+    if (el == libEl && viewStep == 0)
+    {
+        switch (frame)
+        {
+        case 0:
+            CHECK(wis(el[E_LEVEL_TITLE].wstr, "Alpha Arena"), "on Alpha Arena: %s", show(el[E_LEVEL_TITLE].wstr));
+            click(menu, &el[E_PV], 0);
+            CHECK(menu->lastClicked == 0, "no 3D view: a click on its frame does nothing");
+            js("Module.jkLibrary._M.pv = 1, Module.jkLibrary._M.changed |= 32, 0");
+            break;
+        case 1:
+            CHECK(el[E_PV_TEXT].bIsVisible && wis(el[E_PV_TEXT].wstr, "Loading the 3D view..."), "coming: %s", show(el[E_PV_TEXT].wstr));
+            CHECK(el[E_PV].wHintText != NULL, "a hint to click it for the big view");
+            js("Module.jkLibrary._M.pv = 2, Module.jkLibrary._M.changed |= 32, 0");
+            break;
+        case 2:
+            CHECK(el[E_PV].bIsVisible && !el[E_PV_TEXT].bIsVisible && el[E_PV].wHintText != NULL, "there: the level, no text over it");
+            CHECK(js("Module.jkLibrary._M.lastPreview[0]") == 1, "the page draws it in the frame");
+            // How the player left the library, to find again after.
+            el[E_FACTS].texInfo.textScrollY = 2;
+            sounds = 0;
+            click(menu, &el[E_PV], 0);
+            CHECK(menu->lastClicked == 3 && sounds == 1, "a click on it: the big 3D view (%d)", menu->lastClicked);
+            viewStep = 1;
+            break;
+        }
+        return;
+    }
+    if (el != libEl && viewStep == 1)
+    {
+        switch (frame)
+        {
+        case 0:
+            CHECK(js("Module.jkLibrary._M.lastShot[0]") == 0 && js("Module.jkLibrary._M.lastPreview[0]") == 0,
+                  "the library's screenshot and small 3D view put away");
+            CHECK(js("var s = Module.jkLibrary._M.lastView; s && s.join() === '1,21,59,598,310' ? 1 : 0"), "the big view asked for inside its frame: %s",
+                  jsText("String(Module.jkLibrary._M.lastView)"));
+            CHECK(js("Module.jkLibrary._M.views") == 1, "once");
+            CHECK(!wheelFn, "the library's wheel off while the big view is up");
+            CHECK(wis(el[V_TITLE].wstr, "Alpha Arena"), "the level's name over it: %s", show(el[V_TITLE].wstr));
+            CHECK(wis(el[V_HELP].wstr, "Orbit: drag to turn, wheel to zoom."), "how to move: %s", show(el[V_HELP].wstr));
+            CHECK(wis(el[V_NOTE].wstr, "3D view from the test."), "the note: %s", show(el[V_NOTE].wstr));
+            CHECK(!el[V_TEXT].bIsVisible, "no text over the level");
+            CHECK(wis(el[V_BACK].wstr, "Back") && el[V_BACK].bIsVisible, "Back");
+            CHECK(el[V_MODE].bIsVisible && wis(el[V_MODE].wstr, "Walk"), "Walk: %s", show(el[V_MODE].wstr));
+            CHECK(el[V_NEXT].bIsVisible && wis(el[V_NEXT].wstr, "Next Map"), "Next Map: %s", show(el[V_NEXT].wstr));
+            CHECK(menu->pEscapeKeyShortcutElement == &el[V_BACK] && !menu->pReturnKeyShortcutElement, "Escape is Back, Return nothing");
+            CHECK(el[V_BACK].rect.x == libEl[E_CANCEL].rect.x && el[V_BACK].rect.y == libEl[E_CANCEL].rect.y &&
+                  el[V_NEXT].rect.x == libEl[E_USE].rect.x, "Back where Cancel was, the buttons along the bottom");
+            CHECK(el[V_FRAME].rect.y > el[V_TITLE].rect.y && el[V_HELP].rect.y >= el[V_FRAME].rect.y + el[V_FRAME].rect.height &&
+                  el[V_NOTE].rect.y + el[V_NOTE].rect.height <= el[V_HINT].rect.y, "title, frame, help, note, hint, top to bottom");
+            forgetCalls();
+            click(menu, &el[V_MODE], 0);
+            CHECK(called("'viewCommand 1'") && menu->lastClicked == 0, "Walk: the page told, the view stays");
+            CHECK(wis(el[V_MODE].wstr, "Orbit") && wis(el[V_NEXT].wstr, "Next Start"), "now Orbit and Next Start: %s, %s",
+                  show(el[V_MODE].wstr), wis(el[V_NEXT].wstr, "Next Start") ? "Next Start" : "?");
+            CHECK(wis(el[V_HELP].wstr, "Walk: W A S D, drag to look."), "how to walk: %s", show(el[V_HELP].wstr));
+            click(menu, &el[V_NEXT], 0);
+            CHECK(called("'viewCommand 2'") && menu->lastClicked == 0, "Next Start: the page told");
+            break;
+        case 1:
+            menu->focusedElement = &el[V_MODE];
+            js("Module.jkLibrary._M.pv = 1, Module.jkLibrary._M.changed |= 32, 0");
+            break;
+        case 2:
+            CHECK(!el[V_MODE].bIsVisible && !el[V_NEXT].bIsVisible, "while another map comes: no Walk, no Next");
+            CHECK(el[V_TEXT].bIsVisible && wis(el[V_TEXT].wstr, "Loading the 3D view..."), "and it says so: %s", show(el[V_TEXT].wstr));
+            CHECK(menu->focusedElement == &el[V_BACK], "the focus from the hidden button to Back");
+            // The map comes, and the library's list changes meanwhile.
+            js("var M = Module.jkLibrary._M; M.pv = 2; M.rows.push('Delta\t2005 1 MB'); M.titles.push('Delta'); M.status = 'Updated';"
+               "M.changed |= 1 | 2 | 32 | 64; 0");
+            break;
+        case 3:
+            CHECK(el[V_MODE].bIsVisible && el[V_NEXT].bIsVisible && !el[V_TEXT].bIsVisible, "the map there: Walk and Next again");
+            CHECK(rowCount(&libEl[E_LIST]) == 3, "the library waits for the big view to close");
+            CHECK(js("Module.jkLibrary._M.lastView[0]") == 1, "the big view kept up");
+            click(menu, menu->pEscapeKeyShortcutElement, 0);
+            CHECK(menu->lastClicked == 1, "Escape closes it");
+            break;
+        }
+        return;
+    }
+    if (el == libEl && viewStep == 1)
+    {
+        switch (frame)
+        {
+        case 0:
+            CHECK(js("Module.jkLibrary._M.lastView[0]") == 0, "the big view put away");
+            CHECK(js("var s = Module.jkLibrary._M.lastPreview; s && s.join() === '1,475,105,154,115' ? 1 : 0") &&
+                  js("Module.jkLibrary._M.lastShot[0]") == 1, "the screenshot and small 3D view back");
+            CHECK(el[E_TAB_OVERVIEW].type == ELEMENT_TEXT && el[E_FACTS].bIsVisible && el[E_FACTS].texInfo.textScrollY == 2 &&
+                  el[E_LIST].selectedTextEntry == 0, "the library as it was: its tab, its facts scrolled, its pick");
+            CHECK(rowCount(&el[E_LIST]) == 4 && wis(el[E_STATUS].wstr, "Updated"), "with what changed meanwhile: %d rows, %s",
+                  rowCount(&el[E_LIST]), show(el[E_STATUS].wstr));
+            CHECK(wheelFn && wheelMenu == menu, "the wheel back");
+            CHECK(menu->pEscapeKeyShortcutElement == &el[E_CANCEL] && menu->pReturnKeyShortcutElement == &el[E_USE], "Escape is Cancel again");
+            js("Module.jkLibrary._M.pv = 3, Module.jkLibrary._M.changed |= 32, 0");
+            break;
+        case 1:
+            CHECK(el[E_PV_TEXT].bIsVisible && wis(el[E_PV_TEXT].wstr, "The 3D view failed.") && el[E_PV].wHintText, "failed: %s",
+                  show(el[E_PV_TEXT].wstr));
+            forgetCalls();
+            click(menu, &el[E_PV], 0);
+            CHECK(menu->lastClicked == 0 && called("'viewCommand 3'"), "failed: a click tries again, no big view");
+            // On Readme, no 3D view at all.
+            click(menu, &el[E_TAB_README], 0);
+            CHECK(!el[E_PV].bIsVisible && !el[E_PV_TEXT].bIsVisible && js("Module.jkLibrary._M.lastPreview[0]") == 0, "none over the Readme");
+            click(menu, &el[E_TAB_OVERVIEW], 0);
+            CHECK(el[E_PV].bIsVisible && js("Module.jkLibrary._M.lastPreview[0]") == 1, "back on the Overview");
+            js("Module.jkLibrary._M.pv = 1, Module.jkLibrary._M.changed |= 32, 0");
+            break;
+        case 2:
+            click(menu, &el[E_PV], 0);
+            CHECK(menu->lastClicked == 3, "while it comes: the big view");
+            viewStep = 2;
+            break;
+        }
+        return;
+    }
+    if (el != libEl && viewStep == 2)
+    {
+        if (frame == 0)
+        {
+            CHECK(js("Module.jkLibrary._M.views") == 2, "the big view again");
+            CHECK(el[V_TEXT].bIsVisible && wis(el[V_TEXT].wstr, "Loading the 3D view...") && !el[V_MODE].bIsVisible && !el[V_NEXT].bIsVisible,
+                  "it says it's coming: %s", show(el[V_TEXT].wstr));
+            CHECK(!el[V_FRAME].wHintText, "nothing to click in the frame");
+            js("Module.jkLibrary._M.pv = 3, Module.jkLibrary._M.changed |= 32, 0");
+        }
+        else if (frame == 1)
+        {
+            CHECK(el[V_TEXT].bIsVisible && wis(el[V_TEXT].wstr, "The 3D view failed.") && !el[V_MODE].bIsVisible, "failed: %s",
+                  show(el[V_TEXT].wstr));
+            CHECK(el[V_NEXT].bIsVisible && wis(el[V_NEXT].wstr, "Next Map"), "Next Map still, to the level's other maps");
+            CHECK(el[V_FRAME].wHintText != NULL, "a hint to click the frame");
+            forgetCalls();
+            click(menu, &el[V_FRAME], 0);
+            CHECK(menu->lastClicked == 0 && called("'viewCommand 3'"), "a click on the frame tries again");
+            click(menu, &el[V_BACK], 0);
+            CHECK(menu->lastClicked == 1, "Back closes it");
+            viewStep = 3;
+        }
+        return;
+    }
+    if (el == libEl && viewStep == 3 && frame == 0)
+        click(menu, &el[E_CANCEL], 0);
 }
 
 static const char* ctfLabel = "";
@@ -709,6 +923,12 @@ static void emptyOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         click(menu, &el[E_SHOT], 0);
         click(menu, &el[E_PAGE], 0);
         click(menu, &el[E_TAB_OVERVIEW], 0);
+        CHECK(el[E_PV].bIsVisible && el[E_PV_TEXT].bIsVisible && wis(el[E_PV_TEXT].wstr, "No 3D view for this level yet"),
+              "no level, no 3D view: it says so: %s", show(el[E_PV_TEXT].wstr));
+        js("Module.jkLibrary._M.pv = 2, 0");
+        click(menu, &el[E_PV], 0);
+        CHECK(menu->lastClicked == 0, "and there's none to open");
+        js("Module.jkLibrary._M.pv = 0, 0");
         click(menu, &el[E_CANCEL], 0);
     }
 }
@@ -741,6 +961,14 @@ int main()
     script = secondOpen;
     got = jkGuiLibrary_Show(0, name, sizeof(name));
     CHECK(got == 0 && name[0] == 0, "Cancel: nothing given back");
+
+    forgetCalls();
+    script = viewOpen;
+    displays = 0;
+    got = jkGuiLibrary_Show(0, name, sizeof(name));
+    CHECK(got == 0 && viewStep == 3 && displays == 5, "the big 3D view twice, the library three times (%d, %d)", viewStep, displays);
+    CHECK(js("Module.jkLibrary._M.lastView[0]") == 0 && js("Module.jkLibrary._M.lastPreview[0]") == 0, "no 3D view once it's closed");
+    js("var M = Module.jkLibrary._M; M.rows.pop(); M.titles.pop(); M.status = ''; M.pv = 0; M.walk = false; 0");
 
     forgetCalls();
     script = gameOpen;

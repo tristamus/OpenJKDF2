@@ -28,6 +28,7 @@ enum jkGuiLibraryButton_t
 {
     LIB_CANCEL = -1,
     LIB_DONE = 2,
+    LIB_VIEW = 3, // the 3D view's frame clicked: the big 3D view
 };
 
 enum jkGuiLibraryElement_t
@@ -57,6 +58,23 @@ enum jkGuiLibraryElement_t
     LIB_CANCEL_BUTTON = 22,
     LIB_PAGE_BUTTON = 23,
     LIB_USE_BUTTON = 24,
+    LIB_PV = 25,
+    LIB_PV_TEXT = 26,
+    LIB_FILTER_MINE = 27,
+};
+
+// The big 3D view's elements.
+enum jkGuiLibraryViewElement_t
+{
+    VIEW_HINT = 0,
+    VIEW_TITLE = 1,
+    VIEW_FRAME = 2,
+    VIEW_TEXT = 3,
+    VIEW_HELP = 4,
+    VIEW_NOTE = 5,
+    VIEW_BACK = 6,
+    VIEW_MODE = 7,
+    VIEW_NEXT = 8,
 };
 
 enum jkGuiLibraryTab_t
@@ -72,7 +90,9 @@ enum jkGuiLibraryTab_t
 #define LIB_CH_PANEL (4)
 #define LIB_CH_MSG (8)
 #define LIB_CH_USE (16)
-#define LIB_CH_ALL (31)
+#define LIB_CH_PV (32)
+#define LIB_CH_VIEW (64)
+#define LIB_CH_ALL (127)
 
 // library.js's text() and number().
 #define LIB_TEXT_STATUS (0)
@@ -83,6 +103,12 @@ enum jkGuiLibraryTab_t
 #define LIB_TEXT_README (5)
 #define LIB_TEXT_FILES (6)
 #define LIB_TEXT_MESSAGE (7)
+#define LIB_TEXT_PV (8)
+#define LIB_TEXT_VIEW_TITLE (9)
+#define LIB_TEXT_VIEW_HELP (10)
+#define LIB_TEXT_VIEW_NOTE (11)
+#define LIB_TEXT_VIEW_MODE (12)
+#define LIB_TEXT_VIEW_NEXT (13)
 
 #define LIB_NUM_CHANGED (0)
 #define LIB_NUM_COUNT (1)
@@ -91,6 +117,8 @@ enum jkGuiLibraryTab_t
 #define LIB_NUM_BUSY (4)
 #define LIB_NUM_DONE (5)
 #define LIB_NUM_SHOTS (6)
+// The selected level's 3D view: 0 none, 1 coming, 2 there, 3 failed.
+#define LIB_NUM_PV (7)
 
 #define LIB_NUM_SORTS (6)
 #define LIB_SEARCH_MAX (31)
@@ -115,6 +143,12 @@ static int jkGuiLibrary_SortClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, in
 static int jkGuiLibrary_ListClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
 static int jkGuiLibrary_TabClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
 static int jkGuiLibrary_ShotClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
+static int jkGuiLibrary_PreviewClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
+static int jkGuiLibrary_ViewFrameClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
+static int jkGuiLibrary_ViewBackClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
+static int jkGuiLibrary_ViewModeClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
+static int jkGuiLibrary_ViewNextClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
+static void jkGuiLibrary_ViewIdle(jkGuiMenu *pMenu);
 static int jkGuiLibrary_CancelClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
 static int jkGuiLibrary_PageClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
 static int jkGuiLibrary_UseClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
@@ -145,21 +179,51 @@ static jkGuiElement jkGuiLibrary_aElements[] =
     { ELEMENT_TEXTBUTTON, 0, 2, u"Overview", 3, { 310, 78, 104, 24 }, 1, 0, NULL, NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Readme", 3, { 418, 78, 104, 24 }, 1, 0, u"The text files in the level's zip.", NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Files", 3, { 526, 78, 104, 24 }, 1, 0, u"What's in the level's zip.", NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_CUSTOM,     0, 0, NULL, 0, { 382, 104, 176, 132 }, 1, 0, NULL, jkGuiLibrary_ShotDraw, jkGuiLibrary_ShotClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,       0, 0, u"No screenshot for this level", 3, { 382, 104, 176, 132 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,       0, 2, NULL, 3, { 310, 238, 320, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_LISTBOX,    0, 0, NULL, 0, { 310, 260, 320, 128 }, 1, 0, NULL, jkGuiLibrary_PlainListDraw, NULL, jkGuiLibrary_listBitmaps, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // The Overview: the screenshot and the 3D view side by side (4:3 each),
+    // the level's name under them, its details under that.
+    { ELEMENT_CUSTOM,     0, 0, NULL, 0, { 310, 104, 156, 117 }, 1, 0, NULL, jkGuiLibrary_ShotDraw, jkGuiLibrary_ShotClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, u"No screenshot for this level", 3, { 310, 104, 156, 117 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 2, NULL, 3, { 310, 224, 320, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_LISTBOX,    0, 0, NULL, 0, { 310, 246, 320, 142 }, 1, 0, NULL, jkGuiLibrary_PlainListDraw, NULL, jkGuiLibrary_listBitmaps, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_LISTBOX,    0, 0, NULL, 0, { 310, 104, 320, 282 }, 0, 0, NULL, jkGuiLibrary_PlainListDraw, NULL, jkGuiLibrary_listBitmaps, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 20, 390, 600, 18 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, NULL, NULL, jkGuiLibrary_CancelClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Massassi Page", 3, { 220, 430, 200, 40 }, 1, 0, u"Opens the level's page on Massassi.net in a new tab.", NULL, jkGuiLibrary_PageClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Use Level", 3, { 420, 430, 200, 40 }, 1, 0, u"Gets the level, saves it in this browser and picks it on the Host screen.", NULL, jkGuiLibrary_UseClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // After the rest so their numbers stay: the 3D view's frame (the page
+    // draws the level over it, and a click on it opens the big 3D view),
+    // what it says while there's no 3D view, and My levels.
+    { ELEMENT_CUSTOM,     0, 0, NULL, 0, { 474, 104, 156, 117 }, 1, 0, NULL, jkGuiLibrary_ShotDraw, jkGuiLibrary_PreviewClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, NULL, 3, { 474, 104, 156, 117 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,   0, 0, u"My levels", 0, { 162, 128, 138, 24 }, 1, 0, u"Show only the levels saved in this browser: ones you used here, or got from a host.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_END,        0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 };
 
 static jkGuiMenu jkGuiLibrary_menu =
 {
     jkGuiLibrary_aElements, 0, 65535, 65535, 15, NULL, NULL, jkGui_stdBitmaps, jkGui_stdFonts, (intptr_t)jkGuiLibrary_listPaddings, jkGuiLibrary_Idle, "thermloop01.wav", "thrmlpu2.wav", NULL, NULL, NULL, 0, NULL, NULL
+};
+
+// The big 3D view: the level's name, a wide frame the page draws the level
+// over (and takes the mouse in), how to move, and Back (Escape), Walk or
+// Orbit, and the next starting place or map.
+static jkGuiElement jkGuiLibrary_aViewElements[] =
+{
+    { ELEMENT_TEXT,       0, 0, NULL, 3, { 0, 410, 640, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 6, NULL, 3, { 20, 14, 600, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CUSTOM,     0, 0, NULL, 0, { 20, 58, 600, 312 }, 1, 0, NULL, jkGuiLibrary_ShotDraw, jkGuiLibrary_ViewFrameClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 2, NULL, 3, { 20, 58, 600, 312 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, NULL, 3, { 20, 373, 600, 18 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, NULL, 3, { 20, 391, 600, 18 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON, 0, 2, u"Back", 3, { 20, 430, 200, 40 }, 1, 0, u"Back to the Level Library (Esc).", NULL, jkGuiLibrary_ViewBackClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON, 0, 2, NULL, 3, { 220, 430, 200, 40 }, 0, 0, NULL, NULL, jkGuiLibrary_ViewModeClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON, 0, 2, NULL, 3, { 420, 430, 200, 40 }, 0, 0, NULL, NULL, jkGuiLibrary_ViewNextClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_END,        0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+};
+
+static jkGuiMenu jkGuiLibrary_viewMenu =
+{
+    jkGuiLibrary_aViewElements, 0, 65535, 65535, 15, NULL, NULL, jkGui_stdBitmaps, jkGui_stdFonts, 0, jkGuiLibrary_ViewIdle, "thermloop01.wav", "thrmlpu2.wav", NULL, NULL, NULL, 0, NULL, NULL
 };
 
 // The search, filters, sort and tab stay as the player left them, for the
@@ -169,6 +233,7 @@ static char16_t jkGuiLibrary_lastSearch[LIB_SEARCH_MAX + 1];
 static int jkGuiLibrary_filterMp = 1;
 static int jkGuiLibrary_filterCtf = 1;
 static int jkGuiLibrary_filterCoop = 0;
+static int jkGuiLibrary_filterMine = 0;
 static int jkGuiLibrary_sort = 0;
 static int jkGuiLibrary_tab = LIB_TAB_IS_OVERVIEW;
 
@@ -182,6 +247,15 @@ static char16_t* jkGuiLibrary_pStatus = NULL;
 static char16_t* jkGuiLibrary_pSortName = NULL;
 static char16_t* jkGuiLibrary_pLevelTitle = NULL;
 static char16_t* jkGuiLibrary_pMessage = NULL;
+static char16_t* jkGuiLibrary_pPreviewText = NULL;
+static char16_t* jkGuiLibrary_pViewTitle = NULL;
+static char16_t* jkGuiLibrary_pViewText = NULL;
+static char16_t* jkGuiLibrary_pViewHelp = NULL;
+static char16_t* jkGuiLibrary_pViewNote = NULL;
+static char16_t* jkGuiLibrary_pViewMode = NULL;
+static char16_t* jkGuiLibrary_pViewNext = NULL;
+// What changed while the big 3D view was up, for the library after it.
+static int jkGuiLibrary_pending = 0;
 
 // ---- library.js
 
@@ -247,6 +321,23 @@ EM_JS(void, jkGuiLibrary_js_page, (), {
 EM_JS(void, jkGuiLibrary_js_shot, (int bOn, int x, int y, int w, int h), {
     if (Module.jkLibrary)
         Module.jkLibrary.shot(bOn, x, y, w, h);
+});
+
+EM_JS(void, jkGuiLibrary_js_preview, (int bOn, int x, int y, int w, int h), {
+    if (Module.jkLibrary && Module.jkLibrary.preview)
+        Module.jkLibrary.preview(bOn, x, y, w, h);
+});
+
+EM_JS(void, jkGuiLibrary_js_view, (int bOn, int x, int y, int w, int h), {
+    if (Module.jkLibrary && Module.jkLibrary.view)
+        Module.jkLibrary.view(bOn, x, y, w, h);
+});
+
+// 1: Walk or Orbit, 2: the next starting place (Walk) or map (Orbit), 3:
+// try again after the 3D view didn't load.
+EM_JS(void, jkGuiLibrary_js_viewCommand, (int cmd), {
+    if (Module.jkLibrary && Module.jkLibrary.viewCommand)
+        Module.jkLibrary.viewCommand(cmd);
 });
 
 EM_JS(void, jkGuiLibrary_js_nextShot, (), {
@@ -598,13 +689,31 @@ static void jkGuiLibrary_PlainListDraw(jkGuiElement *pElement, jkGuiMenu *pMenu,
 }
 
 // The mouse wheel over the details or the Readme/Files text scrolls that
-// text, 3 lines a notch, whichever list has the focus. Elsewhere it does what
-// the arrow keys do: on the list of levels, the next or previous level.
+// text, 3 lines a notch, and over the list of levels picks the next or
+// previous level a notch, whichever has the focus. Elsewhere it does what
+// the arrow keys do.
 static int jkGuiLibrary_Wheel(jkGuiMenu* pMenu, int32_t notches)
 {
     jkGuiElement* el = jkGuiLibrary_aElements;
     jkGuiElement* pOver = pMenu ? pMenu->lastMouseOverClickable : NULL;
-    if (!notches || !pOver || !pOver->bIsVisible || (pOver != &el[LIB_FACTS] && pOver != &el[LIB_TEXT]))
+    if (!notches || !pOver || !pOver->bIsVisible)
+        return 0;
+    if (pOver == &el[LIB_LIST])
+    {
+        int count = pOver->texInfo.numTextEntries;
+        int sel = pOver->selectedTextEntry - notches;
+        if (sel >= count)
+            sel = count - 1;
+        if (sel < 0)
+            sel = 0;
+        if (count <= 0 || sel == pOver->selectedTextEntry)
+            return 1;
+        pOver->selectedTextEntry = sel;
+        jkGuiLibrary_ListClicked(pOver, pMenu, -1, -1, 0);
+        jkGuiRend_UpdateAndDrawClickable(pOver, pMenu, 1);
+        return 1;
+    }
+    if (pOver != &el[LIB_FACTS] && pOver != &el[LIB_TEXT])
         return 0;
     // When a list scrolls, its arrows take its first and last lines.
     int maxScroll = pOver->texInfo.numTextEntries - (pOver->texInfo.maxTextEntries - 2);
@@ -651,6 +760,11 @@ static void jkGuiLibrary_ShowTab(jkGuiMenu* pMenu)
     el[LIB_LEVEL_TITLE].bIsVisible = bOverview;
     el[LIB_FACTS].bIsVisible = bOverview;
     el[LIB_TEXT].bIsVisible = !bOverview;
+    int pv = jkGuiLibrary_js_number(LIB_NUM_PV);
+    el[LIB_PV].bIsVisible = bOverview;
+    el[LIB_PV_TEXT].bIsVisible = bOverview && pv != 2;
+    el[LIB_PV].wHintText = pv == 1 || pv == 2 ? u"Click for a bigger 3D view you can move around in."
+                         : pv == 3 ? u"Click to try the 3D view again." : NULL;
     // A text box the player clicked in (which focuses it) that's now hidden
     // gives the focus to the list of levels: the menu system, drawing it
     // hidden, would otherwise look for where the focus goes next forever.
@@ -658,6 +772,17 @@ static void jkGuiLibrary_ShowTab(jkGuiMenu* pMenu)
         pMenu->focusedElement = &el[LIB_LIST];
     jkGuiLibrary_js_shot(bOverview && bShots, el[LIB_SHOT].rect.x + 1, el[LIB_SHOT].rect.y + 1,
                          el[LIB_SHOT].rect.width - 2, el[LIB_SHOT].rect.height - 2);
+    jkGuiLibrary_js_preview(bOverview, el[LIB_PV].rect.x + 1, el[LIB_PV].rect.y + 1,
+                            el[LIB_PV].rect.width - 2, el[LIB_PV].rect.height - 2);
+}
+
+// What the 3D view's frame says while the level isn't drawn in it.
+static void jkGuiLibrary_SetPreviewText()
+{
+    if (jkGuiLibrary_pPreviewText)
+        free(jkGuiLibrary_pPreviewText);
+    jkGuiLibrary_pPreviewText = jkGuiLibrary_GetText(LIB_TEXT_PV, 0);
+    jkGuiLibrary_aElements[LIB_PV_TEXT].wstr = jkGuiLibrary_pPreviewText;
 }
 
 static void jkGuiLibrary_FillPanel()
@@ -751,6 +876,8 @@ static void jkGuiLibrary_Refresh(jkGuiMenu* pMenu, int changed)
 {
     jkGuiElement* el = jkGuiLibrary_aElements;
 
+    if (changed & (LIB_CH_PV | LIB_CH_PANEL))
+        jkGuiLibrary_SetPreviewText();
     if (changed & LIB_CH_STATUS)
     {
         jkGuiLibrary_SetText(&el[LIB_STATUS], &jkGuiLibrary_pStatus, jkGuiLibrary_GetText(LIB_TEXT_STATUS, 0));
@@ -775,11 +902,18 @@ static void jkGuiLibrary_Refresh(jkGuiMenu* pMenu, int changed)
     }
     if (changed & (LIB_CH_USE | LIB_CH_PANEL | LIB_CH_ROWS))
         jkGuiLibrary_ShowUse(pMenu);
+    if ((changed & LIB_CH_PV) && !(changed & LIB_CH_PANEL))
+    {
+        jkGuiLibrary_ShowTab(pMenu);
+        if (pMenu)
+            jkGuiRend_Paint(pMenu);
+    }
 }
 
 static void jkGuiLibrary_Query()
 {
-    int filters = (jkGuiLibrary_filterMp ? 1 : 0) | (jkGuiLibrary_filterCtf ? 2 : 0) | (jkGuiLibrary_filterCoop ? 4 : 0);
+    int filters = (jkGuiLibrary_filterMp ? 1 : 0) | (jkGuiLibrary_filterCtf ? 2 : 0) | (jkGuiLibrary_filterCoop ? 4 : 0) |
+                  (jkGuiLibrary_filterMine ? 8 : 0);
     jkGuiLibrary_js_query(jkGuiLibrary_search, filters, jkGuiLibrary_sort);
     memcpy(jkGuiLibrary_lastSearch, jkGuiLibrary_search, sizeof(jkGuiLibrary_search));
 }
@@ -820,6 +954,7 @@ static int jkGuiLibrary_FilterClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, 
     jkGuiLibrary_filterMp = jkGuiLibrary_aElements[LIB_FILTER_MP].selectedTextEntry != 0;
     jkGuiLibrary_filterCtf = jkGuiLibrary_aElements[LIB_FILTER_CTF].selectedTextEntry != 0;
     jkGuiLibrary_filterCoop = jkGuiLibrary_aElements[LIB_FILTER_COOP].selectedTextEntry != 0;
+    jkGuiLibrary_filterMine = jkGuiLibrary_aElements[LIB_FILTER_MINE].selectedTextEntry != 0;
     jkGuiLibrary_Query();
     return 0;
 }
@@ -872,6 +1007,116 @@ static int jkGuiLibrary_ShotClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, in
         jkGuiLibrary_js_nextShot();
     }
     return 0;
+}
+
+// The 3D view's frame: the big 3D view, once the level's 3D view is there
+// or coming; one that didn't load tries again.
+static int jkGuiLibrary_PreviewClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw)
+{
+    int pv = jkGuiLibrary_js_number(LIB_NUM_PV);
+    if (pv == 3)
+    {
+        jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
+        jkGuiLibrary_js_viewCommand(3);
+        return 0;
+    }
+    if (pv != 1 && pv != 2)
+        return 0;
+    jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
+    return LIB_VIEW;
+}
+
+// ---- The big 3D view
+
+static void jkGuiLibrary_ViewRefresh(jkGuiMenu* pMenu)
+{
+    jkGuiElement* v = jkGuiLibrary_aViewElements;
+    int pv = jkGuiLibrary_js_number(LIB_NUM_PV);
+
+    jkGuiLibrary_SetText(&v[VIEW_TITLE], &jkGuiLibrary_pViewTitle, jkGuiLibrary_GetText(LIB_TEXT_VIEW_TITLE, 0));
+    if (jkGuiLibrary_pViewText)
+        free(jkGuiLibrary_pViewText);
+    jkGuiLibrary_pViewText = jkGuiLibrary_GetText(LIB_TEXT_PV, 0);
+    v[VIEW_TEXT].wstr = jkGuiLibrary_pViewText;
+    v[VIEW_TEXT].bIsVisible = pv != 2;
+    jkGuiLibrary_SetText(&v[VIEW_HELP], &jkGuiLibrary_pViewHelp, jkGuiLibrary_GetText(LIB_TEXT_VIEW_HELP, 0));
+    jkGuiLibrary_SetText(&v[VIEW_NOTE], &jkGuiLibrary_pViewNote, jkGuiLibrary_GetText(LIB_TEXT_VIEW_NOTE, 0));
+    jkGuiLibrary_SetText(&v[VIEW_MODE], &jkGuiLibrary_pViewMode, jkGuiLibrary_GetText(LIB_TEXT_VIEW_MODE, 0));
+    jkGuiLibrary_SetText(&v[VIEW_NEXT], &jkGuiLibrary_pViewNext, jkGuiLibrary_GetText(LIB_TEXT_VIEW_NEXT, 0));
+    v[VIEW_MODE].bIsVisible = pv == 2 && jkGuiLibrary_pViewMode && jkGuiLibrary_pViewMode[0];
+    // A map that didn't load still has Next Map, to the level's other maps.
+    v[VIEW_NEXT].bIsVisible = (pv == 2 || pv == 3) && jkGuiLibrary_pViewNext && jkGuiLibrary_pViewNext[0];
+    v[VIEW_FRAME].wHintText = pv == 3 ? u"Click to try the 3D view again." : NULL;
+    // A button that went away gives the focus back.
+    if (pMenu && pMenu->focusedElement && !pMenu->focusedElement->bIsVisible)
+        pMenu->focusedElement = &v[VIEW_BACK];
+    if (pMenu)
+        jkGuiRend_Paint(pMenu);
+}
+
+static void jkGuiLibrary_ViewIdle(jkGuiMenu *pMenu)
+{
+    jkGuiElement* f = &jkGuiLibrary_aViewElements[VIEW_FRAME];
+    jkGuiLibrary_js_view(1, f->rect.x + 1, f->rect.y + 1, f->rect.width - 2, f->rect.height - 2);
+    int changed = jkGuiLibrary_js_number(LIB_NUM_CHANGED);
+    jkGuiLibrary_pending |= changed & ~(LIB_CH_PV | LIB_CH_VIEW);
+    if (changed & (LIB_CH_PV | LIB_CH_VIEW | LIB_CH_PANEL))
+        jkGuiLibrary_ViewRefresh(pMenu);
+}
+
+// The frame takes clicks only while the level isn't drawn over it: one that
+// didn't load tries again.
+static int jkGuiLibrary_ViewFrameClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw)
+{
+    if (jkGuiLibrary_js_number(LIB_NUM_PV) != 3)
+        return 0;
+    jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
+    jkGuiLibrary_js_viewCommand(3);
+    jkGuiLibrary_ViewRefresh(pMenu);
+    return 0;
+}
+
+static int jkGuiLibrary_ViewBackClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw)
+{
+    jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
+    return 1;
+}
+
+static int jkGuiLibrary_ViewModeClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw)
+{
+    jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
+    jkGuiLibrary_js_viewCommand(1);
+    jkGuiLibrary_ViewRefresh(pMenu);
+    return 0;
+}
+
+static int jkGuiLibrary_ViewNextClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw)
+{
+    jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
+    jkGuiLibrary_js_viewCommand(2);
+    jkGuiLibrary_ViewRefresh(pMenu);
+    return 0;
+}
+
+// The big 3D view, until Back or Escape; then the library as it was.
+static void jkGuiLibrary_ShowView()
+{
+    jkGuiElement* v = jkGuiLibrary_aViewElements;
+
+    jkGui_InitMenu(&jkGuiLibrary_viewMenu, jkGui_stdBitmaps[JKGUI_BM_BK_MULTI]);
+    v[VIEW_TITLE].wstr = NULL;
+    v[VIEW_TEXT].wstr = NULL;
+    v[VIEW_HELP].wstr = NULL;
+    v[VIEW_NOTE].wstr = NULL;
+    v[VIEW_MODE].wstr = NULL;
+    v[VIEW_NEXT].wstr = NULL;
+    jkGuiLibrary_pending = 0;
+    jkGuiLibrary_js_view(1, v[VIEW_FRAME].rect.x + 1, v[VIEW_FRAME].rect.y + 1,
+                         v[VIEW_FRAME].rect.width - 2, v[VIEW_FRAME].rect.height - 2);
+    jkGuiLibrary_ViewRefresh(NULL);
+    jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiLibrary_viewMenu, &v[VIEW_BACK]);
+    jkGuiRend_DisplayAndReturnClicked(&jkGuiLibrary_viewMenu);
+    jkGuiLibrary_js_view(0, 0, 0, 0, 0);
 }
 
 // Cancel stops a level that's coming in; otherwise it closes the library.
@@ -930,6 +1175,8 @@ int jkGuiLibrary_Show(int bMots, char* pOutName, int outLen)
     el[LIB_FILTER_MP].selectedTextEntry = jkGuiLibrary_filterMp;
     el[LIB_FILTER_CTF].selectedTextEntry = jkGuiLibrary_filterCtf;
     el[LIB_FILTER_COOP].selectedTextEntry = jkGuiLibrary_filterCoop;
+    el[LIB_FILTER_MINE].selectedTextEntry = jkGuiLibrary_filterMine;
+    el[LIB_PV_TEXT].wstr = NULL;
     // Strings this menu keeps itself are dropped with the last ones it showed.
     el[LIB_STATUS].wstr = NULL;
     el[LIB_LEVEL_TITLE].wstr = NULL;
@@ -944,11 +1191,24 @@ int jkGuiLibrary_Show(int bMots, char* pOutName, int outLen)
     // The Host screen's menu mode and palette are already up.
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiLibrary_menu, &el[LIB_USE_BUTTON]);
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiLibrary_menu, &el[LIB_CANCEL_BUTTON]);
-    jkGuiRend_SetMouseWheelHandler(&jkGuiLibrary_menu, jkGuiLibrary_Wheel);
-    result = jkGuiRend_DisplayAndReturnClicked(&jkGuiLibrary_menu);
-    jkGuiRend_SetMouseWheelHandler(NULL, NULL);
+    for (;;)
+    {
+        jkGuiRend_SetMouseWheelHandler(&jkGuiLibrary_menu, jkGuiLibrary_Wheel);
+        result = jkGuiRend_DisplayAndReturnClicked(&jkGuiLibrary_menu);
+        jkGuiRend_SetMouseWheelHandler(NULL, NULL);
+        if (result != LIB_VIEW)
+            break;
+        // The big 3D view, then the library again as it was, with what
+        // changed meanwhile.
+        jkGuiLibrary_js_shot(0, 0, 0, 0, 0);
+        jkGuiLibrary_js_preview(0, 0, 0, 0, 0);
+        jkGuiLibrary_ShowView();
+        jkGuiLibrary_Refresh(NULL, jkGuiLibrary_pending | LIB_CH_STATUS | LIB_CH_MSG | LIB_CH_USE | LIB_CH_PV);
+        jkGuiLibrary_pending = 0;
+    }
 
     jkGuiLibrary_js_shot(0, 0, 0, 0, 0);
+    jkGuiLibrary_js_preview(0, 0, 0, 0, 0);
     if (result == LIB_DONE && outLen > 0)
         jkGuiLibrary_js_take(pOutName, outLen);
     jkGuiLibrary_js_end();

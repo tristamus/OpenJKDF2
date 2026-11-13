@@ -12,12 +12,14 @@
 //   /levels/d/<id>.json                  one level's description, readmes, files
 //   /levels/z/<id>.zip?h=<sha256>        its zip
 //   /levels/s/<id>-<n>.jpg               its screenshots, from 1
+//   /levels/p/...                        its 3D view's data (preview3d.js)
 //
 // This file is the menu's other half: it gets the list and the details, keeps
 // the search, filters and sort, and gives the menu its text (text(), number(),
 // what changed since it last asked). The menu draws everything in the game's
-// own fonts and colors; the one thing it can't draw, a level's screenshot in
-// full color, the page puts over the frame the menu leaves for it (shot()).
+// own fonts and colors; what it can't draw, a level's screenshot in full
+// color and its 3D view, the page puts over the frames the menu leaves for
+// them (shot(), preview(), view(); the 3D view is preview3d.js).
 //
 // Use Level gets the zip from the site, checks it and each GOB in it against
 // the SHA-256s in the list, saves the GOBs in this browser (maps.js's store,
@@ -47,7 +49,7 @@
         state: STATE_CLOSED, result: '', done: false, game: 'jk1',
         avail: {}, checkedAt: {},
         index: {}, details: {}, saved: {},
-        rows: [], sel: null, q: '', filters: { mp: true, ctf: true, sp: false }, sort: 0, shot: 1,
+        rows: [], sel: null, q: '', filters: { mp: true, ctf: true, sp: false, mine: false }, sort: 0, shot: 1, pvMap: 0,
         job: null, msg: '', error: '', loadFailed: false, changed: 0
     };
 
@@ -254,6 +256,8 @@
             var kind = l.k === 'kfy' ? 'ctf' : l.k;
             if (!f[kind])
                 return false;
+            if (f.mine && !savedName(l, L.game))
+                return false;
             return !q || ((l.t || '') + ' ' + (l.a || '')).toLowerCase().indexOf(q) >= 0;
         });
         var name = function(x, y) { return String(x.t).localeCompare(String(y.t), 'en', { sensitivity: 'base' }); };
@@ -273,8 +277,9 @@
 
     // What changed since the menu last asked: CH_STATUS the line under the
     // title, CH_ROWS the list, CH_PANEL the level's details, CH_MSG the line
-    // over the buttons, CH_USE whether Use Level can be pressed.
-    var CH_STATUS = 1, CH_ROWS = 2, CH_PANEL = 4, CH_MSG = 8, CH_USE = 16, CH_ALL = 31;
+    // over the buttons, CH_USE whether Use Level can be pressed, CH_PV the 3D
+    // view's state, CH_VIEW what the big 3D view's lines and buttons say.
+    var CH_STATUS = 1, CH_ROWS = 2, CH_PANEL = 4, CH_MSG = 8, CH_USE = 16, CH_PV = 32, CH_VIEW = 64, CH_ALL = 127;
 
     function touch(bits) { L.changed |= bits; }
 
@@ -285,6 +290,8 @@
         if (!have)
             return 'Getting the list of levels...';
         var data = have.data, n = data.levels.length;
+        if (L.filters.mine && !L.rows.length)
+            return L.q.trim() ? 'None of the levels saved in this browser match.' : 'No levels saved in this browser yet.';
         return n.toLocaleString('en-US') + (n === 1 ? ' level' : ' levels') + ' from Massassi.net' +
             (data.left ? ' so far, ' + data.left.toLocaleString('en-US') + ' more coming' : '');
     }
@@ -416,19 +423,26 @@
     }
 
     function setQuery(q, mask, sort) {
-        var f = { mp: !!(mask & 1), ctf: !!(mask & 2), sp: !!(mask & 4) };
+        var f = { mp: !!(mask & 1), ctf: !!(mask & 2), sp: !!(mask & 4), mine: !!(mask & 8) };
         sort = Math.max(0, Math.min(SORTS.length - 1, sort | 0));
         q = String(q || '');
-        if (q === L.q && sort === L.sort && f.mp === L.filters.mp && f.ctf === L.filters.ctf && f.sp === L.filters.sp)
+        if (q === L.q && sort === L.sort && f.mp === L.filters.mp && f.ctf === L.filters.ctf && f.sp === L.filters.sp &&
+            f.mine === L.filters.mine)
             return;
+        var mineChanged = f.mine !== L.filters.mine;
         L.q = q;
         L.filters = f;
         L.sort = sort;
         refreshRows();
+        if (mineChanged)
+            touch(CH_STATUS);
     }
 
     function refreshRows() {
+        var wasEmpty = !L.rows.length;
         L.rows = visible();
+        if (L.filters.mine && wasEmpty !== !L.rows.length)
+            touch(CH_STATUS);
         if (!L.job && L.rows.length && !L.rows.some(function(l) { return l.id === L.sel; }))
             pickId(L.rows[0].id);
         touch(CH_ROWS);
@@ -439,11 +453,13 @@
             return;
         L.sel = id;
         L.shot = 1;
+        L.pvMap = 0;
         L.error = '';
         var l = selected();
         if (l)
             detail(l);
-        touch(CH_PANEL | CH_USE | CH_MSG);
+        wantPreview();
+        touch(CH_PANEL | CH_USE | CH_MSG | CH_PV);
     }
 
     async function load() {
@@ -550,6 +566,127 @@
             shot.raf = requestAnimationFrame(shotLayout);
     }
 
+    // ---- The 3D view (preview3d.js draws it)
+
+    function P() { return Module.jkPreview3d; }
+
+    function maps(l) { return l && Array.isArray(l.pv) ? l.pv : []; }
+
+    // The selected level's map to show (the first, until Next Map).
+    function wantPreview() {
+        var p = P(), l = selected();
+        if (!p)
+            return;
+        var list = maps(l);
+        if (list.length && L.state === STATE_OPEN)
+            p.want(l.id, Math.min(L.pvMap, list.length - 1), list[Math.min(L.pvMap, list.length - 1)], L.game);
+        else
+            p.want(null);
+    }
+
+    function setPreview(on, x, y, w, h) {
+        var p = P();
+        if (!p)
+            return;
+        if (on)
+            wantPreview();
+        p.small(on && maps(selected()).length > 0, x, y, w, h);
+    }
+
+    function setView(on, x, y, w, h) {
+        var p = P();
+        if (p)
+            p.big(on, x, y, w, h);
+        touch(CH_VIEW);
+    }
+
+    function viewCommand(cmd) {
+        var p = P(), l = selected();
+        if (!p || !l)
+            return;
+        if (cmd === 1) {
+            p.setMode(p.mode() === 'walk' ? 'orbit' : 'walk');
+        } else if (cmd === 2) {
+            if (p.mode() === 'walk' && previewState() === 2) {
+                p.nextStart();
+            } else if (maps(l).length > 1) {
+                L.pvMap = (L.pvMap + 1) % maps(l).length;
+                wantPreview();
+            }
+        } else if (cmd === 3) {
+            p.retry();
+        }
+        touch(CH_VIEW | CH_PV);
+    }
+
+    function previewState() {
+        var p = P(), l = selected();
+        if (!maps(l).length)
+            return 0;
+        return p ? p.state() : 3;
+    }
+
+    function previewText() {
+        var l = selected();
+        if (!l)
+            return '';
+        switch (previewState()) {
+        case 0: return 'No 3D view for this level yet';
+        case 1: return 'Loading the 3D view...';
+        case 3: return P() ? P().error() || 'The 3D view didn\'t load.' : 'No 3D view here.';
+        }
+        return '';
+    }
+
+    function viewTitle() {
+        var l = selected(), list = maps(l);
+        if (!l)
+            return '';
+        var t = plain(l.t);
+        if (list.length > 1)
+            t += ': ' + plain(list[Math.min(L.pvMap, list.length - 1)]) + ' (' + (Math.min(L.pvMap, list.length - 1) + 1) + ' of ' + list.length + ')';
+        return t;
+    }
+
+    function viewHelp() {
+        var p = P();
+        if (!p || previewState() !== 2)
+            return '';
+        if (p.mode() === 'walk')
+            return 'Drag to look. W A S D to move, E and Q up and down, Shift faster, the wheel a step.';
+        return 'Drag to turn it, right-drag to move it, the wheel to zoom.';
+    }
+
+    function viewNote() {
+        var p = P();
+        if (!p || previewState() !== 2)
+            return '';
+        var missing = p.missing();
+        if (missing)
+            return missing + (missing === 1 ? ' of the game\'s own textures isn\'t' : ' of the game\'s own textures aren\'t') +
+                ' in your game files: shown blurred.';
+        if (p.mode() === 'walk' && p.starts() > 1)
+            return 'Starting place ' + (p.start() + 1) + ' of ' + p.starts() + '.';
+        return '3D view from Massassi.net\'s 3D Preview (jkview, by Stephan Reiter).';
+    }
+
+    function viewModeLabel() {
+        var p = P();
+        if (!p || previewState() !== 2)
+            return '';
+        return p.mode() === 'walk' ? 'Orbit' : 'Walk';
+    }
+
+    // A map that didn't load still has Next Map, to the level's others.
+    function viewNextLabel() {
+        var p = P(), l = selected(), st = previewState();
+        if (!p || (st !== 2 && st !== 3))
+            return '';
+        if (st === 2 && p.mode() === 'walk')
+            return p.starts() > 1 ? 'Next Start' : '';
+        return maps(l).length > 1 ? 'Next Map' : '';
+    }
+
     // ---- Getting a level
 
     function use() {
@@ -619,6 +756,12 @@
         case 5: return l ? readmeText(detail(l)) : '';
         case 6: return l ? filesText(l, detail(l)) : '';
         case 7: return messageText();
+        case 8: return previewText();
+        case 9: return viewTitle();
+        case 10: return viewHelp();
+        case 11: return viewNote();
+        case 12: return viewModeLabel();
+        case 13: return viewNextLabel();
         }
         return '';
     }
@@ -789,13 +932,23 @@
         shot.on = false;
         if (shot.img)
             shot.img.style.display = 'none';
+        if (P()) {
+            P().hide();
+            P().want(null);
+        }
         if (Module.canvas && Module.canvas.focus)
             Module.canvas.focus();
     }
 
     function number(what) {
         switch (what) {
-        case 0: { var c = L.changed; L.changed = 0; return c; }
+        case 0: {
+            if (P() && P().changed())
+                L.changed |= CH_PV | CH_VIEW;
+            var c = L.changed;
+            L.changed = 0;
+            return c;
+        }
         case 1: return L.rows.length;
         case 2: {
             for (var i = 0; i < L.rows.length; i++) {
@@ -808,6 +961,7 @@
         case 4: return L.job ? 1 : 0;
         case 5: return L.done ? 1 : 0;
         case 6: { var l = selected(); return l && l.sh > 0 ? l.sh : 0; }
+        case 7: return previewState();
         }
         return 0;
     }
@@ -829,6 +983,10 @@
         cancel: cancel,
         page: openPage,
         shot: setShot,
+        // The 3D view: the Overview's frame, the big view's, and its buttons.
+        preview: setPreview,
+        view: setView,
+        viewCommand: viewCommand,
         nextShot: function() {
             var l = selected();
             if (l && l.sh > 1) {
@@ -845,7 +1003,7 @@
         },
         // For tests.
         _L: L, _zipEntries: zipEntries, _dateText: dateText, _shot: shot,
-        _ch: { STATUS: CH_STATUS, ROWS: CH_ROWS, PANEL: CH_PANEL, MSG: CH_MSG, USE: CH_USE }
+        _ch: { STATUS: CH_STATUS, ROWS: CH_ROWS, PANEL: CH_PANEL, MSG: CH_MSG, USE: CH_USE, PV: CH_PV, VIEW: CH_VIEW }
     };
 
     // Asks the site whether it serves the library as the engine starts, so

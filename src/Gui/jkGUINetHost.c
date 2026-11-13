@@ -363,16 +363,20 @@ static void jkGuiNetHost_SmallButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMen
         font++;
     if (redraw)
         jkGuiRend_CopyVBuffer(pMenu, &pElement->rect);
+    int flags = pElement->selectedTextEntry;
     if (pElement->wstr)
     {
         int w = stdFont_sub_4355F0(pMenu->fonts[font], pElement->wstr);
         if (w < rect.width)
         {
+            // Drawn from the left at right - w, in a rect a little wider
+            // than the text: one exactly as wide wraps it onto two lines.
             rect.x += rect.width - w;
-            rect.width = w;
+            rect.width = w + 8;
+            flags &= ~1;
         }
     }
-    stdFont_Draw3(pVbuf, pMenu->fonts[font], rect.y, &rect, pElement->selectedTextEntry, pElement->wstr, 1);
+    stdFont_Draw3(pVbuf, pMenu->fonts[font], rect.y, &rect, flags, pElement->wstr, 1);
 }
 
 static void jkGuiNetHost_OpenLibrary()

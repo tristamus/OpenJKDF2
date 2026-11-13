@@ -22,10 +22,14 @@
             'Last line.'
         ].join('\n'),
         readme: '--- readme.txt ---\n\nTitle: Alpha Arena\n\nA readme line.',
-        files: '12 KB\talpha.gob  (episode: Alpha Arena)\n1 KB\treadme.txt'
+        files: '12 KB\talpha.gob  (episode: Alpha Arena)\n1 KB\treadme.txt',
+        // The 3D view: 0 none, 1 coming, 2 there, 3 failed; what the page
+        // was last told about its frames, and Walk or Orbit.
+        pv: 0, lastPreview: null, lastView: null, views: 0, walk: false, status: ''
     };
 
     function touch(bits) { M.changed |= bits; }
+    function pv() { return M.sel >= 0 ? M.pv : 0; }
 
     Module.jkLibrary = {
         available: function() { return M.available; },
@@ -37,13 +41,13 @@
             M.open = true;
             M.done = false;
             M.result = '';
-            M.changed = 31;
+            M.changed = 127;
             return true;
         },
         end: function() { M.calls.push('end'); M.open = false; },
         text: function(what, arg) {
             switch (what) {
-            case 0: return M.rows.length + ' levels from Massassi.net';
+            case 0: return M.status || M.rows.length + ' levels from Massassi.net';
             case 1: return M.rows[arg] || '';
             case 2: return M.sorts[M.sort];
             case 3: return M.sel >= 0 ? M.titles[M.sel] : '';
@@ -51,6 +55,12 @@
             case 5: return M.readme;
             case 6: return M.files;
             case 7: return M.busy ? M.msg : 'One download at a time.';
+            case 8: return ['No 3D view for this level yet', 'Loading the 3D view...', '', 'The 3D view failed.'][pv()];
+            case 9: return M.sel >= 0 ? M.titles[M.sel] : '';
+            case 10: return M.walk ? 'Walk: W A S D, drag to look.' : 'Orbit: drag to turn, wheel to zoom.';
+            case 11: return M.walk ? 'Starting place 1 of 3' : '3D view from the test.';
+            case 12: return pv() === 2 ? (M.walk ? 'Orbit' : 'Walk') : '';
+            case 13: return pv() === 2 ? (M.walk ? 'Next Start' : 'Next Map') : pv() === 3 ? 'Next Map' : '';
             }
             return '';
         },
@@ -69,6 +79,7 @@
                 }
                 return M.done ? 1 : 0;
             case 6: return M.sel >= 0 ? M.shots : 0;
+            case 7: return pv();
             }
             return 0;
         },
@@ -108,6 +119,18 @@
         page: function() { M.pages++; },
         shot: function(on, x, y, w, h) { M.lastShot = [on, x, y, w, h]; },
         nextShot: function() { M.nextShots++; },
+        preview: function(on, x, y, w, h) { M.lastPreview = [on, x, y, w, h]; },
+        view: function(on, x, y, w, h) {
+            if (on && !(M.lastView && M.lastView[0]))
+                M.views++;
+            M.lastView = [on, x, y, w, h];
+        },
+        viewCommand: function(cmd) {
+            M.calls.push('viewCommand ' + cmd);
+            if (cmd === 1)
+                M.walk = !M.walk;
+            touch(64);
+        },
         take: function() { var r = M.result; M.result = ''; return r; },
         _M: M
     };
