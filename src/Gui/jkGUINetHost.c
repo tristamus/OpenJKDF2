@@ -166,8 +166,10 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     // Added: Level Library..., at the right end of the Choose Episode line, in
     // the gold button font of Ok, Cancel and Advanced (players missed it in
     // the small font of the labels). Its text ends at 630, the right edge of
-    // the Episode list and the Server Port box.
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 150, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // the Episode list and the Server Port box. 4 higher than the label: drawn
+    // at 150, its baseline was 4 below "Choose Episode:"'s in the game, and in
+    // MotS its "y" cut into the Episode box's top line.
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 146, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -233,8 +235,8 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    // Added: Level Library..., as in JK's list.
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 173, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Level Library..., as in JK's list (4 higher, as there).
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 169, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
