@@ -927,6 +927,9 @@ static void scriptAddAndUse(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(!el[E_REMOVE].bIsVisible && !el[E_UP].bIsVisible && !el[E_DOWN].bIsVisible && !el[E_CLEAR].bIsVisible,
               "nothing to move, remove or clear");
         CHECK(el[E_LIBRARY].bIsVisible, "Level Library... when the site has it");
+        // Save, not Use: Clear and Cancel left players thinking the playlist was gone.
+        CHECK(wis(el[E_USE].wstr, "Save Playlist") && wis(el[E_CANCEL].wHintText, "Back to the Host screen without saving."),
+              "Save Playlist, and Cancel doesn't save: %s / %s", show(el[E_USE].wstr), show(el[E_CANCEL].wHintText));
         // The episodes the Host screen lists: not the single-player one.
         CHECK(rowCount(&el[E_EPISODES]) == 4, "episodes of the kinds asked for (%d)", rowCount(&el[E_EPISODES]));
         for (int i = 0; i < rowCount(&el[E_EPISODES]); i++)
@@ -1011,7 +1014,7 @@ static void scriptAddAndUse(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(wis(row(&el[E_LIST], 0), "1. Bespin Mining") && wis(row(&el[E_LIST], 1), "2. Canyon Oasis"),
               "removed the 2nd: %s / %s", show(row(&el[E_LIST], 0)), show(row(&el[E_LIST], 1)));
         CHECK(el[E_LIST].selectedTextEntry == 1, "the next one picked");
-        CHECK(count() == 0, "nothing saved before Use Playlist");
+        CHECK(count() == 0, "nothing saved before Save Playlist");
         break;
     case 7:
         click(menu, &el[E_LOOP], 0);
@@ -1019,7 +1022,7 @@ static void scriptAddAndUse(jkGuiMenu* menu, jkGuiElement* el, int frame)
         stdString_SafeWStrCopy((char16_t*)el[E_NAME].wstr, u"Friday Night", 25);
         CHECK(el[E_NAME].selectedTextEntry == 24, "the name box takes 24 letters");
         CHECK(menu->pReturnKeyShortcutElement == &el[E_USE] && menu->pEscapeKeyShortcutElement == &el[E_CANCEL],
-              "Return is Use Playlist, Escape Cancel");
+              "Return is Save Playlist, Escape Cancel");
         click(menu, &el[E_USE], 0);
         break;
     }
@@ -1037,8 +1040,8 @@ static void scriptCancel(jkGuiMenu* menu, jkGuiElement* el, int frame)
               show(row(&el[E_EPISODES], el[E_EPISODES].selectedTextEntry)));
         click(menu, &el[E_CLEAR], 0);
         CHECK(rowCount(&el[E_LIST]) == 1 && wis(el[E_COUNT].wstr, "0 of 6"), "cleared");
-        CHECK(wcontains(el[E_MESSAGE].wstr, "goes back to hosting one episode"), "says what Use does now: %s",
-              show(el[E_MESSAGE].wstr));
+        CHECK(wcontains(el[E_MESSAGE].wstr, "Save Playlist with no levels in it takes the playlist off the Host screen."),
+              "says what Save does now: %s", show(el[E_MESSAGE].wstr));
         break;
     case 1:
         click(menu, &el[E_CANCEL], 0);
@@ -1172,7 +1175,7 @@ static void testScreen(void)
     jkPlaylist_Load(0);
     script = scriptAddAndUse;
     int r = jkGuiPlaylist_Show(0, mask);
-    CHECK(r == 1, "Use Playlist");
+    CHECK(r == 1, "Save Playlist");
     CHECK(count() == 4, "the playlist: 4 levels (%d)", count());
     CHECK(wis(jkPlaylist_list.name, "Friday Night") && jkPlaylist_list.bLoop == 0, "its name and Loop");
     CHECK(!strcmp(jkPlaylist_list.entries[0].gob, "JK1MP") && !strcmp(jkPlaylist_list.entries[0].jkl, "m4.jkl") &&
@@ -1206,7 +1209,7 @@ static void testScreen(void)
     libraryGives[2] = NULL;
     script = scriptLibrary;
     r = jkGuiPlaylist_Show(0, mask);
-    CHECK(r == 1, "Use Playlist after the library");
+    CHECK(r == 1, "Save Playlist after the library");
     CHECK(libraryShows == 3, "the library opened 3 times (%d)", libraryShows);
     CHECK(displays == 6, "the screen came back after each (%d)", displays);
     CHECK(count() == 5 && !strcmp(jkPlaylist_list.entries[4].gob, "hoth") && !strcmp(jkPlaylist_list.entries[4].jkl, "hoth.jkl"),

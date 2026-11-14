@@ -11,7 +11,7 @@
 #ifdef PLATFORM_WSRELAY
 
 // Shows the screen, listing the episodes of the types in typeMask (as the
-// Host screen lists them). Returns 1 when the player pressed Use Playlist
+// Host screen lists them). Returns 1 when the player pressed Save Playlist
 // (jkPlaylist_list is the new playlist, saved), 0 for Cancel.
 int jkGuiPlaylist_Show(int bMots, int typeMask);
 

@@ -766,7 +766,7 @@ static int jkGuiNetHost_ShowPlaylistPicked(jkGuiElement* pList, jkGuiMenu* pMenu
 }
 
 // Added: Playlist...: the Playlist screen, then Choose Episode again, with
-// the playlist picked after Use Playlist, or what was picked before.
+// the playlist picked after Save Playlist, or what was picked before.
 static void jkGuiNetHost_OpenPlaylist()
 {
     jkGuiElement* pList = &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX];
