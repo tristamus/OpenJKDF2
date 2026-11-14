@@ -905,6 +905,33 @@ await test('a game texture that isn\'t in its own files: from the other game\'s 
     await m.page.close();
 });
 
+await test('the playlist\'s next level: a GOB the library lists comes from the site, found by its SHA-256', async () => {
+    requests.length = 0;
+    const got = await page.evaluate(async ([hAlpha, hGamma, hBroken]) => {
+        const digest = async b => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', b)),
+                                             x => x.toString(16).padStart(2, '0')).join('');
+        const steps = [];
+        const a = await Module.jkLibrary.gobFromSite('jk1', hAlpha, (done, total) => steps.push([done, total]));
+        const c = await Module.jkLibrary.gobFromSite('jk1', hGamma, null);
+        const none = await Module.jkLibrary.gobFromSite('jk1', 'a'.repeat(64), null);
+        const bad = await Module.jkLibrary.gobFromSite('jk1', 'not-a-sha', null);
+        const broken = await Module.jkLibrary.gobFromSite('jk1', hBroken, null).then(() => 'got it', e => String(e.message || e));
+        return { a: a && [a.lib, await digest(a.bytes)], c: c && [c.lib, await digest(c.bytes)], none, bad, broken,
+                 last: steps[steps.length - 1] || null, msg: Module.jkLibrary.text(7) };
+    }, [sha(alpha), sha(gamma), sha(broken)]);
+    assert.deepEqual(got.a, [501, sha(alpha)]);
+    assert.deepEqual(got.c, [503, sha(gamma)]); // a GOB in a zip in the zip
+    assert.equal(got.none, null);
+    assert.equal(got.bad, null);
+    assert.match(got.broken, /didn't come through whole/);
+    assert.ok(got.last && got.last[0] === got.last[1] && got.last[1] > 0, JSON.stringify(got.last));
+    assert.deepEqual(requests.filter(r => r.includes('/levels/z/')).sort(),
+                     ['GET /levels/z/501.zip?h=' + byId[501].entry.h, 'GET /levels/z/503.zip?h=' + byId[503].entry.h,
+                      'GET /levels/z/508.zip?h=' + byId[508].entry.h].sort());
+    // The library's own message is left as it was.
+    assert.doesNotMatch(got.msg, /^Getting /);
+});
+
 await test('no errors on the page', async () => {
     assert.deepEqual(jk.errors.filter(e => !/Failed to load resource/.test(e)), []);
 });

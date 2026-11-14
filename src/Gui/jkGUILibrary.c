@@ -1172,7 +1172,19 @@ int jkGuiLibrary_IsAvailable()
     return jkGuiLibrary_js_available();
 }
 
+static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAdd);
+
 int jkGuiLibrary_Show(int bMots, char* pOutName, int outLen)
+{
+    return jkGuiLibrary_ShowFor(bMots, pOutName, outLen, 0);
+}
+
+int jkGuiLibrary_ShowToAdd(int bMots, char* pOutName, int outLen)
+{
+    return jkGuiLibrary_ShowFor(bMots, pOutName, outLen, 1);
+}
+
+static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAdd)
 {
     jkGuiElement* el = jkGuiLibrary_aElements;
     int result;
@@ -1195,6 +1207,11 @@ int jkGuiLibrary_Show(int bMots, char* pOutName, int outLen)
     el[LIB_FILTER_CTF].wHintText = bMots ? u"Show Kill the Fool levels." : u"Show Capture the Flag levels.";
     el[LIB_SEARCH].wstr = jkGuiLibrary_search;
     el[LIB_SEARCH].selectedTextEntry = LIB_SEARCH_MAX;
+    if (bToAdd)
+    {
+        el[LIB_USE_BUTTON].wstr = u"Add to Playlist";
+        el[LIB_USE_BUTTON].wHintText = u"Gets the level, saves it in this browser and adds it to the playlist.";
+    }
     el[LIB_FILTER_MP].selectedTextEntry = jkGuiLibrary_filterMp;
     el[LIB_FILTER_CTF].selectedTextEntry = jkGuiLibrary_filterCtf;
     el[LIB_FILTER_COOP].selectedTextEntry = jkGuiLibrary_filterCoop;

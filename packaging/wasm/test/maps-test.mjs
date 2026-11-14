@@ -1210,6 +1210,155 @@ test('a new joiner gets the map from a paced host as from an old one', async () 
     assert.equal(blockReqs(g.log, 2).length, 3);
 });
 
+// ---- The next level of the host's playlist (src/Main/jkPlaylist.c): the
+// host offers it as a level ends, players who don't have it get it quietly
+// (the score screen shows how far along), and the host hears who's still
+// getting it.
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function waitNext(tab, ms = 20000) {
+    const until = Date.now() + ms;
+    while (tab.jkMaps.next.state() === 0) {
+        if (Date.now() > until)
+            throw new Error('still busy');
+        await sleep(5);
+    }
+    return tab.jkMaps.next.state();
+}
+
+test('the playlist\'s next level: a joiner gets it as the next level, and the host hears when it has it', async () => {
+    const g = makeGame({
+        hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
+        joinFiles: { ...retailInstall },
+    });
+    g.host.jkMaps.next.host('ctf_test', 'gob');
+    await hostReady(g.host);
+    // A player that hasn't said anything yet is still getting it.
+    assert.deepEqual(g.host.jkMaps.next.waiting([2, 3]), { count: 2, least: -1 });
+    g.join.jkMaps.next.fetch('ctf_test', 'gob');
+    assert.equal(await waitNext(g.join), 1);
+    assert.equal(g.join.jkMaps.next.progress(), 1);
+    assert.equal(g.join.jkMaps.next.error(), '');
+    assert.equal(g.join.jkMaps.state(), 1);
+    assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
+    await sleep(20);
+    assert.deepEqual(g.host.jkMaps.next.waiting([2]), { count: 0, least: -1 });
+    assert.deepEqual(g.host.jkMaps.next.waiting([2, 3]), { count: 1, least: -1 });
+    // Everything the joiner sent was about the next level, and it said where
+    // it was as it started and as it ended.
+    assert.deepEqual([...new Set(g.log.filter(f => f.to === 'host').map(f => f.bytes[14]))], [2]);
+    const said = framesTo(g.log, 'host', 7).map(f => JSON.parse(new TextDecoder().decode(f.bytes.subarray(16))));
+    assert.deepEqual(said[0], { n: 'ctf_test', s: 0, p: -1 });
+    assert.deepEqual(said[said.length - 1], { n: 'ctf_test', s: 1, p: 1 });
+});
+
+test('the host stops waiting for a player who couldn\'t get the next level, who hears why', async () => {
+    const g = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall } });
+    g.host.jkMaps.next.host('ctf_gone', 'gob');
+    await hostReady(g.host);
+    g.join.jkMaps.next.fetch('ctf_gone', 'gob');
+    assert.equal(await waitNext(g.join), 2);
+    assert.ok(g.join.jkMaps.next.error().length > 0);
+    await sleep(20);
+    assert.deepEqual(g.host.jkMaps.next.waiting([2]), { count: 0, least: -1 });
+});
+
+test('what a player says about another level is not counted', async () => {
+    const g = makeGame({
+        hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap, '/jk1/episode/ctf_two.gob': customMap },
+        joinFiles: { ...retailInstall },
+    });
+    g.host.jkMaps.next.host('ctf_test', 'gob');
+    await hostReady(g.host);
+    g.join.jkMaps.next.fetch('ctf_test', 'gob');
+    assert.equal(await waitNext(g.join), 1);
+    // The host has moved on to name another level since.
+    g.host.jkMaps.next.host('ctf_two', 'gob');
+    await hostReady(g.host);
+    assert.deepEqual(g.host.jkMaps.next.waiting([2]), { count: 1, least: -1 });
+});
+
+test('a joiner that has the next level says so at once, and downloads nothing', async () => {
+    const g = makeGame({
+        hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
+        joinFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
+    });
+    g.host.jkMaps.next.host('ctf_test', 'gob');
+    await hostReady(g.host);
+    g.join.jkMaps.next.fetch('ctf_test', 'gob');
+    assert.equal(await waitNext(g.join), 1);
+    await sleep(20);
+    assert.deepEqual(g.host.jkMaps.next.waiting([2]), { count: 0, least: -1 });
+    assert.equal(framesTo(g.log, 'host', 3).length + framesTo(g.log, 'host', 5).length, 0);
+});
+
+test('once the host is in the next level it offers it as the map, as it was got ready', async () => {
+    const said = [];
+    const log = console.log;
+    console.log = (...a) => { said.push(a.join(' ')); };
+    let g;
+    try {
+        g = makeGame({
+            hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
+            joinFiles: { ...retailInstall },
+        });
+        g.host.jkMaps.next.host('ctf_test', 'gob');
+        await hostReady(g.host);
+        g.host.jkMaps.host('ctf_test', 'gob');
+        await hostReady(g.host);
+        // A player who joins now gets it as the map.
+        g.join.jkMaps.fetch('ctf_test', 'gob');
+        assert.equal(await waitState(g.join), 1);
+    } finally {
+        console.log = log;
+    }
+    assert.equal(said.filter(l => /ready to send map ctf_test\.gob/.test(l)).length, 1);
+    assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
+    assert.deepEqual([...new Set(g.log.filter(f => f.to === 'host').map(f => f.bytes[14]))], [0]);
+});
+
+test('a Level Library level comes from the site, not the host, when the site has it', async () => {
+    const g = makeGame({
+        hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
+        joinFiles: { ...retailInstall },
+    });
+    const asked = [];
+    g.join.jkLibrary = {
+        async gobFromSite(game, sha256, onProgress) {
+            asked.push([game, sha256]);
+            onProgress(1, 2);
+            onProgress(2, 2);
+            return { bytes: new Uint8Array(customMap), lib: 123 };
+        }
+    };
+    g.host.jkMaps.next.host('ctf_test', 'gob');
+    await hostReady(g.host);
+    g.join.jkMaps.next.fetch('ctf_test', 'gob');
+    assert.equal(await waitNext(g.join), 1);
+    assert.deepEqual(asked, [['jk1', sha(customMap)]]);
+    assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
+    assert.equal(framesTo(g.log, 'host', 3).length + framesTo(g.log, 'host', 5).length, 0);
+    await sleep(20);
+    assert.deepEqual(g.host.jkMaps.next.waiting([2]), { count: 0, least: -1 });
+});
+
+test('a level the site can\'t give comes from the host', async () => {
+    for (const site of [async () => null, async () => { throw new Error('HTTP 500'); }]) {
+        const g = makeGame({
+            hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap },
+            joinFiles: { ...retailInstall },
+        });
+        g.join.jkLibrary = { gobFromSite: site };
+        g.host.jkMaps.next.host('ctf_test', 'gob');
+        await hostReady(g.host);
+        g.join.jkMaps.next.fetch('ctf_test', 'gob');
+        assert.equal(await waitNext(g.join), 1);
+        assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
+        assert.ok(framesTo(g.log, 'host', 5).length > 0);
+    }
+});
+
 let failed = 0;
 for (const t of tests) {
     try {

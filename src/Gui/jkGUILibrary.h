@@ -16,6 +16,10 @@ int jkGuiLibrary_IsAvailable();
 // without one.
 int jkGuiLibrary_Show(int bMots, char* pOutName, int outLen);
 
+// The same, from the Playlist screen (Gui/jkGUIPlaylist.c): Use Level is Add
+// to Playlist.
+int jkGuiLibrary_ShowToAdd(int bMots, char* pOutName, int outLen);
+
 #endif // PLATFORM_WSRELAY
 
 #endif // _JKGUI_LIBRARY_H

@@ -17,6 +17,9 @@
 #include "Win95/stdDisplay.h"
 #include "General/stdString.h"
 #include "Dss/sithMulti.h"
+#ifdef PLATFORM_WSRELAY
+#include "Main/jkPlaylist.h"
+#endif
 
 #ifdef ARCH_WASM
 #include <emscripten.h>
@@ -74,7 +77,15 @@ void jkGuiMultiTally_MenuFrameDrawn(void)
 }
 #endif
 
+#ifdef PLATFORM_WSRELAY
+#define JKGUIMULTITALLY_NEXT1 (91)
+#define JKGUIMULTITALLY_NEXT2 (92)
+#define JKGUIMULTITALLY_TEAM_NEXT1 (17)
+#define JKGUIMULTITALLY_TEAM_NEXT2 (18)
+static jkGuiElement jkGuiMultiTally_buttons[94] = {
+#else
 static jkGuiElement jkGuiMultiTally_buttons[92] = {
+#endif
     { ELEMENT_TEXT, 0, 2, "GUI_MULTIPLAYER_SCORE", 3, { 90, 20, 460, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT, 0, 2, NULL, 3, { 0, 50, 640, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT, 0, 2, "GUI_NAME", 3, { 20, 90, 200, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -166,6 +177,12 @@ static jkGuiElement jkGuiMultiTally_buttons[92] = {
     { ELEMENT_TEXT, 0, 0, NULL, 3, { 245, 440, 150, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, -1, 2, "GUI_QUIT", 3, { 0, 440, 150, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 1, 2, "GUI_OK", 3, { 490, 440, 150, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: the host's playlist, between Quit and Ok: what's next, and the
+    // countdown or who's still getting it (jkPlaylist_TallyText).
+    { ELEMENT_TEXT, 0, 0, NULL, 3, { 150, 440, 340, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT, 0, 0, NULL, 3, { 150, 460, 340, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
 
@@ -177,7 +194,11 @@ static jkGuiMenu jkGuiMultiTally_menu2 = {
     jkGuiMultiTally_buttons, -1, 65535, 65535, 15, NULL, NULL, jkGui_stdBitmaps, jkGui_stdFonts, 0, jkGuiMultiTally_sub_4188B0, "thermloop01.wav", "thrmlpu2.wav", NULL, NULL, NULL, 0, NULL, NULL
 };
 
+#ifdef PLATFORM_WSRELAY
+static jkGuiElement jkGuiMultiTally_buttons3[20] = {
+#else
 static jkGuiElement jkGuiMultiTally_buttons3[18] = {
+#endif
     { ELEMENT_TEXT, 0, 2, "GUI_TEAM_SCORE", 3, { 0, 20, 640, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT, 0, 0, NULL, 3, { 0, 50, 640, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT, 0, 2, "GUI_TEAM", 3, { 150, 90, 210, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -195,6 +216,12 @@ static jkGuiElement jkGuiMultiTally_buttons3[18] = {
     { ELEMENT_TEXT, 0, 0, NULL, 3, { 245, 440, 150, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, -1, 2, "GUI_QUIT", 3, { 0, 440, 150, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 1, 2, "GUI_OK", 3, { 490, 440, 150, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#ifdef PLATFORM_WSRELAY
+    // Added: the host's playlist, between Quit and Ok: what's next, and the
+    // countdown or who's still getting it (jkPlaylist_TallyText).
+    { ELEMENT_TEXT, 0, 0, NULL, 3, { 150, 440, 340, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT, 0, 0, NULL, 3, { 150, 460, 340, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+#endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
 
@@ -206,6 +233,59 @@ static char16_t jkGuiMultiTally_waTmp[64];
 static uint32_t jkGuiMultiTally_msStart;
 static int jkGuiMultiTally_dword_5568D0;
 static int jkGuiMultiTally_idkType;
+
+#ifdef PLATFORM_WSRELAY
+// Added: the host's playlist's lines (jkPlaylist_TallyText), redrawn when they
+// change.
+static char16_t jkGuiMultiTally_wNext1[128];
+static char16_t jkGuiMultiTally_wNext2[128];
+
+static int jkGuiMultiTally_NextLines(jkGuiMenu *pMenu, int bDraw)
+{
+    char16_t w1[128], w2[128];
+    int bTeam = (pMenu == &jkGuiMultiTally_menu3);
+    jkGuiElement* pLine1 = bTeam ? &jkGuiMultiTally_buttons3[JKGUIMULTITALLY_TEAM_NEXT1] : &jkGuiMultiTally_buttons[JKGUIMULTITALLY_NEXT1];
+    jkGuiElement* pLine2 = bTeam ? &jkGuiMultiTally_buttons3[JKGUIMULTITALLY_TEAM_NEXT2] : &jkGuiMultiTally_buttons[JKGUIMULTITALLY_NEXT2];
+    jkGuiElement* pCount = bTeam ? &jkGuiMultiTally_buttons3[14] : &jkGuiMultiTally_buttons[88];
+    uint32_t ms = stdPlatform_GetTimeMsec() - jkGuiMultiTally_msStart;
+
+    // The game's last score screen (the playlist is over, so the game ends:
+    // no countdown, Ok goes to the menu) says only that.
+    int bLast = !jkGuiMultiTally_idkType;
+    if ((bLast && !(jkPlaylist_next.bNamed && jkPlaylist_next.bEnd)) || !jkPlaylist_TallyText(ms, SCORE_DELAY_MS, w1, w2, 128))
+    {
+        pLine1->wstr = NULL;
+        pLine2->wstr = NULL;
+        return 0;
+    }
+    // The countdown is in the lines.
+    if (!bLast)
+        pCount->wstr = NULL;
+    if (!bDraw || __wcscmp(w1, jkGuiMultiTally_wNext1) || pLine1->wstr != jkGuiMultiTally_wNext1)
+    {
+        stdString_SafeWStrCopy(jkGuiMultiTally_wNext1, w1, 128);
+        pLine1->wstr = jkGuiMultiTally_wNext1;
+        if (bDraw)
+            jkGuiRend_UpdateAndDrawClickable(pLine1, pMenu, 1);
+    }
+    if (!bDraw || __wcscmp(w2, jkGuiMultiTally_wNext2) || pLine2->wstr != jkGuiMultiTally_wNext2)
+    {
+        stdString_SafeWStrCopy(jkGuiMultiTally_wNext2, w2, 128);
+        pLine2->wstr = jkGuiMultiTally_wNext2;
+        if (bDraw)
+            jkGuiRend_UpdateAndDrawClickable(pLine2, pMenu, 1);
+    }
+    return 1;
+}
+
+// Ok on the last score screen: not while this game is still getting the
+// playlist's next level.
+static int jkGuiMultiTally_MayLeave(void)
+{
+    return !jkGuiMultiTally_idkType ||
+        jkPlaylist_TallyMayEnd(stdPlatform_GetTimeMsec() - jkGuiMultiTally_msStart, SCORE_DELAY_MS, 1);
+}
+#endif
 
 // MOTS altered?
 int jkGuiMultiTally_Show(int a1)
@@ -284,6 +364,9 @@ int jkGuiMultiTally_Show(int a1)
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiMultiTally_menu, &jkGuiMultiTally_buttons[90]);
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiMultiTally_menu, &jkGuiMultiTally_buttons[89]);
     jkGuiRend_SetVisibleAndDraw(&jkGuiMultiTally_buttons[89], &jkGuiMultiTally_menu, a1);
+#ifdef PLATFORM_WSRELAY
+    jkGuiMultiTally_NextLines(&jkGuiMultiTally_menu, 0); // Added
+#endif
 
 #ifdef QOL_IMPROVEMENTS
     // Added
@@ -406,6 +489,13 @@ int jkGuiMultiTally_Show(int a1)
         {
             continue;
         }
+#ifdef PLATFORM_WSRELAY
+        // Added: the last page waits for the playlist's next level
+        else if ( v2 <= 0x10 && !jkGuiMultiTally_MayLeave() )
+        {
+            continue;
+        }
+#endif
         v15 = 0;
     }
     while ( v15 );
@@ -485,7 +575,12 @@ LABEL_50:
                     continue;
                 }
             }
+#ifdef PLATFORM_WSRELAY
+            // Added: it waits for the playlist's next level
+            else if ( v29 == 1 && jkGuiMultiTally_MayLeave() )
+#else
             else if ( v29 == 1 )
+#endif
             {
                 goto LABEL_50;
             }
@@ -570,6 +665,17 @@ void jkGuiMultiTally_sub_4188B0(jkGuiMenu *pMenu)
     if ( jkGuiMultiTally_idkType )
     {
         v1 = stdPlatform_GetTimeMsec() - jkGuiMultiTally_msStart;
+#ifdef PLATFORM_WSRELAY
+        // Added: the host's playlist named the next level: the screen stays
+        // until this game may go on to it (jkPlaylist_TallyMayEnd), and says
+        // so in its own lines.
+        if ( jkGuiMultiTally_NextLines(pMenu, 1) )
+        {
+            if ( jkPlaylist_TallyMayEnd(v1, SCORE_DELAY_MS, 0) )
+                pMenu->lastClicked = 1;
+            return;
+        }
+#endif
         if ( v1 > SCORE_DELAY_MS )
             pMenu->lastClicked = 1;
         if ( v1 / 1000 != jkGuiMultiTally_dword_5568D0 )
@@ -616,6 +722,9 @@ int jkGuiMultiTally_ShowTeamScores(int a1)
     
     jkGui_SetModeMenu(jkGui_stdBitmaps[JKGUI_BM_BK_TALLY]->palette);
     jkGuiRend_SetVisibleAndDraw(&jkGuiMultiTally_buttons3[15], &jkGuiMultiTally_menu3, a1); // MOTS removed?
+#ifdef PLATFORM_WSRELAY
+    jkGuiMultiTally_NextLines(&jkGuiMultiTally_menu3, 0); // Added
+#endif
     jkGuiMultiTally_buttons3[1].wstr = jkGui_sub_412ED0();
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiMultiTally_menu3, &jkGuiMultiTally_buttons3[16]);
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiMultiTally_menu3, &jkGuiMultiTally_buttons3[15]);

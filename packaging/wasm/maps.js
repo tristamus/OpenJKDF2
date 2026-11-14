@@ -24,12 +24,22 @@
 // The same transfer also carries the host's mod (mods.js): KIND_MOD frames
 // ask for and send it, KIND_MAP frames the map.
 //
+// And the next level of the host's playlist (src/Main/jkPlaylist.c): when a
+// level ends, the host offers the next level's GOB as KIND_NEXT (next.host),
+// and the others start getting it if they don't have it (next.fetch): a Level
+// Library level from the site (library.js, gobFromSite) when the site has
+// one with the host's SHA-256, else from the host as a map. They say how far
+// along they are with STATUS frames, so the host's score screen can wait for
+// them; the engine shows the progress itself, so no panel comes up.
+//
 // Every frame starts like a relay game packet, with idFrom and idTo (u32),
 // then MAGIC, a type byte, a version byte and a kind byte, padded to 16 bytes:
 //   joiner -> host   INFO_REQ
 //                    CHUNK_REQ  <id:8> <chunkSize u32> <first u32> <count u32>
 //                    BLOCK_REQ  <id:8> <first u32> <count u32> <partSize u32>
 //                               <accept u8> <pad:3>
+//                    STATUS     <JSON: n (the GOB's name), s (STATE_*), p (0 to 1,
+//                                or -1)>, KIND_NEXT only
 //   host -> joiner   INFO       <JSON: status, name, ext, size, sha256,
 //                                streamSize, refsBytes, z, streamSha256>
 //                    CHUNK      <id:8> <index u32> <data>
@@ -65,8 +75,10 @@
     var MAGIC = [0x4A, 0x4B, 0x4D, 0x54]; // "JKMT"
     var VERSION = 1;
     var HEADER = 16;
-    var T_INFO_REQ = 1, T_INFO = 2, T_CHUNK_REQ = 3, T_CHUNK = 4, T_BLOCK_REQ = 5, T_BLOCK = 6;
-    var KIND_MAP = 0, KIND_MOD = 1;
+    var T_INFO_REQ = 1, T_INFO = 2, T_CHUNK_REQ = 3, T_CHUNK = 4, T_BLOCK_REQ = 5, T_BLOCK = 6, T_STATUS = 7;
+    var KIND_MAP = 0, KIND_MOD = 1, KIND_NEXT = 2;
+    // A joiner getting the next level says how far along it is at most this often.
+    var STATUS_MS = 1000;
 
     // What can be sent: as much as a browser tab can comfortably hold twice
     // over, once as the file and once while checking it.
@@ -1165,7 +1177,9 @@
                              ' ready for joiners: ' + e);
                 r = { info: { status: 'error' } };
             }
-            if (offers[kind] !== h)
+            // Gone unless some kind still offers it (next.host's offer goes on
+            // as the map once the host is in that level, host()).
+            if (!Object.keys(offers).some(function(k) { return offers[k] === h; }))
                 return;
             h.info = r.info;
             if (r.info.status === 'ok' && r.stream) {
@@ -1174,7 +1188,7 @@
                 h.info.z = BLOCK_BYTES;
             }
             for (var w of h.waiting)
-                sendInfo(kind, w.id, w.via);
+                sendInfo(w.kind === undefined ? kind : w.kind, w.id, w.via);
             h.waiting = [];
         })();
     }
@@ -1185,7 +1199,53 @@
     }
 
     function host(name, ext) {
-        offer(KIND_MAP, async function() {
+        // The playlist's next level, got ready as the last one ended: the
+        // same offer, not hashed again, and players still getting it carry on.
+        var n = offers[KIND_NEXT];
+        if (n && n.name === String(name).toLowerCase() && n.ext === ext) {
+            offers[KIND_MAP] = n;
+            return;
+        }
+        offer(KIND_MAP, prepareMap(name, ext));
+        offers[KIND_MAP].name = String(name).toLowerCase();
+        offers[KIND_MAP].ext = ext;
+    }
+
+    // The next level of the host's playlist (src/Main/jkPlaylist.c), for the
+    // players who don't have it, and who's still getting it.
+    var nextStatus = {}; // player id -> { s, p }
+    var nextName = '';
+    function hostNext(name, ext) {
+        nextStatus = {};
+        nextName = String(name).toLowerCase();
+        var m = offers[KIND_MAP];
+        if (m && m.name === nextName && m.ext === ext) {
+            offers[KIND_NEXT] = m;
+            return;
+        }
+        offer(KIND_NEXT, prepareMap(name, ext));
+        offers[KIND_NEXT].name = nextName;
+        offers[KIND_NEXT].ext = ext;
+    }
+
+    // Of these players (ids), how many are still getting the next level, and
+    // the least far along of them (-1 when none has said). One that hasn't
+    // said anything yet is still getting it, as far as the host knows.
+    function waitingFor(ids) {
+        var count = 0, least = -1;
+        for (var id of ids) {
+            var st = nextStatus[id];
+            if (st && st.s !== STATE_BUSY)
+                continue;
+            count++;
+            if (st && st.p >= 0 && (least < 0 || st.p < least))
+                least = st.p;
+        }
+        return { count: count, least: least };
+    }
+
+    function prepareMap(name, ext) {
+        return async function() {
             var info = { status: 'none', name: name, ext: ext };
             var stream = null;
             try {
@@ -1221,11 +1281,14 @@
                 info = { status: 'error', name: name, ext: ext };
             }
             return { info: info, stream: stream };
-        });
+        };
     }
 
     function unhost() {
         withdraw(KIND_MAP);
+        withdraw(KIND_NEXT);
+        nextStatus = {};
+        nextName = '';
     }
 
     function sendInfo(kind, id, via) {
@@ -1236,7 +1299,13 @@
     }
 
     // Chunks and blocks are asked for by the file's id, whichever kind it is.
-    function offerFor(want) {
+    // kind: the one the joiner asks as, whose frames it takes the answer in,
+    // when that offers it (the playlist's next level is offered as the map
+    // too once the host is in it, host()).
+    function offerFor(want, kind) {
+        var o = offers[kind];
+        if (o && o.stream && sameId(want, o.id))
+            return kind;
         for (var key in offers) {
             if (offers[key].stream && sameId(want, offers[key].id))
                 return Number(key);
@@ -1836,9 +1905,15 @@
             if (h.info)
                 sendInfo(kind, from, via);
             else if (h.waiting.length < 64)
-                h.waiting.push({ id: from, via: via });
+                h.waiting.push({ id: from, via: via, kind: kind });
+        } else if (type === T_STATUS && kind === KIND_NEXT) {
+            var st = null;
+            try { st = JSON.parse(new TextDecoder().decode(new Uint8Array(data, HEADER))); } catch (e) {}
+            if (st && String(st.n).toLowerCase() === nextName && (st.s === STATE_BUSY || st.s === STATE_READY ||
+                                                                  st.s === STATE_FAILED))
+                nextStatus[from] = { s: st.s, p: typeof st.p === 'number' ? st.p : -1 };
         } else if (type === T_CHUNK_REQ && data.byteLength >= HEADER + 20) {
-            var k = offerFor(new Uint8Array(data, HEADER, 8));
+            var k = offerFor(new Uint8Array(data, HEADER, 8), kind);
             if (k === null)
                 return;
             var o = offers[k];
@@ -1850,7 +1925,7 @@
                 return;
             queueChunks(k, o, from, via, size, first, count);
         } else if (type === T_BLOCK_REQ && data.byteLength >= HEADER + 24) {
-            var k = offerFor(new Uint8Array(data, HEADER, 8));
+            var k = offerFor(new Uint8Array(data, HEADER, 8), kind);
             if (k === null)
                 return;
             var o = offers[k];
@@ -1903,6 +1978,51 @@
         startJob(KIND_MAP, { name: name, ext: ext, label: name + '.' + ext }, runJob);
     }
 
+    // The next level of the host's playlist: got as a map is, quietly (the
+    // engine's score screen shows how far along it is), and the host hears
+    // how far along it is.
+    function fetchNext(name, ext) {
+        var old = jobs[KIND_NEXT];
+        if (old && !old.done && old.name === name && old.ext === ext)
+            return;
+        if (old && !old.done)
+            finish(old, 'cancelled');
+        var j = startJob(KIND_NEXT, { name: name, ext: ext, label: name + '.' + ext, quiet: true, progress: -1,
+                                      errorText: '', sentAt: 0 }, runJob);
+        sendStatus(j, true);
+    }
+
+    function sendStatus(j, now) {
+        if (j.kind !== KIND_NEXT)
+            return;
+        var t = Date.now();
+        if (!now && t - j.sentAt < STATUS_MS)
+            return;
+        j.sentAt = t;
+        var s = j.done ? states[KIND_NEXT] : STATE_BUSY;
+        var json = new TextEncoder().encode(JSON.stringify({ n: j.name, s: s, p: s === STATE_READY ? 1 : j.progress }));
+        var f = frame(T_STATUS, 1, json.length, KIND_NEXT);
+        f.bytes.set(json, HEADER);
+        send(1, f, directUp() ? 'direct' : 'relay');
+    }
+
+    // What a job shows the player: the panel, or for the playlist's next level
+    // nothing (the engine shows it), only what it says to the host.
+    function uiOf(j) {
+        if (!j || !j.quiet)
+            return ui;
+        return {
+            show: function() {},
+            progress: function(done, total) {
+                j.progress = total ? done / total : -1;
+                sendStatus(j, false);
+            },
+            error: function(name, text) { j.errorText = text || ''; },
+            notice: function() {},
+            hide: function() {}
+        };
+    }
+
     function fail(reason) {
         var e = new Error(reason);
         e.reason = reason;
@@ -1921,16 +2041,20 @@
         if (!reason) {
             // A restart leaves its notice up, to be read after the restart.
             if (state !== STATE_RESTART)
-                ui.hide();
+                uiOf(j).hide();
             states[j.kind] = state || STATE_READY;
+            sendStatus(j, true);
             return;
         }
         var text = messageFor(reason, j);
         if (text)
-            ui.error(j.label, text, j.kind);
+            uiOf(j).error(j.label, text, j.kind);
         else
-            ui.hide();
+            uiOf(j).hide();
         states[j.kind] = STATE_FAILED;
+        if (j.kind === KIND_NEXT && !j.errorText)
+            j.errorText = text || 'it was cancelled.';
+        sendStatus(j, true);
         console.log('OpenJKDF2: ' + (j.kind === KIND_MOD ? 'mod ' : 'map ') + j.label + ' not installed: ' + reason);
     }
 
@@ -2018,7 +2142,7 @@
 
         var checking = setTimeout(function() {
             if (!j.done)
-                ui.show(j.label, "Checking the host's map...", function() { abort('cancelled'); }, KIND_MAP);
+                uiOf(j).show(j.label, "Checking the host's map...", function() { abort('cancelled'); }, KIND_MAP);
         }, CHECKING_UI_MS);
         j.timers.push(checking);
         var info;
@@ -2060,7 +2184,35 @@
         }
 
         clearTimeout(checking);
-        ui.show(j.label, 'Connecting to the host...', function() { abort('cancelled'); }, KIND_MAP);
+
+        // The playlist's next level, when it's a Level Library level: from
+        // the site, which the host doesn't have to upload it to everyone for.
+        if (j.kind === KIND_NEXT && Module.jkLibrary && Module.jkLibrary.gobFromSite) {
+            var site = null;
+            try {
+                site = await Module.jkLibrary.gobFromSite(game, info.sha256, function(done, total) {
+                    uiOf(j).progress(done, total);
+                });
+            } catch (e) {
+                console.log('OpenJKDF2: the site had no copy of ' + j.label + ' (' + (e && e.message || e) + '), getting it from the host');
+            }
+            check(j);
+            if (site) {
+                try {
+                    install(root, j.name, j.ext, site.bytes);
+                } catch (e) {
+                    throw fail('install');
+                }
+                console.log('OpenJKDF2: installed map ' + j.label + ' from the Level Library (' + site.lib + ')');
+                store.put(game, j.name, j.ext, info.sha256, site.bytes, { lib: site.lib }).catch(function(e) {
+                    console.warn('OpenJKDF2: could not save map ' + j.label + ' for next time: ' + e);
+                });
+                return;
+            }
+            j.progress = -1;
+        }
+
+        uiOf(j).show(j.label, 'Connecting to the host...', function() { abort('cancelled'); }, KIND_MAP);
         await waitForDirect(j);
         var bytes = await receive(j, info, retailSources(root, j.ext), true);
         try {
@@ -2253,7 +2405,7 @@
                 put(b * BLOCK_BYTES, out);
                 done++;
                 bytes += out.length;
-                ui.progress(bytes, total, via, meter(bytes));
+                uiOf(j).progress(bytes, total, via, meter(bytes));
                 if (done === nb) {
                     j.onBlock = null;
                     resolve();
@@ -2326,7 +2478,7 @@
                 j.timers.push(setTimeout(tick, 250));
             }
 
-            ui.progress(0, total, via, 0);
+            uiOf(j).progress(0, total, via, 0);
             pump();
             tick();
         });
@@ -2388,7 +2540,7 @@
                 received++;
                 bytes += len;
                 lastProgress = Date.now();
-                ui.progress(bytes, total, via);
+                uiOf(j).progress(bytes, total, via);
                 if (received === n) {
                     j.onChunk = null;
                     resolve(buf);
@@ -2416,7 +2568,7 @@
                 j.timers.push(setTimeout(tick, 500));
             }
 
-            ui.progress(0, total, via);
+            uiOf(j).progress(0, total, via);
             pump();
             tick();
         });
@@ -2444,9 +2596,9 @@
         if (!isFrame(data))
             return;
         var b = new Uint8Array(data, 12, 3);
-        if (b[1] !== VERSION || (b[2] !== KIND_MAP && b[2] !== KIND_MOD))
+        if (b[1] !== VERSION || (b[2] !== KIND_MAP && b[2] !== KIND_MOD && b[2] !== KIND_NEXT))
             return;
-        if (b[0] === T_INFO_REQ || b[0] === T_CHUNK_REQ || b[0] === T_BLOCK_REQ)
+        if (b[0] === T_INFO_REQ || b[0] === T_CHUNK_REQ || b[0] === T_BLOCK_REQ || b[0] === T_STATUS)
             onHostFrame(from, b[0], data, via, b[2]);
         else
             onJoinerFrame(from, b[0], data, b[2]);
@@ -2469,6 +2621,23 @@
         fetch: fetchMap,
         abort: function(reason) { abort(reason, KIND_MAP); },
         state: function() { return state(KIND_MAP); },
+        // The next level of the host's playlist (src/Main/jkPlaylist.c).
+        next: {
+            host: hostNext,
+            waiting: waitingFor,
+            fetch: fetchNext,
+            state: function() { return state(KIND_NEXT); },
+            // How far along this player is, 0 to 1, or -1 when not known.
+            progress: function() {
+                var j = jobs[KIND_NEXT];
+                return state(KIND_NEXT) === STATE_READY ? 1 : j ? j.progress : -1;
+            },
+            // Why it couldn't be got, for the score screen.
+            error: function() {
+                var j = jobs[KIND_NEXT];
+                return state(KIND_NEXT) === STATE_FAILED && j ? j.errorText : '';
+            }
+        },
         // What mods.js builds on to send the host's mod the same way.
         core: {
             KIND_MOD: KIND_MOD, STATE_BUSY: STATE_BUSY, STATE_READY: STATE_READY,

@@ -19,9 +19,11 @@ extern "C" {
 // a match with. Anything they can is agreed on through the hellos
 // (stdComm_WSRelayHits.c). 1: levels get shared starting places
 // (sithThing_AddSharedStarts), so a player seated past a level's own has a
-// player thing that a build before it doesn't. NETCODE in
+// player thing that a build before it doesn't. 2: the host's playlist names
+// the next level at a level's end (jkDSS_SendEndLevel), which a build before
+// it would ignore, going on to another level than the host. NETCODE in
 // packaging/wasm/index.html has to be the same.
-#define STDCOMM_WSRELAY_NETCODE (1)
+#define STDCOMM_WSRELAY_NETCODE (2)
 
 // What stdComm_Open returns when the lobby turned the join down because the
 // game's host speaks a newer netcode, or an older one.
