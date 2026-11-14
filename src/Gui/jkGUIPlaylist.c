@@ -105,9 +105,9 @@ static jkGuiElement jkGuiPlaylist_aElements[] =
     { ELEMENT_CHECKBOX,   0, 0, u"Loop: start over after the last level", 0, { 320, 284, 310, 22 }, 1, 0, u"Without it the game ends after the last level's score screen.", NULL, jkGuiPlaylist_LoopClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 0, NULL, 0, { 320, 312, 310, 72 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 20, 390, 600, 18 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXTBUTTON, PL_CANCEL, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, u"Back to the Host screen, with the playlist as it was.", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON, PL_CANCEL, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, u"Back to the Host screen without saving.", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Clear", 3, { 220, 430, 200, 40 }, 1, 0, u"Takes every level out.", NULL, jkGuiPlaylist_ClearClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXTBUTTON, PL_USE, 2, u"Use Playlist", 3, { 420, 430, 200, 40 }, 1, 0, u"Saves the playlist in this browser and picks it on the Host screen.", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON, PL_USE, 2, u"Save Playlist", 3, { 420, 430, 200, 40 }, 1, 0, u"Saves the playlist in this browser and picks it on the Host screen.", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_END,        0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 };
 
@@ -593,7 +593,7 @@ static int jkGuiPlaylist_ClearClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, 
     jkGuiPlaylist_work.count = 0;
     memset(jkGuiPlaylist_work.entries, 0, sizeof(jkGuiPlaylist_work.entries));
     jkGuiPlaylist_sel = 0;
-    jkGuiPlaylist_SetMessage(NULL, u"Use Playlist with no levels in it goes back to hosting one episode.");
+    jkGuiPlaylist_SetMessage(NULL, u"Save Playlist with no levels in it takes the playlist off the Host screen.");
     jkGuiPlaylist_Refresh(pMenu);
     return 0;
 }
