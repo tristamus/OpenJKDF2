@@ -925,7 +925,10 @@
             got += r.value.length;
             if (got > MAX_ZIP_BYTES)
                 throw fail('This level is too big for the browser.');
-            progress(total ? got / total : 0, 'Getting ' + l.t + ': ' + size(got) + ' of ' + size(total));
+            if (job.progress)
+                job.progress(got, total);
+            else
+                progress(total ? got / total : 0, 'Getting ' + l.t + ': ' + size(got) + ' of ' + size(total));
         }
         var bytes = new Uint8Array(got), at = 0;
         for (var p of parts) {
@@ -935,6 +938,50 @@
         if (await sha256(bytes) !== l.h)
             throw fail("The download didn't come through whole. Try again.");
         return bytes;
+    }
+
+    // ---- The next level of a host's playlist (maps.js, KIND_NEXT): a GOB the
+    // host offers, by its SHA-256, from the site when a level in the list has
+    // it. Resolves to { bytes, lib } (the level's id), or null when no level
+    // has it; throws when the site has it but it couldn't be got. Nothing is
+    // saved or installed here: maps.js does that, under the host's name for it.
+    async function gobFromSite(game, sha, onProgress) {
+        if (typeof fetch !== 'function' || typeof location === 'undefined' || !/^https?:$/.test(location.protocol) ||
+            !/^[0-9a-f]{64}$/.test(sha))
+            return null;
+        game = game === 'mots' ? 'mots' : 'jk1';
+        var data = await loadIndex(game);
+        var l = null, g = null;
+        for (var level of data.levels) {
+            var found = episodeGobs(level, game).find(function(x) { return x.h === sha; });
+            if (found && level.h) {
+                l = level;
+                g = found;
+                break;
+            }
+        }
+        if (!l)
+            return null;
+        var job = { l: l, game: game, abort: new AbortController(), progress: onProgress || function() {} };
+        var zip = await download(job);
+        var list = zipEntries(zip), from = zip;
+        if (g.in) {
+            var ze = list.find(function(z) { return z.name.toLowerCase() === g.in.toLowerCase(); });
+            if (!ze)
+                throw fail("The zip doesn't have " + g.in + ' in it.');
+            from = await zipData(zip, ze);
+            list = zipEntries(from);
+        }
+        var want = g.n.toLowerCase();
+        var e = list.find(function(z) { return z.name.toLowerCase() === want && z.size === g.b; }) ||
+                list.find(function(z) { return /\.(gob|goo)$/i.test(z.name) && z.size === g.b; });
+        if (!e)
+            throw fail("The zip doesn't have " + g.n + ' in it.');
+        var bytes = await zipData(from, e);
+        if (await sha256(bytes) !== sha)
+            throw fail(g.n + " isn't the one the library lists.");
+        console.log('OpenJKDF2: got ' + g.n + ' of ' + l.id + ' (' + l.t + ') from the Level Library');
+        return { bytes: bytes, lib: l.id };
     }
 
     // ---- The engine's side
@@ -1025,6 +1072,7 @@
                     shot.raf = requestAnimationFrame(shotLayout);
             }
         },
+        gobFromSite: gobFromSite,
         // The episode the library installed, '' if none.
         take: function() {
             var name = L.result;

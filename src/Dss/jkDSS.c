@@ -26,6 +26,7 @@
 
 #ifdef PLATFORM_WSRELAY
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#include "Main/jkPlaylist.h"
 #endif
 
 const char* jkDSS_aKyTeamModels[5] = {
@@ -1127,6 +1128,23 @@ void jkDSS_SendEndLevel()
     NETMSG_START;
 
     NETMSG_PUSHS32(jkEpisode_GetCurrentEpisodeEntry(&jkEpisode_mLoad)->level);
+#ifdef PLATFORM_WSRELAY
+    // Added: the host's playlist names the next level, episode and all, after
+    // the episode's level number (which games from before playlists read and
+    // go by; the lobby keeps those out of the room, STDCOMM_WSRELAY_NETCODE).
+    if ( jkPlaylist_HostPick() )
+    {
+        NETMSG_PUSHU8(1); // its version
+        NETMSG_PUSHU8(jkPlaylist_next.bEnd ? 1 : 0);
+        NETMSG_PUSHU8(jkPlaylist_next.idx);
+        NETMSG_PUSHU8(jkPlaylist_next.count);
+        NETMSG_PUSHU8(jkPlaylist_next.bLoop ? 1 : 0);
+        NETMSG_PUSHU8(0); // the title starts at an even byte
+        NETMSG_PUSHSTR(jkPlaylist_next.gob, JKPLAYLIST_GOB_LEN);
+        NETMSG_PUSHSTR(jkPlaylist_next.jkl, JKPLAYLIST_JKL_LEN);
+        NETMSG_PUSHWSTR(jkPlaylist_next.title, JKPLAYLIST_TITLE_LEN);
+    }
+#endif
     NETMSG_END(DSS_ENDLEVEL);
 
     // lol
@@ -1143,6 +1161,29 @@ int jkDSS_ProcessEndLevel(SithMessage *msg)
 
     NETMSG_IN_START(msg);
     int arg0 = NETMSG_POPS32();
+
+#ifdef PLATFORM_WSRELAY
+    // Added: the next level of the host's playlist (jkDSS_SendEndLevel).
+    // The message comes three times; the first names it.
+    if ( NETMSG_IN_LEFT(msg) >= 6 + JKPLAYLIST_GOB_LEN + JKPLAYLIST_JKL_LEN && NETMSG_POPU8() == 1 && !jkPlaylist_next.bNamed )
+    {
+        jkPlaylistNext next;
+        memset(&next, 0, sizeof(next));
+        next.bEnd = NETMSG_POPU8();
+        next.idx = NETMSG_POPU8();
+        next.count = NETMSG_POPU8();
+        next.bLoop = NETMSG_POPU8();
+        NETMSG_POPU8();
+        NETMSG_POPSTR(next.gob, JKPLAYLIST_GOB_LEN);
+        NETMSG_POPSTR(next.jkl, JKPLAYLIST_JKL_LEN);
+        if ( NETMSG_IN_LEFT(msg) >= (intptr_t)(JKPLAYLIST_TITLE_LEN * sizeof(char16_t)) )
+        {
+            NETMSG_POPWSTR(next.title, JKPLAYLIST_TITLE_LEN);
+        }
+        if ( next.bEnd || (next.gob[0] && next.jkl[0]) )
+            jkPlaylist_Named(&next);
+    }
+#endif
 
     jkEpisode_EndLevel(&jkEpisode_mLoad, arg0);
     sithMulti_QuitGame(sithTime_g_msecGameTime + 10000, 1);

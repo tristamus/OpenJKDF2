@@ -23,6 +23,9 @@
 
 #ifdef PLATFORM_WSRELAY
 #include "Gui/jkGUILibrary.h"
+#include "Gui/jkGUIPlaylist.h"
+#include "Main/jkPlaylist.h"
+#include "Platform/Networking/Imperial/stdComm_Imperial.h"
 #endif
 
 enum jkGuiNetHostButton_t
@@ -33,6 +36,8 @@ enum jkGuiNetHostButton_t
     GUI_ADVANCED = 200,
 #ifdef PLATFORM_WSRELAY
     GUI_LIBRARY = 201, // Added: Level Library... (jkGuiNetHost_OpenLibrary)
+    GUI_PLAYLIST = 202, // Added: Playlist... (jkGuiNetHost_OpenPlaylist)
+    GUI_STAY = 203, // Added: Ok that couldn't host: the screen stays up
 #endif
 };
 
@@ -51,6 +56,7 @@ enum jkGuiNetHostElement_t
     NETHOST_STARS_RIGHT_BUTTON = 15,
     NETHOST_PASSWORD_TEXTBOX = 17,
     NETHOST_EPISODE_LISTBOX = 19,
+    NETHOST_LEVEL_TEXT = 20,
     NETHOST_LEVEL_LISTBOX = 21,
     NETHOST_OK_BUTTON = 23,
     NETHOST_CANCEL_BUTTON = 24,
@@ -74,6 +80,10 @@ enum jkGuiNetHostElement_t
     NETHOST_HWYSHITS_CHECKBOX = NETHOST_JEDIONLY_CHECKBOX + 3,
     // Added: Level Library..., on the Choose Episode line, last in both lists.
     NETHOST_LIBRARY_BUTTON = NETHOST_JEDIONLY_CHECKBOX + 4,
+    // Added: Playlist..., on the Choose Level line, and what Single-level
+    // only's place says while the playlist is picked, after it.
+    NETHOST_PLAYLIST_BUTTON = NETHOST_JEDIONLY_CHECKBOX + 5,
+    NETHOST_PLAYLIST_NOTE = NETHOST_JEDIONLY_CHECKBOX + 6,
 #endif
 };
 
@@ -102,7 +112,11 @@ static int32_t jkGuiNetHost_aIdk[2] = {0xd, 0xe};
 
 #ifdef PLATFORM_WSRELAY
 static int jkGuiNetHost_HitRulesClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, int redraw);
-static void jkGuiNetHost_RightButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw);
+
+// Added: the host's playlist (Main/jkPlaylist.c), the first row of Choose
+// Episode when it has levels. The row's id is this, not an episode.
+static char jkGuiNetHost_playlistRowId[4] = "";
+static int jkGuiNetHost_bPlaylistRow = 0;
 #endif
 
 // MOTS altered
@@ -137,7 +151,9 @@ static jkGuiElement jkGuiNetHost_aElements[] =
 #ifdef PLATFORM_WSRELAY
     // Added: the lists are a row shorter each, for the hit rules under them.
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 175, 320, 66 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSELEVEL", 2, { 310, 246, 260, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: ends before Playlist..., as Choose Episode ends before Level
+    // Library...
+    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSELEVEL", 2, { 310, 246, 145, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_LISTBOX,      1, 0, NULL, 0, { 310, 270, 320, 96 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #else
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 175, 320, 80 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -170,6 +186,11 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     // at 150, its baseline was 4 below "Choose Episode:"'s in the game, and in
     // MotS its "y" cut into the Episode box's top line.
     { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 146, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Playlist..., the same way at the right end of the Choose Level
+    // line (4 higher than its label, as Level Library...), and in Single-level
+    // only's place, what the playlist does instead.
+    { ELEMENT_TEXTBUTTON,   GUI_PLAYLIST, 2, "GUIEXT_PLAYLIST", 3, { 460, 242, 170, 20 }, 1, 0, "GUIEXT_PLAYLIST_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,         0, 0, u"Next level: from the playlist", 2, { 20, 295, 270, 40 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -213,7 +234,8 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
 #ifdef PLATFORM_WSRELAY
     // Added: the lists are a row shorter each, for the hit rules under them.
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 195, 320, 51 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSELEVEL", 2, { 310, 250, 260, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: ends before Playlist..., as in JK's list.
+    { ELEMENT_TEXT,         0, 0, "GUI_CHOOSELEVEL", 2, { 310, 250, 145, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_LISTBOX,      1, 0, NULL, 0, { 310, 272, 320, 96 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #else
     { ELEMENT_LISTBOX,      0, 0, NULL, 0, { 310, 195, 320, 75 }, 1, 0, NULL, NULL, NULL, jkGuiNetHost_aIdk, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -237,6 +259,10 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Added: Level Library..., as in JK's list (4 higher, as there).
     { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 169, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Playlist... and the note in Single-level only's place, as in
+    // JK's list.
+    { ELEMENT_TEXTBUTTON,   GUI_PLAYLIST, 2, "GUIEXT_PLAYLIST", 3, { 460, 246, 170, 20 }, 1, 0, "GUIEXT_PLAYLIST_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,         0, 0, u"Next level: from the playlist", 2, { 20, 285, 270, 40 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -355,8 +381,9 @@ static void jkGuiNetHost_EnumEpisodes();
 // pressed: med0, med1, med2), but with its text right-aligned: it ends where
 // the Episode list's box and the Server Port box end (the right edge of its
 // rect), measured in the font it's drawn in, so it stays put when the mouse is
-// over it.
-static void jkGuiNetHost_RightButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw)
+// over it. The Playlist screen draws its buttons on the right with it too, and
+// its count of levels (a text, which the mouse doesn't light).
+void jkGuiNetHost_RightButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw)
 {
     int32_t font = pElement->textType;
     rdRect rect = pElement->rect;
@@ -393,7 +420,8 @@ static void jkGuiNetHost_OpenLibrary()
     for (int i = 0; i < (int)jkGuiNetHost_dArray1.total; i++)
     {
         jkGuiStringEntry* pEntry = jkGuiRend_GetStringEntry(&jkGuiNetHost_dArray1, i);
-        if (pEntry && pEntry->str && pEntry->c_str && !__strnicmp(pEntry->c_str, name, 0x20u))
+        if (pEntry && pEntry->str && pEntry->c_str && pEntry->c_str != jkGuiNetHost_playlistRowId &&
+            !__strnicmp(pEntry->c_str, name, 0x20u))
         {
             pList->selectedTextEntry = i;
             break;
@@ -600,9 +628,8 @@ static void jkGuiNetHost_SetRankVisible(int bVisible)
     jkGuiNetHost_aElementsMots[NETHOST_STARS_RIGHT_BUTTON].bIsVisible = bVisible;
 }
 
-// Added: the episodes the Host screen lists, into Choose Episode. It was
-// written out where the screen opens and after Advanced.
-static void jkGuiNetHost_EnumEpisodes()
+// Added: the kinds of episode the Host screen lists.
+static jkEpisodeTypeFlags_t jkGuiNetHost_EpisodeMask()
 {
     jkEpisodeTypeFlags_t loadMask = (JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF);
     if (Main_bMotsCompat)
@@ -611,8 +638,173 @@ static void jkGuiNetHost_EnumEpisodes()
     if (jkGuiNetHost_bIsCoop)
         loadMask |= JK_EPISODE_SINGLEPLAYER;
 #endif
+    return loadMask;
+}
+
+#ifdef PLATFORM_WSRELAY
+// Games on the Imperial Network Protocol have desktop players, whose games
+// work the next level out by themselves.
+static int jkGuiNetHost_PlaylistAllowed()
+{
+    return !stdComm_Imperial_bActive;
+}
+
+static int jkGuiNetHost_IsPlaylistRow(jkGuiElement* pList)
+{
+    return jkGuiNetHost_bPlaylistRow && pList->unistr && pList->selectedTextEntry == 0 &&
+           pList->unistr[0].c_str == jkGuiNetHost_playlistRowId;
+}
+#endif
+
+// Added: the episodes the Host screen lists, into Choose Episode. It was
+// written out where the screen opens and after Advanced.
+static void jkGuiNetHost_EnumEpisodes()
+{
+    jkEpisodeTypeFlags_t loadMask = jkGuiNetHost_EpisodeMask();
+#ifdef PLATFORM_WSRELAY
+    // Added: the playlist first, then the episodes as
+    // jkGuiSingleplayer_EnumEpisodes lists them.
+    jkGuiNetHost_bPlaylistRow = jkGuiNetHost_PlaylistAllowed() && jkPlaylist_list.count > 0;
+    if (jkGuiNetHost_bPlaylistRow)
+    {
+        char16_t row[96];
+        const char16_t* pLevels = jkPlaylist_list.count == 1 ? u"level" : u"levels";
+        const char16_t* pLoops = jkPlaylist_list.bLoop ? u", loops" : u"";
+
+        if (jkPlaylist_list.name[0])
+            jk_snwprintf(row, 96, u"Playlist: %s (%d %s%s)", jkPlaylist_list.name, jkPlaylist_list.count, pLevels, pLoops);
+        else
+            jk_snwprintf(row, 96, u"Playlist (%d %s%s)", jkPlaylist_list.count, pLevels, pLoops);
+
+        jkEpisode_LoadVerify();
+        jkGuiRend_DarrayFreeEntry(&jkGuiNetHost_dArray1);
+        jkGuiRend_DarrayReallocStr(&jkGuiNetHost_dArray1, row, (intptr_t)jkGuiNetHost_playlistRowId);
+        for (int i = 0; i < jkEpisode_var2; i++)
+        {
+            if (jkEpisode_aEpisodes[i].type & loadMask)
+                jkGuiRend_DarrayReallocStr(&jkGuiNetHost_dArray1, jkEpisode_aEpisodes[i].unistr, (intptr_t)&jkEpisode_aEpisodes[i]);
+        }
+        jkGuiRend_DarrayReallocStr(&jkGuiNetHost_dArray1, 0, (intptr_t)0);
+        jkGuiRend_SetClickableString(&jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], &jkGuiNetHost_dArray1);
+        return;
+    }
+#endif
     jkGuiSingleplayer_EnumEpisodes(&jkGuiNetHost_dArray1, &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], 0, loadMask);
 }
+
+#ifdef PLATFORM_WSRELAY
+// Added: with the playlist's row picked, Choose Level is "Start with:" and
+// lists the playlist's levels, and Single-level only's place says the
+// playlist picks the next level. Returns whether the row is picked.
+static int jkGuiNetHost_ShowPlaylistPicked(jkGuiElement* pList, jkGuiMenu* pMenu, int bMouse)
+{
+    jkGuiElement* el = jkGuiNetHost_pElements;
+    int bPicked = jkGuiNetHost_IsPlaylistRow(pList);
+    int bWas = el[NETHOST_PLAYLIST_NOTE].bIsVisible;
+
+    el[NETHOST_LEVEL_TEXT].wstr = bPicked ? u"Start with:" : jkStrings_GetUniStringWithFallback("GUI_CHOOSELEVEL");
+    el[NETHOST_SINGLELEVEL_CHECKBOX].bIsVisible = !bPicked;
+    el[NETHOST_PLAYLIST_NOTE].bIsVisible = bPicked;
+    pList->wHintText = bPicked ? u"Single-level only is off while the playlist is picked. Pick any other episode to go back." : NULL;
+    // A checkbox that went away gives the focus to the list.
+    if (pMenu && pMenu->focusedElement && !pMenu->focusedElement->bIsVisible)
+        pMenu->focusedElement = pList;
+
+    if (!bPicked)
+    {
+        if (bWas && bMouse && pMenu)
+            jkGuiRend_Paint(pMenu);
+        return 0;
+    }
+
+    // The playlist's levels, to start with any of them. The level list's
+    // other entries keep their files in their ids (jkGuiSingleplayer_sub_41AA30).
+    for (int i = 0; i < (int)jkGuiNetHost_dArray2.total; i++)
+    {
+        jkGuiStringEntry* pEntry = jkGuiRend_GetStringEntry(&jkGuiNetHost_dArray2, i);
+        if (pEntry && pEntry->id)
+        {
+            JK_FREE((void*)pEntry->id);
+            pEntry->id = 0;
+        }
+    }
+    jkGuiRend_DarrayFreeEntry(&jkGuiNetHost_dArray2);
+    for (int i = 0; i < jkPlaylist_list.count; i++)
+    {
+        char16_t row[JKPLAYLIST_TITLE_LEN + 16];
+        jk_snwprintf(row, sizeof(row) / sizeof(char16_t), u"%d. %s", i + 1, jkPlaylist_list.entries[i].title);
+        jkGuiRend_DarrayReallocStr(&jkGuiNetHost_dArray2, row, 0);
+    }
+    jkGuiRend_DarrayReallocStr(&jkGuiNetHost_dArray2, 0, 0);
+    jkGuiRend_SetClickableString(&el[NETHOST_LEVEL_LISTBOX], &jkGuiNetHost_dArray2);
+    el[NETHOST_LEVEL_LISTBOX].selectedTextEntry = 0;
+    el[NETHOST_LEVEL_LISTBOX].texInfo.textScrollY = 0;
+
+    // A playlist has levels of one kind: its first level's says what this game is.
+    int type = jkPlaylist_list.entries[0].type;
+#ifdef QOL_IMPROVEMENTS
+    jkGuiNetHost_bIsEpisodeCoop = !!(type & JK_EPISODE_SINGLEPLAYER);
+#endif
+    if (Main_bMotsCompat)
+    {
+        if (type & JKM_EPISODE_SABER)
+        {
+            jkGuiNetHost_aElementsMots[NETHOST_PERSONALITIES_CHECKBOX].bIsVisible = 0;
+            jkGuiNetHost_aElementsMots[NETHOST_JEDIONLY_CHECKBOX].selectedTextEntry = 1;
+            jkGuiNetHost_aElementsMots[NETHOST_PERSONALITIES_CHECKBOX].selectedTextEntry = 0;
+            jkGuiNetHost_SetRankVisible(1);
+        }
+        else
+        {
+            jkGuiNetHost_aElementsMots[NETHOST_PERSONALITIES_CHECKBOX].bIsVisible = 1;
+        }
+    }
+    if (bMouse && pMenu)
+        jkGuiRend_Paint(pMenu);
+    return 1;
+}
+
+// Added: Playlist...: the Playlist screen, then Choose Episode again, with
+// the playlist picked after Use Playlist, or what was picked before.
+static void jkGuiNetHost_OpenPlaylist()
+{
+    jkGuiElement* pList = &jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX];
+    char name[32];
+    int bWasPlaylist = jkGuiNetHost_IsPlaylistRow(pList);
+
+    name[0] = 0;
+    if (!bWasPlaylist && pList->unistr && pList->selectedTextEntry >= 0 &&
+        pList->selectedTextEntry < (int)jkGuiNetHost_dArray1.total && pList->unistr[pList->selectedTextEntry].c_str)
+        stdString_SafeStrCopy(name, pList->unistr[pList->selectedTextEntry].c_str, sizeof(name));
+
+    int bUsed = jkGuiPlaylist_Show(Main_bMotsCompat, jkGuiNetHost_EpisodeMask());
+
+    // The Playlist screen loaded other episodes, and may have saved levels
+    // from the Level Library: the episodes again, and the picked one's levels.
+    jkGuiNetHost_EnumEpisodes();
+    pList->selectedTextEntry = jkGuiNetHost_bPlaylistRow ? 1 : 0;
+    if (jkGuiNetHost_bPlaylistRow && (bUsed || bWasPlaylist))
+    {
+        pList->selectedTextEntry = 0;
+    }
+    else if (name[0])
+    {
+        for (int i = 0; i < (int)jkGuiNetHost_dArray1.total; i++)
+        {
+            jkGuiStringEntry* pEntry = jkGuiRend_GetStringEntry(&jkGuiNetHost_dArray1, i);
+            if (pEntry && pEntry->str && pEntry->c_str && pEntry->c_str != jkGuiNetHost_playlistRowId &&
+                !__strnicmp(pEntry->c_str, name, 0x20u))
+            {
+                pList->selectedTextEntry = i;
+                break;
+            }
+        }
+    }
+    pList->texInfo.textScrollY = 0;
+    jkGuiNetHost_pElements[NETHOST_LEVEL_LISTBOX].selectedTextEntry = 0;
+    jkGuiNetHost_sub_4119D0(pList, jkGuiNetHost_pMenu, -1, -1, 0);
+}
+#endif
 
 // MOTS altered
 int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
@@ -636,6 +828,9 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
     char16_t v30[32]; // [esp+140h] [ebp-40h] BYREF
 
     jkGuiNetHost_LoadSettings(); // Added
+#ifdef PLATFORM_WSRELAY
+    jkPlaylist_Load(Main_bMotsCompat); // Added: the playlist kept in this browser
+#endif
 
     // MOTS added
     if (Main_bMotsCompat) {
@@ -706,9 +901,18 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
     jkGuiRend_MenuSetEscapeKeyShortcutElement(jkGuiNetHost_pMenu, &jkGuiNetHost_pElements[NETHOST_CANCEL_BUTTON]);
     
     jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX].selectedTextEntry = 0;
+#ifdef PLATFORM_WSRELAY
+    // Added: the playlist is picked when it was hosted last, else the first
+    // episode under it.
+    if (jkGuiNetHost_bPlaylistRow && !wuRegistry_GetBool("serverPlaylist", 0))
+        jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX].selectedTextEntry = 1;
+    jkGuiNetHost_pElements[NETHOST_PLAYLIST_NOTE].bIsVisible = 0;
+    jkGuiNetHost_pElements[NETHOST_SINGLELEVEL_CHECKBOX].bIsVisible = 1;
+#endif
     jkGuiNetHost_sub_4119D0(&jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX], jkGuiNetHost_pMenu, -1, -1, 0);
 #ifdef PLATFORM_WSRELAY
     jkGuiNetHost_pElements[NETHOST_LIBRARY_BUTTON].bIsVisible = jkGuiLibrary_IsAvailable();
+    jkGuiNetHost_pElements[NETHOST_PLAYLIST_BUTTON].bIsVisible = jkGuiNetHost_PlaylistAllowed();
 #endif
 
     do
@@ -716,13 +920,46 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
         v4 = jkGuiRend_DisplayAndReturnClicked(jkGuiNetHost_pMenu);
         if ( v4 == GUI_OK )
         {
+#ifdef PLATFORM_WSRELAY
+            // Added: with the playlist picked, the game starts with the level
+            // picked under Start with:, from its own episode.
+            int bPlaylist = jkGuiNetHost_IsPlaylistRow(&jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX]);
+            int playlistStart = jkGuiNetHost_pElements[NETHOST_LEVEL_LISTBOX].selectedTextEntry;
+            if (bPlaylist)
+            {
+                if (playlistStart < 0 || playlistStart >= jkPlaylist_list.count)
+                    playlistStart = 0;
+                jkPlaylistEntry* pStart = &jkPlaylist_list.entries[playlistStart];
+                if (!jkGuiSingleplayer_FUN_0041d590(pStart->gob))
+                {
+                    char16_t text[256];
+                    jk_snwprintf(text, 256, u"%s is in %S, which isn't in your game any more. Edit the playlist, or start with another level.",
+                                 pStart->title, pStart->gob);
+                    jkGuiDialog_ErrorDialog(jkStrings_GetUniStringWithFallback("GUINET_HOSTERROR"), text);
+                    v4 = GUI_STAY;
+                    continue;
+                }
+            }
+#endif
             pMultiEntry->multiModeFlags = 0;
             stdString_SafeWStrCopy(pMultiEntry->serverName, jkGuiNetHost_gameName, 0x20);
             for ( i = __wcschr(pMultiEntry->serverName, ':'); i; i = __wcschr(pMultiEntry->serverName, ':') )
                 *i = '-';
             
+#ifdef PLATFORM_WSRELAY
+            if (bPlaylist)
+            {
+                stdString_SafeStrCopy(pMultiEntry->episodeGobName, jkPlaylist_list.entries[playlistStart].gob, 0x20);
+                stdString_SafeStrCopy(pMultiEntry->mapJklFname, jkPlaylist_list.entries[playlistStart].jkl, 0x80);
+                // As picking an episode leaves it (jkGuiNetHost_sub_4119D0).
+                jkRes_LoadGob(pMultiEntry->episodeGobName);
+            }
+            else
+#endif
+            {
             stdString_SafeStrCopy(pMultiEntry->episodeGobName, jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX].unistr[jkGuiNetHost_pElements[NETHOST_EPISODE_LISTBOX].selectedTextEntry].c_str, 0x20);
             stdString_SafeStrCopy(pMultiEntry->mapJklFname, jkGuiNetHost_pElements[NETHOST_LEVEL_LISTBOX].unistr[jkGuiNetHost_pElements[NETHOST_LEVEL_LISTBOX].selectedTextEntry].c_str + sizeof(int), 0x80); // Added: +sizeof(int)
+            }
             
             v10 = wstr_to_int_clamped(v25, 1, 32);
 
@@ -807,6 +1044,14 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
             pMultiEntry->multiModeFlags = jkGuiNetHost_gameFlags;
             pMultiEntry->sessionFlags = jkGuiNetHost_sessionFlags;
 #endif
+#ifdef PLATFORM_WSRELAY
+            // Added: a playlist goes on to its next level whatever Single-level
+            // only says (its tick is kept for next time).
+            if (bPlaylist)
+                pMultiEntry->multiModeFlags &= ~MULTIMODEFLAG_SINGLE_LEVEL;
+            jkPlaylist_SetHosting(bPlaylist, playlistStart);
+            wuRegistry_SaveBool("serverPlaylist", bPlaylist);
+#endif
         }
         else if ( v4 == GUI_ADVANCED )
         {
@@ -847,8 +1092,12 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
         {
             jkGuiNetHost_OpenLibrary();
         }
+        else if ( v4 == GUI_PLAYLIST )
+        {
+            jkGuiNetHost_OpenPlaylist();
+        }
     }
-    while ( v4 == GUI_ADVANCED || v4 == GUI_LIBRARY );
+    while ( v4 == GUI_ADVANCED || v4 == GUI_LIBRARY || v4 == GUI_PLAYLIST || v4 == GUI_STAY );
 #else
     }
     while ( v4 == GUI_ADVANCED );
@@ -898,6 +1147,12 @@ int jkGuiNetHost_sub_4119D0(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mo
 {
     if ( mouseX != -1 || mouseY != -1 )
         jkGuiRend_ClickSound(pElement, pMenu, mouseX, mouseY, redraw);
+
+#ifdef PLATFORM_WSRELAY
+    // Added: the playlist's row lists the playlist's levels.
+    if ( jkGuiNetHost_ShowPlaylistPicked(pElement, pMenu, mouseX != -1 || mouseY != -1) )
+        return 0;
+#endif
 
     jkRes_LoadGob(pElement->unistr[pElement->selectedTextEntry].c_str);
 

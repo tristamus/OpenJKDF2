@@ -148,6 +148,7 @@
 #include "General/stdFnames.h"
 #include "General/stdStrTable.h"
 #include "Main/jkStrings.h"
+#include "Main/jkRes.h"
 
 #include <emscripten.h>
 #include <math.h>
@@ -3233,6 +3234,16 @@ void DirectPlay_SetSessionDesc(const char* a1, DWORD maxPlayers)
     }
 
     _strncpy(wsrelay_storedEntry.mapJklFname, jkMain_aLevelJklFname, 0x20);
+    // Added: the host's playlist can go on to a level in another episode. The
+    // room says which (the lobby's list, players joining now, the match
+    // record), and that one goes to joiners who don't have it.
+    if (wsrelay_bHosting && jkRes_episodeGobName[0] &&
+        __strnicmp(wsrelay_storedEntry.episodeGobName, jkRes_episodeGobName, sizeof(wsrelay_storedEntry.episodeGobName)))
+    {
+        stdPlatform_Printf("OpenJKDF2: the room's episode is %s now\n", jkRes_episodeGobName);
+        stdString_SafeStrCopy(wsrelay_storedEntry.episodeGobName, jkRes_episodeGobName, sizeof(wsrelay_storedEntry.episodeGobName));
+        wsrelay_js_map_host(wsrelay_storedEntry.episodeGobName, JKRES_GOB_EXT);
+    }
     // Added: jkMain passes the smaller of the host's limit and the level's
     // player starts, which is what JK.EXE's DirectPlay session showed and held
     // joins to. The lobby used to get the host's own number, so a 16-start map

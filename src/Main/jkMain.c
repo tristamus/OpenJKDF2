@@ -47,6 +47,9 @@
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h" // Added: the match record
 static void jkMain_FollowHostMap(void); // Added: a dedicated server's next level
 static char jkMain_aMissingMap[128];  // Added: the server went on to a level we don't have
+#include "Main/jkPlaylist.h" // Added: the host's playlist
+static int jkMain_FollowPlaylist(void); // Added: the next level of the host's playlist
+static char16_t jkMain_wPlaylistError[256]; // Added: why this game can't go on to it
 #endif
 #include "Win95/stdDisplay.h"
 #include "Win95/Window.h"
@@ -630,8 +633,10 @@ void jkMain_GameplayShow(int a1, int a2)
         else
         {
 #if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
-            if ( jkSmack_gameMode == 2 )
-                jkMain_FollowHostMap(); // Added: a dedicated server's next level
+            // Added: the next level of the host's playlist, or a dedicated
+            // server's next level
+            if ( jkSmack_gameMode == 2 && !jkMain_FollowPlaylist() )
+                jkMain_FollowHostMap();
 #endif
             jkGui_copies_string(jkMain_aLevelJklFname);
             jkGuiTitle_ShowLoading(jkMain_aLevelJklFname, 0);
@@ -659,6 +664,12 @@ void jkMain_GameplayShow(int a1, int a2)
 #ifdef JKM_DSS
             jkPlayer_SetAmmoMaximums(jkPlayer_personality);
 #endif
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+            // Added: not the level by that name in the episode we still have
+            if ( jkMain_wPlaylistError[0] )
+                v3 = 0;
+            else
+#endif
             v3 = sithOpenMulti(jkMain_aLevelJklFname);
         }
 
@@ -680,8 +691,16 @@ void jkMain_GameplayShow(int a1, int a2)
             v6 = jkStrings_GetUniStringWithFallback("ERR_CANNOT_LOAD_LEVEL");
             v4 = jkStrings_GetUniStringWithFallback("ERROR");
 #if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+            // Added: the host's playlist went on to a level this game couldn't get
+            if ( jkMain_wPlaylistError[0] )
+            {
+                static char16_t wMsg[256];
+                stdString_SafeWStrCopy(wMsg, jkMain_wPlaylistError, 256);
+                v6 = wMsg;
+                jkMain_wPlaylistError[0] = 0;
+            }
             // Added: the dedicated server went on to a level we don't have
-            if ( jkMain_aMissingMap[0] )
+            else if ( jkMain_aMissingMap[0] )
             {
                 static char16_t wMsg[256];
                 char aMsg[256];
@@ -1100,6 +1119,9 @@ int jkMain_loadFile2(char *pGobPath, char *pEpisodeName)
     _strncpy(jkMain_aLevelJklFname, pEpisodeName, 0x7Fu);
     jkMain_aLevelJklFname[127] = 0;
     jkSmack_gameMode = 2;
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+    jkPlaylist_GameStarted(); // Added: nothing named by an earlier game's host
+#endif
     jkRes_LoadGob(pGobPath);
     if ( jkEpisode_mLoad.paEntries )
     {
@@ -1275,6 +1297,51 @@ static int jkMain_HostNamedNextMap(void)
     return sithNet_isMulti && !sithNet_isServer && jkMain_IsDedicatedHost()
         && stdComm_Imperial_GetSessionNextMap(aGob, sizeof(aGob), aJkl, sizeof(aJkl));
 }
+
+// Added: about to load the next level: the one the host's playlist named as
+// the last one ended (jkDSS_SendEndLevel), in its episode, on every game.
+// 0 if none was named. A joiner that couldn't get its GOB gets
+// jkMain_wPlaylistError and doesn't load anything.
+static int jkMain_FollowPlaylist(void)
+{
+    char aGob[JKPLAYLIST_GOB_LEN], aJkl[JKPLAYLIST_JKL_LEN];
+    char16_t wTitle[JKPLAYLIST_TITLE_LEN];
+    char16_t wName[JKPLAYLIST_GOB_LEN + JKPLAYLIST_JKL_LEN + 4];
+    char aName[JKPLAYLIST_GOB_LEN + JKPLAYLIST_JKL_LEN + 4];
+
+    jkMain_wPlaylistError[0] = 0;
+    if ( !sithNet_isMulti || !jkPlaylist_next.bNamed || jkPlaylist_next.bEnd )
+        return 0;
+    stdString_SafeStrCopy(aGob, jkPlaylist_next.gob, sizeof(aGob));
+    stdString_SafeStrCopy(aJkl, jkPlaylist_next.jkl, sizeof(aJkl));
+    stdString_SafeWStrCopy(wTitle, jkPlaylist_next.title, JKPLAYLIST_TITLE_LEN);
+    const char16_t* pFailed = jkPlaylist_FailedText();
+    jkPlaylist_LevelStarted();
+
+    stdString_snprintf(aName, sizeof(aName), "%s (%s)", aJkl, aGob);
+    stdString_CharToWchar(wName, aName, sizeof(aName) - 1);
+    wName[sizeof(aName) - 1] = 0;
+    if ( !wTitle[0] )
+        stdString_SafeWStrCopy(wTitle, wName, JKPLAYLIST_TITLE_LEN);
+    stdPlatform_Printf("OpenJKDF2: the playlist goes on to %s\n", aName);
+
+    if ( pFailed && pFailed[0] )
+    {
+        jk_snwprintf(jkMain_wPlaylistError, 256, u"The host went on to %s, which this game couldn't get: %s", wTitle, pFailed);
+        return 1;
+    }
+    if ( !jkMain_SwitchEpisode(aGob, aJkl) || !jkMain_LevelExists(aJkl) )
+    {
+        stdPlatform_Printf("OpenJKDF2: no %s here\n", aName);
+        if ( sithNet_isServer )
+            jk_snwprintf(jkMain_wPlaylistError, 256, u"The playlist's next level, %s, isn't in your game any more: %s", wTitle, wName);
+        else
+            jk_snwprintf(jkMain_wPlaylistError, 256, u"The host went on to %s, which isn't in this game: %s", wTitle, wName);
+        return 1;
+    }
+    stdString_SafeStrCopy(jkMain_aLevelJklFname, aJkl, sizeof(jkMain_aLevelJklFname));
+    return 1;
+}
 #endif
 
 int jkMain_StartNextLevelInEpisode(int a1, int bIsAPath)
@@ -1293,6 +1360,24 @@ int jkMain_StartNextLevelInEpisode(int a1, int bIsAPath)
         if ( jkGuiRend_menuNestDepth )
             jkGuiRend_bStateChangePending = 1;
         jkSmack_stopTick = 1;
+        jkSmack_nextGuiState = JK_GAMEMODE_GAMEPLAY;
+        return 1;
+    }
+
+    // Added: the host's playlist named the next level (jkMain_FollowPlaylist
+    // loads it), or said it's over, whatever the episode's own order and
+    // Single-level only say.
+    if ( sithNet_isMulti && jkPlaylist_next.bNamed )
+    {
+        if ( jkGuiRend_menuNestDepth )
+            jkGuiRend_bStateChangePending = 1;
+        jkSmack_stopTick = 1;
+        if ( jkPlaylist_next.bEnd )
+        {
+            jkSmack_nextGuiState = JK_GAMEMODE_MAIN;
+            return 0;
+        }
+        jkSmack_gameMode = 2;
         jkSmack_nextGuiState = JK_GAMEMODE_GAMEPLAY;
         return 1;
     }

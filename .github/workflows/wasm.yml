@@ -79,6 +79,14 @@ jobs:
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           sh packaging/wasm/test/library-menu-test.sh build_emcc
+      # Level playlists (src/Main/jkPlaylist.c) and the Playlist screen
+      # (src/Gui/jkGUIPlaylist.c), the same way: what's kept in the browser,
+      # which level comes next, what the score screen says and how long it
+      # waits, and the screen's buttons.
+      - name: Test level playlists
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          sh packaging/wasm/test/playlist-test.sh build_emcc
       # unzip.js, the zip methods the browser can't unpack: zips made by
       # PKZIP, 7-Zip, xz, zstd and others (packaging/wasm/test/fixtures).
       - name: Test unzipping
