@@ -456,6 +456,44 @@ void jkGuiRend_UpdateAndDrawClickable(jkGuiElement *clickable, jkGuiMenu *menu, 
     drawElement(clickable, menu);
 }
 
+// The height of a text wrapped in a box, as stdFont_Draw3 wraps it, for a
+// made-up font of 9 pixels a letter and 14 a line: 34 letters to a line in
+// the info box (310 wide), and 5 lines in its 72. The game's small font fits
+// about 36 to a line there.
+#define FONT_LETTER 9
+#define FONT_LINE 14
+static int textMeasures = 0;
+static int textLines(const char16_t* s, int width)
+{
+    int perLine = width / FONT_LETTER, lines = 0, col = 0;
+    while (s && *s)
+    {
+        while (*s == ' ')
+            s++;
+        int w = 0;
+        while (s[w] && s[w] != ' ')
+            w++;
+        if (!w)
+            break;
+        if (!lines || col + 1 + w > perLine)
+        {
+            lines++;
+            col = w;
+        }
+        else
+            col += 1 + w;
+        s += w;
+    }
+    return lines ? lines : 1;
+}
+
+int stdFont_sub_4357C0(stdFont *a1, const char16_t *a2, rdRect *a4)
+{
+    CHECK(a1 && a1 == jkGui_stdFonts[0], "measured with the box's font");
+    textMeasures++;
+    return textLines(a2, a4->width) * FONT_LINE;
+}
+
 void jkGuiRend_SetVisibleAndDraw(jkGuiElement *clickable, jkGuiMenu *menu, int32_t bVisible)
 {
     clickable->bIsVisible = bVisible;
@@ -468,6 +506,10 @@ void jkGuiRend_Paint(jkGuiMenu *menu)
     paints++;
     for (jkGuiElement* el = menu->paElements; el->type != ELEMENT_END; el++)
         drawElement(el, menu);
+    // The info text: never past its box's last line.
+    jkGuiElement* pInfo = &menu->paElements[E_INFO];
+    CHECK(textLines(pInfo->wstr, pInfo->rect.width) * FONT_LINE <= pInfo->rect.height, "the info fits its box: %s",
+          show(pInfo->wstr));
 }
 
 void jkGuiNetHost_RightButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw)
@@ -1069,6 +1111,58 @@ static void scriptMots(jkGuiMenu* menu, jkGuiElement* el, int frame)
     }
 }
 
+// Long names: the info text drops what doesn't fit its box, down to the
+// level's title and the playlist's kind.
+#define LONG_GOB "dm_the_longest_gob_name_allowed"
+#define LONG_EPISODE "The Very Long Episode Name Here"
+#define LONG_LEVEL "The Grand Imperial Palace Of The Outer Rim Ways"
+static void scriptLongNames(jkGuiMenu* menu, jkGuiElement* el, int frame)
+{
+    if (frame != 0)
+        return;
+    jkGuiElement* pInfo = &el[E_INFO];
+    CHECK(wcontains(pInfo->wstr, "Pick an episode and one of its levels on the left"), "the empty playlist's info: %s",
+          show(pInfo->wstr));
+
+    // An episode named as its one level: the name once, not "X, from X".
+    pickEpisode(menu, el, "The Ancient Oasis Dome PC");
+    int measures = textMeasures;
+    click(menu, &el[E_ADD], 0);
+    CHECK(textMeasures > measures, "measured");
+    CHECK(wcontains(pInfo->wstr, "The Ancient Oasis Dome PC (AODpc.gob). Players who don't have it get it when"),
+          "the level, its GOB and where players get it: %s", show(pInfo->wstr));
+    CHECK(!wcontains(pInfo->wstr, ", from"), "the name only once: %s", show(pInfo->wstr));
+    CHECK(wcontains(pInfo->wstr, "A deathmatch playlist."), "its kind: %s", show(pInfo->wstr));
+    CHECK(textLines(pInfo->wstr, pInfo->rect.width) * FONT_LINE <= pInfo->rect.height, "fits: %s", show(pInfo->wstr));
+
+    // The longest names there can be: still the level and the kind.
+    pickEpisode(menu, el, LONG_EPISODE);
+    click(menu, &el[E_ADD], 0);
+    CHECK(wis(row(&el[E_LIST], 1), "2. " LONG_LEVEL), "added: %s", show(row(&el[E_LIST], 1)));
+    CHECK(wcontains(pInfo->wstr, LONG_LEVEL) && wcontains(pInfo->wstr, "A deathmatch playlist."), "the level and the kind: %s",
+          show(pInfo->wstr));
+    CHECK(textLines(pInfo->wstr, pInfo->rect.width) * FONT_LINE <= pInfo->rect.height, "fits: %s", show(pInfo->wstr));
+
+    // The same for a level that comes with the game, and one that's gone.
+    pickEpisode(menu, el, "Jedi Training");
+    pickLevel(menu, el, "Execution Platform", 0);
+    click(menu, &el[E_ADD], 0);
+    CHECK(wcontains(pInfo->wstr, "Execution Platform, from Jedi Training. Everyone has it: it comes with the game. "
+                                 "A deathmatch playlist."), "a short one's whole text: %s", show(pInfo->wstr));
+    for (int i = 0; i < (int)jkEpisode_var2; i++)
+    {
+        if (!strcmp(jkEpisode_aEpisodes[i].name, LONG_GOB))
+            strcpy(jkEpisode_aEpisodes[i].name, "gone_too");
+    }
+    pickRow(menu, &el[E_LIST], 1, 0);
+    CHECK(wcontains(pInfo->wstr, LONG_LEVEL " isn't in your game any more"), "gone: %s", show(pInfo->wstr));
+    CHECK(textLines(pInfo->wstr, pInfo->rect.width) * FONT_LINE <= pInfo->rect.height, "fits: %s", show(pInfo->wstr));
+
+    pickRow(menu, &el[E_LIST], 0, 0);
+    CHECK(wcontains(pInfo->wstr, "The Ancient Oasis Dome PC (AODpc.gob)"), "picked again: %s", show(pInfo->wstr));
+    click(menu, &el[E_CANCEL], 0);
+}
+
 static void testScreen(void)
 {
     const int mask = JK_EPISODE_DEATHMATCH | JK_EPISODE_4_UNK | JK_EPISODE_SPECIAL_CTF;
@@ -1140,6 +1234,16 @@ static void testScreen(void)
     CHECK(js("JSON.parse(localStorage.getItem('jkdf2mp-playlist-mots')).items.length") == 2, "saved as MotS's");
     CHECK(js("JSON.parse(localStorage.getItem('jkdf2mp-playlist-jk1') || 'null') === null ? 1 : 0"), "not as JK's");
     Main_bMotsCompat = 0;
+
+    fixtures[numFixtures++] = (Fixture){ "AODpc", u"The Ancient Oasis Dome PC", JK_EPISODE_DEATHMATCH, 1, { "aodpc.jkl" },
+                                         { u"The Ancient Oasis Dome PC" } };
+    fixtures[numFixtures++] = (Fixture){ LONG_GOB, u"" LONG_EPISODE, JK_EPISODE_DEATHMATCH, 1, { "long.jkl" }, { u"" LONG_LEVEL } };
+    setEpisodes();
+    js("localStorage.clear(), 0");
+    jkPlaylist_Load(0);
+    script = scriptLongNames;
+    r = jkGuiPlaylist_Show(0, mask);
+    CHECK(r == 0, "Cancel after the long names");
     CHECK(allocs == before, "all freed (%d left)", allocs - before);
     CHECK(!focusRunaway, "never drew with the focus on a hidden element");
 }

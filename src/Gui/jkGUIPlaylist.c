@@ -277,6 +277,29 @@ static int jkGuiPlaylist_PickEpisode(const char* pGob)
 
 // ---- The right half: the playlist
 
+// Whether the info text fits its box, wrapped as stdFont_Draw3 wraps it: the
+// box holds 5 lines, and what's past them isn't drawn. Long level and episode
+// names (The Ancient Oasis Dome PC, from The Ancient Oasis Dome PC) pushed
+// the end of the longest wording out of it.
+static int jkGuiPlaylist_InfoFits(void)
+{
+    jkGuiElement* pElement = &jkGuiPlaylist_aElements[PL_INFO];
+    stdFont* pFont = jkGuiPlaylist_menu.fonts ? jkGuiPlaylist_menu.fonts[pElement->textType] : NULL;
+    if (!pFont)
+        return 1;
+    return stdFont_sub_4357C0(pFont, jkGuiPlaylist_info, &pElement->rect) <= pElement->rect.height;
+}
+
+static int jkGuiPlaylist_SameTitle(const char16_t* a, const char16_t* b)
+{
+    for (; *a && *a == *b; a++, b++)
+        ;
+    return *a == *b;
+}
+
+// The info text for the playlist's picked level, or for an empty playlist:
+// the longest wording that fits the box, down to a short one that always
+// does (a title is under 48 characters).
 static void jkGuiPlaylist_ShowInfo(void)
 {
     jkPlaylist* pList = &jkGuiPlaylist_work;
@@ -287,20 +310,54 @@ static void jkGuiPlaylist_ShowInfo(void)
     {
         jk_snwprintf(pOut, len, u"Pick an episode and one of its levels on the left, then Add Level, or double-click the level. "
                                 u"The levels play in the order they have here.");
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"Pick a level on the left, then Add Level. The levels play in this order.");
         return;
     }
     jkPlaylistEntry* pEntry = &pList->entries[jkGuiPlaylist_sel];
     const char16_t* pEpisode = jkGuiPlaylist_EpisodeTitle(pEntry->gob);
     const char16_t* pKind = jkPlaylist_KindName(jkPlaylist_KindOf(pList->entries[0].type));
+    // "Canyon Oasis, from Jedi Training", or only "Canyon Oasis" when the
+    // episode has the level's name, as a GOB of one level often has.
+    char16_t from[JKPLAYLIST_TITLE_LEN + 48];
+    if (pEpisode && !jkGuiPlaylist_SameTitle(pEntry->title, pEpisode))
+        jk_snwprintf(from, sizeof(from) / sizeof(char16_t), u"%s, from %s", pEntry->title, pEpisode);
+    else
+        stdString_SafeWStrCopy(from, pEntry->title, sizeof(from) / sizeof(char16_t));
+
     if (!pEpisode)
+    {
         jk_snwprintf(pOut, len, u"%s is in %S, which isn't in your game any more: remove it, or get it again. A %s playlist.",
                      pEntry->title, pEntry->gob, pKind);
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"%s isn't in your game any more: remove it, or get it again.", pEntry->title);
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"%s isn't in your game any more.", pEntry->title);
+    }
     else if (jkGuiPlaylist_IsRetail(pEntry->gob))
-        jk_snwprintf(pOut, len, u"%s, from %s. Everyone has it: it comes with the game. A %s playlist.", pEntry->title, pEpisode, pKind);
+    {
+        jk_snwprintf(pOut, len, u"%s. Everyone has it: it comes with the game. A %s playlist.", from, pKind);
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"%s. Everyone has it: it comes with the game. A %s playlist.", pEntry->title, pKind);
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"%s. A %s playlist.", pEntry->title, pKind);
+    }
     else
-        jk_snwprintf(pOut, len, u"%s, from %s (%S.%S). Players who don't have it get it when the game moves on to it, "
+    {
+        jk_snwprintf(pOut, len, u"%s (%S.%S). Players who don't have it get it when the game moves on to it, "
                                 u"from the Level Library or from you. A %s playlist.",
-                     pEntry->title, pEpisode, pEntry->gob, JKRES_GOB_EXT, pKind);
+                     from, pEntry->gob, JKRES_GOB_EXT, pKind);
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"%s (%S.%S). Players who don't have it get it when it comes up. A %s playlist.",
+                         from, pEntry->gob, JKRES_GOB_EXT, pKind);
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"%s (%S.%S). Players who don't have it get it when it comes up. A %s playlist.",
+                         pEntry->title, pEntry->gob, JKRES_GOB_EXT, pKind);
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"%s (%S.%S). A %s playlist.", pEntry->title, pEntry->gob, JKRES_GOB_EXT, pKind);
+        if (!jkGuiPlaylist_InfoFits())
+            jk_snwprintf(pOut, len, u"%s. A %s playlist.", pEntry->title, pKind);
+    }
 }
 
 static void jkGuiPlaylist_SetVisible(jkGuiMenu* pMenu, int idx, int bVisible)
