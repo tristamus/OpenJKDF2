@@ -7,7 +7,10 @@ set(GLOBALS_C_COG ${PROJECT_SOURCE_DIR}/src/globals.c.cog)
 make_directory(${CMAKE_CURRENT_BINARY_DIR}/generated)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/generated)
 
-if(NOT PLAT_MSVC)
+# On a Windows host (MSVC, or Emscripten run from Windows), the venv below
+# has no bin/python3: use the Python CMake finds, with cogapp installed in it
+# (configure with -DPython3_EXECUTABLE=<that python> to pick one).
+if(NOT PLAT_MSVC AND NOT CMAKE_HOST_WIN32)
     set(PYTHON_EXE "${CMAKE_CURRENT_BINARY_DIR}/cogapp_venv/bin/python3")
     # We invoke cog via `python3 -m cogapp`, never the `cog` console-script (which
     # newer cogapp/Python combos don't reliably install). Use an explicit stamp file
@@ -33,7 +36,7 @@ add_custom_command(
     DEPENDS ${SYMBOLS_FILE} ${GLOBALS_C_COG} ${GLOBALS_H} ${EMBEDDED_RESOURCES} ${PYTHON_EXE} ${COGAPP_DEPENDS}
 )
 
-if(NOT PLAT_MSVC)
+if(NOT PLAT_MSVC AND NOT CMAKE_HOST_WIN32)
     add_custom_command(
         OUTPUT ${PYTHON_EXE}
         COMMAND python3 -m venv ${CMAKE_CURRENT_BINARY_DIR}/cogapp_venv
