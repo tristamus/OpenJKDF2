@@ -106,7 +106,8 @@ window.jkLobbyMock = (function() {
         },
         // A game whose host's build speaks a newer netcode (net) than the
         // page's (NETCODE in index.html), as one hosted after an update would
-        // look to a page opened before it.
+        // look to a page opened before it. The others speak the page's
+        // (toStatus).
         versions: {
             label: 'Another version',
             imperial: relay(0),
@@ -116,7 +117,7 @@ window.jkLobbyMock = (function() {
                     { id: 31, name: 'No mods dueling', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
                       mod: '', locked: false, players: 2, max: 4, names: ['Kyle_K', 'Jerec'] },
                     { id: 32, name: 'After the update', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1MP.gob',
-                      mod: '', locked: false, players: 1, max: 4, names: ['Rahn_J'], net: 1 }
+                      mod: '', locked: false, players: 1, max: 4, names: ['Rahn_J'], newer: true }
                 ]
             }
         },
@@ -214,7 +215,14 @@ window.jkLobbyMock = (function() {
             all = all.concat(s.lobby[k]);
             online += byGame[k].online;
         });
-        return { online: online, lobby: all.sort(), byGame: byGame, games: copy(s.games),
+        // Each game's netcode: the page's, or the next for a newer one.
+        var page = typeof window.NETCODE === 'number' ? window.NETCODE : 0;
+        var games = copy(s.games).map(function(g) {
+            g.net = page + (g.newer ? 1 : 0);
+            delete g.newer;
+            return g;
+        });
+        return { online: online, lobby: all.sort(), byGame: byGame, games: games,
                  match: current === 'empty' ? 0 : MATCHES.jk1[0].id };
     }
 

@@ -17,9 +17,11 @@ extern "C" {
 // (/relay?net=<n>): the lobby only lists games, and lets it join them, whose
 // host speaks the same. Raise it only with a change older builds can't play
 // a match with. Anything they can is agreed on through the hellos
-// (stdComm_WSRelayHits.c), so every build so far is 0. NETCODE in
+// (stdComm_WSRelayHits.c). 1: levels get shared starting places
+// (sithThing_AddSharedStarts), so a player seated past a level's own has a
+// player thing that a build before it doesn't. NETCODE in
 // packaging/wasm/index.html has to be the same.
-#define STDCOMM_WSRELAY_NETCODE (0)
+#define STDCOMM_WSRELAY_NETCODE (1)
 
 // What stdComm_Open returns when the lobby turned the join down because the
 // game's host speaks a newer netcode, or an older one.

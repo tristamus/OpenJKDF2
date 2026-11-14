@@ -41,6 +41,7 @@
 #include "Engine/sithInterp.h"
 #ifdef PLATFORM_WSRELAY
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_bActive
 #endif
 
 #define NUM_THING_PARAMS (74) // JK is 72
@@ -1517,6 +1518,76 @@ void sithThing_DetachAttachedThings(SithThing* pThing)
 //sithThing_IsAttachFlagsAnd6
 //sithThing_LotsOfFreeing
 
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+// Added: shared starting places. A level seats as many players as it has
+// player things, its starting places (sithPlayer_PlacePlayers), so a duel
+// level with 2 took 2 players whatever the host's Max players. In a game on
+// the lobby's relay, the level gets a copy of one of its starting places for
+// each player slot past them, after the level's own things and taking its
+// starting places in turn, so it seats up to the host's limit and the players
+// past the level's own share its starting places. Every player's game makes
+// the same copies in the same places as it loads the level, so they're the
+// same things to all of them, as the level's own are (guid = idx). Builds
+// that make none can't play such a match with one that does, so
+// STDCOMM_WSRELAY_NETCODE went up with this. Not on the Imperial connection,
+// whose games have desktop players, whose games make none.
+
+// How many more things the level being loaded needs room for: one for each
+// player slot, or none.
+static int sithThing_SharedStartsRoom(SithWorld *pWorld)
+{
+    if ( pWorld != sithWorld_g_pCurrentWorld || (pWorld->level_type_maybe & 1) != 0 )
+        return 0;
+    if ( !sithNet_isMulti || stdComm_Imperial_bActive )
+        return 0;
+    return JKPLAYER_NUM_INFOS;
+}
+
+// The copies, in the free things from idx `from` on: the level's starting
+// places are the player things before it, in the order
+// sithPlayer_PlacePlayers seats players at them.
+static void sithThing_AddSharedStarts(SithWorld *pWorld, int from)
+{
+    SithThing* aStarts[JKPLAYER_NUM_INFOS];
+    int numStarts = 0;
+    for (int i = 0; i < from && numStarts < JKPLAYER_NUM_INFOS; i++)
+    {
+        if ( pWorld->aThings[i].type == SITH_THING_PLAYER )
+            aStarts[numStarts++] = &pWorld->aThings[i];
+    }
+    if ( !numStarts || numStarts >= JKPLAYER_NUM_INFOS )
+        return;
+
+    int numCopies = 0;
+    int idx = from;
+    while ( numStarts + numCopies < JKPLAYER_NUM_INFOS )
+    {
+        while ( idx < pWorld->numThingsLoaded && pWorld->aThings[idx].type != SITH_THING_FREE )
+            idx++;
+        if ( idx >= pWorld->numThingsLoaded )
+            break;
+
+        // As the level's own are loaded (above), from the same template, at
+        // the same place, with the same thing flags (thingflags= in the level).
+        SithThing* pStart = aStarts[numCopies % numStarts];
+        SithThing* pThing = &pWorld->aThings[idx];
+        sithThing_SetThingBasedOn(pThing, pStart->pTemplate);
+        sithThing_SetPositionAndOrient(pThing, &pStart->position, &pStart->orient);
+        sithThing_EnterSector(pThing, pStart->sector, 1, 1);
+        sithThing_Initialize(pThing);
+        pThing->signature = sithThing_bInitted2++;
+        pThing->guid = pThing->idx;
+        pThing->flags = pStart->flags;
+#ifdef SITH_DEBUG_STRUCT_NAMES
+        stdString_SafeStrCopy(pThing->aName, pStart->aName, 0x20);
+#endif
+        numCopies++;
+    }
+    stdPlatform_Printf("OpenJKDF2: The level has %d starting places; %d players share them.\n",
+                       numStarts, numCopies);
+}
+#endif
+
 // MOTS altered
 int sithThing_ReadStaticThingsListText(SithWorld *pWorld, int bSkip)
 {
@@ -1573,6 +1644,12 @@ int sithThing_ReadStaticThingsListText(SithWorld *pWorld, int bSkip)
     if ( _strcmp(stdConffile_g_entry.aArgs[1].value, "things") )
         return 0;
     v10 = _atoi(stdConffile_g_entry.aArgs[2].value);
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+    // Added: room for the shared starting places (sithThing_AddSharedStarts)
+    int numLevelThings = v10;
+    int numSharedRoom = v10 > 0 ? sithThing_SharedStartsRoom(pWorld) : 0;
+    v10 += numSharedRoom;
+#endif
     { TWL_EXTRAM_SUGGEST(pSithHS); // Added: word-safe struct (audited); slow-but-loads on NDS
     paThings = (SithThing *)SITH_ALLOC(sizeof(SithThing) * v10);
     TWL_EXTRAM_RESTORE(pSithHS); }
@@ -1652,6 +1729,10 @@ int sithThing_ReadStaticThingsListText(SithWorld *pWorld, int bSkip)
             }
         }
     }
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
+    if ( numSharedRoom )
+        sithThing_AddSharedStarts(sithWorld_g_pCurrentWorld, numLevelThings);
+#endif
     sithThing_LoadPostProcess();
     return 1;
 }
