@@ -260,8 +260,9 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     // Added: Level Library..., as in JK's list (4 higher, as there).
     { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 169, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Added: Playlist... and the note in Single-level only's place, as in
-    // JK's list.
-    { ELEMENT_TEXTBUTTON,   GUI_PLAYLIST, 2, "GUIEXT_PLAYLIST", 3, { 460, 246, 170, 20 }, 1, 0, "GUIEXT_PLAYLIST_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // JK's list (5 above its label: at 4, its baseline was 1 below
+    // "Choose Level:"'s in MotS's font).
+    { ELEMENT_TEXTBUTTON,   GUI_PLAYLIST, 2, "GUIEXT_PLAYLIST", 3, { 460, 245, 170, 20 }, 1, 0, "GUIEXT_PLAYLIST_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,         0, 0, u"Next level: from the playlist", 2, { 20, 285, 270, 40 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }

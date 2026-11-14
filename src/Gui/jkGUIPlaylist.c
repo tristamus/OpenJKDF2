@@ -78,17 +78,18 @@ static int jkGuiPlaylist_LoopClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, i
 static int jkGuiPlaylist_ClearClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw);
 
 // An element that's hovered is the first one under the mouse, so the labels
-// end before the buttons on their lines.
+// end before the buttons on their lines. They're short: the game's "Choose
+// Episode:" doesn't fit before Level Library... in the left half.
 static jkGuiElement jkGuiPlaylist_aElements[] =
 {
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 0, 410, 640, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 6, u"Playlist", 3, { 20, 20, 600, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,       0, 0, u"Up to 6 levels of one kind. Players get each level when the game moves on to it.", 3, { 20, 58, 600, 16 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, u"Up to 6 levels of one kind, played one after another.", 3, { 20, 58, 600, 16 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Left: the episodes and their levels, as on the Host screen.
-    { ELEMENT_TEXT,       0, 0, "GUI_CHOOSEEPISODE", 2, { 20, 82, 115, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, u"Episodes:", 2, { 20, 82, 115, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, PL_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 140, 82, 160, 20 }, 1, 0, u"Get a community level from the Level Library and add it here.", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_LISTBOX,    0, 0, NULL, 0, { 20, 106, 280, 120 }, 1, 0, NULL, NULL, jkGuiPlaylist_EpisodeClicked, jkGuiPlaylist_listBitmaps, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,       0, 0, "GUI_CHOOSELEVEL", 2, { 20, 232, 115, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, u"Levels:", 2, { 20, 232, 115, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Add All", 3, { 140, 232, 160, 20 }, 1, 0, u"Adds every level of this episode, in its order.", jkGuiNetHost_RightButtonDraw, jkGuiPlaylist_AddAllClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_LISTBOX,    0, 0, NULL, 0, { 20, 256, 280, 106 }, 1, 0, u"Double-click a level to add it.", NULL, jkGuiPlaylist_LevelClicked, jkGuiPlaylist_listBitmaps, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Add Level", 3, { 140, 366, 160, 20 }, 1, 0, u"Adds the level to the end of the playlist.", jkGuiNetHost_RightButtonDraw, jkGuiPlaylist_AddClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },

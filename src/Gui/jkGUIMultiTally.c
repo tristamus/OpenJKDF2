@@ -249,14 +249,18 @@ static int jkGuiMultiTally_NextLines(jkGuiMenu *pMenu, int bDraw)
     jkGuiElement* pCount = bTeam ? &jkGuiMultiTally_buttons3[14] : &jkGuiMultiTally_buttons[88];
     uint32_t ms = stdPlatform_GetTimeMsec() - jkGuiMultiTally_msStart;
 
-    if (!jkGuiMultiTally_idkType || !jkPlaylist_TallyText(ms, SCORE_DELAY_MS, w1, w2, 128))
+    // The game's last score screen (the playlist is over, so the game ends:
+    // no countdown, Ok goes to the menu) says only that.
+    int bLast = !jkGuiMultiTally_idkType;
+    if ((bLast && !(jkPlaylist_next.bNamed && jkPlaylist_next.bEnd)) || !jkPlaylist_TallyText(ms, SCORE_DELAY_MS, w1, w2, 128))
     {
         pLine1->wstr = NULL;
         pLine2->wstr = NULL;
         return 0;
     }
     // The countdown is in the lines.
-    pCount->wstr = NULL;
+    if (!bLast)
+        pCount->wstr = NULL;
     if (!bDraw || __wcscmp(w1, jkGuiMultiTally_wNext1) || pLine1->wstr != jkGuiMultiTally_wNext1)
     {
         stdString_SafeWStrCopy(jkGuiMultiTally_wNext1, w1, 128);
