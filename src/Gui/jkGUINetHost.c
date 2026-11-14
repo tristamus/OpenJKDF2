@@ -102,7 +102,7 @@ static int32_t jkGuiNetHost_aIdk[2] = {0xd, 0xe};
 
 #ifdef PLATFORM_WSRELAY
 static int jkGuiNetHost_HitRulesClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, int redraw);
-static void jkGuiNetHost_SmallButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw);
+static void jkGuiNetHost_RightButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw);
 #endif
 
 // MOTS altered
@@ -164,10 +164,12 @@ static jkGuiElement jkGuiNetHost_aElements[] =
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Added: Level Library..., at the right end of the Choose Episode line, in
-    // the small font of the labels beside it (2 higher: drawn at 150 it showed
-    // 2 lower than "Choose Episode:" in the game). Its text ends at 630, the
-    // right edge of the Episode list and the Server Port box.
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 490, 148, 140, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // the gold button font of Ok, Cancel and Advanced (players missed it in
+    // the small font of the labels). Its text ends at 630, the right edge of
+    // the Episode list and the Server Port box. 4 higher than the label: drawn
+    // at 150, its baseline was 4 below "Choose Episode:"'s in the game, and in
+    // MotS its "y" cut into the Episode box's top line.
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 146, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -233,8 +235,8 @@ static jkGuiElement jkGuiNetHost_aElementsMots[] =
     { ELEMENT_TEXT,         0, 0, "GUIEXT_HIT_RULES", 2, { 310, 374, 70, 22 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_CLASSIC_HITS", 0, { 382, 374, 76, 22 }, 1, 0, "GUIEXT_CLASSIC_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,     0, 0, "GUIEXT_HWYS_HITS", 0, { 462, 374, 168, 22 }, 1, 0, "GUIEXT_HWYS_HITS_HINT", NULL, &jkGuiNetHost_HitRulesClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    // Added: Level Library..., as in JK's list (2 higher, as there).
-    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 0, "GUIEXT_LEVEL_LIBRARY", 3, { 490, 171, 140, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_SmallButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // Added: Level Library..., as in JK's list (4 higher, as there).
+    { ELEMENT_TEXTBUTTON,   GUI_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 460, 169, 170, 20 }, 1, 0, "GUIEXT_LEVEL_LIBRARY_HINT", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_END, 0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 }
 };
@@ -348,19 +350,18 @@ static void jkGuiNetHost_TakeHitReach()
 // its episode's name, for Choose Episode to pick.
 static void jkGuiNetHost_EnumEpisodes();
 
-// Level Library... in the small font, as the labels and checkboxes around it
-// are: the button font next to "Choose Episode" was a size too big. A text
-// button's font goes up by one with the mouse over it and by two while it's
-// pressed (med0, med1, med2); the small font has two (small0, small1), so
-// pressed stays on small1. Its text ends where the Episode list's box and the
-// Server Port box end (the right edge of its rect), measured in the font it's
-// drawn in, so it stays put when the mouse is over it.
-static void jkGuiNetHost_SmallButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw)
+// Level Library..., a text button drawn as jkGuiRend_TextButtonDraw draws one
+// (its font goes up by one with the mouse over it and by two while it's
+// pressed: med0, med1, med2), but with its text right-aligned: it ends where
+// the Episode list's box and the Server Port box end (the right edge of its
+// rect), measured in the font it's drawn in, so it stays put when the mouse is
+// over it.
+static void jkGuiNetHost_RightButtonDraw(jkGuiElement *pElement, jkGuiMenu *pMenu, tVBuffer *pVbuf, BOOL redraw)
 {
     int32_t font = pElement->textType;
     rdRect rect = pElement->rect;
     if (pMenu->lastMouseOverClickable == pElement)
-        font++;
+        font += (pMenu->lastMouseDownClickable == pElement) ? 2 : 1;
     if (redraw)
         jkGuiRend_CopyVBuffer(pMenu, &pElement->rect);
     int flags = pElement->selectedTextEntry;
