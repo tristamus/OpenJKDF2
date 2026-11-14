@@ -706,7 +706,7 @@ static int jkGuiNetHost_ShowPlaylistPicked(jkGuiElement* pList, jkGuiMenu* pMenu
     el[NETHOST_LEVEL_TEXT].wstr = bPicked ? u"Start with:" : jkStrings_GetUniStringWithFallback("GUI_CHOOSELEVEL");
     el[NETHOST_SINGLELEVEL_CHECKBOX].bIsVisible = !bPicked;
     el[NETHOST_PLAYLIST_NOTE].bIsVisible = bPicked;
-    pList->wHintText = bPicked ? u"Single-level only is off while the playlist is picked. Pick any other episode to go back." : NULL;
+    pList->wHintText = bPicked ? u"Single-level only is off while the playlist is picked." : NULL;
     // A checkbox that went away gives the focus to the list.
     if (pMenu && pMenu->focusedElement && !pMenu->focusedElement->bIsVisible)
         pMenu->focusedElement = pList;

@@ -93,7 +93,7 @@ MSGS 128          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_LEVEL_LIBRARY"           0 "Level Library..."
    "GUIEXT_LEVEL_LIBRARY_HINT"      0 "Community levels from Massassi.net, saved in this browser for hosting."
    "GUIEXT_PLAYLIST"                0 "Playlist..."
-   "GUIEXT_PLAYLIST_HINT"           0 "Up to 6 levels that play one after another, without everyone leaving and joining again."
+   "GUIEXT_PLAYLIST_HINT"           0 "Up to 6 levels that play one after another, without rejoining."
 
    #"GUIEXT_"                0 ""
 
