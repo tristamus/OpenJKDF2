@@ -182,10 +182,12 @@
 #endif
 
 // The host's player limit until they change it (Host > Max players). The
-// browser build starts at the 32 the Host screen allows; a level still only
-// takes as many as it has player starts (16 on JK's deathmatch maps), and the
-// lobby shows the smaller of the two, as JK.EXE's session did. Desktop builds
-// keep the original game's 4.
+// browser build starts at the 32 the Host screen allows. A level takes as many
+// as it has player starts (16 on JK's deathmatch maps), and the lobby shows the
+// smaller of the two, as JK.EXE's session did; in a game on the lobby's relay
+// the level gets shared copies of its starts up to 32
+// (sithThing_AddSharedStarts), so there it's the host's. Desktop builds keep
+// the original game's 4.
 #define MAXPLAYERS_ORIGINAL_DEFAULT (4)
 #ifdef ARCH_WASM
 #define MAXPLAYERS_DEFAULT (32)
