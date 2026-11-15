@@ -9,7 +9,7 @@
 // the test and served the way the site's Worker serves them (src/levels.js
 // in jkdf2mp-bb-server: /levels/jk1.json, /levels/d/<id>.json,
 // /levels/z/<id>.zip, /levels/s/<id>-<n>.jpg, and the 3D view's
-// /levels/p/<id>-<m>.map.json, .mat.json and /levels/p/<id>.tex.json).
+// /levels/p/<id>-<m>.map.json, .mat.json, .parts.json and /levels/p/<id>.tex.json).
 // maps.js and preview3d.js run as they are, on a stand-in for Emscripten's
 // FS and the browser's own IndexedDB; the game doesn't run.
 
@@ -709,7 +709,7 @@ await test('the 3D view in the Overview\'s frame: the level\'s own textures exac
     assert.equal(await number(page, N.PV), 1);
     assert.equal(await libText(page, T.PV), 'Loading the 3D view...');
     await page.waitForFunction(() => Module.jkLibrary.number(7) === 2, null, { timeout: 10000 });
-    assert.deepEqual(requests.filter(r => r.includes('/levels/p/')).sort(), ['GET /levels/p/501-0.map.json', 'GET /levels/p/501-0.mat.json', 'GET /levels/p/501.tex.json']);
+    assert.deepEqual(requests.filter(r => r.includes('/levels/p/')).sort(), ['GET /levels/p/501-0.map.json', 'GET /levels/p/501-0.mat.json', 'GET /levels/p/501.tex.json?v=2']);
     assert.equal(await libText(page, T.PV), '');
     assert.equal(await page.evaluate(() => !Module.jkPreview3d._worker.off && !!Module.jkPreview3d._worker.url), true, 'the map read in a worker');
     // Over the frame, inside its border: 1280 x 800, a menu pixel 1.667 of the page's.
@@ -852,6 +852,88 @@ await test('the big 3D view of a level with two maps: Next Map, a texture not in
     assert.equal(await libText(page, T.VIEW_TITLE), 'Alpha Arena');
     await call(page, 'end');
     await page.evaluate(() => { Module.jkPreview3d._worker.off = false; });
+});
+
+// The parts of the map's models that the preview's data leaves out, as the
+// site makes them (levels-parts.js in jkdf2mp-bb-server): after the
+// preview's two textures (base), the level's own MAT, one of the game's
+// whose size the site didn't know (raw), and one that is nowhere.
+const PART_PIX = [1, 2, 3, 4];
+const PARTS = {
+    v: 1, base: 2,
+    mats: [{ name: '3do/mat/part.mat', mat: Buffer.from(makeMat({ w: 2, h: 2, pixels: PART_PIX })).toString('base64') },
+           { name: 'mat/vanilla.mat', raw: true }, { name: 'mat/nowhere.mat', raw: true }],
+    model_surfaces: [
+        { vertices: [[[0, 0, 3], [0, 0]], [[1, 0, 3], [1, 0]], [[1, 1, 3], [1, 1]]], material: 2 },
+        { vertices: [[[0, 0, 4], [0, 0]], [[1, 0, 4], [2, 0]], [[1, 1, 4], [2, 2]]], material: 3 },
+        { vertices: [[[0, 0, 5], [0, 0]], [[1, 0, 5], [4, 0]], [[1, 1, 5], [4, 4]]], material: 4 },
+        { vertices: [[[0, 0, 6], [0, 0]], [[1, 0, 6], [1, 0]], [[1, 1, 6], [1, 1]]], material: 0 },
+    ],
+};
+
+await test('the parts of models the preview leaves out: drawn with the map, their textures the level\'s MAT and the game\'s', async () => {
+    const tex501 = PV['501.tex.json'];
+    PV['501.tex.json'] = [200, { ...tex501[1], parts: [0] }];
+    PV['501-0.parts.json'] = [200, PARTS];
+    try {
+        requests.length = 0;
+        await open(page);
+        // Another first: the library keeps the last level picked.
+        await pick(page, 503);
+        await pick(page, 501);
+        await keep(page, 'view', 1, 21, 59, 598, 310);
+        await page.waitForFunction(() => { const s = Module.jkPreview3d._V.scene; return s && s.id === 501 && s.loaded; }, null, { timeout: 10000 });
+        assert.ok(requests.includes('GET /levels/p/501-0.parts.json'), requests.join('|'));
+        assert.deepEqual(await page.evaluate(() => { const s = Module.jkPreview3d._V.scene; return [!!s.parts, s.total]; }), [true, 5]);
+        // The level's MAT, through its master colormap; the game's, from the
+        // player's files; the one that is nowhere, its color.
+        assert.deepEqual(await texels(page, 2), [[through(LEVEL_PAL, 1), through(LEVEL_PAL, 2)], [through(LEVEL_PAL, 3), through(LEVEL_PAL, 4)]]);
+        assert.deepEqual(await texels(page, 3), [[through(LEVEL_PAL, 10), through(LEVEL_PAL, 20)], [through(LEVEL_PAL, 30), through(LEVEL_PAL, 40)]]);
+        assert.equal(await texels(page, 4), null);
+        // Drawn after the map: in orbit, and in walk after the sky and the map.
+        const drawn = () => page.evaluate(async () => {
+            const V = Module.jkPreview3d._V, r = V.renderer, draw = r.draw, got = [];
+            r.draw = function(w, h, mvp, list) {
+                got.push(list.map(x => x.mesh === V.scene.parts ? 'parts' : x.mesh === V.scene.world ? 'world' : x.mesh === V.scene.sky ? 'sky' : '?'));
+                return draw.apply(this, arguments);
+            };
+            V.changed = true;
+            for (let i = 0; i < 40 && !got.length; i++)
+                await new Promise(res => setTimeout(res, 25));
+            r.draw = draw;
+            return got[0] || null;
+        });
+        assert.deepEqual(await drawn(), ['world', 'parts']);
+        await call(page, 'viewCommand', 1);
+        assert.deepEqual(await drawn(), ['sky', 'world', 'parts']);
+        await call(page, 'viewCommand', 1);
+        // The game's texture places divided by its MAT's size (2 x 2); the
+        // one that is nowhere's left as they are.
+        assert.deepEqual(await page.evaluate(async parts => {
+            const mats = [{}, {}].concat(parts.mats.map(e => ({ ...e, part: true })));
+            await Module.jkPreview3d._partSizes({ game: 'jk1' }, parts, mats);
+            return parts.model_surfaces.map(s => s.vertices.map(v => v[1]));
+        }, PARTS), [[[0, 0], [1, 0], [1, 1]], [[0, 0], [1, 0], [1, 1]], [[0, 0], [4, 0], [4, 4]], [[0, 0], [1, 0], [1, 1]]]);
+        assert.deepEqual(await page.evaluate(b => Module.jkPreview3d._matDims(new Uint8Array(b)), Array.from(makeMat({ w: 8, h: 4 }))), [8, 4]);
+        // Made for another mat.json (its base isn't this one's length): not drawn.
+        await stop(page);
+        await call(page, 'view', 0, 0, 0, 0, 0);
+        await call(page, 'end');
+        PV['501-0.parts.json'] = [200, { ...PARTS, base: 3 }];
+        await page.evaluate(() => { window.__before = Module.jkPreview3d._V.scene; });
+        await open(page);
+        await pick(page, 503);
+        await pick(page, 501);
+        await keep(page, 'view', 1, 21, 59, 598, 310);
+        await page.waitForFunction(() => { const s = Module.jkPreview3d._V.scene; return s && s !== window.__before && s.id === 501 && s.loaded; }, null, { timeout: 10000 });
+        assert.deepEqual(await page.evaluate(() => { const s = Module.jkPreview3d._V.scene; return [s.parts, s.total]; }), [null, 2]);
+    } finally {
+        PV['501.tex.json'] = tex501;
+        delete PV['501-0.parts.json'];
+        await stop(page);
+        await call(page, 'view', 0, 0, 0, 0, 0);
+        await call(page, 'end');
+    }
 });
 
 await test('a game texture that isn\'t in its own files: from the other game\'s files saved in this browser, else blurred and said whose', async () => {
