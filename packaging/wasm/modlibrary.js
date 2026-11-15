@@ -522,9 +522,9 @@
     function messageText() {
         if (M.job || M.msg)
             return M.msg;
-        if (M.error)
-            return M.error;
-        return 'Mods you get are saved in this browser, not in your game folder.';
+        // Nothing otherwise: a hint of two lines, centered on the line under
+        // this one, reaches up into it. Get Mod's hint says where mods go.
+        return M.error || '';
     }
 
     function progress(fraction, text) {

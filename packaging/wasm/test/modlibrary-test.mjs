@@ -201,6 +201,7 @@ await test('available once the site answers, with maps.js, mods.js and library.j
 
 await test('the list: each mod once, its versions under it, newest first, sorted by downloads', async () => {
     await open(tab);
+    assert.equal(L(tab).text(T.MESSAGE), '', 'no standing line over the hint line');
     assert.equal(L(tab).text(T.SORT), 'Most downloaded');
     assert.deepEqual(rows(tab).map(r => r.split('\t')[0]),
                      ['Kyle Skin', 'MP Pack', 'SBX-JK v3.1', '  SBX-JK v3.0', 'JK Enhanced', 'Broken Download']);
