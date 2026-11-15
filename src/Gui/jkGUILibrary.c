@@ -102,6 +102,9 @@ static const int jkGuiLibrary_aTabElements[LIB_NUM_TABS] = {LIB_TAB_OVERVIEW, LI
 // Their order on the screen: the Mod Library has Changes second.
 static const int jkGuiLibrary_aLevelTabs[] = {LIB_TAB_IS_OVERVIEW, LIB_TAB_IS_README, LIB_TAB_IS_FILES, -1};
 static const int jkGuiLibrary_aModTabs[] = {LIB_TAB_IS_OVERVIEW, LIB_TAB_IS_CHANGES, LIB_TAB_IS_README, LIB_TAB_IS_FILES, -1};
+// The Mod Library's four tabs are as wide as their words need, so the words
+// keep apart: Overview, Changes and Readme, and Files gets the rest.
+static const int jkGuiLibrary_aModTabWidths[] = {92, 84, 76};
 
 // What changed since the menu last asked (library.js, CH_*).
 #define LIB_CH_STATUS (1)
@@ -221,7 +224,7 @@ static jkGuiElement jkGuiLibrary_aElements[] =
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 474, 104, 156, 117 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,   0, 0, u"My levels", 0, { 162, 128, 138, 24 }, 1, 0, u"Show only the levels saved in this browser: ones you used here, or got from a host.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // The Mod Library's: Campaigns, and the Changes tab.
-    { ELEMENT_CHECKBOX,   0, 0, u"Campaigns", 0, { 162, 128, 138, 24 }, 0, 0, u"Show single-player campaigns. The Host screen lists their episodes with Experimental Co-op ticked under Advanced.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,   0, 0, u"Campaigns", 0, { 162, 128, 138, 24 }, 0, 0, u"Show single-player campaigns. Host them with Experimental Co-op ticked under Advanced.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Changes", 3, { 391, 78, 77, 24 }, 0, 0, u"Which of the game's own files the mod replaces, and what it adds.", NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_END,        0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 };
@@ -981,10 +984,19 @@ static void jkGuiLibrary_ShowUse(jkGuiMenu* pMenu)
     if (jkGuiLibrary_bMods)
     {
         jkGuiLibrary_SetText(&el[LIB_USE_BUTTON], &jkGuiLibrary_pUse, jkGuiLibrary_GetText(LIB_TEXT_USE, 0));
-        if (jkGuiLibrary_pUseHint)
-            free(jkGuiLibrary_pUseHint);
+        // The hint line shows the hint of the button under the mouse by
+        // pointing at it (jkGuiRend_UpdateDrawMenu), so when it shows the old
+        // hint, it's pointed at the new one before the old one is freed.
+        char16_t* pOldHint = jkGuiLibrary_pUseHint;
         jkGuiLibrary_pUseHint = jkGuiLibrary_GetText(LIB_TEXT_USE_HINT, 0);
         el[LIB_USE_BUTTON].wHintText = jkGuiLibrary_pUseHint;
+        if (pOldHint && el[LIB_HINT].wstr == pOldHint)
+        {
+            el[LIB_HINT].wstr = jkGuiLibrary_pUseHint;
+            if (pMenu)
+                jkGuiRend_UpdateAndDrawClickable(&el[LIB_HINT], pMenu, 1);
+        }
+        free(pOldHint);
         el[LIB_CANCEL_BUTTON].wstr = bBusy ? u"Stop" : u"Back";
         el[LIB_CANCEL_BUTTON].wHintText = bBusy ? u"Stops getting the mod." : NULL;
         if (pMenu)
@@ -1324,7 +1336,7 @@ int jkGuiLibrary_ShowMods(int bMots, char* pOutPath, int outLen)
 // Puts the tabs in the order given (ending in -1) side by side, equally wide,
 // across the details' width: the Level Library's three are 104 wide, the Mod
 // Library's four 77. The tabs not in the order are hidden.
-static void jkGuiLibrary_LayOutTabs(const int* pOrder)
+static void jkGuiLibrary_LayOutTabs(const int* pOrder, const int* pWidths)
 {
     jkGuiElement* el = jkGuiLibrary_aElements;
     int left = 310, right = 630, gap = 4, n = 0;
@@ -1335,14 +1347,44 @@ static void jkGuiLibrary_LayOutTabs(const int* pOrder)
         n++;
     if (!n)
         return;
-    int w = (right - left - gap * (n - 1)) / n;
+    // Equal widths, or the ones given for all but the last.
+    int w = (right - left - gap * (n - 1)) / n, x = left;
     for (int i = 0; i < n; i++)
     {
         jkGuiElement* pTab = &el[jkGuiLibrary_aTabElements[pOrder[i]]];
-        pTab->rect.x = left + i * (w + gap);
-        pTab->rect.width = i == n - 1 ? right - pTab->rect.x : w;
+        pTab->rect.x = x;
+        pTab->rect.width = i == n - 1 ? right - x : pWidths ? pWidths[i] : w;
         pTab->bIsVisible = 1;
+        x += pTab->rect.width + gap;
     }
+}
+
+// The filters, the sort and the list: the Level Library's four filters in
+// two rows, or the Mod Library's five in three, which moves the sort and the
+// list down a row.
+static void jkGuiLibrary_LayOutFilters(int bMods)
+{
+    jkGuiElement* el = jkGuiLibrary_aElements;
+    static const int aLevels[][3] = {{LIB_FILTER_MP, 20, 104}, {LIB_FILTER_CTF, 162, 104},
+                                     {LIB_FILTER_COOP, 20, 128}, {LIB_FILTER_MINE, 162, 128}};
+    static const int aMods[][3] = {{LIB_FILTER_MP, 20, 104}, {LIB_FILTER_CTF, 162, 104},
+                                   {LIB_FILTER_COOP, 20, 128}, {LIB_FILTER_CAMPAIGNS, 162, 128},
+                                   {LIB_FILTER_MINE, 20, 152}};
+    const int (*pPlaces)[3] = bMods ? aMods : aLevels;
+    int n = bMods ? 5 : 4, down = bMods ? 24 : 0;
+
+    for (int i = 0; i < n; i++)
+    {
+        el[pPlaces[i][0]].rect.x = pPlaces[i][1];
+        el[pPlaces[i][0]].rect.y = pPlaces[i][2];
+        el[pPlaces[i][0]].rect.width = 138;
+    }
+    el[LIB_SORT_LABEL].rect.y = 152 + down;
+    el[LIB_SORT_PREV].rect.y = 152 + down;
+    el[LIB_SORT_NEXT].rect.y = 152 + down;
+    el[LIB_SORT_NAME].rect.y = 152 + down;
+    el[LIB_LIST].rect.y = 186 + down;
+    el[LIB_LIST].rect.height = 200 - down;
 }
 
 // What differs between the Level Library and the Mod Library. The menu's
@@ -1359,49 +1401,32 @@ static void jkGuiLibrary_SetMode(int bMots, int bToAdd, int bMods)
         el[LIB_SEARCH].wHintText = u"Type part of a mod's title or its author's name.";
         el[LIB_FILTER_MP].wstr = u"Gameplay";
         el[LIB_FILTER_MP].wHintText = u"Show mods that change how the game plays: weapons, Force powers, game modes.";
-        el[LIB_FILTER_MP].rect.x = 20;
-        el[LIB_FILTER_MP].rect.width = 92;
         el[LIB_FILTER_CTF].wstr = u"Characters";
         el[LIB_FILTER_CTF].wHintText = u"Show skins and characters: new models to play as.";
-        el[LIB_FILTER_CTF].rect.x = 112;
-        el[LIB_FILTER_CTF].rect.width = 100;
         el[LIB_FILTER_COOP].wstr = u"Graphics";
         el[LIB_FILTER_COOP].wHintText = u"Show mods that change how the game looks: textures, effects, graphics packs.";
-        el[LIB_FILTER_COOP].rect.x = 212;
-        el[LIB_FILTER_COOP].rect.y = 104;
-        el[LIB_FILTER_COOP].rect.width = 88;
         el[LIB_FILTER_MINE].wstr = u"My mods";
         el[LIB_FILTER_MINE].wHintText = u"Show only the mods saved in this browser: ones you got here, or from a host.";
-        el[LIB_FILTER_MINE].rect.x = 20;
-        el[LIB_FILTER_MINE].rect.width = 138;
         el[LIB_LIST].wHintText = u"Mods with * are saved in this browser. Double-click one to get it.";
         el[LIB_TAB_README].wHintText = u"The text files in the mod's zip.";
         el[LIB_TAB_FILES].wHintText = u"What's in the mod's zip.";
         el[LIB_NO_SHOT].wstr = u"No screenshot for this mod";
         el[LIB_PAGE_BUTTON].wHintText = u"Opens the mod's page on Massassi.net in a new tab.";
         el[LIB_CANCEL_BUTTON].wstr = u"Back";
-        jkGuiLibrary_LayOutTabs(jkGuiLibrary_aModTabs);
+        jkGuiLibrary_LayOutTabs(jkGuiLibrary_aModTabs, jkGuiLibrary_aModTabWidths);
     }
     else
     {
         el[LIB_FILTER_CTF].wstr = bMots ? u"Kill the Fool" : u"CTF";
         el[LIB_FILTER_CTF].wHintText = bMots ? u"Show Kill the Fool levels." : u"Show Capture the Flag levels.";
-        el[LIB_FILTER_MP].rect.x = 20;
-        el[LIB_FILTER_MP].rect.width = 138;
-        el[LIB_FILTER_CTF].rect.x = 162;
-        el[LIB_FILTER_CTF].rect.width = 138;
-        el[LIB_FILTER_COOP].rect.x = 20;
-        el[LIB_FILTER_COOP].rect.y = 128;
-        el[LIB_FILTER_COOP].rect.width = 138;
-        el[LIB_FILTER_MINE].rect.x = 162;
-        el[LIB_FILTER_MINE].rect.width = 138;
         if (bToAdd)
         {
             el[LIB_USE_BUTTON].wstr = u"Add to Playlist";
             el[LIB_USE_BUTTON].wHintText = u"Gets the level, saves it in this browser and adds it to the playlist.";
         }
-        jkGuiLibrary_LayOutTabs(jkGuiLibrary_aLevelTabs);
+        jkGuiLibrary_LayOutTabs(jkGuiLibrary_aLevelTabs, NULL);
     }
+    jkGuiLibrary_LayOutFilters(bMods);
 }
 
 static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAdd, int bMods)
@@ -1479,7 +1504,10 @@ static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAd
     el[LIB_FACTS].unistr = NULL;
     el[LIB_TEXT].unistr = NULL;
 
-    // The Use button's words from the page go with this showing.
+    // The Use button's words from the page go with this showing, and the
+    // hint line lets go of its hint.
+    if (jkGuiLibrary_pUseHint && el[LIB_HINT].wstr == jkGuiLibrary_pUseHint)
+        el[LIB_HINT].wstr = NULL;
     el[LIB_USE_BUTTON].wstr = NULL;
     el[LIB_USE_BUTTON].wHintText = NULL;
     free(jkGuiLibrary_pUse);

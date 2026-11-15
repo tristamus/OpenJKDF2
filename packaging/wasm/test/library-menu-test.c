@@ -984,21 +984,26 @@ static void modsOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(modCalled("'begin jk1'") && !called("'begin jk1'"), "the Mod Library's page half began, not the Level Library's");
         CHECK(js("Module.jkLibraryNow === Module.jkModLibrary ? 1 : 0"), "and the menu talks to it");
         CHECK(wis(el[E_STATUS].wstr, "3 mods from Massassi.net"), "status %s", show(el[E_STATUS].wstr));
-        // Gameplay, Characters, Graphics on one row; My mods and Campaigns
-        // under them, Campaigns off.
-        CHECK(wis(el[E_MP].wstr, "Gameplay") && rectIs(&el[E_MP], 20, 104, 92), "Gameplay first");
-        CHECK(wis(el[E_CTF].wstr, "Characters") && rectIs(&el[E_CTF], 112, 104, 100), "then Characters");
-        CHECK(wis(el[E_COOP].wstr, "Graphics") && rectIs(&el[E_COOP], 212, 104, 88), "then Graphics, ending at the list's edge");
-        CHECK(wis(el[E_MINE].wstr, "My mods") && rectIs(&el[E_MINE], 20, 128, 138), "My mods under them");
+        // In the Level Library's two columns: Gameplay and Characters,
+        // Graphics and Campaigns (off), then My mods; the sort and the list
+        // a row lower, the list ending where it did.
+        CHECK(wis(el[E_MP].wstr, "Gameplay") && rectIs(&el[E_MP], 20, 104, 138), "Gameplay first");
+        CHECK(wis(el[E_CTF].wstr, "Characters") && rectIs(&el[E_CTF], 162, 104, 138), "then Characters");
+        CHECK(wis(el[E_COOP].wstr, "Graphics") && rectIs(&el[E_COOP], 20, 128, 138), "Graphics under Gameplay");
         CHECK(el[E_CAMPAIGNS].bIsVisible && wis(el[E_CAMPAIGNS].wstr, "Campaigns") && rectIs(&el[E_CAMPAIGNS], 162, 128, 138) &&
               el[E_CAMPAIGNS].selectedTextEntry == 0, "Campaigns beside it, off");
+        CHECK(wis(el[E_MINE].wstr, "My mods") && rectIs(&el[E_MINE], 20, 152, 138), "My mods under them");
+        CHECK(el[E_SORT_LABEL].rect.y == 176 && el[E_SORT_PREV].rect.y == 176 && el[E_SORT_NEXT].rect.y == 176 &&
+              el[E_SORT_NAME].rect.y == 176, "the sort a row lower");
+        CHECK(el[E_LIST].rect.y == 210 && el[E_LIST].rect.y + el[E_LIST].rect.height == 386, "the list too, ending where it did");
         CHECK(el[E_MP].selectedTextEntry && el[E_CTF].selectedTextEntry && el[E_COOP].selectedTextEntry && !el[E_MINE].selectedTextEntry,
               "every kind on at first, My mods off");
         CHECK(modCalled("'query \"\" 7 0'"), "asked for gameplay, characters and graphics: %s", jsText("JSON.stringify(" MODS ".calls)"));
         CHECK(wis(el[E_SORT_NAME].wstr, "Most downloaded"), "the page's first sort: %s", show(el[E_SORT_NAME].wstr));
-        // Four tabs across the details: Overview, Changes, Readme, Files.
-        CHECK(el[E_TAB_CHANGES].bIsVisible && rectIs(&el[E_TAB_OVERVIEW], 310, 78, 77) && rectIs(&el[E_TAB_CHANGES], 391, 78, 77) &&
-              rectIs(&el[E_TAB_README], 472, 78, 77) && rectIs(&el[E_TAB_FILES], 553, 78, 77),
+        // Four tabs across the details, each as wide as its word needs:
+        // Overview, Changes, Readme, Files.
+        CHECK(el[E_TAB_CHANGES].bIsVisible && rectIs(&el[E_TAB_OVERVIEW], 310, 78, 92) && rectIs(&el[E_TAB_CHANGES], 406, 78, 84) &&
+              rectIs(&el[E_TAB_README], 494, 78, 76) && rectIs(&el[E_TAB_FILES], 574, 78, 56),
               "four tabs, Changes second: %d %d %d %d", el[E_TAB_OVERVIEW].rect.x, el[E_TAB_CHANGES].rect.x, el[E_TAB_README].rect.x,
               el[E_TAB_FILES].rect.x);
         CHECK(el[E_TAB_FILES].rect.x + el[E_TAB_FILES].rect.width == el[E_PV].rect.x + el[E_PV].rect.width, "ending where the frames do");
@@ -1055,6 +1060,10 @@ static void modsOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
     else if (frame == 2)
     {
         CHECK(el[E_PV].bIsVisible, "two again");
+        // The mouse on Get Mod: the hint line shows its hint, by pointing
+        // at it, as jkGuiRend_UpdateDrawMenu does. The hint changes under it
+        // (and AddressSanitizer would catch a draw of the freed one).
+        el[E_HINT].wstr = el[E_USE].wHintText;
         click(menu, &el[E_USE], 0);
         CHECK(modCalled("'use'"), "Get Mod");
     }
@@ -1072,6 +1081,8 @@ static void modsOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         modStep = 2;
         CHECK(wis(el[E_USE].wstr, "Restart With It") && el[E_USE].bIsVisible, "saved: Restart With It (%s)", show(el[E_USE].wstr));
         CHECK(wis(el[E_USE].wHintText, "Starts the game again with only this mod."), "with its hint");
+        CHECK(el[E_HINT].wstr == el[E_USE].wHintText, "which the hint line shows, not the freed one before it");
+        jkGuiRend_UpdateAndDrawClickable(&el[E_HINT], menu, 1);
         CHECK(wis(el[E_CANCEL].wstr, "Back"), "and Back again");
         click(menu, &el[E_USE], 0);
     }
@@ -1107,6 +1118,8 @@ static void levelsAfterMods(jkGuiMenu* menu, jkGuiElement* el, int frame)
               "the Level Library's words: %s, %s, %s", show(el[E_TITLE].wstr), show(el[E_USE].wstr), show(el[E_CANCEL].wstr));
         CHECK(wis(el[E_MP].wstr, "Multiplayer") && rectIs(&el[E_MP], 20, 104, 138) && rectIs(&el[E_CTF], 162, 104, 138) &&
               rectIs(&el[E_COOP], 20, 128, 138) && rectIs(&el[E_MINE], 162, 128, 138), "its filters where they were");
+        CHECK(el[E_SORT_LABEL].rect.y == 152 && el[E_SORT_NAME].rect.y == 152 && el[E_LIST].rect.y == 186 && el[E_LIST].rect.height == 200,
+              "its sort and list too");
         CHECK(!el[E_CAMPAIGNS].bIsVisible && !el[E_TAB_CHANGES].bIsVisible, "no Campaigns, no Changes");
         CHECK(rectIs(&el[E_TAB_OVERVIEW], 310, 78, 104) && rectIs(&el[E_TAB_README], 418, 78, 104) && rectIs(&el[E_TAB_FILES], 526, 78, 104),
               "its three tabs");

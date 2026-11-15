@@ -28,6 +28,7 @@ const RES2 = makeGob([
     { name: 'cog\\force_pull.cog', bytes: text('# pull') },
     { name: 'cog\\force_push.cog', bytes: text('# push') },
     { name: '3do\\kyle.3do', bytes: text('3DO kyle') },
+    { name: '3do\\key\\kyrun.key', bytes: text('KEY run') },
     { name: 'ui\\bkmain.bm', bytes: text('BM main') },
 ]);
 const GAME = { '/jk1/resource/Res2.gob': RES2, '/jk1/episode/JK1MP.gob': makeGob([{ name: 'episode.jk', bytes: text('"JK MP"\nTYPE 2\n') }]) };
@@ -257,6 +258,16 @@ await test('Changes: by name against the game\'s own files, inside the mod\'s GO
     await details(tab);
     assert.ok(L(tab).text(T.CHANGES).split('\n').includes("Replaces:\t1 of the game's own files: 1 model"));
     assert.equal(L(tab).number(N.SHOTS), 1);
+    // By folder: 3do/key's animations apart from 3do's models.
+    const nested = L(tab)._changesText({}, { mod: { plan: { files: [['m/3do/kyle.3do', '3do/kyle.3do'],
+                                                                     ['m/3do/key/kyrun.key', '3do/key/kyrun.key']] } } }).split('\n');
+    assert.ok(nested.includes('  3do\tkyle.3do') && nested.includes('  3do/key\tkyrun.key'), nested.join('\n'));
+});
+
+await test('a Word readme without the line of Word\'s own bytes before its words', async () => {
+    const u = tab.jkLibrary.util;
+    assert.equal(u.readmeBody({ n: 'README.DOC', t: '\u0000bjbjU\u0001\u0002\nSaber Battle X\r\n' }), 'Saber Battle X');
+    assert.equal(u.readmeBody({ n: 'readme.txt', t: 'bjbj stays in a text file\n' }), 'bjbj stays in a text file');
 });
 
 await test('which places a pack keeps, as mods.js packs a folder', async () => {
@@ -275,7 +286,7 @@ await test('Get Mod: the plan\'s files packed with the fingerprint the same fold
     assert.equal(L(tab).number(N.BUSY), 1);
     assert.equal(L(tab).number(N.CAN_USE), 0, 'one job at a time');
     await settled(tab);
-    assert.match(L(tab).text(T.MESSAGE), /^Saved in this browser\. Restart With It starts the game with it now/);
+    assert.match(L(tab).text(T.MESSAGE), /^Saved in this browser\. Restart With It plays it now\.$/);
     assert.equal(L(tab).text(T.USE), 'Restart With It');
     assert.match(L(tab).text(T.USE_HINT), /only this mod/);
     assert.equal(L(tab).number(N.CAN_USE), 1);
@@ -334,7 +345,7 @@ await test('a graphics pack: into mods/, and the running mod stays', async () =>
     L(tab).use();
     await settled(tab);
     assert.equal(L(tab).text(T.USE), 'Restart With It');
-    assert.match(L(tab).text(T.USE_HINT), /graphics pack, and the mod it runs now/);
+    assert.match(L(tab).text(T.USE_HINT), /graphics pack and the mod you run now/);
     L(tab).use();
     await until(() => L(tab).number(N.DONE), 'done');
     assert.equal(L(tab).take(), 'netmods/' + sbxFp.substring(0, 16), 'still SBX');

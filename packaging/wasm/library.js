@@ -364,6 +364,16 @@
         return out.join('\n');
     }
 
+    // A readme's text. The site reads a Word .doc as plain text, which
+    // leaves a line of Word's own bytes (like "bjbjU") before the words:
+    // that line is dropped.
+    function readmeBody(t) {
+        var s = String(t.t || '');
+        if (/\.doc$/i.test(String(t.n || '')))
+            s = s.replace(/^[^\n]*bjbj[^\n]*(\n|$)/m, '');
+        return s.replace(/\s+$/, '');
+    }
+
     function readmeText(d) {
         if (!d)
             return 'Getting the readme...';
@@ -371,7 +381,7 @@
             return 'The readme can\'t be shown right now.';
         if (!d.texts || !d.texts.length)
             return 'This level\'s zip has no readme.';
-        return plain(d.texts.map(function(t) { return '--- ' + t.n + ' ---\n\n' + String(t.t || '').replace(/\s+$/, ''); }).join('\n\n'));
+        return plain(d.texts.map(function(t) { return '--- ' + t.n + ' ---\n\n' + readmeBody(t); }).join('\n\n'));
     }
 
     // A size, a tab, then the file's name.
@@ -1076,7 +1086,7 @@
         // For the Mod Library (modlibrary.js), which reads the site's zips and
         // writes episodes the same way.
         util: {
-            size: size, dateText: dateText, plain: plain, sha256: sha256, fail: fail,
+            size: size, dateText: dateText, plain: plain, sha256: sha256, fail: fail, readmeBody: readmeBody,
             zipEntries: zipEntries, zipData: zipData, download: download,
             placeEpisode: function(g, l, game, bytes, job) { return place(g, l, game, bytes, job, true); }
         },

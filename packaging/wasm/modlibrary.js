@@ -320,7 +320,7 @@
             return 'The readme can\'t be shown right now.';
         if (!d.texts || !d.texts.length)
             return 'This mod\'s zip has no readme.';
-        return plain(d.texts.map(function(t) { return '--- ' + t.n + ' ---\n\n' + String(t.t || '').replace(/\s+$/, ''); }).join('\n\n'));
+        return plain(d.texts.map(function(t) { return '--- ' + t.n + ' ---\n\n' + U().readmeBody(t); }).join('\n\n'));
     }
 
     function filesText(d) {
@@ -418,7 +418,8 @@
                          ': ' + whatOf(replaced));
                 var folders = new Map();
                 for (var n of replaced) {
-                    var dir = n.indexOf('/') > 0 ? n.substring(0, n.indexOf('/')) : '(top)';
+                    // By folder, so 3do/key's animations aren't with 3do's models.
+                    var dir = n.lastIndexOf('/') > 0 ? n.substring(0, n.lastIndexOf('/')) : '(top)';
                     if (!folders.has(dir))
                         folders.set(dir, []);
                     folders.get(dir).push(base(n));
@@ -512,9 +513,9 @@
         if (!l)
             return '';
         if (savedOf(l))
-            return l.gp ? 'Starts the game again with this graphics pack, and the mod it runs now.'
-                        : 'Starts the game again with only this mod. Choose mods on the start page can combine mods.';
-        return 'Gets the mod and saves it in this browser. Nothing goes to your game folder.';
+            return l.gp ? 'Starts the game again with this graphics pack and the mod you run now.'
+                        : 'Starts the game again with only this mod running.';
+        return 'Saves the mod in this browser. Nothing goes to your game folder.';
     }
 
     function messageText() {
@@ -599,7 +600,7 @@
             return;
         M.ready = got.fp ? { id: l.id, fp: got.fp, bytes: got.bytes } : null;
         if (got.fp)
-            M.msg = 'Saved in this browser. Restart With It starts the game with it now; Choose mods on the start page lists it too.';
+            M.msg = 'Saved in this browser. Restart With It plays it now.';
         else
             M.msg = 'Saved in this browser: ' + (got.eps.length === 1 ? 'its episode is' : 'its episodes are') + ' on the Host screen.';
         touch(CH_ROWS | CH_PANEL | CH_MSG | CH_USE | CH_STATUS);
