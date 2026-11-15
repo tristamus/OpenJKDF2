@@ -23,7 +23,8 @@ const code = cut('      var SHOT_GAMES', '      // ---- Your Screenshots on this
     // A worker that never says it's ready is given up on sooner here.
     .replace('SHOT_WORKER_START_MS = 5000', 'SHOT_WORKER_START_MS = 50') +
     '\nreturn { shotLevel, shotName, shotPixels, shotStore, shotSaver, zipFiles, shotImagesInWorker, shotLimits, shotSharer, shotScreenPart, ' +
-    'SHOT_FINAL_WAIT_MS, SHOT_FINAL_SPREAD_MS, SHOT_FINAL_RETRY_MS, SHOT_FINAL_TRIES, SHOT_FINAL_MS, SHOT_SHARE_RETRY_MS, SHOT_SHARE_GAP_MS };';
+    'SHOT_FINAL_WAIT_MS, SHOT_FINAL_SPREAD_MS, SHOT_FINAL_RETRY_MS, SHOT_FINAL_TRIES, SHOT_FINAL_MS, SHOT_FINAL_KEEP_MS, ' +
+    'SHOT_SHARE_RETRY_MS, SHOT_SHARE_GAP_MS };';
 
 // The page's code, with its clock set to the given times, one per new Date(),
 // and a made-up Worker (see fakeWorker).
@@ -386,6 +387,26 @@ test('a screenshot\'s record can be changed in part, or only while it waits', as
     assert.deepEqual(await store.list(), [{ key: 'a.png', time: 5, size: 1, share: 'off' }]);
     assert.equal(await store.patch('gone.png', { share: 'on' }), null);
     assert.deepEqual([...await store.read('a.png')], [1], 'the picture itself is left alone');
+});
+
+test('the store keeps something beside the screenshots that no list of them shows', async () => {
+    const { shotStore } = page();
+    const store = shotStore(makeIDB());
+    await store.add({ key: 'a.png', time: 5, size: 1 }, Uint8Array.of(1));
+    assert.equal(await store.kept('final'), null);
+    await store.keep('final', { v: 1, taken: 7, full: Uint8Array.of(2, 3), thumb: Uint8Array.of(4) });
+    assert.deepEqual((await store.list()).map(m => m.key), ['a.png']);
+    assert.deepEqual(await store.keys(), ['a.png']);
+    const kept = await store.kept('final');
+    assert.deepEqual([kept.v, kept.taken, [...kept.full], [...kept.thumb]], [1, 7, [2, 3], [4]]);
+    // Deleting every screenshot leaves it, and taking it out leaves them.
+    await store.remove(await store.keys());
+    assert.equal((await store.kept('final')).taken, 7);
+    await store.add({ key: 'b.png', time: 6, size: 1 }, Uint8Array.of(9));
+    await store.unkeep('final');
+    assert.equal(await store.kept('final'), null);
+    assert.deepEqual([...await store.read('b.png')], [9]);
+    await store.unkeep('final');
 });
 
 test('a picture taken in a reported level is marked to go, and the engine hears which ones do', async () => {
@@ -856,7 +877,7 @@ test("the final scoreboard goes from the host at once and from the others a litt
     await w.pass(1);
     assert.equal(w.take().length, 1);
     assert.equal(sharer.pendingFinal(), false);
-    // Refused for good (a player shown as Anonymous in it, a level its host didn't end): dropped.
+    // Refused for good (a player shown as Anonymous in it, a match that went on after its player left): dropped.
     for (const no of [[200, { no: 'anonymous' }], [200, { no: 'none', wait: false }]]) {
         answers = [no];
         sharer.takeFinal({ full: 'final', thumb: 't' }, w.now, true);
@@ -950,7 +971,7 @@ test('the page tells the sharer which level is being played, lets one tab send a
     assert.deepEqual(requests[0], ['jkdf2mp-share-shots', { ifAvailable: true }]);
     assert.equal(new Function('navigator', 'return ' + lock[1])({}), null, 'none in a browser without them');
     // The lobby's list came: what waits is asked about, from the start the first time and once with each later list.
-    assert.match(glue, /if \(limits && !was\) shotShare\.run\(\);\s+else if \(limits\) shotShare\.nudge\(\);/);
+    assert.match(glue, /if \(limits && !was\) \{\s+shotShare\.resumeFinal\(\);\s+shotShare\.run\(\);\s+\} else if \(limits\) \{\s+shotShare\.nudge\(\);\s+\}/);
     assert.match(html, /Module\.jkLadderSaved = function\(id\) \{[\s\S]{0,400}?shotShare\.saved\(\);\n      \};/);
 });
 
@@ -973,10 +994,201 @@ test("the game asks the page before it reads the final scoreboard back, and only
                    'jkGuiMultiTally_js_wantsPicture()', 'std3D_ReadWindowRGBA(', 'jkGuiMultiTally_js_takePicture('].map(t => drawn.indexOf(t));
     assert.ok(order.every((at, i) => at > 0 && (!i || at > order[i - 1])), 'in that order: ' + order);
     assert.match(tally, /void jkGuiMultiTally_sub_4188B0\(jkGuiMenu \*pMenu\)\n\{[^}]*?jkGuiMultiTally_PictureRound\(\);/);
-    // The page wants one only of a level that ended as a level does, in a match the lobby was told of, once.
+    assert.match(cut('      // ---- Sharing them (shotSharer above).', '      function sizeText(bytes)'),
+                 /function shotFinal\(rgba, w, h\) \{[^}]*ended\.shot = 1;/);
+});
+
+test("the page wants the score screen of a level that ended and of one its player left, in a match the lobby was told of, once", () => {
     const glue = cut('      // ---- Sharing them (shotSharer above).', '      function sizeText(bytes)');
-    assert.match(glue, /function shotWantsFinal\(\) \{[^}]*shotShareAllowed\(\) && ended && !ended\.left && ended\.told && !ended\.shot &&/);
-    assert.match(glue, /function shotFinal\(rgba, w, h\) \{[^}]*ended\.shot = 1;/);
+    const body = /      function shotWantsFinal\(\) \{[\s\S]*?\n      \}\n/.exec(glue);
+    assert.ok(body, 'the page has shotWantsFinal');
+    const w = { limits: {}, allowed: true, now: 100_000 };
+    const Module = {};
+    const wants = new Function('Module', 'shotShare', 'shotShareAllowed', 'performance', body[0] + '\nreturn shotWantsFinal;')(
+        Module, { limits: () => w.limits }, () => w.allowed, { now: () => w.now });
+    assert.equal(wants(), false, 'no reporter');
+    Module.jkLadder = { ended: null };
+    assert.equal(wants(), false, 'no level has ended');
+    // What ladder.js keeps of the last level: how it ended, and whether the lobby had a report of it.
+    const ladder = readFileSync(new URL('../ladder.js', import.meta.url), 'utf8');
+    assert.ok(ladder.includes('L.ended = { at: now(), left: !!left, told: L.sentAt > 0, host: L.host };'));
+    const ended = more => { Module.jkLadder.ended = { at: 99_000, left: false, told: true, host: false, ...more }; return wants(); };
+    assert.equal(ended(), true, 'a level that ended');
+    // A host that leaves ends the match for everyone, and the others are thrown out to their score screens:
+    // each has the match's last. The lobby says whether a player who left did so with the host.
+    assert.equal(ended({ left: true, host: true }), true, 'the host left');
+    assert.equal(ended({ left: true }), true, 'another player left, or was thrown out with the host');
+    assert.equal(ended({ told: false }), false, 'a level the lobby never heard of');
+    assert.equal(ended({ left: true, told: false }), false);
+    assert.equal(ended({ shot: 1 }), false, 'one a level');
+    assert.equal(ended({ at: 100_000 - 60_000 }), false, 'a score screen long after');
+    w.allowed = false;
+    assert.equal(ended(), false, "a player who doesn't share");
+    w.allowed = true;
+    w.limits = null;
+    assert.equal(ended({ left: true, host: true }), false, 'a lobby that takes no pictures');
+    // The picture goes with how the level ended for this game, which the lobby needs to tell a match's
+    // last score screen from one of a player who left a match that went on.
+    assert.match(glue, /function shotFinal\(rgba, w, h\) \{[^}]*var host = !!ended\.host, left = !!ended\.left;/);
+    assert.ok(glue.includes('shotShare.takeFinal(images, taken, host, left);'));
+});
+
+test("the final scoreboard is kept until it's sent, and the page that loads after a player quits sends it", async () => {
+    const P = page();
+    let answers = [];
+    const lobby = (method) => method === 'GET' ? answers.shift() : [200, { id: ID(6), match: 4, secs: 300, left: 1 }];
+    const wait = [200, { no: 'none', wait: true }], go = [200, { match: 4, secs: 300, left: 1 }];
+    const { sharer, w, store } = await sharing(P, [['a.png', 3, '']], lobby);
+    sharer.limits(P.shotLimits(LIMITS));
+    // The page that loads next: its own sharer, clock and timers, over the browser's one store.
+    const next = async () => {
+        const made = await sharing(P, [], lobby, { store });
+        made.w.now = w.now;
+        made.sharer.limits(P.shotLimits(LIMITS));
+        return made;
+    };
+    const kept = async () => { const k = await store.kept('final'); return k && [k.v, k.taken, k.host, k.full, k.thumb]; };
+
+    // The host leaves, and its match isn't saved yet. The lobby is told that the player left (the level
+    // didn't end), with every ask.
+    const taken = w.now;
+    answers = [wait];
+    sharer.takeFinal({ full: 'final', thumb: 't' }, taken, true, true);
+    await w.pass(0);
+    assert.deepEqual(w.take(), [`GET /ladder/shot?age=0&taken=${taken}&final=1&left=1`]);
+    assert.deepEqual(await kept(), [1, taken, true, 'final', 't']);
+    assert.equal((await store.kept('final')).left, true);
+    assert.deepEqual((await store.list()).map(m => m.key), ['a.png'], 'not one of Your Screenshots');
+    // The player quits the game: the page loads anew, with nothing of the old one but the store.
+    w.now += 4000;
+    let b = await next();
+    answers = [go];
+    await b.sharer.resumeFinal();
+    assert.equal(b.sharer.pendingFinal(), true);
+    await b.w.pass(0);
+    assert.deepEqual(b.w.take(), [`GET /ladder/shot?age=4000&taken=${taken}&final=1&left=1`,
+                                  `POST /ladder/shot?age=4000&taken=${taken}&final=1&left=1 {"form":"final"}`]);
+    await settle();
+    assert.deepEqual([b.sharer.pendingFinal(), await kept()], [false, null], 'sent, and kept no longer');
+    // Nothing is left for the page after that one, however often it looks.
+    b = await next();
+    await b.sharer.resumeFinal();
+    b.sharer.nudge();
+    b.sharer.saved();
+    await b.w.pass(60000);
+    assert.deepEqual([b.w.take().length, b.sharer.pendingFinal()], [0, false]);
+
+    // One this page sent itself is kept no longer either.
+    answers = [go];
+    sharer.takeFinal({ full: 'second', thumb: 't' }, w.now, true);
+    await w.pass(0);
+    await settle();
+    assert.deepEqual([w.take().length, sharer.pendingFinal(), await kept()], [2, false, null]);
+
+    // A page that ran out of tries leaves it for the next, which a later list or a saved match starts.
+    answers = Array.from({ length: P.SHOT_FINAL_TRIES }, () => wait);
+    const third = w.now;
+    sharer.takeFinal({ full: 'third', thumb: 't' }, third, false);
+    await w.pass(P.SHOT_FINAL_WAIT_MS + P.SHOT_FINAL_SPREAD_MS + P.SHOT_FINAL_RETRY_MS * P.SHOT_FINAL_TRIES);
+    assert.deepEqual([w.take().length, sharer.pendingFinal()], [P.SHOT_FINAL_TRIES, false]);
+    assert.deepEqual(await kept(), [1, third, false, 'third', 't']);
+    b = await next();
+    b.w.now = w.now;
+    answers = [wait, go];
+    b.sharer.nudge();
+    await settle();
+    await b.w.pass(P.SHOT_FINAL_RETRY_MS);
+    assert.deepEqual(b.w.take().map(c => c.split(' ')[0]), ['GET', 'GET', 'POST']);
+    await settle();
+    assert.equal(await kept(), null);
+
+    // Kept longer than the page that took it would try: that page asks no more and leaves it,
+    // and the next still sends it, within the hour.
+    const old = w.now;
+    sharer.takeFinal({ full: 'old', thumb: 't' }, old, false);
+    w.now = old + P.SHOT_FINAL_MS + 1;
+    sharer.saved();
+    await w.pass(P.SHOT_FINAL_WAIT_MS);
+    assert.deepEqual([w.take().length, sharer.pendingFinal(), (await kept())[3]], [0, false, 'old']);
+    w.now = old;
+    b = await next();
+    b.w.now = old + P.SHOT_FINAL_KEEP_MS - 1000;
+    answers = [go];
+    await b.sharer.resumeFinal();
+    await b.w.pass(0);
+    assert.deepEqual(b.w.take().map(c => c.split(' ').pop()), [`/ladder/shot?age=${P.SHOT_FINAL_KEEP_MS - 1000}&taken=${old}&final=1`, '{"form":"old"}']);
+    await settle();
+    // Past that it's taken out unasked, and so is anything that isn't one.
+    for (const [what, at] of [[{ v: 1, taken: old, host: true, full: 'old', thumb: 't' }, old + P.SHOT_FINAL_KEEP_MS + 1],
+                              [{ v: 1, taken: old + 5000, host: true, full: 'old', thumb: 't' }, old],
+                              [{ v: 2, taken: old, full: 'x', thumb: 't' }, old], [{ v: 1, taken: old, thumb: 't' }, old], ['junk', old]]) {
+        await store.keep('final', what);
+        b = await next();
+        b.w.now = at;
+        await b.sharer.resumeFinal();
+        await b.w.pass(60000);
+        await settle();
+        assert.deepEqual([b.w.take().length, b.sharer.pendingFinal(), await kept()], [0, false, null], JSON.stringify(what));
+    }
+
+    // The lobby has no place for it (a player who left a match that went on): dropped for good.
+    answers = [[200, { no: 'none', wait: false }]];
+    sharer.takeFinal({ full: 'early', thumb: 't' }, w.now, true);
+    await w.pass(0);
+    await settle();
+    assert.deepEqual([w.take().length, sharer.pendingFinal(), await kept()], [1, false, null]);
+
+    // A page that can't send now (no key yet, say) leaves it alone, and takes it up when it can.
+    const fifth = w.now;
+    await store.keep('final', { v: 1, taken: fifth, host: true, full: 'fifth', thumb: 't' });
+    b = await next();
+    b.w.allowed = false;
+    await b.sharer.resumeFinal();
+    await b.w.pass(60000);
+    assert.deepEqual([b.w.take().length, b.sharer.pendingFinal(), (await kept())[3]], [0, false, 'fifth']);
+    b.w.allowed = true;
+    answers = [go];
+    b.sharer.saved();
+    await settle();
+    await b.w.pass(0);
+    assert.deepEqual(b.w.take().map(c => c.split(' ')[0]), ['GET', 'POST']);
+    await settle();
+    assert.equal(await kept(), null);
+
+    // A player who unticks the box: the one waiting isn't sent, by this page or the next.
+    answers = [wait];
+    sharer.takeFinal({ full: 'sixth', thumb: 't' }, w.now, true);
+    await w.pass(0);
+    w.take();
+    await sharer.keepAllBack();
+    await w.pass(60000);
+    assert.deepEqual([w.take().length, sharer.pendingFinal(), await kept()], [0, false, null]);
+
+    // Two tabs: a page done with an older one leaves the other's newer one in the store.
+    answers = [wait, [200, { no: 'have' }]];
+    sharer.takeFinal({ full: 'mine', thumb: 't' }, w.now, true);
+    await w.pass(0);
+    await store.keep('final', { v: 1, taken: w.now + 1, host: true, full: 'theirs', thumb: 't' });
+    await w.pass(P.SHOT_FINAL_RETRY_MS);
+    await settle();
+    assert.deepEqual([w.take().length, sharer.pendingFinal(), (await kept())[3]], [2, false, 'theirs']);
+    await store.unkeep('final');
+
+    // A browser with no store for it sends as before, and keeps nothing.
+    const bare = P.shotSharer({
+        store: { list: async () => [], read: async () => null, patch: async () => null },
+        fetch: async (url, init = {}) => { w.calls.push((init.method || 'GET') + ' ' + url); const [status, answer] = go; return { status, json: async () => answer }; },
+        now: () => w.now, allowed: () => true, levelSince: () => 0, form: images => ({ form: images.full }), changed: () => {},
+        warn: text => w.warned.push(text), setTimeout: (fn, ms) => { const t = { fn, at: w.now + ms }; w.timers.push(t); return t; },
+        clearTimeout: t => { w.timers = w.timers.filter(x => x !== t); }, random: () => 0.5,
+    });
+    bare.limits(P.shotLimits(LIMITS));
+    await bare.resumeFinal();
+    bare.takeFinal({ full: 'bare', thumb: 't' }, w.now, true);
+    await w.pass(0);
+    assert.deepEqual([w.take().length, bare.pendingFinal()], [2, false]);
+    await bare.keepAllBack();
+    assert.deepEqual(w.warned, []);
 });
 
 let failed = 0;

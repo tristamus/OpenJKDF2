@@ -27,9 +27,9 @@
 
 // Added: the browser build's picture of the final scoreboard, for the match's
 // page on the lobby. The page (index.html, Module.jkScreenshots) says whether
-// one is wanted: only of a level that ended as a level does, not of this
-// player leaving one, in a match the lobby keeps a record of, from a player
-// who shares their screenshots. It's taken of the first score screen shown
+// one is wanted: after a level that ended or that this player left (a host's
+// leaving ends the match for all), in a match the lobby keeps a record of,
+// from a player who shares theirs. It's taken of the first score screen shown
 // (the teams' in a team game) once that has been up for a few rounds, and
 // never of a dialog over it. WebGL clears the window as soon as the browser
 // shows it, so it's read back between a frame's drawing and its showing
