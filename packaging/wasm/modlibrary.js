@@ -427,7 +427,8 @@
                 var list = Array.from(folders.entries()).sort(function(a, b) { return b[1].length - a[1].length; });
                 for (var fd of list) {
                     var shown = fd[1].slice(0, 8);
-                    out.push('  ' + plain(fd[0]) + '\t' + plain(shown.join(', ')) +
+                    // No tab: a folder's name can be longer than the labels' column.
+                    out.push('  ' + plain(fd[0]) + ': ' + plain(shown.join(', ')) +
                              (fd[1].length > shown.length ? ', and ' + (fd[1].length - shown.length) + ' more' : ''));
                 }
             } else {

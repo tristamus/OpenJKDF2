@@ -151,7 +151,7 @@
         overview: 'Author:\tThe SBX Team\nKind:\tGameplay\n\nWhen you host with it, players who join get it from you.',
         changes: 'What Get Mod adds to the game, by file name.\n\n' +
                  "Replaces:\t318 of the game's own files: 14 scripts, 6 models\n" +
-                 '  cog\tforce_blinding.cog, force_destruction.cog\n' +
+                 '  cog: force_blinding.cog, force_destruction.cog\n' +
                  'Adds:\t1,526 new files: 1,411 models'
     };
 

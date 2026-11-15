@@ -1038,7 +1038,7 @@ static void modsOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         click(menu, &el[E_TAB_CHANGES], 0);
         CHECK(el[E_TAB_CHANGES].type == ELEMENT_TEXT && el[E_TAB_OVERVIEW].type == ELEMENT_TEXTBUTTON, "Changes is the open tab");
         CHECK(el[E_TEXT].bIsVisible && !el[E_FACTS].bIsVisible && !el[E_SHOT].bIsVisible && !el[E_PV].bIsVisible, "its text, no pictures");
-        CHECK(hasLine(&el[E_TEXT], "Adds:\t1,526 new files: 1,411 models") && hasLineStarting(&el[E_TEXT], "  cog\tforce_blinding.cog,"),
+        CHECK(hasLine(&el[E_TEXT], "Adds:\t1,526 new files: 1,411 models") && hasLineStarting(&el[E_TEXT], "  cog: force_blinding.cog,"),
               "what it changes, from the page");
         checkLinesFit(&el[E_TEXT], 80, "changes");
         listDraws = 0;

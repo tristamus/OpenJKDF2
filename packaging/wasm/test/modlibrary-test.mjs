@@ -251,7 +251,7 @@ await test('Changes: by name against the game\'s own files, inside the mod\'s GO
     await details(tab);
     const c = L(tab).text(T.CHANGES).split('\n');
     assert.ok(c.includes("Replaces:\t2 of the game's own files: 2 scripts"), c.join('\n'));
-    assert.ok(c.includes('  cog\tforce_push.cog, force_pull.cog'), c.join('\n'));
+    assert.ok(c.includes('  cog: force_push.cog, force_pull.cog'), c.join('\n'));
     assert.ok(c.includes('Adds:\t2 new files: 1 model, 1 script'), c.join('\n'));
     assert.ok(c.includes("Left out:\tsetup.exe: programs, which the browser can't run."), c.join('\n'));
     pick(tab, 'Kyle Skin');
@@ -261,7 +261,7 @@ await test('Changes: by name against the game\'s own files, inside the mod\'s GO
     // By folder: 3do/key's animations apart from 3do's models.
     const nested = L(tab)._changesText({}, { mod: { plan: { files: [['m/3do/kyle.3do', '3do/kyle.3do'],
                                                                      ['m/3do/key/kyrun.key', '3do/key/kyrun.key']] } } }).split('\n');
-    assert.ok(nested.includes('  3do\tkyle.3do') && nested.includes('  3do/key\tkyrun.key'), nested.join('\n'));
+    assert.ok(nested.includes('  3do: kyle.3do') && nested.includes('  3do/key: kyrun.key'), nested.join('\n'));
 });
 
 await test('a Word readme without the line of Word\'s own bytes before its words', async () => {
