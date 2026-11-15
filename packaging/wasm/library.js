@@ -1073,6 +1073,13 @@
             }
         },
         gobFromSite: gobFromSite,
+        // For the Mod Library (modlibrary.js), which reads the site's zips and
+        // writes episodes the same way.
+        util: {
+            size: size, dateText: dateText, plain: plain, sha256: sha256, fail: fail,
+            zipEntries: zipEntries, zipData: zipData, download: download,
+            placeEpisode: function(g, l, game, bytes, job) { return place(g, l, game, bytes, job, true); }
+        },
         // The episode the library installed, '' if none.
         take: function() {
             var name = L.result;

@@ -238,7 +238,10 @@ A player who joins a game with a custom map they don't have gets it from the hos
 (`packaging/wasm/maps.js`, bundled into `openjkdf2.js`). Files in the map that are copies of the
 original game's are never sent: the joiner rebuilds them from their own install. Its tests run in
 Node 22 without game files: `node packaging/wasm/test/maps-test.mjs`. The same goes for sharing
-mods (`mods-test.mjs`) and the page's mod list, including zipped mods (`picker-test.mjs`).
+mods (`mods-test.mjs`), the page's mod list, including zipped mods (`picker-test.mjs`), and the Mod
+Library's page side (`packaging/wasm/modlibrary.js`, `modlibrary-test.mjs`). The Mod Library's list in
+the page's Choose mods is tested in Chromium with Playwright (`library-mods-test.mjs`), as the Level
+Library's page side is (`library-test.mjs`).
 
 For local testing only, configure with `-DOPENJKDF2_WASM_PRELOAD_DATA=ON` after copying your
 `jk1/` (and/or `mots/`) game folders into `wasm_out/`, then open `index.html#bundled`. That bakes the

@@ -7,6 +7,13 @@
 // changed and tells it what the player picks. The one thing the menu can't
 // draw, a level's screenshot in full color, the page puts over the frame the
 // menu leaves for it.
+//
+// The Mod Library (Mod Library on the main menu, Gui/jkGUIMain.c) is the same
+// menu over packaging/wasm/modlibrary.js: other filters (Gameplay, Characters,
+// Graphics, My mods, Campaigns), a Changes tab, both screenshots side by side
+// where the Level Library has its 3D view, and Get Mod, which saves the mod in
+// this browser and then reads Restart With It: the engine starts again with
+// the mod (jkGuiLibrary_ShowMods returns its path).
 
 #ifdef PLATFORM_WSRELAY
 
@@ -61,6 +68,9 @@ enum jkGuiLibraryElement_t
     LIB_PV = 25,
     LIB_PV_TEXT = 26,
     LIB_FILTER_MINE = 27,
+    // The Mod Library's
+    LIB_FILTER_CAMPAIGNS = 28,
+    LIB_TAB_CHANGES = 29,
 };
 
 // The big 3D view's elements.
@@ -82,7 +92,16 @@ enum jkGuiLibraryTab_t
     LIB_TAB_IS_OVERVIEW = 0,
     LIB_TAB_IS_README = 1,
     LIB_TAB_IS_FILES = 2,
+    LIB_TAB_IS_CHANGES = 3, // the Mod Library's
 };
+
+#define LIB_NUM_TABS (4)
+
+// The tabs from left to right, by LIB_TAB_IS_*.
+static const int jkGuiLibrary_aTabElements[LIB_NUM_TABS] = {LIB_TAB_OVERVIEW, LIB_TAB_README, LIB_TAB_FILES, LIB_TAB_CHANGES};
+// Their order on the screen: the Mod Library has Changes second.
+static const int jkGuiLibrary_aLevelTabs[] = {LIB_TAB_IS_OVERVIEW, LIB_TAB_IS_README, LIB_TAB_IS_FILES, -1};
+static const int jkGuiLibrary_aModTabs[] = {LIB_TAB_IS_OVERVIEW, LIB_TAB_IS_CHANGES, LIB_TAB_IS_README, LIB_TAB_IS_FILES, -1};
 
 // What changed since the menu last asked (library.js, CH_*).
 #define LIB_CH_STATUS (1)
@@ -109,6 +128,11 @@ enum jkGuiLibraryTab_t
 #define LIB_TEXT_VIEW_NOTE (11)
 #define LIB_TEXT_VIEW_MODE (12)
 #define LIB_TEXT_VIEW_NEXT (13)
+// The Mod Library's: the Changes tab, and the Use button's words and hint
+// (Get Mod, Restart With It).
+#define LIB_TEXT_CHANGES (14)
+#define LIB_TEXT_USE (15)
+#define LIB_TEXT_USE_HINT (16)
 
 #define LIB_NUM_CHANGED (0)
 #define LIB_NUM_COUNT (1)
@@ -196,6 +220,9 @@ static jkGuiElement jkGuiLibrary_aElements[] =
     { ELEMENT_CUSTOM,     0, 0, NULL, 0, { 474, 104, 156, 117 }, 1, 0, NULL, jkGuiLibrary_ShotDraw, jkGuiLibrary_PreviewClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 474, 104, 156, 117 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,   0, 0, u"My levels", 0, { 162, 128, 138, 24 }, 1, 0, u"Show only the levels saved in this browser: ones you used here, or got from a host.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    // The Mod Library's: Campaigns, and the Changes tab.
+    { ELEMENT_CHECKBOX,   0, 0, u"Campaigns", 0, { 162, 128, 138, 24 }, 0, 0, u"Show single-player campaigns. The Host screen lists their episodes with Experimental Co-op ticked under Advanced.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON, 0, 2, u"Changes", 3, { 391, 78, 77, 24 }, 0, 0, u"Which of the game's own files the mod replaces, and what it adds.", NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_END,        0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 };
 
@@ -227,15 +254,65 @@ static jkGuiMenu jkGuiLibrary_viewMenu =
 };
 
 // The search, filters, sort and tab stay as the player left them, for the
-// next time the library opens.
+// next time the library opens. These are the open library's; each library
+// keeps its own while the other is open (jkGuiLibrary_aKept).
 static char16_t jkGuiLibrary_search[LIB_SEARCH_MAX + 1];
 static char16_t jkGuiLibrary_lastSearch[LIB_SEARCH_MAX + 1];
+// The Level Library's Multiplayer, CTF, Co-op; the Mod Library's Gameplay,
+// Characters, Graphics.
 static int jkGuiLibrary_filterMp = 1;
 static int jkGuiLibrary_filterCtf = 1;
 static int jkGuiLibrary_filterCoop = 0;
 static int jkGuiLibrary_filterMine = 0;
+static int jkGuiLibrary_filterCampaigns = 0;
 static int jkGuiLibrary_sort = 0;
 static int jkGuiLibrary_tab = LIB_TAB_IS_OVERVIEW;
+// Whether the open library is the Mod Library.
+static int jkGuiLibrary_bMods = 0;
+
+typedef struct jkGuiLibraryKept
+{
+    char16_t search[LIB_SEARCH_MAX + 1];
+    int filters[5];
+    int sort;
+    int tab;
+} jkGuiLibraryKept;
+
+// The Level Library's and the Mod Library's, while the other is open. The Mod
+// Library shows every kind but campaigns at first.
+static jkGuiLibraryKept jkGuiLibrary_aKept[2] = {
+    {{0}, {1, 1, 0, 0, 0}, 0, LIB_TAB_IS_OVERVIEW},
+    {{0}, {1, 1, 1, 0, 0}, 0, LIB_TAB_IS_OVERVIEW},
+};
+
+static void jkGuiLibrary_TakeKept(int bMods)
+{
+    jkGuiLibraryKept* k = &jkGuiLibrary_aKept[bMods ? 1 : 0];
+    memcpy(jkGuiLibrary_search, k->search, sizeof(jkGuiLibrary_search));
+    memcpy(jkGuiLibrary_lastSearch, k->search, sizeof(jkGuiLibrary_lastSearch));
+    jkGuiLibrary_filterMp = k->filters[0];
+    jkGuiLibrary_filterCtf = k->filters[1];
+    jkGuiLibrary_filterCoop = k->filters[2];
+    jkGuiLibrary_filterMine = k->filters[3];
+    jkGuiLibrary_filterCampaigns = k->filters[4];
+    jkGuiLibrary_sort = k->sort;
+    jkGuiLibrary_tab = k->tab;
+    if (!bMods && jkGuiLibrary_tab == LIB_TAB_IS_CHANGES)
+        jkGuiLibrary_tab = LIB_TAB_IS_OVERVIEW;
+}
+
+static void jkGuiLibrary_KeepState(int bMods)
+{
+    jkGuiLibraryKept* k = &jkGuiLibrary_aKept[bMods ? 1 : 0];
+    memcpy(k->search, jkGuiLibrary_search, sizeof(k->search));
+    k->filters[0] = jkGuiLibrary_filterMp;
+    k->filters[1] = jkGuiLibrary_filterCtf;
+    k->filters[2] = jkGuiLibrary_filterCoop;
+    k->filters[3] = jkGuiLibrary_filterMine;
+    k->filters[4] = jkGuiLibrary_filterCampaigns;
+    k->sort = jkGuiLibrary_sort;
+    k->tab = jkGuiLibrary_tab;
+}
 
 static Darray jkGuiLibrary_rows;
 static Darray jkGuiLibrary_facts;
@@ -254,31 +331,37 @@ static char16_t* jkGuiLibrary_pViewHelp = NULL;
 static char16_t* jkGuiLibrary_pViewNote = NULL;
 static char16_t* jkGuiLibrary_pViewMode = NULL;
 static char16_t* jkGuiLibrary_pViewNext = NULL;
+static char16_t* jkGuiLibrary_pUse = NULL;
+static char16_t* jkGuiLibrary_pUseHint = NULL;
 // What changed while the big 3D view was up, for the library after it.
 static int jkGuiLibrary_pending = 0;
 
 // ---- library.js
 
-EM_JS(int, jkGuiLibrary_js_available, (), {
-    return Module.jkLibrary && Module.jkLibrary.available() ? 1 : 0;
+// The Level Library (library.js) or the Mod Library (modlibrary.js): the
+// same calls, to whichever is open.
+EM_JS(int, jkGuiLibrary_js_available, (int bMods), {
+    var L = bMods ? Module.jkModLibrary : Module.jkLibrary;
+    return L && L.available() ? 1 : 0;
 });
 
-EM_JS(int, jkGuiLibrary_js_begin, (int bMots), {
-    return Module.jkLibrary && Module.jkLibrary.begin(bMots ? 'mots' : 'jk1') ? 1 : 0;
+EM_JS(int, jkGuiLibrary_js_begin, (int bMots, int bMods), {
+    Module.jkLibraryNow = bMods ? Module.jkModLibrary : Module.jkLibrary;
+    return Module.jkLibraryNow && Module.jkLibraryNow.begin(bMots ? 'mots' : 'jk1') ? 1 : 0;
 });
 
 EM_JS(void, jkGuiLibrary_js_end, (), {
-    if (Module.jkLibrary)
-        Module.jkLibrary.end();
+    if (Module.jkLibraryNow)
+        Module.jkLibraryNow.end();
 });
 
 EM_JS(int, jkGuiLibrary_js_number, (int what), {
-    return Module.jkLibrary ? (Module.jkLibrary.number(what) | 0) : 0;
+    return Module.jkLibraryNow ? (Module.jkLibraryNow.number(what) | 0) : 0;
 });
 
 // A text from library.js: its length first (kept for the copy that follows).
 EM_JS(int, jkGuiLibrary_js_textLength, (int what, int arg), {
-    var s = Module.jkLibrary ? String(Module.jkLibrary.text(what, arg)) : "";
+    var s = Module.jkLibraryNow ? String(Module.jkLibraryNow.text(what, arg)) : "";
     Module.jkLibraryLastText = s;
     return s.length;
 });
@@ -296,57 +379,57 @@ EM_JS(void, jkGuiLibrary_js_query, (const char16_t* pSearch, int filters, int so
     var q = "";
     for (var i = 0; HEAPU16[(pSearch >> 1) + i]; i++)
         q += String.fromCharCode(HEAPU16[(pSearch >> 1) + i]);
-    if (Module.jkLibrary)
-        Module.jkLibrary.query(q, filters, sort);
+    if (Module.jkLibraryNow)
+        Module.jkLibraryNow.query(q, filters, sort);
 });
 
 EM_JS(void, jkGuiLibrary_js_select, (int idx), {
-    if (Module.jkLibrary)
-        Module.jkLibrary.select(idx);
+    if (Module.jkLibraryNow)
+        Module.jkLibraryNow.select(idx);
 });
 
 EM_JS(int, jkGuiLibrary_js_use, (), {
-    return Module.jkLibrary && Module.jkLibrary.use() ? 1 : 0;
+    return Module.jkLibraryNow && Module.jkLibraryNow.use() ? 1 : 0;
 });
 
 EM_JS(int, jkGuiLibrary_js_cancel, (), {
-    return Module.jkLibrary && Module.jkLibrary.cancel() ? 1 : 0;
+    return Module.jkLibraryNow && Module.jkLibraryNow.cancel() ? 1 : 0;
 });
 
 EM_JS(void, jkGuiLibrary_js_page, (), {
-    if (Module.jkLibrary)
-        Module.jkLibrary.page();
+    if (Module.jkLibraryNow)
+        Module.jkLibraryNow.page();
 });
 
 EM_JS(void, jkGuiLibrary_js_shot, (int bOn, int x, int y, int w, int h), {
-    if (Module.jkLibrary)
-        Module.jkLibrary.shot(bOn, x, y, w, h);
+    if (Module.jkLibraryNow)
+        Module.jkLibraryNow.shot(bOn, x, y, w, h);
 });
 
 EM_JS(void, jkGuiLibrary_js_preview, (int bOn, int x, int y, int w, int h), {
-    if (Module.jkLibrary && Module.jkLibrary.preview)
-        Module.jkLibrary.preview(bOn, x, y, w, h);
+    if (Module.jkLibraryNow && Module.jkLibraryNow.preview)
+        Module.jkLibraryNow.preview(bOn, x, y, w, h);
 });
 
 EM_JS(void, jkGuiLibrary_js_view, (int bOn, int x, int y, int w, int h), {
-    if (Module.jkLibrary && Module.jkLibrary.view)
-        Module.jkLibrary.view(bOn, x, y, w, h);
+    if (Module.jkLibraryNow && Module.jkLibraryNow.view)
+        Module.jkLibraryNow.view(bOn, x, y, w, h);
 });
 
 // 1: Walk or Orbit, 2: the next starting place (Walk) or map (Orbit), 3:
 // try again after the 3D view didn't load.
 EM_JS(void, jkGuiLibrary_js_viewCommand, (int cmd), {
-    if (Module.jkLibrary && Module.jkLibrary.viewCommand)
-        Module.jkLibrary.viewCommand(cmd);
+    if (Module.jkLibraryNow && Module.jkLibraryNow.viewCommand)
+        Module.jkLibraryNow.viewCommand(cmd);
 });
 
 EM_JS(void, jkGuiLibrary_js_nextShot, (), {
-    if (Module.jkLibrary)
-        Module.jkLibrary.nextShot();
+    if (Module.jkLibraryNow)
+        Module.jkLibraryNow.nextShot();
 });
 
 EM_JS(void, jkGuiLibrary_js_take, (char* pOut, int outLen), {
-    stringToUTF8(Module.jkLibrary ? Module.jkLibrary.take() : "", pOut, outLen);
+    stringToUTF8(Module.jkLibraryNow ? Module.jkLibraryNow.take() : "", pOut, outLen);
 });
 
 static char16_t* jkGuiLibrary_GetText(int what, int arg)
@@ -692,7 +775,7 @@ static void jkGuiLibrary_PlainListDraw(jkGuiElement *pElement, jkGuiMenu *pMenu,
         fonts[i] = pMenu->fonts[i];
     fonts[last] = pMenu->fonts[pElement->textType];
     tmp.fonts = fonts;
-    if (pElement == &jkGuiLibrary_aElements[LIB_FACTS])
+    if (pElement == &jkGuiLibrary_aElements[LIB_FACTS] || jkGuiLibrary_tab == LIB_TAB_IS_CHANGES)
         tmp.paddings = (intptr_t)jkGuiLibrary_factsPaddings;
     else if (jkGuiLibrary_tab == LIB_TAB_IS_FILES)
         tmp.paddings = (intptr_t)jkGuiLibrary_filesPaddings;
@@ -757,30 +840,43 @@ static void jkGuiLibrary_ShowTab(jkGuiMenu* pMenu)
 {
     jkGuiElement* el = jkGuiLibrary_aElements;
     int bOverview = jkGuiLibrary_tab == LIB_TAB_IS_OVERVIEW;
-    int bShots = jkGuiLibrary_js_number(LIB_NUM_SHOTS) > 0;
+    int shots = jkGuiLibrary_js_number(LIB_NUM_SHOTS);
+    int bShots = shots > 0;
     // With no level picked (an empty list), the details' text says why, with
     // no picture frames beside it.
     int bPicked = jkGuiLibrary_js_number(LIB_NUM_SELECTED) >= 0;
 
     // The tab that's open is drawn lit and isn't a button.
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < LIB_NUM_TABS; i++)
     {
-        jkGuiElement* pTab = &el[LIB_TAB_OVERVIEW + i];
+        jkGuiElement* pTab = &el[jkGuiLibrary_aTabElements[i]];
         int bOpen = jkGuiLibrary_tab == i;
         pTab->type = bOpen ? ELEMENT_TEXT : ELEMENT_TEXTBUTTON;
         pTab->textType = bOpen ? 3 : 2;
     }
     el[LIB_SHOT].bIsVisible = bOverview && bPicked;
     el[LIB_NO_SHOT].bIsVisible = bOverview && bPicked && !bShots;
-    el[LIB_SHOT].wHintText = bShots && jkGuiLibrary_js_number(LIB_NUM_SHOTS) > 1 ? u"Click the picture for the next screenshot." : NULL;
     el[LIB_LEVEL_TITLE].bIsVisible = bOverview;
     el[LIB_FACTS].bIsVisible = bOverview;
     el[LIB_TEXT].bIsVisible = !bOverview;
     int pv = jkGuiLibrary_js_number(LIB_NUM_PV);
-    el[LIB_PV].bIsVisible = bOverview && bPicked;
-    el[LIB_PV_TEXT].bIsVisible = bOverview && bPicked && pv != 2;
-    el[LIB_PV].wHintText = pv == 1 || pv == 2 ? u"Click for a bigger 3D view you can move around in."
-                         : pv == 3 ? u"Click to try the 3D view again." : NULL;
+    if (jkGuiLibrary_bMods)
+    {
+        // A mod's second screenshot where a level's 3D view would be (the
+        // page puts it there), and nothing there without one.
+        el[LIB_SHOT].wHintText = NULL;
+        el[LIB_PV].bIsVisible = bOverview && bPicked && shots > 1;
+        el[LIB_PV_TEXT].bIsVisible = 0;
+        el[LIB_PV].wHintText = NULL;
+    }
+    else
+    {
+        el[LIB_SHOT].wHintText = bShots && shots > 1 ? u"Click the picture for the next screenshot." : NULL;
+        el[LIB_PV].bIsVisible = bOverview && bPicked;
+        el[LIB_PV_TEXT].bIsVisible = bOverview && bPicked && pv != 2;
+        el[LIB_PV].wHintText = pv == 1 || pv == 2 ? u"Click for a bigger 3D view you can move around in."
+                             : pv == 3 ? u"Click to try the 3D view again." : NULL;
+    }
     // A text box the player clicked in (which focuses it) that's now hidden
     // gives the focus to the list of levels: the menu system, drawing it
     // hidden, would otherwise look for where the focus goes next forever.
@@ -788,7 +884,7 @@ static void jkGuiLibrary_ShowTab(jkGuiMenu* pMenu)
         pMenu->focusedElement = &el[LIB_LIST];
     jkGuiLibrary_js_shot(bOverview && bPicked && bShots, el[LIB_SHOT].rect.x + 1, el[LIB_SHOT].rect.y + 1,
                          el[LIB_SHOT].rect.width - 2, el[LIB_SHOT].rect.height - 2);
-    jkGuiLibrary_js_preview(bOverview && bPicked, el[LIB_PV].rect.x + 1, el[LIB_PV].rect.y + 1,
+    jkGuiLibrary_js_preview(el[LIB_PV].bIsVisible, el[LIB_PV].rect.x + 1, el[LIB_PV].rect.y + 1,
                             el[LIB_PV].rect.width - 2, el[LIB_PV].rect.height - 2);
 }
 
@@ -818,6 +914,11 @@ static void jkGuiLibrary_FillPanel()
     {
         pText = jkGuiLibrary_GetText(LIB_TEXT_README, 0);
         jkGuiLibrary_FillLines(&jkGuiLibrary_text, &el[LIB_TEXT], pText, 0);
+    }
+    else if (jkGuiLibrary_tab == LIB_TAB_IS_CHANGES)
+    {
+        pText = jkGuiLibrary_GetText(LIB_TEXT_CHANGES, 0);
+        jkGuiLibrary_FillLines(&jkGuiLibrary_text, &el[LIB_TEXT], pText, jkGuiLibrary_factsPaddings[0]);
     }
     else
     {
@@ -875,6 +976,25 @@ static void jkGuiLibrary_ShowUse(jkGuiMenu* pMenu)
     int bBusy = jkGuiLibrary_js_number(LIB_NUM_BUSY);
     int bUse = !bBusy && jkGuiLibrary_js_number(LIB_NUM_CAN_USE);
 
+    // The Mod Library's Use button says Get Mod or Restart With It, and its
+    // Back is Stop while a mod comes in.
+    if (jkGuiLibrary_bMods)
+    {
+        jkGuiLibrary_SetText(&el[LIB_USE_BUTTON], &jkGuiLibrary_pUse, jkGuiLibrary_GetText(LIB_TEXT_USE, 0));
+        if (jkGuiLibrary_pUseHint)
+            free(jkGuiLibrary_pUseHint);
+        jkGuiLibrary_pUseHint = jkGuiLibrary_GetText(LIB_TEXT_USE_HINT, 0);
+        el[LIB_USE_BUTTON].wHintText = jkGuiLibrary_pUseHint;
+        el[LIB_CANCEL_BUTTON].wstr = bBusy ? u"Stop" : u"Back";
+        el[LIB_CANCEL_BUTTON].wHintText = bBusy ? u"Stops getting the mod." : NULL;
+        if (pMenu)
+        {
+            jkGuiRend_UpdateAndDrawClickable(&el[LIB_CANCEL_BUTTON], pMenu, 1);
+            if (el[LIB_USE_BUTTON].bIsVisible && bUse)
+                jkGuiRend_UpdateAndDrawClickable(&el[LIB_USE_BUTTON], pMenu, 1);
+        }
+    }
+
     if (pMenu)
     {
         jkGuiRend_SetVisibleAndDraw(&el[LIB_USE_BUTTON], pMenu, bUse);
@@ -929,7 +1049,7 @@ static void jkGuiLibrary_Refresh(jkGuiMenu* pMenu, int changed)
 static void jkGuiLibrary_Query()
 {
     int filters = (jkGuiLibrary_filterMp ? 1 : 0) | (jkGuiLibrary_filterCtf ? 2 : 0) | (jkGuiLibrary_filterCoop ? 4 : 0) |
-                  (jkGuiLibrary_filterMine ? 8 : 0);
+                  (jkGuiLibrary_filterMine ? 8 : 0) | (jkGuiLibrary_bMods && jkGuiLibrary_filterCampaigns ? 16 : 0);
     jkGuiLibrary_js_query(jkGuiLibrary_search, filters, jkGuiLibrary_sort);
     memcpy(jkGuiLibrary_lastSearch, jkGuiLibrary_search, sizeof(jkGuiLibrary_search));
 }
@@ -971,6 +1091,7 @@ static int jkGuiLibrary_FilterClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, 
     jkGuiLibrary_filterCtf = jkGuiLibrary_aElements[LIB_FILTER_CTF].selectedTextEntry != 0;
     jkGuiLibrary_filterCoop = jkGuiLibrary_aElements[LIB_FILTER_COOP].selectedTextEntry != 0;
     jkGuiLibrary_filterMine = jkGuiLibrary_aElements[LIB_FILTER_MINE].selectedTextEntry != 0;
+    jkGuiLibrary_filterCampaigns = jkGuiLibrary_aElements[LIB_FILTER_CAMPAIGNS].selectedTextEntry != 0;
     jkGuiLibrary_Query();
     return 0;
 }
@@ -1006,8 +1127,13 @@ static int jkGuiLibrary_ListClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, in
 
 static int jkGuiLibrary_TabClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw)
 {
-    int tab = (int)(pElement - &jkGuiLibrary_aElements[LIB_TAB_OVERVIEW]);
-    if (tab < 0 || tab > 2 || tab == jkGuiLibrary_tab)
+    int tab = -1;
+    for (int i = 0; i < LIB_NUM_TABS; i++)
+    {
+        if (pElement == &jkGuiLibrary_aElements[jkGuiLibrary_aTabElements[i]])
+            tab = i;
+    }
+    if (tab < 0 || tab == jkGuiLibrary_tab)
         return 0;
     jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
     jkGuiLibrary_tab = tab;
@@ -1017,7 +1143,8 @@ static int jkGuiLibrary_TabClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int
 
 static int jkGuiLibrary_ShotClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw)
 {
-    if (jkGuiLibrary_js_number(LIB_NUM_SHOTS) > 1)
+    // The Mod Library shows both screenshots at once.
+    if (!jkGuiLibrary_bMods && jkGuiLibrary_js_number(LIB_NUM_SHOTS) > 1)
     {
         jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
         jkGuiLibrary_js_nextShot();
@@ -1029,7 +1156,7 @@ static int jkGuiLibrary_ShotClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, in
 // or coming; one that didn't load tries again.
 static int jkGuiLibrary_PreviewClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int32_t mouseX, int32_t mouseY, BOOL redraw)
 {
-    int pv = jkGuiLibrary_js_number(LIB_NUM_PV);
+    int pv = jkGuiLibrary_bMods ? 0 : jkGuiLibrary_js_number(LIB_NUM_PV);
     if (pv == 3)
     {
         jkGuiLibrary_ClickSound(pMenu, mouseX, mouseY);
@@ -1169,30 +1296,125 @@ static int jkGuiLibrary_UseClicked(jkGuiElement *pElement, jkGuiMenu *pMenu, int
 
 int jkGuiLibrary_IsAvailable()
 {
-    return jkGuiLibrary_js_available();
+    return jkGuiLibrary_js_available(0);
 }
 
-static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAdd);
+int jkGuiLibrary_ModsAvailable()
+{
+    return jkGuiLibrary_js_available(1);
+}
+
+static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAdd, int bMods);
 
 int jkGuiLibrary_Show(int bMots, char* pOutName, int outLen)
 {
-    return jkGuiLibrary_ShowFor(bMots, pOutName, outLen, 0);
+    return jkGuiLibrary_ShowFor(bMots, pOutName, outLen, 0, 0);
 }
 
 int jkGuiLibrary_ShowToAdd(int bMots, char* pOutName, int outLen)
 {
-    return jkGuiLibrary_ShowFor(bMots, pOutName, outLen, 1);
+    return jkGuiLibrary_ShowFor(bMots, pOutName, outLen, 1, 0);
 }
 
-static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAdd)
+int jkGuiLibrary_ShowMods(int bMots, char* pOutPath, int outLen)
+{
+    return jkGuiLibrary_ShowFor(bMots, pOutPath, outLen, 0, 1);
+}
+
+// Puts the tabs in the order given (ending in -1) side by side, equally wide,
+// across the details' width: the Level Library's three are 104 wide, the Mod
+// Library's four 77. The tabs not in the order are hidden.
+static void jkGuiLibrary_LayOutTabs(const int* pOrder)
+{
+    jkGuiElement* el = jkGuiLibrary_aElements;
+    int left = 310, right = 630, gap = 4, n = 0;
+
+    for (int i = 0; i < LIB_NUM_TABS; i++)
+        el[jkGuiLibrary_aTabElements[i]].bIsVisible = 0;
+    while (n < LIB_NUM_TABS && pOrder[n] >= 0)
+        n++;
+    if (!n)
+        return;
+    int w = (right - left - gap * (n - 1)) / n;
+    for (int i = 0; i < n; i++)
+    {
+        jkGuiElement* pTab = &el[jkGuiLibrary_aTabElements[pOrder[i]]];
+        pTab->rect.x = left + i * (w + gap);
+        pTab->rect.width = i == n - 1 ? right - pTab->rect.x : w;
+        pTab->bIsVisible = 1;
+    }
+}
+
+// What differs between the Level Library and the Mod Library. The menu's
+// words and hints are as the table has them after jkGui_InitMenu, the
+// Level Library's; places and what's shown are set here for both.
+static void jkGuiLibrary_SetMode(int bMots, int bToAdd, int bMods)
+{
+    jkGuiElement* el = jkGuiLibrary_aElements;
+
+    el[LIB_FILTER_CAMPAIGNS].bIsVisible = bMods;
+    if (bMods)
+    {
+        el[LIB_TITLE].wstr = u"Mod Library";
+        el[LIB_SEARCH].wHintText = u"Type part of a mod's title or its author's name.";
+        el[LIB_FILTER_MP].wstr = u"Gameplay";
+        el[LIB_FILTER_MP].wHintText = u"Show mods that change how the game plays: weapons, Force powers, game modes.";
+        el[LIB_FILTER_MP].rect.x = 20;
+        el[LIB_FILTER_MP].rect.width = 92;
+        el[LIB_FILTER_CTF].wstr = u"Characters";
+        el[LIB_FILTER_CTF].wHintText = u"Show skins and characters: new models to play as.";
+        el[LIB_FILTER_CTF].rect.x = 112;
+        el[LIB_FILTER_CTF].rect.width = 100;
+        el[LIB_FILTER_COOP].wstr = u"Graphics";
+        el[LIB_FILTER_COOP].wHintText = u"Show mods that change how the game looks: textures, effects, graphics packs.";
+        el[LIB_FILTER_COOP].rect.x = 212;
+        el[LIB_FILTER_COOP].rect.y = 104;
+        el[LIB_FILTER_COOP].rect.width = 88;
+        el[LIB_FILTER_MINE].wstr = u"My mods";
+        el[LIB_FILTER_MINE].wHintText = u"Show only the mods saved in this browser: ones you got here, or from a host.";
+        el[LIB_FILTER_MINE].rect.x = 20;
+        el[LIB_FILTER_MINE].rect.width = 138;
+        el[LIB_LIST].wHintText = u"Mods with * are saved in this browser. Double-click one to get it.";
+        el[LIB_TAB_README].wHintText = u"The text files in the mod's zip.";
+        el[LIB_TAB_FILES].wHintText = u"What's in the mod's zip.";
+        el[LIB_NO_SHOT].wstr = u"No screenshot for this mod";
+        el[LIB_PAGE_BUTTON].wHintText = u"Opens the mod's page on Massassi.net in a new tab.";
+        el[LIB_CANCEL_BUTTON].wstr = u"Back";
+        jkGuiLibrary_LayOutTabs(jkGuiLibrary_aModTabs);
+    }
+    else
+    {
+        el[LIB_FILTER_CTF].wstr = bMots ? u"Kill the Fool" : u"CTF";
+        el[LIB_FILTER_CTF].wHintText = bMots ? u"Show Kill the Fool levels." : u"Show Capture the Flag levels.";
+        el[LIB_FILTER_MP].rect.x = 20;
+        el[LIB_FILTER_MP].rect.width = 138;
+        el[LIB_FILTER_CTF].rect.x = 162;
+        el[LIB_FILTER_CTF].rect.width = 138;
+        el[LIB_FILTER_COOP].rect.x = 20;
+        el[LIB_FILTER_COOP].rect.y = 128;
+        el[LIB_FILTER_COOP].rect.width = 138;
+        el[LIB_FILTER_MINE].rect.x = 162;
+        el[LIB_FILTER_MINE].rect.width = 138;
+        if (bToAdd)
+        {
+            el[LIB_USE_BUTTON].wstr = u"Add to Playlist";
+            el[LIB_USE_BUTTON].wHintText = u"Gets the level, saves it in this browser and adds it to the playlist.";
+        }
+        jkGuiLibrary_LayOutTabs(jkGuiLibrary_aLevelTabs);
+    }
+}
+
+static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAdd, int bMods)
 {
     jkGuiElement* el = jkGuiLibrary_aElements;
     int result;
 
     if (outLen > 0)
         pOutName[0] = 0;
-    if (!jkGuiLibrary_js_begin(bMots))
+    if (!jkGuiLibrary_js_begin(bMots, bMods))
         return 0;
+    jkGuiLibrary_bMods = bMods;
+    jkGuiLibrary_TakeKept(bMods);
 
     if (!jkGuiLibrary_bArrays)
     {
@@ -1203,19 +1425,14 @@ static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAd
     }
 
     jkGui_InitMenu(&jkGuiLibrary_menu, jkGui_stdBitmaps[JKGUI_BM_BK_MULTI]);
-    el[LIB_FILTER_CTF].wstr = bMots ? u"Kill the Fool" : u"CTF";
-    el[LIB_FILTER_CTF].wHintText = bMots ? u"Show Kill the Fool levels." : u"Show Capture the Flag levels.";
+    jkGuiLibrary_SetMode(bMots, bToAdd, bMods);
     el[LIB_SEARCH].wstr = jkGuiLibrary_search;
     el[LIB_SEARCH].selectedTextEntry = LIB_SEARCH_MAX;
-    if (bToAdd)
-    {
-        el[LIB_USE_BUTTON].wstr = u"Add to Playlist";
-        el[LIB_USE_BUTTON].wHintText = u"Gets the level, saves it in this browser and adds it to the playlist.";
-    }
     el[LIB_FILTER_MP].selectedTextEntry = jkGuiLibrary_filterMp;
     el[LIB_FILTER_CTF].selectedTextEntry = jkGuiLibrary_filterCtf;
     el[LIB_FILTER_COOP].selectedTextEntry = jkGuiLibrary_filterCoop;
     el[LIB_FILTER_MINE].selectedTextEntry = jkGuiLibrary_filterMine;
+    el[LIB_FILTER_CAMPAIGNS].selectedTextEntry = jkGuiLibrary_filterCampaigns;
     el[LIB_PV_TEXT].wstr = NULL;
     // Strings this menu keeps itself are dropped with the last ones it showed.
     el[LIB_STATUS].wstr = NULL;
@@ -1228,7 +1445,8 @@ static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAd
     jkGuiLibrary_js_number(LIB_NUM_CHANGED);
     jkGuiLibrary_Refresh(NULL, LIB_CH_ALL);
 
-    // The Host screen's menu mode and palette are already up.
+    // The Host screen's menu mode and palette are already up (the main menu
+    // puts them up for the Mod Library).
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiLibrary_menu, &el[LIB_USE_BUTTON]);
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiLibrary_menu, &el[LIB_CANCEL_BUTTON]);
     for (;;)
@@ -1261,6 +1479,21 @@ static int jkGuiLibrary_ShowFor(int bMots, char* pOutName, int outLen, int bToAd
     el[LIB_FACTS].unistr = NULL;
     el[LIB_TEXT].unistr = NULL;
 
+    // The Use button's words from the page go with this showing.
+    el[LIB_USE_BUTTON].wstr = NULL;
+    el[LIB_USE_BUTTON].wHintText = NULL;
+    free(jkGuiLibrary_pUse);
+    free(jkGuiLibrary_pUseHint);
+    jkGuiLibrary_pUse = NULL;
+    jkGuiLibrary_pUseHint = NULL;
+
+    jkGuiLibrary_KeepState(bMods);
+    jkGuiLibrary_bMods = 0;
+
+    // Restart With It can give no folder: a graphics pack the page put in
+    // mods/, with no mod running.
+    if (bMods)
+        return result == LIB_DONE;
     return outLen > 0 && pOutName[0] != 0;
 }
 

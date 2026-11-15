@@ -71,6 +71,11 @@ jobs:
       # The page's mod list and zipped mods, with made-up files.
       - name: Test the mod list
         run: node packaging/wasm/test/picker-test.mjs
+      # The Mod Library's page side (modlibrary.js): its list, what each mod
+      # changes, Get Mod and Restart With It, with made-up mods served as the
+      # site serves them.
+      - name: Test the Mod Library
+        run: node packaging/wasm/test/modlibrary-test.mjs
       # The Level Library's game menu (src/Gui/jkGUILibrary.c) on its own,
       # with Emscripten and AddressSanitizer, on a made-up menu system and a
       # made-up page: what it shows, what it tells the page, what it gives the

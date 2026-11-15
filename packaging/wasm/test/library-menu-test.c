@@ -24,7 +24,8 @@ enum
 {
     E_HINT, E_TITLE, E_STATUS, E_SEARCH_LABEL, E_SEARCH, E_MP, E_CTF, E_COOP, E_SORT_LABEL, E_SORT_PREV,
     E_SORT_NEXT, E_SORT_NAME, E_LIST, E_TAB_OVERVIEW, E_TAB_README, E_TAB_FILES, E_SHOT, E_NO_SHOT,
-    E_LEVEL_TITLE, E_FACTS, E_TEXT, E_MESSAGE, E_CANCEL, E_PAGE, E_USE, E_PV, E_PV_TEXT, E_MINE, E_COUNT
+    E_LEVEL_TITLE, E_FACTS, E_TEXT, E_MESSAGE, E_CANCEL, E_PAGE, E_USE, E_PV, E_PV_TEXT, E_MINE,
+    E_CAMPAIGNS, E_TAB_CHANGES, E_COUNT
 };
 
 // The big 3D view's.
@@ -946,6 +947,176 @@ static void emptyOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
     }
 }
 
+// ---- The Mod Library: the same menu over Module.jkModLibrary.
+
+#define MODS "Module.jkModLibrary._M"
+
+static int modCalled(const char* what)
+{
+    char code[512];
+    snprintf(code, sizeof(code), MODS ".calls.indexOf(%s) >= 0 ? 1 : 0", what);
+    return js(code);
+}
+
+static int rectIs(jkGuiElement* el, int x, int y, int w)
+{
+    return el->rect.x == x && el->rect.y == y && el->rect.width == w;
+}
+
+static int modStep = 0;
+
+static int hasLineStarting(jkGuiElement* el, const char* want)
+{
+    for (int i = 0; el->unistr && el->unistr[i].str; i++)
+    {
+        if (wstarts(el->unistr[i].str, want))
+            return 1;
+    }
+    return 0;
+}
+
+static void modsOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
+{
+    if (frame == 0)
+    {
+        modStep = 0;
+        CHECK(wis(el[E_TITLE].wstr, "Mod Library"), "the Mod Library's title: %s", show(el[E_TITLE].wstr));
+        CHECK(modCalled("'begin jk1'") && !called("'begin jk1'"), "the Mod Library's page half began, not the Level Library's");
+        CHECK(js("Module.jkLibraryNow === Module.jkModLibrary ? 1 : 0"), "and the menu talks to it");
+        CHECK(wis(el[E_STATUS].wstr, "3 mods from Massassi.net"), "status %s", show(el[E_STATUS].wstr));
+        // Gameplay, Characters, Graphics on one row; My mods and Campaigns
+        // under them, Campaigns off.
+        CHECK(wis(el[E_MP].wstr, "Gameplay") && rectIs(&el[E_MP], 20, 104, 92), "Gameplay first");
+        CHECK(wis(el[E_CTF].wstr, "Characters") && rectIs(&el[E_CTF], 112, 104, 100), "then Characters");
+        CHECK(wis(el[E_COOP].wstr, "Graphics") && rectIs(&el[E_COOP], 212, 104, 88), "then Graphics, ending at the list's edge");
+        CHECK(wis(el[E_MINE].wstr, "My mods") && rectIs(&el[E_MINE], 20, 128, 138), "My mods under them");
+        CHECK(el[E_CAMPAIGNS].bIsVisible && wis(el[E_CAMPAIGNS].wstr, "Campaigns") && rectIs(&el[E_CAMPAIGNS], 162, 128, 138) &&
+              el[E_CAMPAIGNS].selectedTextEntry == 0, "Campaigns beside it, off");
+        CHECK(el[E_MP].selectedTextEntry && el[E_CTF].selectedTextEntry && el[E_COOP].selectedTextEntry && !el[E_MINE].selectedTextEntry,
+              "every kind on at first, My mods off");
+        CHECK(modCalled("'query \"\" 7 0'"), "asked for gameplay, characters and graphics: %s", jsText("JSON.stringify(" MODS ".calls)"));
+        CHECK(wis(el[E_SORT_NAME].wstr, "Most downloaded"), "the page's first sort: %s", show(el[E_SORT_NAME].wstr));
+        // Four tabs across the details: Overview, Changes, Readme, Files.
+        CHECK(el[E_TAB_CHANGES].bIsVisible && rectIs(&el[E_TAB_OVERVIEW], 310, 78, 77) && rectIs(&el[E_TAB_CHANGES], 391, 78, 77) &&
+              rectIs(&el[E_TAB_README], 472, 78, 77) && rectIs(&el[E_TAB_FILES], 553, 78, 77),
+              "four tabs, Changes second: %d %d %d %d", el[E_TAB_OVERVIEW].rect.x, el[E_TAB_CHANGES].rect.x, el[E_TAB_README].rect.x,
+              el[E_TAB_FILES].rect.x);
+        CHECK(el[E_TAB_FILES].rect.x + el[E_TAB_FILES].rect.width == el[E_PV].rect.x + el[E_PV].rect.width, "ending where the frames do");
+        // Both screenshots, the second where a level's 3D view would be.
+        CHECK(el[E_SHOT].bIsVisible && el[E_PV].bIsVisible && !el[E_PV_TEXT].bIsVisible && !el[E_NO_SHOT].bIsVisible,
+              "two screenshots, no 3D view words");
+        CHECK(!el[E_SHOT].wHintText && !el[E_PV].wHintText, "neither is a button");
+        CHECK(js("var s = " MODS ".lastShot; s && s.join() === '1,311,105,154,115' ? 1 : 0") &&
+              js("var s = " MODS ".lastPreview; s && s.join() === '1,475,105,154,115' ? 1 : 0"),
+              "the page asked for both, in their frames: %s, %s", jsText("String(" MODS ".lastShot)"), jsText("String(" MODS ".lastPreview)"));
+        CHECK(js("Module.jkLibrary._M.lastShot === null || Module.jkLibrary._M.lastShot[0] === 0 ? 1 : 0"),
+              "the Level Library's page half draws nothing");
+        CHECK(wis(el[E_USE].wstr, "Get Mod") && wis(el[E_USE].wHintText, "Gets the mod.") && el[E_USE].bIsVisible, "Get Mod");
+        CHECK(wis(el[E_CANCEL].wstr, "Back") && !el[E_CANCEL].wHintText, "Back");
+        CHECK(menu->pReturnKeyShortcutElement == &el[E_USE] && menu->pEscapeKeyShortcutElement == &el[E_CANCEL], "Return gets, Escape goes back");
+        checkLinesFit(&el[E_FACTS], 80, "mod facts");
+
+        // The shots are both up: a click on either does nothing.
+        click(menu, &el[E_SHOT], 0);
+        click(menu, &el[E_PV], 0);
+        CHECK(menu->lastClicked == 0 && js(MODS ".nextShots") == 0 && !modCalled("'view'"), "no next screenshot, no big view");
+
+        // Campaigns.
+        forgetCalls();
+        js(MODS ".calls = [], 0");
+        click(menu, &el[E_CAMPAIGNS], 0);
+        CHECK(modCalled("'query \"\" 23 0'"), "Campaigns adds 16: %s", jsText("JSON.stringify(" MODS ".calls)"));
+        click(menu, &el[E_CAMPAIGNS], 0);
+        CHECK(modCalled("'query \"\" 7 0'"), "and takes it off");
+
+        // The Changes tab.
+        click(menu, &el[E_TAB_CHANGES], 0);
+        CHECK(el[E_TAB_CHANGES].type == ELEMENT_TEXT && el[E_TAB_OVERVIEW].type == ELEMENT_TEXTBUTTON, "Changes is the open tab");
+        CHECK(el[E_TEXT].bIsVisible && !el[E_FACTS].bIsVisible && !el[E_SHOT].bIsVisible && !el[E_PV].bIsVisible, "its text, no pictures");
+        CHECK(hasLine(&el[E_TEXT], "Adds:\t1,526 new files: 1,411 models") && hasLineStarting(&el[E_TEXT], "  cog\tforce_blinding.cog,"),
+              "what it changes, from the page");
+        checkLinesFit(&el[E_TEXT], 80, "changes");
+        listDraws = 0;
+        jkGuiRend_UpdateAndDrawClickable(&el[E_TEXT], menu, 1);
+        CHECK(listDraws == 1 && listPaddings && listPaddings[0] == 80, "its labels end at 80, as the facts' do");
+        CHECK(js(MODS ".lastShot[0]") == 0 && js(MODS ".lastPreview[0]") == 0, "the page hides both pictures");
+        click(menu, &el[E_TAB_OVERVIEW], 0);
+
+        // One screenshot: the second frame goes.
+        el[E_LIST].selectedTextEntry = 2;
+        click(menu, &el[E_LIST], 0);
+    }
+    else if (frame == 1)
+    {
+        CHECK(el[E_SHOT].bIsVisible && !el[E_PV].bIsVisible && js(MODS ".lastPreview[0]") == 0, "one screenshot: one frame");
+        el[E_LIST].selectedTextEntry = 0;
+        click(menu, &el[E_LIST], 0);
+    }
+    else if (frame == 2)
+    {
+        CHECK(el[E_PV].bIsVisible, "two again");
+        click(menu, &el[E_USE], 0);
+        CHECK(modCalled("'use'"), "Get Mod");
+    }
+    else if (frame == 3)
+    {
+        CHECK(wis(el[E_CANCEL].wstr, "Stop") && el[E_CANCEL].wHintText && !el[E_USE].bIsVisible, "while it comes in: Stop, no Get Mod");
+    }
+    else if (modStep == 0 && js(MODS ".saved[0] ? 1 : 0"))
+    {
+        // The menu hears of it in its next frame.
+        modStep = 1;
+    }
+    else if (modStep == 1)
+    {
+        modStep = 2;
+        CHECK(wis(el[E_USE].wstr, "Restart With It") && el[E_USE].bIsVisible, "saved: Restart With It (%s)", show(el[E_USE].wstr));
+        CHECK(wis(el[E_USE].wHintText, "Starts the game again with only this mod."), "with its hint");
+        CHECK(wis(el[E_CANCEL].wstr, "Back"), "and Back again");
+        click(menu, &el[E_USE], 0);
+    }
+}
+
+// A mod that's saved: Restart With It at once.
+static void modsRestart(jkGuiMenu* menu, jkGuiElement* el, int frame)
+{
+    if (frame == 0)
+    {
+        CHECK(wis(el[E_USE].wstr, "Restart With It"), "a saved mod: Restart With It");
+        click(menu, &el[E_USE], 0);
+    }
+}
+
+// Back: nothing to restart with.
+static void modsBack(jkGuiMenu* menu, jkGuiElement* el, int frame)
+{
+    if (frame == 0)
+    {
+        CHECK(el[E_CAMPAIGNS].bIsVisible && el[E_TAB_CHANGES].bIsVisible, "the Mod Library again");
+        CHECK(modCalled("'query \"\" 7 0'"), "its filters as they were left");
+        click(menu, &el[E_CANCEL], 0);
+    }
+}
+
+// The Level Library after the Mod Library: its own places, words and filters.
+static void levelsAfterMods(jkGuiMenu* menu, jkGuiElement* el, int frame)
+{
+    if (frame == 0)
+    {
+        CHECK(wis(el[E_TITLE].wstr, "Level Library") && wis(el[E_USE].wstr, "Use Level") && wis(el[E_CANCEL].wstr, "Cancel"),
+              "the Level Library's words: %s, %s, %s", show(el[E_TITLE].wstr), show(el[E_USE].wstr), show(el[E_CANCEL].wstr));
+        CHECK(wis(el[E_MP].wstr, "Multiplayer") && rectIs(&el[E_MP], 20, 104, 138) && rectIs(&el[E_CTF], 162, 104, 138) &&
+              rectIs(&el[E_COOP], 20, 128, 138) && rectIs(&el[E_MINE], 162, 128, 138), "its filters where they were");
+        CHECK(!el[E_CAMPAIGNS].bIsVisible && !el[E_TAB_CHANGES].bIsVisible, "no Campaigns, no Changes");
+        CHECK(rectIs(&el[E_TAB_OVERVIEW], 310, 78, 104) && rectIs(&el[E_TAB_README], 418, 78, 104) && rectIs(&el[E_TAB_FILES], 526, 78, 104),
+              "its three tabs");
+        // As the earlier tests left them (a search for "al", the second sort).
+        CHECK(called("'query \"al\" 3 1'"), "its own search, filters and sort: %s", jsText("JSON.stringify(Module.jkLibrary._M.calls)"));
+        CHECK(js("Module.jkLibraryNow === Module.jkLibrary ? 1 : 0"), "the menu talks to the Level Library again");
+        click(menu, &el[E_CANCEL], 0);
+    }
+}
+
 int main()
 {
     for (int i = 0; i < 16; i++)
@@ -996,6 +1167,38 @@ int main()
     script = emptyOpen;
     got = jkGuiLibrary_Show(0, name, sizeof(name));
     CHECK(got == 0, "an empty list");
+
+    // The Mod Library.
+    CHECK(jkGuiLibrary_ModsAvailable() == 1, "the Mod Library where the page says so");
+    js(MODS ".available = false, 0");
+    CHECK(jkGuiLibrary_ModsAvailable() == 0 && jkGuiLibrary_IsAvailable() == 1, "each library's own answer");
+    js(MODS ".available = true, 0");
+    js("var M = Module.jkLibrary._M; M.rows = ['Alpha Arena\t1999 12 KB']; M.titles = ['Alpha Arena']; M.sel = 0; M.shots = 2; M.lastShot = null; 0");
+    forgetCalls();
+    script = modsOpen;
+    char path[64];
+    got = jkGuiLibrary_ShowMods(0, path, sizeof(path));
+    CHECK(modStep == 2, "it got the mod and restarted");
+    CHECK(got == 1 && !strcmp(path, "netmods/0123456789abcdef"), "Restart With It gives back the mod's folder: %d \"%s\"", got, path);
+    CHECK(modCalled("'end'") && js(MODS ".lastShot[0]") == 0 && js(MODS ".lastPreview[0]") == 0, "closed, no pictures");
+    CHECK(!wheelFn, "the wheel let go");
+
+    js(MODS ".calls = [], 0");
+    script = modsBack;
+    got = jkGuiLibrary_ShowMods(0, path, sizeof(path));
+    CHECK(got == 0 && path[0] == 0, "Back: no restart");
+
+    // A graphics pack with no mod running: a restart with no folder.
+    js("var M = " MODS "; M.saved[0] = true; M.path = ''; M.calls = []; 0");
+    script = modsRestart;
+    got = jkGuiLibrary_ShowMods(1, path, sizeof(path));
+    CHECK(modCalled("'begin mots'"), "MotS's Mod Library");
+    CHECK(got == 1 && path[0] == 0, "Restart With It with no folder still restarts: %d \"%s\"", got, path);
+
+    forgetCalls();
+    script = levelsAfterMods;
+    got = jkGuiLibrary_Show(0, name, sizeof(name));
+    CHECK(got == 0, "the Level Library closed");
 
     js("Module.jkLibrary._M.beginOk = false, 0");
     script = NULL;

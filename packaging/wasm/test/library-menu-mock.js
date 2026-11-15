@@ -135,3 +135,120 @@
         _M: M
     };
 })();
+
+// The same for packaging/wasm/modlibrary.js: the Module.jkModLibrary the menu
+// talks to as the Mod Library, with made-up mods. Get Mod saves the picked
+// one a few frames later; Restart With It then gives back M.path.
+(function() {
+    var M = {
+        calls: [], game: '', open: false, available: true,
+        rows: ['SBX-JK v3.1\t2005 39 MB', '  SBX-JK v3.0\t2004 30 MB', 'Kyle Skin\t1999 200 KB\tSkin'],
+        titles: ['SBX-JK v3.1', 'SBX-JK v3.0', 'Kyle Skin'],
+        saved: [false, false, false], shots: [2, 2, 1],
+        sel: 0, changed: 0, busy: false, job: '', done: false, result: '', path: 'netmods/0123456789abcdef',
+        doneIn: -1, q: null, mask: -1, sort: 0, lastShot: null, lastPreview: null, nextShots: 0, pages: 0,
+        sorts: ['Most downloaded', 'Name', 'Newest first', 'Oldest first', 'Top rated', 'Smallest first'],
+        overview: 'Author:\tThe SBX Team\nKind:\tGameplay\n\nWhen you host with it, players who join get it from you.',
+        changes: 'What Get Mod adds to the game, by file name.\n\n' +
+                 "Replaces:\t318 of the game's own files: 14 scripts, 6 models\n" +
+                 '  cog\tforce_blinding.cog, force_destruction.cog\n' +
+                 'Adds:\t1,526 new files: 1,411 models'
+    };
+
+    function touch(bits) { M.changed |= bits; }
+
+    Module.jkModLibrary = {
+        available: function() { return M.available; },
+        begin: function(game) {
+            M.calls.push('begin ' + game);
+            M.game = game;
+            M.open = true;
+            M.done = false;
+            M.result = '';
+            M.changed = 127;
+            return true;
+        },
+        end: function() { M.calls.push('end'); M.open = false; },
+        text: function(what, arg) {
+            switch (what) {
+            case 0: return M.rows.length + ' mods from Massassi.net';
+            case 1: return M.rows[arg] || '';
+            case 2: return M.sorts[M.sort];
+            case 3: return M.sel >= 0 ? M.titles[M.sel] : '';
+            case 4: return M.sel >= 0 ? M.overview : '';
+            case 5: return 'A readme.';
+            case 6: return '39 MB\tsbx.gob';
+            case 7: return M.busy ? 'Getting ' + M.titles[M.sel] : 'Mods you get are saved in this browser.';
+            case 14: return M.sel >= 0 ? M.changes : '';
+            case 15: return M.sel >= 0 && M.saved[M.sel] ? 'Restart With It' : 'Get Mod';
+            case 16: return M.sel >= 0 && M.saved[M.sel] ? 'Starts the game again with only this mod.' : 'Gets the mod.';
+            }
+            return '';
+        },
+        number: function(what) {
+            switch (what) {
+            case 0: { var c = M.changed; M.changed = 0; return c; }
+            case 1: return M.rows.length;
+            case 2: return M.sel;
+            case 3: return !M.busy && M.sel >= 0 ? 1 : 0;
+            case 4: return M.busy ? 1 : 0;
+            case 5:
+                if (M.doneIn > 0 && --M.doneIn === 0) {
+                    M.busy = false;
+                    if (M.job === 'get') {
+                        M.saved[M.sel] = true;
+                        touch(2 | 4 | 8 | 16);
+                    } else {
+                        M.done = true;
+                        M.result = M.path;
+                    }
+                }
+                return M.done ? 1 : 0;
+            case 6: return M.sel >= 0 ? M.shots[M.sel] : 0;
+            case 7: return 0;
+            }
+            return 0;
+        },
+        query: function(q, mask, sort) {
+            M.calls.push('query ' + JSON.stringify(q) + ' ' + mask + ' ' + sort);
+            M.q = q;
+            M.mask = mask;
+            M.sort = sort;
+            touch(2);
+        },
+        select: function(i) {
+            M.calls.push('select ' + i);
+            if (M.busy || i === M.sel || i < 0 || i >= M.rows.length)
+                return;
+            M.sel = i;
+            touch(4 | 8 | 16);
+        },
+        use: function() {
+            M.calls.push('use');
+            if (M.busy || M.sel < 0)
+                return false;
+            M.busy = true;
+            M.job = M.saved[M.sel] ? 'restart' : 'get';
+            M.doneIn = 3;
+            touch(8 | 16);
+            return true;
+        },
+        cancel: function() {
+            M.calls.push('cancel');
+            if (!M.busy)
+                return false;
+            M.busy = false;
+            M.doneIn = -1;
+            touch(8 | 16);
+            return true;
+        },
+        page: function() { M.pages++; },
+        shot: function(on, x, y, w, h) { M.lastShot = [on, x, y, w, h]; },
+        nextShot: function() { M.nextShots++; },
+        preview: function(on, x, y, w, h) { M.lastPreview = [on, x, y, w, h]; },
+        view: function() { M.calls.push('view'); },
+        viewCommand: function(cmd) { M.calls.push('viewCommand ' + cmd); },
+        take: function() { var r = M.result; M.result = ''; return r; },
+        _M: M
+    };
+})();

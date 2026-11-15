@@ -759,10 +759,21 @@
       #mod-choice label.mod-all[hidden] { display: none; }
       #mod-choice fieldset[hidden] { display: none; }
       /* The folder's mods while a saved set is picked: kept as they are, not used. */
-      #mod-choice fieldset:disabled .mod-list, #mod-choice fieldset:disabled .mod-all b { opacity: 0.5; }
+      #mod-choice fieldset:disabled .mod-list, #mod-choice fieldset:disabled .library-list,
+      #mod-choice fieldset:disabled .mod-all b { opacity: 0.5; }
       #mod-choice fieldset:disabled label { cursor: default; }
       #mod-choice fieldset:disabled label:has(input:checked) { border-color: var(--teal-light); }
-      #mod-choice .saved-about { margin: 0 0 6px; }
+      #mod-choice .saved-about, #mod-choice .library-about { margin: 0 0 6px; }
+      #mod-choice .library-list button {
+        margin-left: auto;
+        padding: 2px 8px;
+        border: 1px solid var(--teal-light);
+        background: transparent;
+        color: var(--muted);
+        font: 12px Verdana, Geneva, sans-serif;
+        cursor: pointer;
+      }
+      #mod-choice .library-list button:hover { color: #fff; border-color: var(--gold); }
       #mod-choice .mod-count { margin-left: auto; color: var(--muted); font-size: 13px; }
       #mod-choice input { accent-color: var(--gold); }
       #mod-choice .where { display: block; color: var(--muted); font-size: 13px; }
@@ -2470,13 +2481,18 @@
               <label class="mod-all" hidden><input type="checkbox"><b>Select all</b><span class="mod-count"></span></label>
               <div class="mod-list"></div>
             </fieldset>
+            <fieldset class="library-mods" hidden>
+              <legend>From the Mod Library</legend>
+              <p class="fine library-about"></p>
+              <div class="library-list"></div>
+            </fieldset>
             <fieldset class="saved-mods" hidden>
               <legend>Saved from online games</legend>
               <p class="fine saved-about"></p>
               <div class="saved-list"></div>
             </fieldset>
             <p class="mod-clash" role="status" hidden></p>
-            <p class="fine">Mods start as you left them, and new ones start ticked. When two mods change the
+            <p class="fine">Mods start as you left them, and new ones in your folder start ticked. When two mods change the
               same file, the higher one wins. Players who join get your mods (never original game files), and
               if you join a game with different mods, the game restarts with those. Graphics packs (JK HD
               Models, JKE, JKR) are never sent: everyone keeps their own, in every game.</p>
@@ -5881,6 +5897,8 @@
             episodes[lower[1]] = true;
         }
         for (var e of files) {
+          // The Mod Library's are saved in the browser, not in the folder.
+          if (e.library) continue;
           if (e.mod !== undefined) {
             byMod[e.mod].push(state(e));
             continue;
@@ -6255,8 +6273,146 @@
         return { clashes: clashes, contents: contents };
       }
 
-      // Mods saved from earlier games (mods.js keeps them), newest first.
+      // Mods saved from earlier games (mods.js keeps them), newest first. The
+      // Mod Library's (modlibrary.js), which carry its id (lib), are listed
+      // on their own (libraryMods).
       function storedMods(game) {
+        return storedModMetas(game).then(function(list) {
+          return list.filter(function(m) { return m.lib == null; });
+        });
+      }
+
+      // The Mod Library's, one for each mod in it (the latest saved), with
+      // the keys of every copy saved of it (keys), which Remove forgets.
+      function libraryMods(game) {
+        return storedModMetas(game, true).then(function(list) {
+          var byLib = {}, out = [];
+          for (var m of list) {
+            if (m.lib == null) continue;
+            var id = String(m.lib);
+            if (!byLib[id]) {
+              byLib[id] = Object.assign({}, m, { keys: [] });
+              out.push(byLib[id]);
+            }
+            byLib[id].keys.push(m.key);
+          }
+          return out;
+        });
+      }
+
+      // Opens the store mods.js keeps them in, as it makes it (maps.js's
+      // makeStore), and gives it to fn; resolves to fn's answer, or to
+      // fallback when it can't be opened.
+      function withModStore(fn, fallback) {
+        return new Promise(function(resolve) {
+          var settled = false;
+          function done(v) {
+            if (settled) return;
+            settled = true;
+            resolve(v);
+          }
+          setTimeout(function() { done(fallback); }, 3000);
+          try {
+            var req = indexedDB.open('jkdf2mp-mods', 1);
+            req.onupgradeneeded = function() {
+              req.result.createObjectStore('meta', { keyPath: 'key' });
+              req.result.createObjectStore('data');
+            };
+            req.onsuccess = function() {
+              var db = req.result;
+              try {
+                fn(db, function(v) { db.close(); done(v); });
+              } catch (e) {
+                db.close();
+                done(fallback);
+              }
+            };
+            req.onerror = req.onblocked = function() { done(fallback); };
+          } catch (e) {
+            done(fallback);
+          }
+        });
+      }
+
+      // A saved mod's pack, as a Blob (or bytes, saved before Blobs were).
+      function storedModData(key) {
+        return withModStore(function(db, done) {
+          var get = db.transaction('data').objectStore('data').get(key);
+          get.onsuccess = function() {
+            var d = get.result;
+            done(d == null ? null : typeof Blob !== 'undefined' && d instanceof Blob ? d : new Blob([d]));
+          };
+          get.onerror = function() { done(null); };
+        }, null);
+      }
+
+      function forgetStoredMods(keys) {
+        return withModStore(function(db, done) {
+          var tx = db.transaction(['meta', 'data'], 'readwrite');
+          for (var key of keys) {
+            tx.objectStore('meta').delete(key);
+            tx.objectStore('data').delete(key);
+          }
+          tx.oncomplete = function() { done(true); };
+          tx.onerror = tx.onabort = function() { done(false); };
+        }, false);
+      }
+
+      // The Mod Library's mods as mods of the folder, after detectMods's:
+      // each pack's files (its GOB's table) as files of a folder no game
+      // folder has, so the rest goes as it does for the folder's mods
+      // (placeModFiles, findClashes, setFiles). A graphics pack is optional,
+      // as one in the folder is. The files are parts of the saved pack.
+      var LIBRARY_ROOT = '\u0001mod-library/';
+      async function addLibraryMods(metas, folderMods, files, ext) {
+        for (var meta of metas) {
+          var data = await storedModData(meta.key);
+          var table = data ? await gobTable(data) : null;
+          if (!table || !table.length) {
+            console.warn('OpenJKDF2: the Mod Library mod ' + meta.name + " couldn't be read from this browser's storage");
+            continue;
+          }
+          var prefix = LIBRARY_ROOT + meta.lib + '/', bytes = 0;
+          for (var g of table) {
+            files.push({ path: prefix + g.name, file: data.slice(g.offset, g.offset + g.size), library: true });
+            bytes += g.size;
+          }
+          var only = table.length === 1 ? table[0].name.toLowerCase() : null;
+          var i = folderMods.length;
+          var name = String(meta.title || meta.name);
+          folderMods.push({
+            rank: 1, from: 'Mod Library', name: name, library: meta, bytes: bytes,
+            optional: !!(meta.gp || (only && OPTIONAL_PACKS[ext].indexOf(only) >= 0)),
+            rel: (function(prefix) {
+              var lower = prefix.toLowerCase();
+              return function(l, path) { return l.startsWith(lower) ? path.substring(prefix.length) : null; };
+            })(prefix),
+            path: 'jkmods/' + i + '-' + name.replace(/[^A-Za-z0-9_.-]+/g, '_').substring(0, 40)
+          });
+        }
+      }
+
+      // Which of the Mod Library's mods are ticked, and which the player has
+      // seen in this list, per game, by their id. Restart With It in the game
+      // ticks the mod too (modlibrary.js).
+      var LIBRARY_ON = 'jkdf2mp-library-mods-on-', LIBRARY_SEEN = 'jkdf2mp-library-mods-seen-';
+      function libraryIds(key, game) {
+        try {
+          var ids = JSON.parse(localStorage.getItem(key + game) || '[]');
+          return Array.isArray(ids) ? ids.map(String) : [];
+        } catch (e) {
+          return [];
+        }
+      }
+      function rememberLibraryIds(key, game, ids) {
+        try {
+          localStorage.setItem(key + game, JSON.stringify(ids.map(String)));
+        } catch (e) {}
+      }
+
+      // Every copy saved (all), or one for each pack, the Mod Library's apart
+      // from the others'.
+      function storedModMetas(game, all) {
         return new Promise(function(resolve) {
           var settled = false;
           function done(list) {
@@ -6274,16 +6430,17 @@
             req.onsuccess = function() {
               var db = req.result;
               try {
-                var all = db.transaction('meta').objectStore('meta').getAll();
-                all.onsuccess = function() {
+                var list = db.transaction('meta').objectStore('meta').getAll();
+                list.onsuccess = function() {
                   db.close();
                   var seen = {};
-                  done(all.result.filter(function(m) {
-                    if (m.game !== game || seen[m.sha256]) return false;
-                    return (seen[m.sha256] = true);
+                  done(list.result.filter(function(m) {
+                    var k = (m.lib == null ? '' : 'lib/') + m.sha256;
+                    if (m.game !== game || (!all && seen[k])) return false;
+                    return (seen[k] = true);
                   }).sort(function(a, b) { return b.used - a.used; }));
                 };
-                all.onerror = function() { db.close(); done([]); };
+                list.onerror = function() { db.close(); done([]); };
               } catch (e) {
                 db.close();
                 done([]);
@@ -6338,28 +6495,51 @@
       // page.
       function chooseMods(folderMods, saved, clashes, game, fromBrowser, copyTime, news, kept) {
         var leftOut = modsLeftOut(game);
+        // The Mod Library's mods (addLibraryMods) have a list of their own.
+        // Each starts unticked, but for those the player played with last
+        // time, or restarted with in the game, and is tagged New until it's
+        // been in the list at a start.
+        var libOn = libraryIds(LIBRARY_ON, game), libSeen = libraryIds(LIBRARY_SEEN, game);
+        function sizeText(m) {
+          return megabytes(m.bytes) +
+                 (m.optional ? ". Graphics pack: only you see it. Players joining you don't need it, " +
+                               'and it stays on in games you join' :
+                  m.bytes > 1024 * 1048576 ? ". Too big to send: players need their own copy" : '');
+        }
         var options = folderMods.map(function(m, i) {
+          if (m.library) {
+            var id = String(m.library.lib);
+            return { index: i, name: m.name, path: m.path, library: m.library, id: id,
+                     news: libSeen.indexOf(id) < 0 ? 'new' : null,
+                     where: (m.library.author ? 'By ' + m.library.author + ', s' : 'S') +
+                            'aved from the Mod Library, ' + sizeText(m) };
+          }
           return { index: i, name: m.name, path: m.path, key: modKey(m), news: news && news.mods[i],
                    where: (m.kept ? 'In your folder "' + kept.name + '", ' :
                            m.always ? 'In your game folder (' + m.from + "), so the original game always loads it, "
-                                    : 'In your game folder (' + m.from + '), ') + megabytes(m.bytes) +
-                          (m.optional ? ". Graphics pack: only you see it. Players joining you don't need it, " +
-                                        'and it stays on in games you join' :
-                           m.bytes > 1024 * 1048576 ? ". Too big to send: players need their own copy" : '') };
+                                    : 'In your game folder (' + m.from + '), ') + sizeText(m) };
         });
+        var hasFolder = folderMods.some(function(m) { return !m.library; });
+        var hasLibrary = folderMods.some(function(m) { return m.library; });
         for (var s of saved) {
           options.push({ name: s.name, path: 'netmods/' + s.sha256.substring(0, 16), saved: true,
                          where: megabytes(s.size) });
         }
 
         var folderSet = modChoice.querySelector('.folder-mods');
+        var libSet = modChoice.querySelector('.library-mods');
         var savedSet = modChoice.querySelector('.saved-mods');
         var list = modChoice.querySelector('.mod-list');
+        var libList = modChoice.querySelector('.library-list');
         var savedList = modChoice.querySelector('.saved-list');
         var note = modChoice.querySelector('.mod-clash');
-        list.textContent = savedList.textContent = '';
-        folderSet.disabled = false;
-        folderSet.hidden = !folderMods.length;
+        list.textContent = libList.textContent = savedList.textContent = '';
+        folderSet.disabled = libSet.disabled = false;
+        folderSet.hidden = !hasFolder;
+        libSet.hidden = !hasLibrary;
+        libSet.querySelector('.library-about').textContent = "Mods you got in the game's Mod Library (on the main " +
+          'menu), saved in this browser. ' + (hasFolder ? 'Tick one to play with it, on its own or with the mods above.'
+                                                        : 'Tick one to play with it.');
         savedSet.hidden = !saved.length;
         savedSet.querySelector('.saved-about').textContent = "Each is one host's mods, all together. " +
           (folderMods.length ? 'Pick one to play it instead of the mods above.' : 'Pick one to play it.');
@@ -6381,6 +6561,7 @@
           text.append(where);
           label.append(input, text);
           parent.appendChild(label);
+          return label;
         }
         // None comes first among the saved ones, and starts picked.
         var none = document.createElement('input');
@@ -6395,10 +6576,39 @@
           input.type = o.saved ? 'radio' : 'checkbox';
           input.value = String(i);
           if (o.saved) input.name = 'saved-mod';
-          else input.checked = leftOut.indexOf(o.key) < 0;
-          row(o.saved ? savedList : list, input, o.name, o.news && (o.news === 'new' ? 'New' : 'Updated'), o.where);
+          else input.checked = o.library ? libOn.indexOf(o.id) >= 0 : leftOut.indexOf(o.key) < 0;
+          var label = row(o.saved ? savedList : o.library ? libList : list, input, o.name,
+                          o.news && (o.news === 'new' ? 'New' : 'Updated'), o.where);
+          if (o.library) label.append(removeButton(o, input, label));
           return input;
         });
+
+        // Remove forgets a Mod Library mod saved in the browser (every copy
+        // of it). The Mod Library can get it again.
+        function removeButton(o, input, label) {
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = 'Remove';
+          button.title = 'Removes ' + o.name + ' from this browser. You can get it again in the Mod Library.';
+          button.onclick = async function(ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            button.disabled = true;
+            if (!(await forgetStoredMods(o.library.keys || [o.library.key]))) {
+              button.disabled = false;
+              button.title = "Couldn't remove it from this browser's storage. Try again.";
+              return;
+            }
+            o.removed = true;
+            input.checked = false;
+            label.remove();
+            rememberLibraryIds(LIBRARY_ON, game, libraryIds(LIBRARY_ON, game).filter(function(id) { return id !== o.id; }));
+            libSet.hidden = !options.some(function(x) { return x.library && !x.removed; });
+            update();
+            updateAll();
+          };
+          return button;
+        }
 
         // The saved set picked, if any.
         function pickedSaved() {
@@ -6410,7 +6620,7 @@
         function ticked() {
           var set = pickedSaved();
           if (set) return [set];
-          return options.filter(function(o, i) { return !o.saved && inputs[i].checked; });
+          return options.filter(function(o, i) { return !o.saved && !o.removed && inputs[i].checked; });
         }
         function update() {
           var on = ticked().filter(function(o) { return !o.saved; });
@@ -6435,7 +6645,7 @@
         // ticks them all. Shown for two or more.
         var all = modChoice.querySelector('.mod-all');
         var allBox = all.querySelector('input');
-        var mine = inputs.filter(function(input, i) { return !options[i].saved; });
+        var mine = inputs.filter(function(input, i) { return !options[i].saved && !options[i].library; });
         all.hidden = mine.length < 2;
         function updateAll() {
           var n = mine.filter(function(input) { return input.checked; }).length;
@@ -6451,7 +6661,7 @@
         };
         // A saved set picked sets the folder's mods aside, ticks and all.
         function pick() {
-          folderSet.disabled = !!pickedSaved();
+          folderSet.disabled = libSet.disabled = !!pickedSaved();
           update();
           updateAll();
         }
@@ -6545,9 +6755,16 @@
             done();
             // A saved set says nothing about the folder's mods, and nor does
             // a folder without any.
-            if (folderMods.length && !pickedSaved())
-              rememberModsLeftOut(game, options.filter(function(o, i) { return !o.saved && !inputs[i].checked; })
+            if (hasFolder && !pickedSaved())
+              rememberModsLeftOut(game, options.filter(function(o, i) { return !o.saved && !o.library && !inputs[i].checked; })
                                                .map(function(o) { return o.key; }));
+            if (hasLibrary) {
+              var shown = options.filter(function(o) { return o.library && !o.removed; });
+              if (!pickedSaved())
+                rememberLibraryIds(LIBRARY_ON, game, shown.filter(function(o) { return inputs[o.index].checked; })
+                                                          .map(function(o) { return o.id; }));
+              rememberLibraryIds(LIBRARY_SEEN, game, shown.map(function(o) { return o.id; }));
+            }
             resolve(ticked());
           };
         });
@@ -6940,7 +7157,10 @@
         var extras = kept && kept.extras;
         if (pathAt < 0) {
           folderMods = detectMods(files, isMots);
-          saved = typeof indexedDB !== 'undefined' ? await storedMods(game) : [];
+          if (typeof indexedDB !== 'undefined') {
+            saved = await storedMods(game);
+            await addLibraryMods(await libraryMods(game), folderMods, files, ext);
+          }
           lap('finding mods');
           if (folderMods.length > 1) {
             showPickerResult('Looking through your mods...');
@@ -6959,7 +7179,7 @@
             return extras ? extras.has(src) : !!kept.seen[rel.substring(rel.indexOf('/') + 1).toLowerCase()];
           };
           folderMods.forEach(function(m, i) {
-            var mine = kept && (extras || kept.seen) ? files.filter(function(e) { return e.mod === i; }) : [];
+            var mine = !m.library && kept && (extras || kept.seen) ? files.filter(function(e) { return e.mod === i; }) : [];
             m.kept = mine.length > 0 && mine.every(fromKept);
           });
         }
@@ -6986,6 +7206,18 @@
         // The player went to choose a different folder, or closed the prompt.
         if (!picked) return;
         lap('start window');
+        // The Mod Library's mods left unticked aren't read into the tab:
+        // they stay saved in the browser, where mods.js finds one by its
+        // fingerprint when a host plays it.
+        var unused = folderMods.map(function(m, i) {
+          return !!m.library && !picked.some(function(o) { return !o.saved && o.index === i; });
+        });
+        if (unused.indexOf(true) >= 0) {
+          files = files.filter(function(e) { return e.mod === undefined || !unused[e.mod]; });
+          Module.jkModFolders = Module.jkModFolders.filter(function(f) {
+            return !folderMods.some(function(m, i) { return unused[i] && m.path === f.path; });
+          });
+        }
         if (extras) keptSeen(game, fileList, extras);
         // A folder given with ?path= is read like a mod.
         var modPath = pathAt < 0 ? null : String(Module['arguments'][pathAt + 1] || '').replace(/\\/g, '/')
