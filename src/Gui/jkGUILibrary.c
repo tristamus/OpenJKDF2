@@ -1011,6 +1011,17 @@ static void jkGuiLibrary_ShowUse(jkGuiMenu* pMenu)
     {
         jkGuiRend_SetVisibleAndDraw(&el[LIB_USE_BUTTON], pMenu, bUse);
         jkGuiRend_SetVisibleAndDraw(&el[LIB_PAGE_BUTTON], pMenu, !bBusy && jkGuiLibrary_js_number(LIB_NUM_SELECTED) >= 0);
+        // A button that was hidden (while a mod or level came in) can come
+        // back under a mouse that hasn't moved. The menu forgot it was under
+        // the mouse when it hid, and a click goes only to the button it knows
+        // is there, so the first click on it would do nothing. Look again, as
+        // jkGuiMouse does after it hides its buttons.
+        if (!pMenu->lastMouseOverClickable)
+        {
+            int32_t mouseX = 0, mouseY = 0;
+            jkGuiRend_GetMousePos(&mouseX, &mouseY);
+            jkGuiRend_MouseMovedCallback(pMenu, mouseX, mouseY);
+        }
     }
     else
     {
