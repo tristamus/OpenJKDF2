@@ -3,8 +3,9 @@
 # script keeps the score: the four calls a script has for a player's score,
 # kills, deaths and suicides (src/Cog/sithCogFunctionPlayer.c), and what the
 # match record makes of them for the lobby
-# (src/Platform/Networking/WSRelay/stdComm_WSRelay.c). Neither file can be
-# compiled on its own, so the functions the test needs are cut out of the
+# (src/Platform/Networking/WSRelay/stdComm_WSRelay.c), and the count it keeps
+# of a player's deaths by one of the level's own characters. Neither file can
+# be compiled on its own, so the functions the test needs are cut out of the
 # sources first. From the top of the source tree:
 #
 #   sh packaging/wasm/test/scripted-test.sh [other source tree]
@@ -47,10 +48,11 @@ statics() {
 }
 
 {
-    grep -E '^#define STDCOMM_WSRELAY_SCRIPTED_[A-Z]+ +\(' "$src/Platform/Networking/WSRelay/stdComm_WSRelay.h"
+    grep -E '^#define STDCOMM_WSRELAY_(SCRIPTED|KIND)_[A-Z]+ +\(' "$src/Platform/Networking/WSRelay/stdComm_WSRelay.h"
+    grep -E '^ +SITH_THING_(ACTOR|PLAYER) += ' "$src/types_enums.h" | sed 's/^ *\([A-Z0-9_]*\) *= *\([0-9a-fx]*\),.*/#define \1 (\2)/'
     grep -E '^ +MULTIMODEFLAG_(TEAMS|4|SCORELIMIT) = ' "$src/types_enums.h" | sed 's/^ *\([A-Z0-9_]*\) = \([0-9a-fx]*\),.*/#define \1 (\2)/'
     # The match record's functions, as the header declares them.
-    grep -E '^void stdComm_WSRelay_Match(Start|Scores|Scripted|End)\(' "$src/Platform/Networking/WSRelay/stdComm_WSRelay.h"
+    grep -E '^void stdComm_WSRelay_Match(Start|Kill|Scores|Scripted|End)\(' "$src/Platform/Networking/WSRelay/stdComm_WSRelay.h"
 } > "$out/scripted-types.inc"
 
 {
@@ -61,10 +63,11 @@ statics() {
     cut_out "$cog" 'void sithCogFunctionPlayer_SetPlayerKilled('
     cut_out "$cog" 'void sithCogFunctionPlayer_SetPlayerSuicides('
     # The match record's.
-    statics wsrelay_matchKind wsrelay_bMatchOn wsrelay_matchScripted
+    statics wsrelay_matchKind wsrelay_bMatchOn wsrelay_matchScripted wsrelay_aMatchByLevelId wsrelay_aMatchByLevel
     cut_out "$relay" 'void stdComm_WSRelay_MatchScores('
     cut_out "$relay" 'void stdComm_WSRelay_MatchScripted('
     cut_out "$relay" 'void stdComm_WSRelay_MatchStart('
+    cut_out "$relay" 'void stdComm_WSRelay_MatchKill('
     cut_out "$relay" 'void stdComm_WSRelay_MatchEnd('
 } > "$out/scripted-code.inc"
 

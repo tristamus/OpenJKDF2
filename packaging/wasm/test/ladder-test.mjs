@@ -496,6 +496,46 @@ test("a joiner's game says nothing of scripts, and a kept last report still does
     assert.deepEqual([got[1].map, got[1].scr], ['m5.jkl', undefined]);
 });
 
+test("a death by one of the level's own characters goes with the player's scoreboard row", () => {
+    const g = makeGame();
+    start(g, { host: true });
+    g.world.run(0);
+    let [r] = g.reports();
+    assert.deepEqual(r.sb, SB, 'rows of six where there is none, as ever');
+    // The host's game has counted three for one player and none for the other.
+    const ROWS = [[1, -3, 0, 3, 3, 0, 3], [2, 0, 0, 0, 0, 0]];
+    g.L.scores(ROWS, TEAMS, 0x18, 0);
+    g.world.run(30000);
+    [r] = g.reports();
+    assert.deepEqual(r.sb, ROWS, 'as the game gave them (the reader of reports() has checked the lobby takes them so)');
+    assert.equal(r.scr, undefined, "it isn't the script's doing");
+    g.L.scores([[1, -4, 0, 4, 4, 0, 4], [2, -1, 0, 1, 1, 0, 1]], TEAMS, 0x18, 0);
+    g.L.end(false);
+    [r] = g.reports();
+    assert.deepEqual([r.end, r.sb], ['level', [[1, -4, 0, 4, 4, 0, 4], [2, -1, 0, 1, 1, 0, 1]]], "the level's last has the last count");
+    // The next level starts with rows of six again.
+    start(g, { host: true, map: 'm5.jkl', title: 'Battleground Jedi' });
+    g.world.run(0);
+    [r] = g.reports();
+    assert.deepEqual(r.sb, SB);
+    if (lobby) {
+        // What the lobby makes of a row: how often, for the players it
+        // happened to.
+        assert.deepEqual([...lobby.levelDeaths({ sb: [[0, -4, 0, 4, 4, 0, 4], [1, 0, 0, 0, 0, 0]] })], [[0, 4]]);
+    }
+    // The engine gives the seventh only where there is one, counts it on the
+    // host for a death by an actor that isn't a player, and forgets it with
+    // the level.
+    assert.ok(relayC.includes('for (var j = 0; j < 6; j++) row.push(HEAP32[(pRows >> 2) + i * 7 + j]);'));
+    assert.ok(relayC.includes('if (byLevel > 0) row.push(byLevel);'));
+    assert.ok(relayC.includes('static int32_t aRows[32 * 7];'));
+    assert.ok(relayC.includes('if (sithNet_isServer && pKiller && pKiller != pVictimThing && pKiller->type == SITH_THING_ACTOR)'));
+    assert.equal(relayC.split('memset(wsrelay_aMatchByLevel, 0, sizeof(wsrelay_aMatchByLevel));').length - 1, 2, "at a level's start and its end");
+    const multiC = read('src/Dss/sithMulti.c');
+    assert.ok(multiC.indexOf('stdComm_WSRelay_MatchKill(pPlayer, pPlayerThing, pKiller);') < multiC.indexOf('pPlayer->numSuicides'),
+              'told before the game counts the suicide');
+});
+
 test("a level's file is named as the lobby takes it", () => {
     for (const [file, name] of [['M4.JKL', 'M4.JKL'], ['my level (v2).jkl', 'my_level__v2_.jkl'], ['', 'unknown'],
                                 ['a'.repeat(40) + '.jkl', 'a'.repeat(32)]]) {
