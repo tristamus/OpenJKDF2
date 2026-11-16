@@ -49,6 +49,9 @@ static int checks = 0;
 
 int32_t sithNet_isMulti = 0;
 int32_t sithNet_isServer = 0;
+int sithMulti_multiModeFlags = 0;
+int32_t sithNet_MultiModeFlags = 0;
+int32_t sithMulti_multiplayerTimelimit = 0;
 int32_t sithNet_serverNetId = 1;
 SithPlayer jkPlayer_playerInfos[JKPLAYER_NUM_INFOS];
 uint32_t jkPlayer_maxPlayers = 32;
@@ -721,19 +724,19 @@ static void testKinds(void)
     Main_bMotsCompat = 0;
     CHECK(wis(jkPlaylist_KindName(JKPLAYLIST_KIND_CTF), "Capture the Flag"), "JK's CTF");
 
-    // Deathmatch and CTF share a playlist; saber-only and co-op levels don't
-    // share one with anything else (the game-wide rules they set).
+    // Deathmatch, CTF and saber-only levels share a playlist; co-op levels
+    // don't share one with anything else (how enemies sync is the game's).
     const int dm = JK_EPISODE_DEATHMATCH, ctf = JK_EPISODE_SPECIAL_CTF | JK_EPISODE_DEATHMATCH;
     CHECK(jkPlaylist_CanMix(dm, ctf) && jkPlaylist_CanMix(ctf, dm) && jkPlaylist_CanMix(ctf, JK_EPISODE_SPECIAL_CTF),
           "deathmatch with CTF");
     CHECK(jkPlaylist_CanMix(JK_EPISODE_4_UNK, dm), "type 4 with deathmatch");
-    CHECK(!jkPlaylist_CanMix(dm, JKM_EPISODE_SABER) && !jkPlaylist_CanMix(JKM_EPISODE_SABER, ctf), "not saber only");
+    CHECK(jkPlaylist_CanMix(dm, JKM_EPISODE_SABER) && jkPlaylist_CanMix(JKM_EPISODE_SABER, ctf), "saber only with the others");
     CHECK(jkPlaylist_CanMix(JKM_EPISODE_SABER, JKM_EPISODE_SABER), "saber only with saber only");
     CHECK(!jkPlaylist_CanMix(dm, JK_EPISODE_SINGLEPLAYER) && !jkPlaylist_CanMix(JK_EPISODE_SINGLEPLAYER, ctf), "not co-op");
-    CHECK(!jkPlaylist_CanMix(JK_EPISODE_SINGLEPLAYER, JKM_EPISODE_SABER), "co-op isn't saber only");
-    // An episode that's saber only and CTF: saber only.
-    CHECK(jkPlaylist_CanMix(JKM_EPISODE_SABER | JK_EPISODE_SPECIAL_CTF, JKM_EPISODE_SABER) &&
-          !jkPlaylist_CanMix(JKM_EPISODE_SABER | JK_EPISODE_SPECIAL_CTF, ctf), "saber-only CTF is saber only");
+    CHECK(!jkPlaylist_CanMix(JK_EPISODE_SINGLEPLAYER, JKM_EPISODE_SABER) && !jkPlaylist_CanMix(JKM_EPISODE_SABER, JK_EPISODE_SINGLEPLAYER),
+          "co-op isn't saber only");
+    CHECK(jkPlaylist_CanMix(JK_EPISODE_SINGLEPLAYER, JK_EPISODE_SINGLEPLAYER), "co-op with co-op");
+    CHECK(jkPlaylist_CanMix(JKM_EPISODE_SABER | JK_EPISODE_SPECIAL_CTF, ctf), "saber-only CTF with CTF");
 
     jkPlaylist list;
     memset(&list, 0, sizeof(list));
@@ -752,6 +755,102 @@ static void testKinds(void)
     Main_bMotsCompat = 0;
     list.count = 1;
     CHECK(!jkPlaylist_IsMixed(&list), "only the playlist's own levels count");
+
+    // Saber only (MotS): with the others, a ranked Jedi game.
+    Main_bMotsCompat = 1;
+    list.count = 2;
+    list.entries[0].type = JKM_EPISODE_SABER;
+    list.entries[1].type = JKM_EPISODE_SABER;
+    CHECK(wis(jkPlaylist_ListKindName(&list), "saber only") && jkPlaylist_HasSaber(&list) && !jkPlaylist_IsSaberMixed(&list),
+          "all saber only: %s", show(jkPlaylist_ListKindName(&list)));
+    list.entries[1].type = dm;
+    CHECK(wis(jkPlaylist_ListKindName(&list), "deathmatch and saber only") && jkPlaylist_IsSaberMixed(&list) && !jkPlaylist_IsMixed(&list),
+          "saber only and deathmatch: %s", show(jkPlaylist_ListKindName(&list)));
+    list.count = 3;
+    list.entries[2].type = ctf;
+    CHECK(wis(jkPlaylist_ListKindName(&list), "deathmatch, Kill the Fool and saber only") && jkPlaylist_IsMixed(&list),
+          "all three: %s", show(jkPlaylist_ListKindName(&list)));
+    list.count = 2;
+    list.entries[0].type = JKM_EPISODE_SABER | JK_EPISODE_SPECIAL_CTF;
+    CHECK(wis(jkPlaylist_ListKindName(&list), "deathmatch, Kill the Fool and saber only") && jkPlaylist_IsSaberMixed(&list),
+          "saber-only Kill the Fool counts as both: %s", show(jkPlaylist_ListKindName(&list)));
+    list.entries[0].type = dm;
+    CHECK(!jkPlaylist_HasSaber(&list) && !jkPlaylist_IsSaberMixed(&list), "no saber only");
+    list.count = 0;
+    CHECK(!jkPlaylist_HasSaber(&list), "an empty playlist has no saber only");
+    Main_bMotsCompat = 0;
+}
+
+// Saber only goes on and off with the level, in a ranked Jedi game (MotS);
+// MotS's player cog takes the guns away at each spawn while it's on.
+static void testLevelRules(void)
+{
+    Main_bMotsCompat = 1;
+    sithMulti_multiModeFlags = MULTIMODEFLAG_1000 | MULTIMODEFLAG_TIMELIMIT;
+    sithNet_MultiModeFlags = sithMulti_multiModeFlags;
+    jkPlaylist_LevelRules(JKM_EPISODE_SABER);
+    CHECK(sithMulti_multiModeFlags == (MULTIMODEFLAG_1000 | MULTIMODEFLAG_2000 | MULTIMODEFLAG_TIMELIMIT) &&
+          sithNet_MultiModeFlags == sithMulti_multiModeFlags, "a saber-only level: on (%x, %x)", sithMulti_multiModeFlags,
+          sithNet_MultiModeFlags);
+    jkPlaylist_LevelRules(JK_EPISODE_DEATHMATCH);
+    CHECK(sithMulti_multiModeFlags == (MULTIMODEFLAG_1000 | MULTIMODEFLAG_TIMELIMIT) && sithNet_MultiModeFlags == sithMulti_multiModeFlags,
+          "a deathmatch level: off (%x, %x)", sithMulti_multiModeFlags, sithNet_MultiModeFlags);
+    jkPlaylist_LevelRules(JKM_EPISODE_SABER | JK_EPISODE_SPECIAL_CTF);
+    CHECK(sithMulti_multiModeFlags & MULTIMODEFLAG_2000, "a saber-only Kill the Fool level: on");
+    jkPlaylist_LevelRules(JK_EPISODE_SPECIAL_CTF | JK_EPISODE_DEATHMATCH);
+    CHECK(!(sithMulti_multiModeFlags & MULTIMODEFLAG_2000), "a Kill the Fool level: off");
+
+    // A personalities game, or JK: as it was.
+    sithMulti_multiModeFlags = sithNet_MultiModeFlags = MULTIMODEFLAG_TIMELIMIT;
+    jkPlaylist_LevelRules(JKM_EPISODE_SABER);
+    CHECK(sithMulti_multiModeFlags == MULTIMODEFLAG_TIMELIMIT && sithNet_MultiModeFlags == MULTIMODEFLAG_TIMELIMIT,
+          "personalities: untouched");
+    Main_bMotsCompat = 0;
+    sithMulti_multiModeFlags = sithNet_MultiModeFlags = MULTIMODEFLAG_1000;
+    jkPlaylist_LevelRules(JKM_EPISODE_SABER);
+    CHECK(sithMulti_multiModeFlags == MULTIMODEFLAG_1000, "JK: untouched");
+    sithMulti_multiModeFlags = sithNet_MultiModeFlags = 0;
+}
+
+// The host ends a playlist's level that goes on too far past the time limit
+// (a CTF or Jedi Ball cog's own clock, a tied score).
+static void testOvertime(void)
+{
+    const uint32_t limit = 60000, over = JKPLAYLIST_OVERTIME_MS;
+    resetMock();
+    asHost();
+    setPlaylist(3, 1);
+    jkPlaylist_SetHosting(1, 0);
+    jkPlaylist_GameStarted();
+    sithMulti_multiplayerTimelimit = limit;
+    sithMulti_multiModeFlags = MULTIMODEFLAG_TIMELIMIT;
+
+    sithNet_MultiModeFlags = MULTIMODEFLAG_TIMELIMIT;
+    CHECK(!jkPlaylist_Overtime(limit + over + 1), "the game's own time limit is still to come");
+    sithNet_MultiModeFlags = 0; // a cog took it over
+    CHECK(!jkPlaylist_Overtime(limit + 1) && !jkPlaylist_Overtime(limit + over), "not yet");
+    CHECK(jkPlaylist_Overtime(limit + over + 1), "too far past it: the level ends");
+    CHECK(!jkPlaylist_Overtime(limit + over + 1000), "once a level");
+    jkPlaylist_LevelStarted();
+    CHECK(jkPlaylist_Overtime(limit + over + 1), "the next level: again");
+
+    jkPlaylist_LevelStarted();
+    jkPlaylist_HostPick();
+    CHECK(!jkPlaylist_Overtime(limit + over + 1), "not once the level has ended");
+
+    jkPlaylist_LevelStarted();
+    sithMulti_multiModeFlags = 0;
+    CHECK(!jkPlaylist_Overtime(limit + over + 1), "no time limit on the Host screen");
+    sithMulti_multiModeFlags = MULTIMODEFLAG_TIMELIMIT;
+    jkPlaylist_SetHosting(0, 0);
+    CHECK(!jkPlaylist_Overtime(limit + over + 1), "not a playlist");
+    sithNet_isServer = 0;
+    jkPlaylist_SetHosting(1, 0);
+    CHECK(!jkPlaylist_Overtime(limit + over + 1), "not the host");
+    asHost();
+    jkPlaylist_SetHosting(0, 0);
+    sithMulti_multiModeFlags = 0;
+    sithMulti_multiplayerTimelimit = 0;
 }
 
 // The host goes through the playlist: 1, 2, 3, then the end or 1 again.
@@ -1205,16 +1304,19 @@ static void scriptMots(jkGuiMenu* menu, jkGuiElement* el, int frame)
               "MotS's GOO, and the kind: %s", show(el[E_INFO].wstr));
         pickEpisode(menu, el, "Jedi Training");
         click(menu, &el[E_ADD], 0);
-        CHECK(wis(el[E_MESSAGE].wstr, "Saber-only levels need a playlist of their own."),
-              "saber only keeps to itself: %s", show(el[E_MESSAGE].wstr));
-        CHECK(wis(el[E_COUNT].wstr, "1 of 6"), "deathmatch isn't added: %s", show(el[E_COUNT].wstr));
+        CHECK(wis(el[E_COUNT].wstr, "2 of 6"), "deathmatch joins saber only: %s", show(el[E_COUNT].wstr));
+        CHECK(wis(el[E_MESSAGE].wstr, "With a saber-only level, the game is Jedi only: no personalities."),
+              "and says what that means: %s", show(el[E_MESSAGE].wstr));
+        CHECK(wcontains(el[E_INFO].wstr, "A deathmatch and saber only playlist."), "the kind: %s", show(el[E_INFO].wstr));
         pickEpisode(menu, el, "Capture the Flag");
         click(menu, &el[E_ADD], 0);
-        CHECK(wis(el[E_COUNT].wstr, "1 of 6") && wcontains(el[E_MESSAGE].wstr, "Saber-only levels need a playlist of their own."),
-              "nor Kill the Fool: %s", show(el[E_MESSAGE].wstr));
+        CHECK(wis(el[E_COUNT].wstr, "3 of 6") && wis(el[E_MESSAGE].wstr, "Kill the Fool plays in teams with its own scoring. Use a time limit."),
+              "and Kill the Fool: %s", show(el[E_MESSAGE].wstr));
+        CHECK(wcontains(el[E_INFO].wstr, "playlist."), "the kind, or as much as fits: %s", show(el[E_INFO].wstr));
         pickEpisode(menu, el, "Saber Arenas");
         click(menu, &el[E_ADD], 0);
         CHECK(wcontains(el[E_INFO].wstr, "Arena, from Saber Arenas. Everyone has it"), "MotS's own episode: %s", show(el[E_INFO].wstr));
+        CHECK(!el[E_MESSAGE].wstr || !el[E_MESSAGE].wstr[0], "no message for another saber-only level: %s", show(el[E_MESSAGE].wstr));
         break;
     case 1:
         click(menu, &el[E_USE], 0);
@@ -1353,8 +1455,8 @@ static void testScreen(void)
     jkPlaylist_Load(1);
     script = scriptMots;
     r = jkGuiPlaylist_Show(1, mask | JKM_EPISODE_SABER);
-    CHECK(r == 1 && count() == 2, "a saber playlist (%d)", count());
-    CHECK(js("JSON.parse(localStorage.getItem('jkdf2mp-playlist-mots')).items.length") == 2, "saved as MotS's");
+    CHECK(r == 1 && count() == 4, "a saber playlist with the others (%d)", count());
+    CHECK(js("JSON.parse(localStorage.getItem('jkdf2mp-playlist-mots')).items.length") == 4, "saved as MotS's");
     CHECK(js("JSON.parse(localStorage.getItem('jkdf2mp-playlist-jk1') || 'null') === null ? 1 : 0"), "not as JK's");
     Main_bMotsCompat = 0;
 
@@ -1383,6 +1485,8 @@ int main(void)
     testKinds();
     testHostOrder();
     testHostTally();
+    testLevelRules();
+    testOvertime();
     testJoiner();
     sithNet_isMulti = 0;
     sithNet_isServer = 0;

@@ -26,13 +26,17 @@
 // next level, from when it came up.
 #define JKPLAYLIST_WAIT_MS (60000)
 
-// A level's kind. Deathmatch and CTF (MotS: Kill the Fool) levels share a
-// playlist: a CTF level's own cog turns on teams and its own scoring when it
-// starts, and every level starts with the Host screen's rules again
-// (sithMulti_StartupServer). Saber-only and co-op levels have playlists of
-// their own: those rules are the game's, set once when it's hosted (which
-// characters joiners may pick, how enemies sync), and can't change between
-// levels.
+// A level's kind. Deathmatch, CTF (MotS: Kill the Fool) and MotS's saber-only
+// levels share a playlist:
+// - a CTF level's own cog turns on teams and its own scoring when it starts,
+//   and every level starts with the Host screen's rules again
+//   (sithMulti_StartupServer);
+// - a saber-only level makes the whole game a ranked Jedi game (which
+//   characters joiners may pick is the game's, set once when it's hosted),
+//   and every game turns saber only on for those levels and off for the rest
+//   (jkPlaylist_LevelRules).
+// Co-op levels have playlists of their own: how enemies sync is the game's
+// and can't change between levels.
 #define JKPLAYLIST_KIND_DM (0)
 #define JKPLAYLIST_KIND_CTF (1)
 #define JKPLAYLIST_KIND_SABER (2)
@@ -77,16 +81,39 @@ void jkPlaylist_Save(int bMots);
 int jkPlaylist_KindOf(int type);
 const char16_t* jkPlaylist_KindName(int kind);
 
-// Whether levels of these episode types may share a playlist: the same
-// game-wide rules (saber only, co-op), whatever their kind.
+// Whether levels of these episode types may share a playlist: both co-op, or
+// neither.
 int jkPlaylist_CanMix(int typeA, int typeB);
 
-// The playlist's kind, for "A ... playlist.": its levels' kind, or
-// "deathmatch and Capture the Flag" when it has both. "" when it's empty.
+// The playlist's kind, for "A ... playlist.": its levels' kinds, such as
+// "deathmatch and Capture the Flag". "" when it's empty.
 const char16_t* jkPlaylist_ListKindName(const jkPlaylist* pList);
 
 // Whether the playlist has deathmatch and CTF levels both.
 int jkPlaylist_IsMixed(const jkPlaylist* pList);
+
+// Whether the playlist has saber-only levels (MotS), which make the game a
+// ranked Jedi game: no personalities.
+int jkPlaylist_HasSaber(const jkPlaylist* pList);
+
+// Whether it has saber-only levels and others both.
+int jkPlaylist_IsSaberMixed(const jkPlaylist* pList);
+
+// Every game, as a level of a playlist's ranked Jedi game (MotS) loads, with
+// its episode's type: saber only (MULTIMODEFLAG_2000, which MotS's player cog
+// takes the guns away for at each spawn) on for a saber-only level, off for
+// the others.
+void jkPlaylist_LevelRules(int type);
+
+// The longest a playlist's level goes on past the host's time limit. A level's
+// own cog may have taken the limit over (CTF, Jedi Ball): its clock starts
+// when the first player picks a team, and it plays on while the score is tied.
+#define JKPLAYLIST_OVERTIME_MS (120000)
+
+// The host, each frame: whether the level, still going JKPLAYLIST_OVERTIME_MS
+// past the Host screen's time limit, ends now so the playlist goes on. 1 once
+// a level at most.
+int jkPlaylist_Overtime(uint32_t msGameTime);
 
 // Host screen: this game hosts the playlist from level idx, or (bOn 0) the
 // episode's own order as before.

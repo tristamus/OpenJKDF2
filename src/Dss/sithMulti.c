@@ -24,6 +24,7 @@
 #include "Engine/sithInterp.h"
 #include "stdPlatform.h"
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#include "Main/jkPlaylist.h"
 
 #define sithMulti_infoPrintf(fmt, ...) stdPlatform_Printf(fmt, ##__VA_ARGS__)
 #define sithMulti_verbosePrintf(fmt, ...) if (Main_bVerboseNetworking) \
@@ -1342,7 +1343,13 @@ void sithMulti_Update(int msecDeltaTime)
             stdComm_WSRelay_MatchScores();
 #endif
         }
-        if ( (sithNet_MultiModeFlags & MULTIMODEFLAG_TIMELIMIT) != 0 && sithTime_g_msecGameTime > sithNet_multiplayer_timelimit )
+        if ( ((sithNet_MultiModeFlags & MULTIMODEFLAG_TIMELIMIT) != 0 && sithTime_g_msecGameTime > sithNet_multiplayer_timelimit)
+#ifdef PLATFORM_WSRELAY
+             // Added: a playlist's level whose own cog took the time limit
+             // over, and plays on, ends anyway so the playlist goes on
+             || jkPlaylist_Overtime(sithTime_g_msecGameTime)
+#endif
+           )
         {
             stdString_WcharToChar(std_g_genBuffer, sithStrTable_GetUniStringWithFallback("MULTI_TIMELIMIT"), 127);
             std_g_genBuffer[127] = 0;
