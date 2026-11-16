@@ -5,9 +5,6 @@
 // A co-op level gives a player "kills" for the enemies they shoot, so the
 // game's scoreboard is the level's own; the lobby is told, and shows the
 // match by that scoreboard instead of by the kills between its players.
-// Its enemies kill players too, which the game scores as suicides: the host
-// counts those deaths for each player and sends the count with the player's
-// row, so the lobby can tell them from a player's own doing.
 // scripted-test.sh cuts the code out of the sources and builds this file
 // around it. From the top of the source tree:
 //
@@ -19,11 +16,7 @@
 #include <string.h>
 #include <uchar.h>
 
-typedef struct SithPlayer SithPlayer;
-typedef struct SithThing SithThing;
-
-// What the lobby is told of (STDCOMM_WSRELAY_SCRIPTED_*), the mode flags, the
-// kinds of thing, and the match record's functions.
+// What the lobby is told of (STDCOMM_WSRELAY_SCRIPTED_*), and the mode flags.
 #include "scripted-types.inc"
 
 // ---- What the code reads of the engine.
@@ -39,6 +32,7 @@ typedef struct SithPlayer
     int32_t score;
 } SithPlayer;
 
+#define SITH_THING_PLAYER (10)
 typedef struct SithThing
 {
     int type;
@@ -64,9 +58,6 @@ static sithWorld* sithWorld_g_pCurrentWorld = &world;
 static SithPlayer jkPlayer_playerInfos[32];
 static int jkPlayer_maxPlayers = NUM_PLAYERS;
 static SithThing things[NUM_PLAYERS];
-// This game's own player, and one of the level's characters.
-static SithThing* sithPlayer_g_pLocalPlayerThing = &things[0];
-static SithThing enemy = { SITH_THING_ACTOR, { NULL } };
 
 static int syncs = 0;
 static void sithMulti_SyncScores(void) { syncs++; }
@@ -83,8 +74,6 @@ static char16_t* wsrelay_matchTitle(char* pJklFname) { return NULL; }
 
 static int starts = 0, ends = 0, scores = 0;
 static int lastMode = -1, lastScripted = -1, lastRows = -1, lastKills0 = -1;
-static int lastByLevel[NUM_PLAYERS];
-static int kills = 0, lastVictim = -1, lastKiller = -1;
 
 static void wsrelay_js_match_start(const char* pMap, const char16_t* pTitle, int mode, int scoreLimit, int timeLimitMin,
                                    int bHost, int bIdle, const char* pBuild)
@@ -97,20 +86,11 @@ static void wsrelay_js_match_scores(const int32_t* pRows, int n, const int32_t* 
     scores++;
     lastRows = n;
     lastKills0 = n ? pRows[2] : -1;
-    for (int i = 0; i < NUM_PLAYERS; i++)
-        lastByLevel[i] = i < n ? pRows[i * 7 + 6] : -1;
     lastMode = mode;
     lastScripted = scripted;
 }
 
 static void wsrelay_js_match_end(int bLeft) { ends++; }
-
-static void wsrelay_js_match_kill(int victim, int killer, int kind)
-{
-    kills++;
-    lastVictim = victim;
-    lastKiller = killer;
-}
 
 // The tree's own code.
 #include "scripted-code.inc"
@@ -145,22 +125,8 @@ static void newGame(int bMulti, int bServer)
     stdComm_Imperial_bActive = 0;
     wsrelay_bMatchOn = 0;
     wsrelay_matchScripted = 0;
-    memset(wsrelay_aMatchByLevelId, 0, sizeof(wsrelay_aMatchByLevelId));
-    memset(wsrelay_aMatchByLevel, 0, sizeof(wsrelay_aMatchByLevel));
-    starts = ends = scores = syncs = kills = 0;
-    lastMode = lastScripted = lastRows = lastKills0 = lastVictim = lastKiller = -1;
-}
-
-// The player in a seat dies of pKiller, as the game tells the match record.
-static void die(int seat, SithThing* pKiller)
-{
-    stdComm_WSRelay_MatchKill(&jkPlayer_playerInfos[seat], &things[seat], pKiller);
-}
-
-static int byLevel(int a, int b, int c)
-{
-    stdComm_WSRelay_MatchScores();
-    return lastByLevel[0] == a && lastByLevel[1] == b && lastByLevel[2] == c;
+    starts = ends = scores = syncs = 0;
+    lastMode = lastScripted = lastRows = lastKills0 = -1;
 }
 
 int main(void)
@@ -256,55 +222,6 @@ int main(void)
     jkPlayer_playerInfos[0].numKills = 0;
     stdComm_WSRelay_MatchStart();
     CHECK("the next match starts with nothing set", starts == 1 && lastScripted == 0);
-
-    // The level's own characters kill players, which the game scores as
-    // suicides. The host counts them for each player, apart from a player's
-    // kill, a player's own doing and a fall.
-    newGame(1, 1);
-    stdComm_WSRelay_MatchStart();
-    CHECK("nobody has died of the level yet", lastByLevel[0] == 0 && lastByLevel[1] == 0 && lastByLevel[2] == 0);
-    die(0, &enemy);
-    CHECK("an enemy's kill is nobody's, as the game scores it", kills == 1 && lastVictim == 1 && lastKiller == 0);
-    die(0, &enemy);
-    die(2, &enemy);
-    die(1, &things[0]);
-    CHECK("a player's kill is that player's", lastVictim == 2 && lastKiller == 1);
-    die(1, &things[1]);
-    die(1, NULL);
-    CHECK("deaths by the level's characters, for each player", byLevel(2, 0, 1));
-    CHECK("which sets nothing of a script's", lastScripted == 0);
-    // Another player in a seat starts from none.
-    jkPlayer_playerInfos[0].playerNetId = 9;
-    CHECK("a seat's next player has none", byLevel(0, 0, 1));
-    die(0, &enemy);
-    CHECK("and counts from there", byLevel(1, 0, 1));
-    // The level's end sends the last count, and the next level starts anew.
-    stdComm_WSRelay_MatchEnd(0);
-    CHECK("the last scoreboard has the count", lastByLevel[0] == 1 && lastByLevel[2] == 1);
-    stdComm_WSRelay_MatchStart();
-    CHECK("the next level starts with none", lastByLevel[0] == 0 && lastByLevel[2] == 0);
-
-    // A game that joined keeps no count: the host's scoreboard is the one.
-    newGame(1, 0);
-    stdComm_WSRelay_MatchStart();
-    die(0, &enemy);
-    die(1, &enemy);
-    CHECK("a joiner's game tells the kill", kills == 2 && lastKiller == 0);
-    CHECK("and counts nothing", byLevel(0, 0, 0));
-
-    // A level the lobby isn't told of: nothing is counted for a later match.
-    newGame(1, 1);
-    stdComm_Imperial_bActive = 1;
-    stdComm_WSRelay_MatchStart();
-    die(0, &enemy);
-    stdComm_WSRelay_MatchEnd(0);
-    stdComm_Imperial_bActive = 0;
-    stdComm_WSRelay_MatchStart();
-    CHECK("an unreported level's deaths aren't carried over", kills == 0 && lastByLevel[0] == 0);
-    // A seat nobody is in (no id) isn't counted.
-    jkPlayer_playerInfos[1].playerNetId = 0;
-    die(1, &enemy);
-    CHECK("a seat without a player tells nothing", kills == 0);
 
     if (failed)
         printf("%d failed\n", failed);

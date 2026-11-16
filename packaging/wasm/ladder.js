@@ -275,11 +275,7 @@
             L.waiting.shift();
     };
 
-    // rows: the scoreboard, a row of six for each player (id, score, kills,
-    // deaths, suicides, team) and a seventh where one of the level's own
-    // characters killed them: how often, which the host's game counts. They
-    // go to the lobby as they are. mode: the game's mode flags as they are
-    // now, which a level's script
+    // mode: the game's mode flags as they are now, which a level's script
     // can add to after its start (scored by the level, say). scripted: what
     // the script has set of a player's by itself, 1 score, 2 kills, 4 deaths,
     // 8 suicides; it only ever grows in a level.

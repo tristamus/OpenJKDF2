@@ -392,9 +392,6 @@ int stdComm_WSRelay_InMatch();
 // host, has given a player another score, kills, deaths or suicides than the
 // game counted (what: STDCOMM_WSRELAY_SCRIPTED_*): the scoreboard is the
 // level's own from then on, and no longer what the kills add up to.
-// MatchKill also counts, on the host, the deaths of each player by one of the
-// level's own characters (an actor that isn't a player), which the game
-// scores as suicides: MatchScores sends the count with the player's row.
 #define STDCOMM_WSRELAY_SCRIPTED_SCORE    (1)
 #define STDCOMM_WSRELAY_SCRIPTED_KILLS    (2)
 #define STDCOMM_WSRELAY_SCRIPTED_DEATHS   (4)
