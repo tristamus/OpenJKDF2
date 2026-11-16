@@ -105,16 +105,6 @@ int jkPlaylist_IsSaberMixed(const jkPlaylist* pList);
 // the others.
 void jkPlaylist_LevelRules(int type);
 
-// The longest a playlist's level goes on past the host's time limit. A level's
-// own cog may have taken the limit over (CTF, Jedi Ball): its clock starts
-// when the first player picks a team, and it plays on while the score is tied.
-#define JKPLAYLIST_OVERTIME_MS (120000)
-
-// The host, each frame: whether the level, still going JKPLAYLIST_OVERTIME_MS
-// past the Host screen's time limit, ends now so the playlist goes on. 1 once
-// a level at most.
-int jkPlaylist_Overtime(uint32_t msGameTime);
-
 // Host screen: this game hosts the playlist from level idx, or (bOn 0) the
 // episode's own order as before.
 void jkPlaylist_SetHosting(int bOn, int idx);

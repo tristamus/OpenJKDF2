@@ -51,7 +51,6 @@ int32_t sithNet_isMulti = 0;
 int32_t sithNet_isServer = 0;
 int sithMulti_multiModeFlags = 0;
 int32_t sithNet_MultiModeFlags = 0;
-int32_t sithMulti_multiplayerTimelimit = 0;
 int32_t sithNet_serverNetId = 1;
 SithPlayer jkPlayer_playerInfos[JKPLAYER_NUM_INFOS];
 uint32_t jkPlayer_maxPlayers = 32;
@@ -812,47 +811,6 @@ static void testLevelRules(void)
     sithMulti_multiModeFlags = sithNet_MultiModeFlags = 0;
 }
 
-// The host ends a playlist's level that goes on too far past the time limit
-// (a CTF or Jedi Ball cog's own clock, a tied score).
-static void testOvertime(void)
-{
-    const uint32_t limit = 60000, over = JKPLAYLIST_OVERTIME_MS;
-    resetMock();
-    asHost();
-    setPlaylist(3, 1);
-    jkPlaylist_SetHosting(1, 0);
-    jkPlaylist_GameStarted();
-    sithMulti_multiplayerTimelimit = limit;
-    sithMulti_multiModeFlags = MULTIMODEFLAG_TIMELIMIT;
-
-    sithNet_MultiModeFlags = MULTIMODEFLAG_TIMELIMIT;
-    CHECK(!jkPlaylist_Overtime(limit + over + 1), "the game's own time limit is still to come");
-    sithNet_MultiModeFlags = 0; // a cog took it over
-    CHECK(!jkPlaylist_Overtime(limit + 1) && !jkPlaylist_Overtime(limit + over), "not yet");
-    CHECK(jkPlaylist_Overtime(limit + over + 1), "too far past it: the level ends");
-    CHECK(!jkPlaylist_Overtime(limit + over + 1000), "once a level");
-    jkPlaylist_LevelStarted();
-    CHECK(jkPlaylist_Overtime(limit + over + 1), "the next level: again");
-
-    jkPlaylist_LevelStarted();
-    jkPlaylist_HostPick();
-    CHECK(!jkPlaylist_Overtime(limit + over + 1), "not once the level has ended");
-
-    jkPlaylist_LevelStarted();
-    sithMulti_multiModeFlags = 0;
-    CHECK(!jkPlaylist_Overtime(limit + over + 1), "no time limit on the Host screen");
-    sithMulti_multiModeFlags = MULTIMODEFLAG_TIMELIMIT;
-    jkPlaylist_SetHosting(0, 0);
-    CHECK(!jkPlaylist_Overtime(limit + over + 1), "not a playlist");
-    sithNet_isServer = 0;
-    jkPlaylist_SetHosting(1, 0);
-    CHECK(!jkPlaylist_Overtime(limit + over + 1), "not the host");
-    asHost();
-    jkPlaylist_SetHosting(0, 0);
-    sithMulti_multiModeFlags = 0;
-    sithMulti_multiplayerTimelimit = 0;
-}
-
 // The host goes through the playlist: 1, 2, 3, then the end or 1 again.
 static void testHostOrder(void)
 {
@@ -1486,7 +1444,6 @@ int main(void)
     testHostOrder();
     testHostTally();
     testLevelRules();
-    testOvertime();
     testJoiner();
     sithNet_isMulti = 0;
     sithNet_isServer = 0;

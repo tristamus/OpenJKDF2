@@ -21,7 +21,6 @@ jkPlaylistNext jkPlaylist_next;
 static int jkPlaylist_bHosting = 0;
 static int jkPlaylist_cur = 0;          // the level playing now, while hosting
 static int jkPlaylist_bPicked = 0;      // this level's end has named the next one
-static int jkPlaylist_bOvertime = 0;    // this level went too far past the time limit (jkPlaylist_Overtime)
 // The players the host waits for: those in the game when the level ended.
 static int32_t jkPlaylist_aWaitIds[32];
 static int jkPlaylist_numWaitIds = 0;
@@ -288,21 +287,6 @@ void jkPlaylist_LevelRules(int type)
     }
 }
 
-int jkPlaylist_Overtime(uint32_t msGameTime)
-{
-    // Not when the Host screen has no time limit, or the game's own is still
-    // to come (sithMulti_Update's), or the level already ended.
-    if (!jkPlaylist_IsHosting() || jkPlaylist_bOvertime || jkPlaylist_next.bNamed)
-        return 0;
-    if (!(sithMulti_multiModeFlags & MULTIMODEFLAG_TIMELIMIT) || (sithNet_MultiModeFlags & MULTIMODEFLAG_TIMELIMIT))
-        return 0;
-    if (msGameTime <= (uint32_t)sithMulti_multiplayerTimelimit + JKPLAYLIST_OVERTIME_MS)
-        return 0;
-    jkPlaylist_bOvertime = 1;
-    stdPlatform_Printf("OpenJKDF2: the level went %d s past the time limit: the playlist goes on\n", JKPLAYLIST_OVERTIME_MS / 1000);
-    return 1;
-}
-
 void jkPlaylist_SetHosting(int bOn, int idx)
 {
     jkPlaylist_bHosting = bOn && jkPlaylist_list.count > 0;
@@ -324,7 +308,6 @@ int jkPlaylist_IsHosting(void)
 void jkPlaylist_GameStarted(void)
 {
     memset(&jkPlaylist_next, 0, sizeof(jkPlaylist_next));
-    jkPlaylist_bOvertime = 0;
     jkPlaylist_bPicked = 0;
     jkPlaylist_numWaitIds = 0;
     jkPlaylist_wFailed[0] = 0;
@@ -336,7 +319,6 @@ void jkPlaylist_LevelStarted(void)
         jkPlaylist_cur = jkPlaylist_next.idx;
     jkPlaylist_next.bNamed = 0;
     jkPlaylist_bPicked = 0;
-    jkPlaylist_bOvertime = 0;
     jkPlaylist_numWaitIds = 0;
     jkPlaylist_wFailed[0] = 0;
 }
