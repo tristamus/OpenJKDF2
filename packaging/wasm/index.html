@@ -3351,7 +3351,34 @@
           return out;
         }
 
-        return { list: list, keys: keys, read: read, add: add, remove: remove, patch: patch };
+        // Something the page keeps beside the screenshots, under a name
+        // none of them has (theirs end in .png): the final scoreboard still
+        // to be sent (shotSharer). It has no record, so no list shows it.
+        function keptKey(name) {
+          return '(kept) ' + name;
+        }
+
+        async function keep(name, value) {
+          var db = await open();
+          var tx = db.transaction('data', 'readwrite');
+          tx.objectStore('data').put(value, keptKey(name));
+          await done(tx);
+        }
+
+        async function kept(name) {
+          var db = await open();
+          return (await request(db.transaction('data').objectStore('data').get(keptKey(name)))) || null;
+        }
+
+        async function unkeep(name) {
+          var db = await open();
+          var tx = db.transaction('data', 'readwrite');
+          tx.objectStore('data').delete(keptKey(name));
+          await done(tx);
+        }
+
+        return { list: list, keys: keys, read: read, add: add, remove: remove, patch: patch,
+                 keep: keep, kept: kept, unkeep: unkeep };
       }
 
       // What the engine calls: save() takes a screenshot and stores it in the
@@ -3467,11 +3494,17 @@
       // lobby had no place for it. rec marks one taken in a reported level,
       // which the player can still send by hand.
       //
-      // The final scoreboard is the game's own picture of its score screen
-      // when a level ends (takeFinal). Every game in the match has the same
-      // one and the lobby keeps the first, so the host's goes at once and the
-      // others' a little later, when the lobby usually says it has one. It's
-      // kept here only until it's sent or given up on.
+      // The final scoreboard is the game's own picture of the score screen
+      // it shows when a level ends or its player leaves one (takeFinal).
+      // Every game still in the match at its end has the same one and the
+      // lobby keeps the first, so the host's goes at once and the others' a
+      // little later, when the lobby usually says it has one. The lobby
+      // says whether it's the match's last: one from a player who left a
+      // match that went on isn't. It's never shown under Your Screenshots,
+      // and is kept (in the store, beside them) only until it's sent or
+      // given up on: a player who quits the game loads the page anew, often
+      // before the lobby has saved the match, and the page that comes then
+      // sends it (resumeFinal).
       //
       // d: { store, fetch, now(), allowed(), levelSince() (when the level
       //      being played began by now()'s clock, 0 when none is), lock(fn)
@@ -3488,7 +3521,8 @@
       var SHOT_FINAL_SPREAD_MS = 9000;  // and up to this much longer
       var SHOT_FINAL_RETRY_MS = 5000;
       var SHOT_FINAL_TRIES = 6;
-      var SHOT_FINAL_MS = 2 * 60 * 1000;   // and is given up on after this
+      var SHOT_FINAL_MS = 2 * 60 * 1000;   // and is given up on after this,
+      var SHOT_FINAL_KEEP_MS = 60 * 60 * 1000;   // or this, by a page that found it kept
 
       // The lobby's limits as it sent them, or null for anything else.
       function shotLimits(a) {
@@ -3515,11 +3549,16 @@
         var retry = null, tries = 0;
         // The level being played at the last tick (d.levelSince()).
         var level = 0;
-        var final = null;
+        // The final scoreboard being sent, and whether the store is known
+        // to keep none (resumeFinal).
+        var final = null, noneKept = false;
 
-        function address(taken, isFinal) {
+        // f: the final scoreboard it's of, if it is one. left: its player
+        // left the level, which the lobby takes for the match's last only
+        // where the match was over by then.
+        function address(taken, f) {
           return '/ladder/shot?age=' + Math.max(0, Math.round(d.now() - taken)) + '&taken=' + taken +
-                 (isFinal ? '&final=1' : '');
+                 (f ? '&final=1' + (f.left ? '&left=1' : '') : '');
         }
 
         // Asks the lobby, and says what its answer means for the picture:
@@ -3689,9 +3728,11 @@
           return true;
         }
 
-        // And all of them: the player unticked the box.
+        // And all of them: the player unticked the box. The final
+        // scoreboard that waits isn't sent either.
         async function keepAllBack() {
           var any = false;
+          await forgetFinal();
           for (var meta of await d.store.list()) {
             if (meta.share !== 'wait') continue;
             await d.store.patch(meta.key, { share: 'off' }, 'wait');
@@ -3713,35 +3754,102 @@
           final.timer = d.setTimeout(sendFinal, ms);
         }
 
+        // The one kept in the store is this one still (and not a later one
+        // of another tab's): it's taken out.
+        function unkeepFinal(taken) {
+          if (!d.store.unkeep) return Promise.resolve();
+          return d.store.kept('final').then(function(k) {
+            if (k && k.taken === taken) return d.store.unkeep('final');
+          }).catch(function() {});
+        }
+
+        // Done with f, here and in the store: it's there, or has no place.
+        function dropFinal(f) {
+          d.clearTimeout(f.timer);
+          if (final === f) final = null;
+          return unkeepFinal(f.taken);
+        }
+
         async function sendFinal() {
           var f = final;
           if (!f || f.busy) return;
-          if (!limits || !d.allowed() || d.now() - f.taken > SHOT_FINAL_MS) {
+          var age = d.now() - f.taken;
+          if (age > SHOT_FINAL_KEEP_MS) return dropFinal(f);
+          // Nothing goes now, or the page that took it has tried long
+          // enough: it stays in the store, for a page that may send it.
+          if (!limits || !d.allowed() || (!f.resumed && age > SHOT_FINAL_MS)) {
             final = null;
             return;
           }
           f.busy = true;
-          var r = await ask(address(f.taken, true));
-          if (r.state === 'go') r = await ask(address(f.taken, true), { method: 'POST', body: d.form(f.images) });
+          var r = await ask(address(f.taken, f));
+          if (r.state === 'go') r = await ask(address(f.taken, f), { method: 'POST', body: d.form(f.images) });
           f.busy = false;
           if (final !== f) return;
-          // Its match isn't saved yet: again in a while, or when the game
-          // hears that it is (saved).
-          if ((r.state === 'wait' || r.state === 'stop') && ++f.tries < SHOT_FINAL_TRIES) return later(SHOT_FINAL_RETRY_MS);
-          final = null;
+          if (r.state === 'wait' || r.state === 'stop') {
+            // Its match isn't saved yet: again in a while, or when the game
+            // hears that it is (saved).
+            if (++f.tries < SHOT_FINAL_TRIES) return later(SHOT_FINAL_RETRY_MS);
+            // Not by this page, then: the next finds it in the store.
+            final = null;
+            return;
+          }
+          dropFinal(f);
         }
 
         // The game's picture of the final scoreboard, as the lobby takes it
         // (images), taken at `taken`. host: this game hosts the match.
-        function takeFinal(images, taken, host) {
+        // left: its player left the level, it didn't end.
+        function takeFinal(images, taken, host, left) {
           if (final) d.clearTimeout(final.timer);
-          final = { images: images, taken: taken, host: !!host, tries: 0, busy: false, timer: null };
+          final = { images: images, taken: taken, host: !!host, left: !!left, tries: 0, busy: false, timer: null };
+          noneKept = false;
+          if (d.store.keep) {
+            d.store.keep('final', { v: 1, taken: taken, host: !!host, left: !!left, full: images.full, thumb: images.thumb })
+              .catch(function(e) { d.warn('could not keep the final scoreboard for the next page (' + e + ')'); });
+          }
           later(host ? 0 : SHOT_FINAL_WAIT_MS + Math.floor(d.random() * SHOT_FINAL_SPREAD_MS));
+        }
+
+        // A final scoreboard a page before this one took and couldn't send
+        // (its player quit the game, and the page loaded anew): this one
+        // sends it, if it's still worth it. Asked for whenever something
+        // may have changed, so what the store said last is remembered.
+        async function resumeFinal() {
+          if (final || noneKept || !limits || !d.allowed() || !d.store.kept) return;
+          var k = null;
+          try {
+            k = await d.store.kept('final');
+          } catch (e) {
+            return;
+          }
+          if (final) return;
+          var age = k ? d.now() - k.taken : 0;
+          if (!k || k.v !== 1 || typeof k.taken !== 'number' || !k.full || !k.thumb || !(age >= 0 && age <= SHOT_FINAL_KEEP_MS)) {
+            noneKept = true;
+            if (k) unkeepFinal(k.taken);
+            return;
+          }
+          final = { images: { full: k.full, thumb: k.thumb }, taken: k.taken, host: !!k.host, left: !!k.left, tries: 0,
+                    busy: false, timer: null, resumed: true };
+          later(0);
+        }
+
+        // The player doesn't share (any more): the one waiting isn't sent,
+        // by this page or the next.
+        function forgetFinal() {
+          var f = final;
+          final = null;
+          noneKept = true;
+          if (f) d.clearTimeout(f.timer);
+          if (d.store.unkeep) return d.store.unkeep('final').catch(function() {});
+          return Promise.resolve();
         }
 
         // The lobby saved a match of this game's.
         function saved() {
           if (final && !final.busy) later(final.host ? 0 : Math.floor(d.random() * SHOT_FINAL_WAIT_MS));
+          else if (!final) resumeFinal();
           run();
         }
 
@@ -3756,9 +3864,9 @@
           // its level ended is asked about at the next tick.
           want: function() { if (!d.levelSince()) wanted = true; },
           // One more try at what waits, without starting the tries over.
-          nudge: function() { run(true); },
+          nudge: function() { resumeFinal(); run(true); },
           run: run, tick: tick, saved: saved, takeOff: takeOff, keepBack: keepBack, keepAllBack: keepAllBack,
-          putUp: putUp, takeFinal: takeFinal,
+          putUp: putUp, takeFinal: takeFinal, resumeFinal: resumeFinal,
           pendingFinal: function() { return !!final; }
         };
       }
@@ -3949,20 +4057,24 @@
         return { rec: 1, share: share ? 'wait' : '', tell: share && shotShareAllowed() };
       }
 
-      // The game took its picture of the final scoreboard: wanted only of a
-      // level that just ended as a level does (not this player leaving), in
-      // a match the lobby was told of, from a player who shares theirs.
+      // The game is about to take its picture of the final scoreboard:
+      // wanted of the score screen it shows when a level just ended or its
+      // player just left one (the host's leaving ends the match for all,
+      // and throws the others out to theirs), in a match the lobby was told
+      // of, from a player who shares theirs. Whether it's the match's last
+      // is the lobby's to say: it places none from a player who left a match
+      // that went on.
       function shotWantsFinal() {
         var L = Module.jkLadder;
         var ended = L && L.ended;
-        return !!(shotShare.limits() && shotShareAllowed() && ended && !ended.left && ended.told && !ended.shot &&
+        return !!(shotShare.limits() && shotShareAllowed() && ended && ended.told && !ended.shot &&
                   performance.now() - ended.at < 60000);
       }
 
       function shotFinal(rgba, w, h) {
         var taken = Date.now();
         var ended = Module.jkLadder.ended;
-        var host = !!ended.host;
+        var host = !!ended.host, left = !!ended.left;
         // One of a level.
         ended.shot = 1;
         var limits = shotShare.limits();
@@ -3979,7 +4091,7 @@
           canvas.getContext('2d').drawImage(whole, part[0], 0, part[1], h, 0, 0, part[1], h);
         }
         shotJpegs(canvas, canvas.width, h, limits).then(function(images) {
-          shotShare.takeFinal(images, taken, host);
+          shotShare.takeFinal(images, taken, host, left);
         }, function(err) {
           console.warn('OpenJKDF2: the final scoreboard was not made into a picture (' + err + ')');
         });
@@ -4006,8 +4118,13 @@
         if (!!limits !== was) showShots();
         // What waits is asked about when the page learns the lobby takes
         // pictures, and once more with each later list (a match was saved).
-        if (limits && !was) shotShare.run();
-        else if (limits) shotShare.nudge();
+        // So is a final scoreboard the page before this one left behind.
+        if (limits && !was) {
+          shotShare.resumeFinal();
+          shotShare.run();
+        } else if (limits) {
+          shotShare.nudge();
+        }
       }
 
       // A game is starting from a prompt that showed the box: the player
