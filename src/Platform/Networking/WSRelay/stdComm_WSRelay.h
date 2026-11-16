@@ -388,11 +388,19 @@ int stdComm_WSRelay_InMatch();
 // about to die of pSource, which only this game knows; MatchKill for each
 // kill as this game counts it; MatchScores whenever the scoreboard may have
 // changed; MatchEnd when the level is left (bLeft: its player leaves the
-// game, not only the level).
+// game, not only the level). MatchScripted when the level's script, on the
+// host, has given a player another score, kills, deaths or suicides than the
+// game counted (what: STDCOMM_WSRELAY_SCRIPTED_*): the scoreboard is the
+// level's own from then on, and no longer what the kills add up to.
+#define STDCOMM_WSRELAY_SCRIPTED_SCORE    (1)
+#define STDCOMM_WSRELAY_SCRIPTED_KILLS    (2)
+#define STDCOMM_WSRELAY_SCRIPTED_DEATHS   (4)
+#define STDCOMM_WSRELAY_SCRIPTED_SUICIDES (8)
 void stdComm_WSRelay_MatchStart(void);
 void stdComm_WSRelay_MatchDying(SithThing* pVictim, SithThing* pSource, int damageType);
 void stdComm_WSRelay_MatchKill(SithPlayer* pVictim, SithThing* pVictimThing, SithThing* pKiller);
 void stdComm_WSRelay_MatchScores(void);
+void stdComm_WSRelay_MatchScripted(int what);
 void stdComm_WSRelay_MatchEnd(int bLeft);
 
 #endif // PLATFORM_WSRELAY

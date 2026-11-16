@@ -6,6 +6,18 @@
 #include "World/sithWeapon.h"
 #include "World/sithActor.h"
 #include "Gameplay/sithInventory.h"
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h" // Added: the match record
+
+// Added: the match record. A level's script that gives a player another
+// score, kills, deaths or suicides than the game counted keeps the score by
+// itself (a co-op level's points for its enemies, say), which the lobby is
+// told, so the match is shown by the game's scoreboard and not by its kills.
+#ifdef PLATFORM_WSRELAY
+#define SITHCOGFUNCTIONPLAYER_SCRIPTED(what, before, after) \
+    do { if ((before) != (after)) stdComm_WSRelay_MatchScripted(STDCOMM_WSRELAY_SCRIPTED_##what); } while (0)
+#else
+#define SITHCOGFUNCTIONPLAYER_SCRIPTED(what, before, after) do { } while (0)
+#endif
 
 void sithCogFunctionPlayer_SetInvActivated(sithCog *pCog)
 {
@@ -211,6 +223,7 @@ void sithCogFunctionPlayer_SetPlayerScore(sithCog *pCog)
         SithPlayer* playerInfo = player->actorParams.pPlayer;
         if (playerInfo)
         {
+            SITHCOGFUNCTIONPLAYER_SCRIPTED(SCORE, playerInfo->score, score); // Added
             playerInfo->score = score;
             if (sithNet_isMulti) {
                 sithMulti_SyncScores();
@@ -245,6 +258,7 @@ void sithCogFunctionPlayer_SetPlayerKills(sithCog *pCog)
         SithPlayer* playerInfo = player->actorParams.pPlayer;
         if ( playerInfo )
         {
+            SITHCOGFUNCTIONPLAYER_SCRIPTED(KILLS, playerInfo->numKills, numKills); // Added
             playerInfo->numKills = numKills;
             if (sithNet_isMulti) {
                 sithMulti_SyncScores();
@@ -279,6 +293,7 @@ void sithCogFunctionPlayer_SetPlayerKilled(sithCog *pCog)
         SithPlayer* playerInfo = player->actorParams.pPlayer;
         if (playerInfo)
         {
+            SITHCOGFUNCTIONPLAYER_SCRIPTED(DEATHS, playerInfo->numKilled, numKilled); // Added
             playerInfo->numKilled = numKilled;
             if (sithNet_isMulti) {
                 sithMulti_SyncScores();
@@ -312,6 +327,7 @@ void sithCogFunctionPlayer_SetPlayerSuicides(sithCog *pCog)
         SithPlayer* playerInfo = player->actorParams.pPlayer;
         if (playerInfo)
         {
+            SITHCOGFUNCTIONPLAYER_SCRIPTED(SUICIDES, playerInfo->numSuicides, numSuicides); // Added
             playerInfo->numSuicides = numSuicides;
             if (sithNet_isMulti) {
                 sithMulti_SyncScores();

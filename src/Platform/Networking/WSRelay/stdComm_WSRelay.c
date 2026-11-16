@@ -3602,7 +3602,10 @@ EM_JS(void, wsrelay_js_match_kill, (int victim, int killer, int kind), {
 });
 
 // pRows: n rows of six (player id, score, kills, deaths, suicides, team).
-EM_JS(void, wsrelay_js_match_scores, (const int32_t* pRows, int n, const int32_t* pTeams), {
+// mode: the game's mode flags as they are now, which a level's script can add
+// to. scripted: what the level's script has set of a player's by itself
+// (STDCOMM_WSRELAY_SCRIPTED_*).
+EM_JS(void, wsrelay_js_match_scores, (const int32_t* pRows, int n, const int32_t* pTeams, int mode, int scripted), {
     if (!Module.jkLadder) return;
     var rows = [];
     for (var i = 0; i < n; i++) {
@@ -3612,7 +3615,7 @@ EM_JS(void, wsrelay_js_match_scores, (const int32_t* pRows, int n, const int32_t
     }
     var teams = [];
     for (var t = 0; t < 5; t++) teams.push(HEAP32[(pTeams >> 2) + t]);
-    Module.jkLadder.scores(rows, teams);
+    Module.jkLadder.scores(rows, teams, mode, scripted);
 });
 
 EM_JS(void, wsrelay_js_match_end, (int bLeft), {
@@ -3623,6 +3626,10 @@ EM_JS(void, wsrelay_js_match_end, (int bLeft), {
 // is counted.
 static int wsrelay_matchKind = 0;
 static int wsrelay_bMatchOn = 0;
+// What the level's script has set of a player's score by itself, on the host
+// (STDCOMM_WSRELAY_SCRIPTED_*). Kept from before the level's start is
+// reported, as a script can do it as the level opens, until its end.
+static int wsrelay_matchScripted = 0;
 
 void stdComm_WSRelay_MatchScores(void)
 {
@@ -3647,7 +3654,14 @@ void stdComm_WSRelay_MatchScores(void)
     }
     for (int i = 0; i < 5; i++)
         aTeams[i] = sithNet_teamScore[i];
-    wsrelay_js_match_scores(aRows, n, aTeams);
+    wsrelay_js_match_scores(aRows, n, aTeams, sithNet_MultiModeFlags, wsrelay_matchScripted);
+}
+
+void stdComm_WSRelay_MatchScripted(int what)
+{
+    // The host's only: its scoreboard is the one the others take over.
+    if (sithNet_isMulti && sithNet_isServer)
+        wsrelay_matchScripted |= what;
 }
 
 // The level's title as the loading screen shows it, or the level's name where
@@ -3712,9 +3726,13 @@ void stdComm_WSRelay_MatchKill(SithPlayer* pVictim, SithThing* pVictimThing, Sit
 
 void stdComm_WSRelay_MatchEnd(int bLeft)
 {
-    if (!wsrelay_bMatchOn)
-        return;
-    stdComm_WSRelay_MatchScores();
-    wsrelay_bMatchOn = 0;
-    wsrelay_js_match_end(bLeft);
+    if (wsrelay_bMatchOn)
+    {
+        stdComm_WSRelay_MatchScores();
+        wsrelay_bMatchOn = 0;
+        wsrelay_js_match_end(bLeft);
+    }
+    // The next level's script starts with nothing set, also after a level
+    // that wasn't reported (the Imperial relay's).
+    wsrelay_matchScripted = 0;
 }

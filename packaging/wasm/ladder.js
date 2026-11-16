@@ -9,7 +9,10 @@
 // dies, their own game tells the others who did it, and each game counts it.
 // So each game reports the kills it counts, and the lobby takes a kill two
 // games reported as one that was announced in the match. The host's game also
-// sends its scoreboard, which is the one the other games take over.
+// sends its scoreboard, which is the one the other games take over, and says
+// when the level's script has set a player's score, kills, deaths or suicides
+// by itself (scr): the scoreboard is the level's own then, as in a co-op
+// level that gives points for its enemies, and not what the kills add up to.
 //
 // The engine calls in here (stdComm_WSRelay.c, the match record): start when
 // a multiplayer level is loaded, kill for each kill it counts, scores when
@@ -95,6 +98,7 @@
         n: 0,           // kills counted in it
         waiting: [],    // kills not reported yet: {n, at, victim, killer, kind}
         sb: null, teams: null,
+        scr: 0,         // what the level's script set of a player's by itself
         sentAt: 0,
         timer: null, soon: null,
         last: null,     // an ended level's last report, still to go (L.keep)
@@ -138,6 +142,8 @@
                 r.sb = s.sb;
                 r.teams = s.teams;
             }
+            if (s.scr)
+                r.scr = s.scr;
         }
         if (end)
             r.end = end;
@@ -178,7 +184,7 @@
         var t = now();
         L.last = { room: net.seat.room, seat: net.seat.id, until: t + LAST_MS, endAt: t,
                    lv: L.lv, map: L.map, title: L.title, build: L.build, host: L.host, idle: L.idle, rules: L.rules,
-                   since: L.since, waiting: L.waiting, sb: L.sb, teams: L.teams, sentAt: L.sentAt };
+                   since: L.since, waiting: L.waiting, sb: L.sb, teams: L.teams, scr: L.scr, sentAt: L.sentAt };
         L.lastTimer = setInterval(L.flush, RETRY_MS);
     };
 
@@ -254,6 +260,7 @@
         L.since = now();
         L.n = 0;
         L.sb = L.teams = null;
+        L.scr = 0;
         L.sentAt = 0;
         L.timer = setInterval(L.tick, RETRY_MS);
         // Once the engine has given the scoreboard, which comes right after.
@@ -268,11 +275,18 @@
             L.waiting.shift();
     };
 
-    L.scores = function(rows, teams) {
+    // mode: the game's mode flags as they are now, which a level's script
+    // can add to after its start (scored by the level, say). scripted: what
+    // the script has set of a player's by itself, 1 score, 2 kills, 4 deaths,
+    // 8 suicides; it only ever grows in a level.
+    L.scores = function(rows, teams, mode, scripted) {
         if (!L.on)
             return;
         L.sb = rows;
         L.teams = teams;
+        if (typeof mode === 'number' && L.rules)
+            L.rules = { mode: mode >>> 0, sl: L.rules.sl, tl: L.rules.tl };
+        L.scr |= scripted & 15;
     };
 
     L.end = function(left) {

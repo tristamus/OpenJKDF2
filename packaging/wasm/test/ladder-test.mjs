@@ -97,6 +97,7 @@ function makeGame({ can = ['links', 'pw', 'match'], key = 'ab'.repeat(16), anon 
                 assert.deepEqual(c.rules, r.rules || null);
                 assert.deepEqual(c.sb, r.sb || null);
                 assert.deepEqual(c.teams, r.teams || null);
+                assert.equal(c.scr, r.scr || 0);
             }
             return r;
         });
@@ -441,6 +442,60 @@ test('the next level counts its kills from one again', () => {
     assert.deepEqual(got[got.length - 1].ev.map(e => e[0]), [1]);
 });
 
+test("the host says when the level's script keeps the score, and its mode as it is now", () => {
+    const g = makeGame();
+    start(g, { host: true });
+    g.world.run(0);
+    let [r] = g.reports();
+    assert.equal(r.scr, undefined, 'nothing to say of a level that only counts its kills');
+    assert.equal(r.rules.mode, 0x18);
+    // The script turns on its own scoring, then gives a player kills.
+    g.L.scores(SB, TEAMS, 0x1c, 0);
+    g.world.run(30000);
+    [r] = g.reports();
+    assert.deepEqual(r.rules, { mode: 0x1c, sl: 15, tl: 20 }, 'the mode as the script left it, the limits as they were');
+    assert.equal(r.scr, undefined);
+    g.L.scores([[1, 9, 12, 2, 3, 0], [2, 1, 1, 3, 0, 0]], TEAMS, 0x1c, 2);
+    g.world.run(30000);
+    [r] = g.reports();
+    assert.equal(r.scr, 2);
+    assert.equal(r.sb[0][2], 12);
+    g.L.scores(SB, TEAMS, 0x1c, 1);
+    g.L.scores(SB, TEAMS, 0x1c, 0);
+    g.L.end(false);
+    [r] = g.reports();
+    assert.equal(r.scr, 3, "what it has set stays said until the level's end");
+    assert.equal(r.end, 'level');
+    // The next level starts with nothing set.
+    start(g, { host: true, map: 'm5.jkl', title: 'Battleground Jedi' });
+    g.world.run(0);
+    [r] = g.reports();
+    assert.equal(r.scr, undefined);
+    assert.equal(r.rules.mode, 0x18);
+});
+
+test("a joiner's game says nothing of scripts, and a kept last report still does", () => {
+    const j = makeGame();
+    start(j);
+    j.L.scores(SB, TEAMS, 0x18, 2);
+    j.world.run(0);
+    assert.equal(j.reports()[0].scr, undefined, "only the host's scoreboard is anyone's");
+    const g = makeGame();
+    start(g, { host: true });
+    g.world.run(100);
+    g.reports();
+    g.L.scores(SB, TEAMS, 0x18, 10);
+    g.net.state = 0;
+    g.L.end(false);
+    assert.equal(g.sent.length, 0);
+    start(g, { host: true, map: 'm5.jkl', title: 'Battleground Jedi' });
+    g.net.state = 1;
+    g.world.run(1000);
+    const got = g.reports();
+    assert.deepEqual([got[0].map, got[0].end, got[0].scr], ['m4.jkl', 'level', 10], "the level's last, with what its script did");
+    assert.deepEqual([got[1].map, got[1].scr], ['m5.jkl', undefined]);
+});
+
 test("a level's file is named as the lobby takes it", () => {
     for (const [file, name] of [['M4.JKL', 'M4.JKL'], ['my level (v2).jkl', 'my_level__v2_.jkl'], ['', 'unknown'],
                                 ['a'.repeat(40) + '.jkl', 'a'.repeat(32)]]) {
@@ -527,6 +582,21 @@ test('the engine calls what ladder.js has, and is built with it', () => {
         assert.ok(relayC.includes(call), 'stdComm_WSRelay.c has ' + call);
     for (const name of ['start', 'kill', 'scores', 'end', 'saved'])
         assert.equal(typeof makeGame().L[name], 'function');
+    // The scoreboard goes with the mode as it is and what the level's script
+    // has set, which each of the four calls a script has for it tells.
+    assert.ok(relayC.includes('Module.jkLadder.scores(rows, teams, mode, scripted);'));
+    assert.ok(relayC.includes('wsrelay_js_match_scores(aRows, n, aTeams, sithNet_MultiModeFlags, wsrelay_matchScripted);'));
+    const cogC = read('src/Cog/sithCogFunctionPlayer.c');
+    for (const [what, field, value] of [['SCORE', 'score', 'score'], ['KILLS', 'numKills', 'numKills'],
+                                        ['DEATHS', 'numKilled', 'numKilled'], ['SUICIDES', 'numSuicides', 'numSuicides']]) {
+        const told = `SITHCOGFUNCTIONPLAYER_SCRIPTED(${what}, playerInfo->${field}, ${value});`;
+        const set = `playerInfo->${field} = ${value};`;
+        assert.ok(cogC.includes(told), 'sithCogFunctionPlayer.c has ' + told);
+        assert.ok(cogC.indexOf(told) < cogC.indexOf(set), 'before the value is set, to tell a change');
+    }
+    const header = read('src/Platform/Networking/WSRelay/stdComm_WSRelay.h');
+    for (const [name, bit] of [['SCORE', 1], ['KILLS', 2], ['DEATHS', 4], ['SUICIDES', 8]])
+        assert.match(header, new RegExp(`#define STDCOMM_WSRELAY_SCRIPTED_${name} +\\(${bit}\\)`));
     assert.match(cmake, /--pre-js \$\{PROJECT_SOURCE_DIR\}\/packaging\/wasm\/ladder\.js/);
     // The lobby's word for keeping a record, as both sides spell it.
     assert.ok(source.includes("indexOf('match')"));
