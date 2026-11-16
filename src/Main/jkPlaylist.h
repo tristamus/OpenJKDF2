@@ -26,8 +26,13 @@
 // next level, from when it came up.
 #define JKPLAYLIST_WAIT_MS (60000)
 
-// A game's kind: a playlist has levels of one kind only (team scoring,
-// flags and saber rules don't change between levels).
+// A level's kind. Deathmatch and CTF (MotS: Kill the Fool) levels share a
+// playlist: a CTF level's own cog turns on teams and its own scoring when it
+// starts, and every level starts with the Host screen's rules again
+// (sithMulti_StartupServer). Saber-only and co-op levels have playlists of
+// their own: those rules are the game's, set once when it's hosted (which
+// characters joiners may pick, how enemies sync), and can't change between
+// levels.
 #define JKPLAYLIST_KIND_DM (0)
 #define JKPLAYLIST_KIND_CTF (1)
 #define JKPLAYLIST_KIND_SABER (2)
@@ -71,6 +76,17 @@ void jkPlaylist_Save(int bMots);
 
 int jkPlaylist_KindOf(int type);
 const char16_t* jkPlaylist_KindName(int kind);
+
+// Whether levels of these episode types may share a playlist: the same
+// game-wide rules (saber only, co-op), whatever their kind.
+int jkPlaylist_CanMix(int typeA, int typeB);
+
+// The playlist's kind, for "A ... playlist.": its levels' kind, or
+// "deathmatch and Capture the Flag" when it has both. "" when it's empty.
+const char16_t* jkPlaylist_ListKindName(const jkPlaylist* pList);
+
+// Whether the playlist has deathmatch and CTF levels both.
+int jkPlaylist_IsMixed(const jkPlaylist* pList);
 
 // Host screen: this game hosts the playlist from level idx, or (bOn 0) the
 // episode's own order as before.

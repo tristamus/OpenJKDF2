@@ -195,6 +195,41 @@ const char16_t* jkPlaylist_KindName(int kind)
     }
 }
 
+// The rules a level's episode sets for the whole game when it's hosted
+// (jkGuiNetHost_Show): saber only (MotS, ranked Jedi) and co-op.
+static int jkPlaylist_RulesOf(int type)
+{
+    return ((type & JKM_EPISODE_SABER) ? 2 : 0) | ((type & JK_EPISODE_SINGLEPLAYER) ? 1 : 0);
+}
+
+int jkPlaylist_CanMix(int typeA, int typeB)
+{
+    return jkPlaylist_RulesOf(typeA) == jkPlaylist_RulesOf(typeB);
+}
+
+static int jkPlaylist_Kinds(const jkPlaylist* pList)
+{
+    int kinds = 0;
+    for (int i = 0; i < pList->count && i < JKPLAYLIST_MAX; i++)
+        kinds |= 1 << jkPlaylist_KindOf(pList->entries[i].type);
+    return kinds;
+}
+
+int jkPlaylist_IsMixed(const jkPlaylist* pList)
+{
+    int kinds = jkPlaylist_Kinds(pList);
+    return (kinds & (1 << JKPLAYLIST_KIND_DM)) && (kinds & (1 << JKPLAYLIST_KIND_CTF));
+}
+
+const char16_t* jkPlaylist_ListKindName(const jkPlaylist* pList)
+{
+    if (pList->count <= 0)
+        return u"";
+    if (jkPlaylist_IsMixed(pList))
+        return Main_bMotsCompat ? u"deathmatch and Kill the Fool" : u"deathmatch and Capture the Flag";
+    return jkPlaylist_KindName(jkPlaylist_KindOf(pList->entries[0].type));
+}
+
 void jkPlaylist_SetHosting(int bOn, int idx)
 {
     jkPlaylist_bHosting = bOn && jkPlaylist_list.count > 0;

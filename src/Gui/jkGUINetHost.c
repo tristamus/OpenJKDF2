@@ -741,7 +741,8 @@ static int jkGuiNetHost_ShowPlaylistPicked(jkGuiElement* pList, jkGuiMenu* pMenu
     el[NETHOST_LEVEL_LISTBOX].selectedTextEntry = 0;
     el[NETHOST_LEVEL_LISTBOX].texInfo.textScrollY = 0;
 
-    // A playlist has levels of one kind: its first level's says what this game is.
+    // A playlist's levels share the game-wide rules (saber only, co-op:
+    // jkPlaylist_CanMix), so its first level's say what this game is.
     int type = jkPlaylist_list.entries[0].type;
 #ifdef QOL_IMPROVEMENTS
     jkGuiNetHost_bIsEpisodeCoop = !!(type & JK_EPISODE_SINGLEPLAYER);

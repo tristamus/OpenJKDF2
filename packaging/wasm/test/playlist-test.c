@@ -720,6 +720,38 @@ static void testKinds(void)
     CHECK(wis(jkPlaylist_KindName(JKPLAYLIST_KIND_CTF), "Kill the Fool"), "MotS's CTF");
     Main_bMotsCompat = 0;
     CHECK(wis(jkPlaylist_KindName(JKPLAYLIST_KIND_CTF), "Capture the Flag"), "JK's CTF");
+
+    // Deathmatch and CTF share a playlist; saber-only and co-op levels don't
+    // share one with anything else (the game-wide rules they set).
+    const int dm = JK_EPISODE_DEATHMATCH, ctf = JK_EPISODE_SPECIAL_CTF | JK_EPISODE_DEATHMATCH;
+    CHECK(jkPlaylist_CanMix(dm, ctf) && jkPlaylist_CanMix(ctf, dm) && jkPlaylist_CanMix(ctf, JK_EPISODE_SPECIAL_CTF),
+          "deathmatch with CTF");
+    CHECK(jkPlaylist_CanMix(JK_EPISODE_4_UNK, dm), "type 4 with deathmatch");
+    CHECK(!jkPlaylist_CanMix(dm, JKM_EPISODE_SABER) && !jkPlaylist_CanMix(JKM_EPISODE_SABER, ctf), "not saber only");
+    CHECK(jkPlaylist_CanMix(JKM_EPISODE_SABER, JKM_EPISODE_SABER), "saber only with saber only");
+    CHECK(!jkPlaylist_CanMix(dm, JK_EPISODE_SINGLEPLAYER) && !jkPlaylist_CanMix(JK_EPISODE_SINGLEPLAYER, ctf), "not co-op");
+    CHECK(!jkPlaylist_CanMix(JK_EPISODE_SINGLEPLAYER, JKM_EPISODE_SABER), "co-op isn't saber only");
+    // An episode that's saber only and CTF: saber only.
+    CHECK(jkPlaylist_CanMix(JKM_EPISODE_SABER | JK_EPISODE_SPECIAL_CTF, JKM_EPISODE_SABER) &&
+          !jkPlaylist_CanMix(JKM_EPISODE_SABER | JK_EPISODE_SPECIAL_CTF, ctf), "saber-only CTF is saber only");
+
+    jkPlaylist list;
+    memset(&list, 0, sizeof(list));
+    CHECK(wis(jkPlaylist_ListKindName(&list), "") && !jkPlaylist_IsMixed(&list), "an empty playlist has no kind");
+    list.count = 2;
+    list.entries[0].type = dm;
+    list.entries[1].type = dm;
+    CHECK(wis(jkPlaylist_ListKindName(&list), "deathmatch") && !jkPlaylist_IsMixed(&list), "all deathmatch");
+    list.entries[0].type = ctf;
+    list.entries[1].type = ctf;
+    CHECK(wis(jkPlaylist_ListKindName(&list), "Capture the Flag") && !jkPlaylist_IsMixed(&list), "all CTF");
+    list.entries[1].type = dm;
+    CHECK(wis(jkPlaylist_ListKindName(&list), "deathmatch and Capture the Flag") && jkPlaylist_IsMixed(&list), "both");
+    Main_bMotsCompat = 1;
+    CHECK(wis(jkPlaylist_ListKindName(&list), "deathmatch and Kill the Fool"), "both, in MotS");
+    Main_bMotsCompat = 0;
+    list.count = 1;
+    CHECK(!jkPlaylist_IsMixed(&list), "only the playlist's own levels count");
 }
 
 // The host goes through the playlist: 1, 2, 3, then the end or 1 again.
@@ -962,15 +994,29 @@ static void scriptAddAndUse(jkGuiMenu* menu, jkGuiElement* el, int frame)
               show(el[E_INFO].wstr));
         break;
     case 3:
-        // Another kind: refused.
+        // CTF with deathmatch: added, and the message says what a host
+        // should know about it.
         pickEpisode(menu, el, "Capture the Flag");
         pickLevel(menu, el, "Spaceport", 0);
         click(menu, &el[E_ADD], 0);
-        CHECK(wis(el[E_COUNT].wstr, "2 of 6"), "CTF isn't added: %s", show(el[E_COUNT].wstr));
-        CHECK(wcontains(el[E_MESSAGE].wstr, "This playlist is deathmatch, and Capture the Flag is Capture the Flag"),
-              "says why: %s", show(el[E_MESSAGE].wstr));
-        click(menu, &el[E_ADDALL], 0);
-        CHECK(wis(el[E_COUNT].wstr, "2 of 6"), "nor with Add All");
+        CHECK(wis(el[E_COUNT].wstr, "3 of 6"), "CTF is added: %s", show(el[E_COUNT].wstr));
+        CHECK(wis(row(&el[E_LIST], 2), "3. Spaceport") && el[E_LIST].selectedTextEntry == 2, "row 3: %s",
+              show(row(&el[E_LIST], 2)));
+        CHECK(wis(el[E_MESSAGE].wstr, "CTF levels play in teams with their own scoring. Use a time limit."),
+              "what mixing means: %s", show(el[E_MESSAGE].wstr));
+        CHECK(wcontains(el[E_INFO].wstr, "Spaceport, from Capture the Flag. Everyone has it") &&
+              wcontains(el[E_INFO].wstr, "A deathmatch and Capture the Flag playlist."), "both kinds: %s", show(el[E_INFO].wstr));
+        // Only the first level that mixes them says it.
+        pickLevel(menu, el, "Dark Temple", 1);
+        CHECK(wis(el[E_COUNT].wstr, "4 of 6") && el[E_MESSAGE].wstr && !el[E_MESSAGE].wstr[0], "said once: %s",
+              show(el[E_MESSAGE].wstr));
+        // The rest of this script has the 2 deathmatch levels again.
+        click(menu, &el[E_REMOVE], 0);
+        pickRow(menu, &el[E_LIST], 2, 0);
+        click(menu, &el[E_REMOVE], 0);
+        CHECK(wis(el[E_COUNT].wstr, "2 of 6") && wis(row(&el[E_LIST], 1), "2. The Big Canyon"), "removed: %s",
+              show(row(&el[E_LIST], 1)));
+        CHECK(wcontains(el[E_INFO].wstr, "A deathmatch playlist."), "deathmatch again: %s", show(el[E_INFO].wstr));
         break;
     case 4:
         // An episode with no levels.
@@ -1102,8 +1148,13 @@ static void scriptMots(jkGuiMenu* menu, jkGuiElement* el, int frame)
               "MotS's GOO, and the kind: %s", show(el[E_INFO].wstr));
         pickEpisode(menu, el, "Jedi Training");
         click(menu, &el[E_ADD], 0);
-        CHECK(wcontains(el[E_MESSAGE].wstr, "This playlist is saber only, and Jedi Training is deathmatch"), "one kind: %s",
-              show(el[E_MESSAGE].wstr));
+        CHECK(wis(el[E_MESSAGE].wstr, "Saber-only levels need a playlist of their own."),
+              "saber only keeps to itself: %s", show(el[E_MESSAGE].wstr));
+        CHECK(wis(el[E_COUNT].wstr, "1 of 6"), "deathmatch isn't added: %s", show(el[E_COUNT].wstr));
+        pickEpisode(menu, el, "Capture the Flag");
+        click(menu, &el[E_ADD], 0);
+        CHECK(wis(el[E_COUNT].wstr, "1 of 6") && wcontains(el[E_MESSAGE].wstr, "Saber-only levels need a playlist of their own."),
+              "nor Kill the Fool: %s", show(el[E_MESSAGE].wstr));
         pickEpisode(menu, el, "Saber Arenas");
         click(menu, &el[E_ADD], 0);
         CHECK(wcontains(el[E_INFO].wstr, "Arena, from Saber Arenas. Everyone has it"), "MotS's own episode: %s", show(el[E_INFO].wstr));
@@ -1145,6 +1196,18 @@ static void scriptLongNames(jkGuiMenu* menu, jkGuiElement* el, int frame)
     CHECK(wcontains(pInfo->wstr, LONG_LEVEL) && wcontains(pInfo->wstr, "A deathmatch playlist."), "the level and the kind: %s",
           show(pInfo->wstr));
     CHECK(textLines(pInfo->wstr, pInfo->rect.width) * FONT_LINE <= pInfo->rect.height, "fits: %s", show(pInfo->wstr));
+
+    // With a CTF level as well, the longer kind still fits beside it.
+    pickEpisode(menu, el, "Capture the Flag");
+    click(menu, &el[E_ADD], 0);
+    CHECK(wis(el[E_COUNT].wstr, "3 of 6"), "CTF added: %s", show(el[E_COUNT].wstr));
+    pickRow(menu, &el[E_LIST], 1, 0);
+    CHECK(wcontains(pInfo->wstr, LONG_LEVEL) && wcontains(pInfo->wstr, "A deathmatch and Capture the Flag playlist."),
+          "the long level and both kinds: %s", show(pInfo->wstr));
+    CHECK(textLines(pInfo->wstr, pInfo->rect.width) * FONT_LINE <= pInfo->rect.height, "fits: %s", show(pInfo->wstr));
+    pickRow(menu, &el[E_LIST], 2, 0);
+    click(menu, &el[E_REMOVE], 0);
+    CHECK(wis(el[E_COUNT].wstr, "2 of 6"), "CTF removed: %s", show(el[E_COUNT].wstr));
 
     // The same for a level that comes with the game, and one that's gone.
     pickEpisode(menu, el, "Jedi Training");
