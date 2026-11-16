@@ -112,6 +112,11 @@ void jkPlaylist_Named(const jkPlaylistNext* pNext);
 int jkPlaylist_TallyMayEnd(uint32_t msElapsed, uint32_t msDelay, int bAsked);
 int jkPlaylist_TallyText(uint32_t msElapsed, uint32_t msDelay, char16_t* pLine1, char16_t* pLine2, int len);
 
+// The score screen: keeps each line on one line of its box (pRect1, pRect2)
+// in pFont. Line 1 drops "(2 of 3)", then "Up", and cuts the level's name
+// with "..." only when it's still too long; line 2 is cut with "...".
+void jkPlaylist_TallyFit(stdFont* pFont, const rdRect* pRect1, const rdRect* pRect2, char16_t* pLine1, char16_t* pLine2, int len);
+
 // This game couldn't get the next level: why, for the error after the score
 // screen ("" when it could).
 const char16_t* jkPlaylist_FailedText(void);
