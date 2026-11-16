@@ -290,6 +290,38 @@ void jkGuiRend_SetVisibleAndDraw(jkGuiElement *clickable, jkGuiMenu *menu, int32
     drawElement(clickable, menu);
 }
 
+// The mouse, where the test puts it, and the game's look at what's under it:
+// the first element shown there.
+static int32_t testMouseX = -1, testMouseY = -1;
+static int mouseLooks = 0;
+
+void jkGuiRend_GetMousePos(int32_t *pX, int32_t *pY)
+{
+    *pX = testMouseX;
+    *pY = testMouseY;
+}
+
+void jkGuiRend_MouseMovedCallback(jkGuiMenu *menu, int32_t x, int32_t y)
+{
+    mouseLooks++;
+    menu->lastMouseOverClickable = NULL;
+    for (jkGuiElement* el = menu->paElements; el->type != ELEMENT_END; el++)
+    {
+        if (el->bIsVisible && x >= el->rect.x && x < el->rect.x + el->rect.width && y >= el->rect.y && y < el->rect.y + el->rect.height)
+        {
+            menu->lastMouseOverClickable = el;
+            break;
+        }
+    }
+}
+
+static void mouseOn(jkGuiMenu* menu, jkGuiElement* el)
+{
+    testMouseX = el->rect.x + el->rect.width / 2;
+    testMouseY = el->rect.y + el->rect.height / 2;
+    jkGuiRend_MouseMovedCallback(menu, testMouseX, testMouseY);
+}
+
 void jkGuiRend_Paint(jkGuiMenu *menu)
 {
     CHECK(menu == displayed && menu, "paints only while the menu is up");
@@ -1082,12 +1114,15 @@ static void modsOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         // at it, as jkGuiRend_UpdateDrawMenu does. The hint changes under it
         // (and AddressSanitizer would catch a draw of the freed one).
         el[E_HINT].wstr = el[E_USE].wHintText;
+        mouseOn(menu, &el[E_USE]);
+        CHECK(menu->lastMouseOverClickable == &el[E_USE], "the mouse on Get Mod");
         click(menu, &el[E_USE], 0);
         CHECK(modCalled("'use'"), "Get Mod");
     }
     else if (frame == 3)
     {
         CHECK(wis(el[E_CANCEL].wstr, "Stop") && el[E_CANCEL].wHintText && !el[E_USE].bIsVisible, "while it comes in: Stop, no Get Mod");
+        CHECK(menu->lastMouseOverClickable != &el[E_USE], "the menu forgets the hidden button was under the mouse");
     }
     else if (modStep == 0 && js(MODS ".saved[0] ? 1 : 0"))
     {
@@ -1102,6 +1137,9 @@ static void modsOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(el[E_HINT].wstr == el[E_USE].wHintText, "which the hint line shows, not the freed one before it");
         jkGuiRend_UpdateAndDrawClickable(&el[E_HINT], menu, 1);
         CHECK(wis(el[E_CANCEL].wstr, "Back"), "and Back again");
+        // The mouse hasn't moved: the menu knows Restart With It is under it,
+        // so the first click reaches it (kit 128 needed a second one).
+        CHECK(menu->lastMouseOverClickable == &el[E_USE], "Restart With It under the mouse that hasn't moved");
         click(menu, &el[E_USE], 0);
     }
 }
