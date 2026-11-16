@@ -5,10 +5,16 @@
 // matches the engine it ships with.
 //
 // The site's Worker (src/levels.js in the jkdf2mp-bb-server repository)
-// copies Massassi.net's level lists, pages, zips and screenshots, slowly, and
-// serves
+// copies Massassi.net's level lists, pages, zips and screenshots, slowly,
+// and the levels in jkdf2.net's archive that Massassi doesn't have (their
+// zips and 3D views, from Massassi's 3D Preview; no page or screenshots),
+// and serves
 //
-//   /levels/jk1.json, /levels/mots.json  the levels that are ready, per game
+//   /levels/all/jk1.json, /levels/all/mots.json   the levels of both that are
+//                                        ready, per game; one of jkdf2.net's
+//                                        has o: 'jkdf2.net'
+//   /levels/jk1.json, /levels/mots.json  Massassi's alone (what this reads
+//                                        from a site without the other)
 //   /levels/d/<id>.json                  one level's description, readmes, files
 //   /levels/z/<id>.zip?h=<sha256>        its zip
 //   /levels/s/<id>-<n>.jpg               its screenshots, from 1
@@ -196,11 +202,18 @@
         return res.json();
     }
 
+    // Both sources' levels, or Massassi's alone from a site that doesn't
+    // have that list (yet).
     async function loadIndex(game) {
         var have = L.index[game];
         if (have && Date.now() - have.at < 5 * 60000)
             return have.data;
-        var data = await getJson(game + '.json');
+        var data = null;
+        try {
+            data = await getJson('all/' + game + '.json');
+        } catch (e) {}
+        if (!data || !Array.isArray(data.levels))
+            data = await getJson(game + '.json');
         if (!data || !Array.isArray(data.levels))
             throw new Error('not a level list');
         L.index[game] = { at: Date.now(), data: data };
@@ -292,7 +305,8 @@
         var data = have.data, n = data.levels.length;
         if (L.filters.mine && !L.rows.length)
             return L.q.trim() ? 'None of the levels saved in this browser match.' : 'No levels saved in this browser yet.';
-        return n.toLocaleString('en-US') + (n === 1 ? ' level' : ' levels') + ' from Massassi.net' +
+        var other = data.from && data.from['jkdf2.net'] > 0;
+        return n.toLocaleString('en-US') + (n === 1 ? ' level' : ' levels') + ' from Massassi.net' + (other ? ' and jkdf2.net' : '') +
             (data.left ? ' so far, ' + data.left.toLocaleString('en-US') + ' more coming' : '');
     }
 
@@ -323,6 +337,10 @@
 
     function selected() { return L.sel != null ? byId(L.sel) : null; }
 
+    // A level from jkdf2.net's archive: no page there to open, and no
+    // screenshots.
+    function fromJkdf2(l) { return !!l && l.o === 'jkdf2.net'; }
+
     // Lines for the Overview, Readme and Files tabs, '\n' between them. A
     // line with a tab has a label before it; the menu wraps what's after it.
     function overviewText(l, d) {
@@ -333,6 +351,7 @@
         fact('Released', dateText(l.rel || l.add, l.rel ? l.rp : 'd') + (src ? ' (' + src + ')' : ''));
         fact('Size', size(l.sz) + ' zip');
         fact('Type', KINDS[l.k] || l.k);
+        fact('From', fromJkdf2(l) ? 'jkdf2.net (Massassi doesn\'t have it)' : 'Massassi.net');
         var gobs = episodeGobs(l, L.game);
         if (gobs.length) {
             var g = gobs[0];
@@ -775,7 +794,7 @@
 
     function openPage() {
         var l = selected();
-        if (!l || typeof window === 'undefined' || !window.open)
+        if (!l || fromJkdf2(l) || typeof window === 'undefined' || !window.open)
             return false;
         try {
             window.open('https://www.massassi.net/levels/files/' + l.id + '.shtml', '_blank', 'noopener');
@@ -1049,6 +1068,8 @@
         case 5: return L.done ? 1 : 0;
         case 6: { var l = selected(); return l && l.sh > 0 ? l.sh : 0; }
         case 7: return previewState();
+        // The picked level has no page to open (Massassi Page): one of jkdf2.net's.
+        case 8: return fromJkdf2(selected()) ? 1 : 0;
         }
         return 0;
     }

@@ -146,6 +146,9 @@ static const int jkGuiLibrary_aModTabWidths[] = {92, 84, 76};
 #define LIB_NUM_SHOTS (6)
 // The selected level's 3D view: 0 none, 1 coming, 2 there, 3 failed.
 #define LIB_NUM_PV (7)
+// 1 when the selected level has no page to open (one from jkdf2.net): no
+// Massassi Page. The Mod Library's mods always have one (0).
+#define LIB_NUM_NO_PAGE (8)
 
 #define LIB_NUM_SORTS (6)
 #define LIB_SEARCH_MAX (31)
@@ -973,6 +976,13 @@ static void jkGuiLibrary_FillRows()
     pList->selectedTextEntry = sel >= 0 ? sel : 0;
 }
 
+// Massassi Page: for a picked level or mod that has a page, while nothing
+// comes in.
+static int jkGuiLibrary_HasPage(int bBusy)
+{
+    return !bBusy && jkGuiLibrary_js_number(LIB_NUM_SELECTED) >= 0 && !jkGuiLibrary_js_number(LIB_NUM_NO_PAGE);
+}
+
 static void jkGuiLibrary_ShowUse(jkGuiMenu* pMenu)
 {
     jkGuiElement* el = jkGuiLibrary_aElements;
@@ -1010,7 +1020,7 @@ static void jkGuiLibrary_ShowUse(jkGuiMenu* pMenu)
     if (pMenu)
     {
         jkGuiRend_SetVisibleAndDraw(&el[LIB_USE_BUTTON], pMenu, bUse);
-        jkGuiRend_SetVisibleAndDraw(&el[LIB_PAGE_BUTTON], pMenu, !bBusy && jkGuiLibrary_js_number(LIB_NUM_SELECTED) >= 0);
+        jkGuiRend_SetVisibleAndDraw(&el[LIB_PAGE_BUTTON], pMenu, jkGuiLibrary_HasPage(bBusy));
         // A button that was hidden (while a mod or level came in) can come
         // back under a mouse that hasn't moved. The menu forgot it was under
         // the mouse when it hid, and a click goes only to the button it knows
@@ -1026,7 +1036,7 @@ static void jkGuiLibrary_ShowUse(jkGuiMenu* pMenu)
     else
     {
         el[LIB_USE_BUTTON].bIsVisible = bUse;
-        el[LIB_PAGE_BUTTON].bIsVisible = !bBusy && jkGuiLibrary_js_number(LIB_NUM_SELECTED) >= 0;
+        el[LIB_PAGE_BUTTON].bIsVisible = jkGuiLibrary_HasPage(bBusy);
     }
 }
 

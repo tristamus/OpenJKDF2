@@ -970,6 +970,18 @@ static void gameOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
     }
 }
 
+// A level from jkdf2.net: it can be used, but has no page to open.
+static void noPageOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
+{
+    if (frame == 0)
+    {
+        CHECK(el[E_USE].bIsVisible && !el[E_PAGE].bIsVisible, "a level from jkdf2.net: Use Level, no Massassi Page");
+        click(menu, &el[E_PAGE], 0);
+        CHECK(js("Module.jkLibrary._M.pages") == 1, "and no page opened");
+        click(menu, &el[E_CANCEL], 0);
+    }
+}
+
 static void emptyOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
 {
     if (frame == 0)
@@ -1231,6 +1243,12 @@ int main()
     ctfLabel = "CTF";
     got = jkGuiLibrary_Show(0, name, sizeof(name));
     CHECK(got == 0 && called("'begin jk1'"), "Jedi Knight again");
+
+    js("var M = Module.jkLibrary._M; M.sel = 0; M.noPage = true; 0");
+    script = noPageOpen;
+    got = jkGuiLibrary_Show(0, name, sizeof(name));
+    CHECK(got == 0, "a level from jkdf2.net");
+    js("Module.jkLibrary._M.noPage = false, 0");
 
     js("var M = Module.jkLibrary._M; M.rows = []; M.sel = -1; 0");
     script = emptyOpen;
