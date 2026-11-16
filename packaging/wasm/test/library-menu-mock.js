@@ -80,6 +80,8 @@
                 return M.done ? 1 : 0;
             case 6: return M.sel >= 0 ? M.shots : 0;
             case 7: return pv();
+            // A level from jkdf2.net: no page to open.
+            case 8: return M.sel >= 0 && M.noPage ? 1 : 0;
             }
             return 0;
         },

@@ -187,8 +187,17 @@ const LEVELS = [
           { h: 'f'.repeat(64) }),
     level(601, 'kfy', 'Fool Yard', 'mots', [{ n: 'foolyard.goo', bytes: kfy, ep: 'Fool Yard', ty: 2, lv: ['fool.jkl'] }]),
 ];
-const byId = Object.fromEntries(LEVELS.map(l => [l.entry.id, l]));
-const byTitle = Object.fromEntries(LEVELS.map(l => [l.entry.t, l.entry.id]));
+// A level from jkdf2.net's archive, only in the list of both sources
+// (/levels/all/<game>.json, while ALL.on): no Massassi date, rating,
+// downloads, screenshots or 3D view.
+const omega = episode('Omega Outpost', 2, ['omega.jkl']);
+const DF2_LEVELS = [
+    level(1000001, 'mp', 'Omega Outpost', 'jk1', [{ n: 'omega.gob', bytes: omega, ep: 'Omega Outpost', ty: 2, lv: ['omega.jkl'] }],
+          { o: 'jkdf2.net', add: undefined, r: undefined, v: undefined, dl: undefined, sh: 0 }),
+];
+const ALL = { on: false };
+const byId = Object.fromEntries(LEVELS.concat(DF2_LEVELS).map(l => [l.entry.id, l]));
+const byTitle = Object.fromEntries(LEVELS.concat(DF2_LEVELS).map(l => [l.entry.t, l.entry.id]));
 // Letters the game's fonts don't have, in a description and a title.
 byId[507].detail.desc = 'It\u2019s \u201ctaken\u201d\tfor sure\u2026 Caf\u00e9 \u2013 \u00a0done';
 byId[507].detail.files[0].n = 'taken.gob';
@@ -210,6 +219,13 @@ const server = createServer((req, res) => {
         return send(200, 'text/html', '<!doctype html><meta charset="utf-8"><title>library test</title>' +
                     '<style>body{margin:0;background:#000}#canvas{position:absolute;inset:0;width:100%;height:100%;background:#123}</style>' +
                     '<canvas id="canvas" tabindex="-1"></canvas>');
+    if ((m = /^\/levels\/all\/(jk1|mots)\.json$/.exec(path)) && ALL.on)
+        return send(200, 'application/json', JSON.stringify({
+            v: 1, game: m[1], built: '2026-11-16T00:00:00Z', source: 'https://www.massassi.net',
+            sources: ['https://www.massassi.net', 'https://www.jkdf2.net'], listed: 13, left: 3,
+            from: { 'jkdf2.net': DF2_LEVELS.filter(l => l.game === m[1]).length },
+            levels: LEVELS.concat(DF2_LEVELS).filter(l => l.game === m[1]).map(l => l.entry),
+        }));
     if ((m = /^\/levels\/(jk1|mots)\.json$/.exec(path)))
         return send(200, 'application/json', JSON.stringify({
             v: 1, game: m[1], built: '2026-11-13T00:00:00Z', source: 'https://www.massassi.net', listed: 12, left: 3,
@@ -1073,6 +1089,48 @@ await test('My levels with nothing saved yet says so', async () => {
     assert.equal(await libText(m.page, T.TITLE), 'My levels');
     assert.equal(await number(m.page, N.SHOTS), 0);
     assert.equal(await number(m.page, N.PV), 0);
+    await call(m.page, 'end');
+    await m.page.close();
+});
+
+await test('both sources: jkdf2.net\'s levels in the list, said where they\'re from, with no Massassi Page', async () => {
+    ALL.on = true;
+    const m = await game();
+    try {
+        await open(m.page);
+        assert.ok(requests.includes('GET /levels/all/jk1.json'));
+        assert.equal(await libText(m.page, T.STATUS), '9 levels from Massassi.net and jkdf2.net so far, 3 more coming');
+        await pick(m.page, 1000001);
+        await details(m.page);
+        const facts = (await libText(m.page, T.OVERVIEW)).split('\n');
+        assert.ok(facts.includes('From:\tjkdf2.net (Massassi doesn\'t have it)'), facts.join('|'));
+        assert.equal(facts[1], 'Released:\tMay 2, 1999 (from its readme)');
+        assert.ok(!facts.some(f => /^Rating:/.test(f)));
+        assert.equal(await number(m.page, 8), 1);
+        assert.equal(await call(m.page, 'page'), false);
+        assert.equal(await number(m.page, N.SHOTS), 0);
+        assert.equal(await libText(m.page, T.PV), 'No 3D view for levels from jkdf2.net');
+        // Massassi's beside it, as before.
+        await pick(m.page, 501);
+        await details(m.page);
+        assert.equal(await number(m.page, 8), 0);
+        assert.ok((await libText(m.page, T.OVERVIEW)).split('\n').includes('From:\tMassassi.net'));
+        // It's used as any other.
+        assert.equal(await useLevel(m.page, 1000001), 'omega');
+        assert.equal(await fileSha(m.page, '/jk1/episode/omega.gob'), sha(omega));
+    } finally {
+        ALL.on = false;
+    }
+    await m.page.close();
+});
+
+await test('a site without the list of both sources: Massassi\'s alone', async () => {
+    const m = await game();
+    requests.length = 0;
+    await open(m.page);
+    assert.deepEqual(requests.filter(r => /\/levels\/(all\/)?jk1\.json$/.test(r)), ['GET /levels/all/jk1.json', 'GET /levels/jk1.json']);
+    assert.equal(await libText(m.page, T.STATUS), '8 levels from Massassi.net so far, 3 more coming');
+    assert.ok(!(await rows(m.page)).includes(1000001));
     await call(m.page, 'end');
     await m.page.close();
 });
