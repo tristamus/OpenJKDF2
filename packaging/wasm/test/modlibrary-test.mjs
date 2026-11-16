@@ -241,6 +241,7 @@ await test('the Overview: kind, versions, what Get Mod leaves out; both screensh
     assert.match(o, /About SBX-JK v3\.1\./);
     assert.equal(L(tab).number(N.SHOTS), 2);
     assert.equal(L(tab).text(T.USE), 'Get Mod');
+    assert.ok(L(tab).text(T.USE_HINT).length <= 70, 'one line on the hint line');
     assert.equal(L(tab).number(N.CAN_USE), 1);
     pick(tab, 'SBX-JK v3.0');
     await details(tab);
@@ -290,6 +291,7 @@ await test('Get Mod: the plan\'s files packed with the fingerprint the same fold
     assert.match(L(tab).text(T.MESSAGE), /^Saved in this browser\. Restart With It plays it now\.$/);
     assert.equal(L(tab).text(T.USE), 'Restart With It');
     assert.match(L(tab).text(T.USE_HINT), /only this mod/);
+    assert.ok(L(tab).text(T.USE_HINT).length <= 70, 'one line on the hint line');
     assert.equal(L(tab).number(N.CAN_USE), 1);
     assert.ok(rows(tab).includes(rows(tab).find(r => r.startsWith('* SBX-JK v3.1'))), 'marked saved: ' + rows(tab));
     const saved = await tab.jkMods.library.list('jk1');
@@ -327,6 +329,7 @@ await test('a mod of episodes only: written into episode/, no restart', async ()
     await open(tab);
     pick(tab, 'MP Pack');
     assert.equal(L(tab).text(T.USE), 'Get Mod');
+    assert.ok(L(tab).text(T.USE_HINT).length <= 70, 'one line on the hint line');
     assert.equal(L(tab).number(N.SHOTS), 0);
     L(tab).use();
     await settled(tab);
@@ -347,6 +350,7 @@ await test('a graphics pack: into mods/, and the running mod stays', async () =>
     await settled(tab);
     assert.equal(L(tab).text(T.USE), 'Restart With It');
     assert.match(L(tab).text(T.USE_HINT), /graphics pack and the mod you run now/);
+    assert.ok(L(tab).text(T.USE_HINT).length <= 70, 'one line on the hint line');
     L(tab).use();
     await until(() => L(tab).number(N.DONE), 'done');
     assert.equal(L(tab).take(), 'netmods/' + sbxFp.substring(0, 16), 'still SBX');

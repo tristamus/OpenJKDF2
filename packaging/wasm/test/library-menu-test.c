@@ -414,6 +414,22 @@ static void checkLinesFit(jkGuiElement* el, int pad, const char* what)
     }
 }
 
+// The hint line under the details holds one line of the game's small font:
+// it's 20 high and the buttons start under it, so a second line loses its
+// bottom (and covers the line above it). In the game a 76 letter hint took two
+// lines and others as long didn't, so every hint keeps under 70.
+#define HINT_MAX (70)
+
+static void checkHintsFit(jkGuiElement* el, const char* what)
+{
+    for (int i = 0; i < E_COUNT; i++)
+    {
+        if (el[i].wHintText)
+            CHECK(wlen(el[i].wHintText) <= HINT_MAX, "%s: element %d's hint fits on the hint line (%d letters): %s", what, i,
+                  wlen(el[i].wHintText), show(el[i].wHintText));
+    }
+}
+
 static int hasLine(jkGuiElement* el, const char* want)
 {
     for (int i = 0; el->unistr && el->unistr[i].str; i++)
@@ -499,6 +515,7 @@ static void firstOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(hasLine(&el[E_FACTS], "Last line."), "the last line");
         CHECK(hasLine(&el[E_FACTS], ""), "blank lines kept");
         checkLinesFit(&el[E_FACTS], 80, "facts");
+        checkHintsFit(el, "Level Library");
         int longWord = 0;
         for (int i = 0; el[E_FACTS].unistr[i].str; i++)
             longWord += wstarts(el[E_FACTS].unistr[i].str, "xxxxxxxxxx");
@@ -1020,6 +1037,7 @@ static void modsOpen(jkGuiMenu* menu, jkGuiElement* el, int frame)
         CHECK(wis(el[E_CANCEL].wstr, "Back") && !el[E_CANCEL].wHintText, "Back");
         CHECK(menu->pReturnKeyShortcutElement == &el[E_USE] && menu->pEscapeKeyShortcutElement == &el[E_CANCEL], "Return gets, Escape goes back");
         checkLinesFit(&el[E_FACTS], 80, "mod facts");
+        checkHintsFit(el, "Mod Library");
 
         // The shots are both up: a click on either does nothing.
         click(menu, &el[E_SHOT], 0);

@@ -514,7 +514,7 @@
         if (!l)
             return '';
         if (savedOf(l))
-            return l.gp ? 'Starts the game again with this graphics pack and the mod you run now.'
+            return l.gp ? 'Starts again with this graphics pack and the mod you run now.'
                         : 'Starts the game again with only this mod running.';
         return 'Saves the mod in this browser. Nothing goes to your game folder.';
     }

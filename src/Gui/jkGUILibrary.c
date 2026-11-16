@@ -197,7 +197,7 @@ static jkGuiElement jkGuiLibrary_aElements[] =
     { ELEMENT_TEXTBOX,    0, 0, NULL, LIB_SEARCH_MAX, { 100, 80, 200, 20 }, 1, 0, u"Type part of a level's title or its author's name.", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,   0, 0, u"Multiplayer", 1, { 20, 104, 138, 24 }, 1, 0, u"Show deathmatch levels.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_CHECKBOX,   0, 0, u"CTF", 1, { 162, 104, 138, 24 }, 1, 0, NULL, NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_CHECKBOX,   0, 0, u"Co-op", 0, { 20, 128, 138, 24 }, 1, 0, u"Show single-player levels. The Host screen lists them with Experimental Co-op ticked under Advanced.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,   0, 0, u"Co-op", 0, { 20, 128, 138, 24 }, 1, 0, u"Show co-op levels. To host one, tick Experimental Co-op in Advanced.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 0, u"Sort", 2, { 20, 152, 58, 30 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_PICBUTTON,  0, 0, NULL, JKGUI_BM_ARROW_LEFT, { 80, 152, 30, 30 }, 1, 0, NULL, NULL, jkGuiLibrary_SortClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_PICBUTTON,  0, 0, NULL, JKGUI_BM_ARROW_RIGHT, { 110, 152, 30, 30 }, 1, 0, NULL, NULL, jkGuiLibrary_SortClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -216,15 +216,15 @@ static jkGuiElement jkGuiLibrary_aElements[] =
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 20, 390, 600, 18 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, NULL, NULL, jkGuiLibrary_CancelClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Massassi Page", 3, { 220, 430, 200, 40 }, 1, 0, u"Opens the level's page on Massassi.net in a new tab.", NULL, jkGuiLibrary_PageClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXTBUTTON, 0, 2, u"Use Level", 3, { 420, 430, 200, 40 }, 1, 0, u"Gets the level, saves it in this browser and picks it on the Host screen.", NULL, jkGuiLibrary_UseClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXTBUTTON, 0, 2, u"Use Level", 3, { 420, 430, 200, 40 }, 1, 0, u"Saves the level in this browser and picks it on the Host screen.", NULL, jkGuiLibrary_UseClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // After the rest so their numbers stay: the 3D view's frame (the page
     // draws the level over it, and a click on it opens the big 3D view),
     // what it says while there's no 3D view, and My levels.
     { ELEMENT_CUSTOM,     0, 0, NULL, 0, { 474, 104, 156, 117 }, 1, 0, NULL, jkGuiLibrary_ShotDraw, jkGuiLibrary_PreviewClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 474, 104, 156, 117 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_CHECKBOX,   0, 0, u"My levels", 0, { 162, 128, 138, 24 }, 1, 0, u"Show only the levels saved in this browser: ones you used here, or got from a host.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,   0, 0, u"My levels", 0, { 162, 128, 138, 24 }, 1, 0, u"Show only the levels saved in this browser, from here or a host.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // The Mod Library's: Campaigns, and the Changes tab.
-    { ELEMENT_CHECKBOX,   0, 0, u"Campaigns", 0, { 162, 128, 138, 24 }, 0, 0, u"Show single-player campaigns. Host them with Experimental Co-op ticked under Advanced.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX,   0, 0, u"Campaigns", 0, { 162, 128, 138, 24 }, 0, 0, u"Show campaigns. To host one, tick Experimental Co-op in Advanced.", NULL, jkGuiLibrary_FilterClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, 0, 2, u"Changes", 3, { 391, 78, 77, 24 }, 0, 0, u"Which of the game's own files the mod replaces, and what it adds.", NULL, jkGuiLibrary_TabClicked, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_END,        0, 0, NULL, 0, { 0, 0, 0, 0 }, 0, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 };
@@ -1400,13 +1400,13 @@ static void jkGuiLibrary_SetMode(int bMots, int bToAdd, int bMods)
         el[LIB_TITLE].wstr = u"Mod Library";
         el[LIB_SEARCH].wHintText = u"Type part of a mod's title or its author's name.";
         el[LIB_FILTER_MP].wstr = u"Gameplay";
-        el[LIB_FILTER_MP].wHintText = u"Show mods that change how the game plays: weapons, Force powers, game modes.";
+        el[LIB_FILTER_MP].wHintText = u"Show gameplay mods: new weapons, Force powers and game modes.";
         el[LIB_FILTER_CTF].wstr = u"Characters";
         el[LIB_FILTER_CTF].wHintText = u"Show skins and characters: new models to play as.";
         el[LIB_FILTER_COOP].wstr = u"Graphics";
-        el[LIB_FILTER_COOP].wHintText = u"Show mods that change how the game looks: textures, effects, graphics packs.";
+        el[LIB_FILTER_COOP].wHintText = u"Show graphics mods: textures, effects and graphics packs.";
         el[LIB_FILTER_MINE].wstr = u"My mods";
-        el[LIB_FILTER_MINE].wHintText = u"Show only the mods saved in this browser: ones you got here, or from a host.";
+        el[LIB_FILTER_MINE].wHintText = u"Show only the mods saved in this browser, from here or a host.";
         el[LIB_LIST].wHintText = u"Mods with * are saved in this browser. Double-click one to get it.";
         el[LIB_TAB_README].wHintText = u"The text files in the mod's zip.";
         el[LIB_TAB_FILES].wHintText = u"What's in the mod's zip.";
