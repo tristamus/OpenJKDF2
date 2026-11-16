@@ -189,7 +189,7 @@ const LEVELS = [
 ];
 // A level from jkdf2.net's archive, only in the list of both sources
 // (/levels/all/<game>.json, while ALL.on): no Massassi date, rating,
-// downloads, screenshots or 3D view.
+// downloads or screenshots.
 const omega = episode('Omega Outpost', 2, ['omega.jkl']);
 const DF2_LEVELS = [
     level(1000001, 'mp', 'Omega Outpost', 'jk1', [{ n: 'omega.gob', bytes: omega, ep: 'Omega Outpost', ty: 2, lv: ['omega.jkl'] }],
@@ -1109,7 +1109,6 @@ await test('both sources: jkdf2.net\'s levels in the list, said where they\'re f
         assert.equal(await number(m.page, 8), 1);
         assert.equal(await call(m.page, 'page'), false);
         assert.equal(await number(m.page, N.SHOTS), 0);
-        assert.equal(await libText(m.page, T.PV), 'No 3D view for levels from jkdf2.net');
         // Massassi's beside it, as before.
         await pick(m.page, 501);
         await details(m.page);

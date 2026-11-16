@@ -7,7 +7,8 @@
 // The site's Worker (src/levels.js in the jkdf2mp-bb-server repository)
 // copies Massassi.net's level lists, pages, zips and screenshots, slowly,
 // and the levels in jkdf2.net's archive that Massassi doesn't have (their
-// zips only: no page, screenshots or 3D view), and serves
+// zips and 3D views, from Massassi's 3D Preview; no page or screenshots),
+// and serves
 //
 //   /levels/all/jk1.json, /levels/all/mots.json   the levels of both that are
 //                                        ready, per game; one of jkdf2.net's
@@ -336,8 +337,8 @@
 
     function selected() { return L.sel != null ? byId(L.sel) : null; }
 
-    // A level from jkdf2.net's archive: no page there to open, no screenshots
-    // and no 3D view.
+    // A level from jkdf2.net's archive: no page there to open, and no
+    // screenshots.
     function fromJkdf2(l) { return !!l && l.o === 'jkdf2.net'; }
 
     // Lines for the Overview, Readme and Files tabs, '\n' between them. A
@@ -683,7 +684,7 @@
         if (!l)
             return '';
         switch (previewState()) {
-        case 0: return fromJkdf2(l) ? 'No 3D view for levels from jkdf2.net' : 'No 3D view for this level yet';
+        case 0: return 'No 3D view for this level yet';
         case 1: return 'Loading the 3D view...';
         case 3: return P() ? P().error() || 'The 3D view didn\'t load.' : 'No 3D view here.';
         }
