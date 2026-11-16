@@ -84,7 +84,7 @@ static jkGuiElement jkGuiPlaylist_aElements[] =
 {
     { ELEMENT_TEXT,       0, 0, NULL, 3, { 0, 410, 640, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXT,       0, 6, u"Playlist", 3, { 20, 20, 600, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
-    { ELEMENT_TEXT,       0, 0, u"Up to 6 levels of one kind, played one after another.", 3, { 20, 58, 600, 16 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_TEXT,       0, 0, u"Up to 6 levels, played one after another.", 3, { 20, 58, 600, 16 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     // Left: the episodes and their levels, as on the Host screen.
     { ELEMENT_TEXT,       0, 0, u"Episodes:", 2, { 20, 82, 115, 20 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, PL_LIBRARY, 2, "GUIEXT_LEVEL_LIBRARY", 3, { 140, 82, 160, 20 }, 1, 0, u"Get a community level from the Level Library and add it here.", jkGuiNetHost_RightButtonDraw, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -316,7 +316,7 @@ static void jkGuiPlaylist_ShowInfo(void)
     }
     jkPlaylistEntry* pEntry = &pList->entries[jkGuiPlaylist_sel];
     const char16_t* pEpisode = jkGuiPlaylist_EpisodeTitle(pEntry->gob);
-    const char16_t* pKind = jkPlaylist_KindName(jkPlaylist_KindOf(pList->entries[0].type));
+    const char16_t* pKind = jkPlaylist_ListKindName(pList);
     // "Canyon Oasis, from Jedi Training", or only "Canyon Oasis" when the
     // episode has the level's name, as a GOB of one level often has.
     char16_t from[JKPLAYLIST_TITLE_LEN + 48];
@@ -428,7 +428,6 @@ static int jkGuiPlaylist_Add(jkGuiMenu* pMenu, int i)
     jkEpisode* pEpisode = jkGuiPlaylist_SelectedEpisode();
     const char16_t* pTitle;
     const char* pJkl;
-    char16_t msg[160];
 
     if (!pEpisode || !jkGuiPlaylist_LevelAt(i, &pTitle, &pJkl))
         return 0;
@@ -437,18 +436,16 @@ static int jkGuiPlaylist_Add(jkGuiMenu* pMenu, int i)
         jkGuiPlaylist_SetMessage(pMenu, u"A playlist holds up to 6 levels. Remove one to add another.");
         return 0;
     }
-    int kind = jkPlaylist_KindOf(pEpisode->type);
-    if (pList->count > 0)
+    // Deathmatch and CTF levels mix; saber-only and co-op levels keep to
+    // playlists of their own (jkPlaylist.h).
+    if (pList->count > 0 && !jkPlaylist_CanMix(pEpisode->type, pList->entries[0].type))
     {
-        int listKind = jkPlaylist_KindOf(pList->entries[0].type);
-        if (kind != listKind)
-        {
-            jk_snwprintf(msg, sizeof(msg) / sizeof(char16_t), u"This playlist is %s, and %s is %s: a playlist keeps to one kind of game.",
-                         jkPlaylist_KindName(listKind), pEpisode->unistr, jkPlaylist_KindName(kind));
-            jkGuiPlaylist_SetMessage(pMenu, msg);
-            return 0;
-        }
+        int bSaber = (pEpisode->type | pList->entries[0].type) & JKM_EPISODE_SABER;
+        jkGuiPlaylist_SetMessage(pMenu, bSaber ? u"Saber-only levels need a playlist of their own."
+                                               : u"Co-op levels need a playlist of their own.");
+        return 0;
     }
+    int bWasMixed = jkPlaylist_IsMixed(pList);
     if (strlen(pEpisode->name) >= JKPLAYLIST_GOB_LEN || strlen(pJkl) >= JKPLAYLIST_JKL_LEN)
     {
         jkGuiPlaylist_SetMessage(pMenu, u"That level's file name is too long for a playlist.");
@@ -462,6 +459,11 @@ static int jkGuiPlaylist_Add(jkGuiMenu* pMenu, int i)
     stdString_SafeWStrCopy(pEntry->title, pTitle, JKPLAYLIST_TITLE_LEN);
     pEntry->type = pEpisode->type;
     jkGuiPlaylist_sel = pList->count++;
+    // The first level that mixes deathmatch and CTF: what the host should
+    // know (the CTF level's cog takes teams, the score and the limits over).
+    if (!bWasMixed && jkPlaylist_IsMixed(pList))
+        jkGuiPlaylist_SetMessage(pMenu, Main_bMotsCompat ? u"Kill the Fool plays in teams with its own scoring. Use a time limit."
+                                                         : u"CTF levels play in teams with their own scoring. Use a time limit.");
     return 1;
 }
 
@@ -529,7 +531,8 @@ static int jkGuiPlaylist_AddAllClicked(jkGuiElement *pElement, jkGuiMenu *pMenu,
             continue;
         if (!jkGuiPlaylist_Add(NULL, i))
         {
-            // The message says why (the playlist is full, or of another kind).
+            // The message says why (the playlist is full, or the level is
+            // saber-only or co-op and the playlist isn't, or the other way).
             if (jkGuiPlaylist_work.count >= JKPLAYLIST_MAX && added)
             {
                 int left = 0;

@@ -258,6 +258,8 @@ static int jkGuiMultiTally_NextLines(jkGuiMenu *pMenu, int bDraw)
         pLine2->wstr = NULL;
         return 0;
     }
+    // A long level name would wrap onto the countdown's line.
+    jkPlaylist_TallyFit(pMenu->fonts ? pMenu->fonts[pLine1->textType] : NULL, &pLine1->rect, &pLine2->rect, w1, w2, 128);
     // The countdown is in the lines.
     if (!bLast)
         pCount->wstr = NULL;

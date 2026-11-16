@@ -8,6 +8,7 @@
 #include <emscripten.h>
 
 #include "General/stdString.h"
+#include "General/stdFont.h"
 #include "Dss/sithMulti.h"
 #include "Main/jkRes.h"
 #include "Platform/Networking/Imperial/stdComm_Imperial.h"
@@ -193,6 +194,41 @@ const char16_t* jkPlaylist_KindName(int kind)
         case JKPLAYLIST_KIND_COOP: return u"co-op";
         default: return u"deathmatch";
     }
+}
+
+// The rules a level's episode sets for the whole game when it's hosted
+// (jkGuiNetHost_Show): saber only (MotS, ranked Jedi) and co-op.
+static int jkPlaylist_RulesOf(int type)
+{
+    return ((type & JKM_EPISODE_SABER) ? 2 : 0) | ((type & JK_EPISODE_SINGLEPLAYER) ? 1 : 0);
+}
+
+int jkPlaylist_CanMix(int typeA, int typeB)
+{
+    return jkPlaylist_RulesOf(typeA) == jkPlaylist_RulesOf(typeB);
+}
+
+static int jkPlaylist_Kinds(const jkPlaylist* pList)
+{
+    int kinds = 0;
+    for (int i = 0; i < pList->count && i < JKPLAYLIST_MAX; i++)
+        kinds |= 1 << jkPlaylist_KindOf(pList->entries[i].type);
+    return kinds;
+}
+
+int jkPlaylist_IsMixed(const jkPlaylist* pList)
+{
+    int kinds = jkPlaylist_Kinds(pList);
+    return (kinds & (1 << JKPLAYLIST_KIND_DM)) && (kinds & (1 << JKPLAYLIST_KIND_CTF));
+}
+
+const char16_t* jkPlaylist_ListKindName(const jkPlaylist* pList)
+{
+    if (pList->count <= 0)
+        return u"";
+    if (jkPlaylist_IsMixed(pList))
+        return Main_bMotsCompat ? u"deathmatch and Kill the Fool" : u"deathmatch and Capture the Flag";
+    return jkPlaylist_KindName(jkPlaylist_KindOf(pList->entries[0].type));
 }
 
 void jkPlaylist_SetHosting(int bOn, int idx)
@@ -388,6 +424,60 @@ int jkPlaylist_TallyText(uint32_t msElapsed, uint32_t msDelay, char16_t* pLine1,
         jk_snwprintf(pLine2, len, u"Next level in %d", secs);
     }
     return 1;
+}
+
+// Whether pText is one line in pRect, wrapped as the menu draws it
+// (stdFont_sub_4357C0 measures it the way stdFont_Draw3 wraps it).
+static int jkPlaylist_OneLine(stdFont* pFont, const rdRect* pRect, const char16_t* pText)
+{
+    rdRect rect = *pRect;
+    int lineHeight = stdFont_sub_4357C0(pFont, u"A", &rect);
+    rect = *pRect;
+    return stdFont_sub_4357C0(pFont, pText, &rect) <= lineHeight;
+}
+
+// Cuts pText, a letter at a time, until it and "..." are one line.
+static void jkPlaylist_CutToLine(stdFont* pFont, const rdRect* pRect, char16_t* pText, int len)
+{
+    char16_t whole[128];
+    int n = 0;
+
+    if (jkPlaylist_OneLine(pFont, pRect, pText))
+        return;
+    stdString_SafeWStrCopy(whole, pText, 128);
+    while (whole[n])
+        n++;
+    while (--n > 0)
+    {
+        int end = n;
+        while (end > 0 && whole[end - 1] == ' ')
+            end--;
+        if (end <= 0 || end + 4 > len)
+            continue;
+        memcpy(pText, whole, end * sizeof(char16_t));
+        memcpy(pText + end, u"...", 4 * sizeof(char16_t));
+        if (jkPlaylist_OneLine(pFont, pRect, pText))
+            return;
+    }
+}
+
+void jkPlaylist_TallyFit(stdFont* pFont, const rdRect* pRect1, const rdRect* pRect2, char16_t* pLine1, char16_t* pLine2, int len)
+{
+    if (!pFont)
+        return;
+    // A long level name: the line goes without "(3 of 3)", then "Up", and
+    // the name is cut only when it's still too long.
+    if (pLine1[0] && jkPlaylist_next.bNamed && !jkPlaylist_next.bEnd && !jkPlaylist_OneLine(pFont, pRect1, pLine1))
+    {
+        jk_snwprintf(pLine1, len, u"Up next: %s", jkPlaylist_next.title);
+        if (!jkPlaylist_OneLine(pFont, pRect1, pLine1))
+            jk_snwprintf(pLine1, len, u"Next: %s", jkPlaylist_next.title);
+    }
+    if (pLine1[0])
+        jkPlaylist_CutToLine(pFont, pRect1, pLine1, len);
+    // A long reason the level couldn't be got.
+    if (pLine2[0])
+        jkPlaylist_CutToLine(pFont, pRect2, pLine2, len);
 }
 
 const char16_t* jkPlaylist_FailedText(void)

@@ -26,8 +26,13 @@
 // next level, from when it came up.
 #define JKPLAYLIST_WAIT_MS (60000)
 
-// A game's kind: a playlist has levels of one kind only (team scoring,
-// flags and saber rules don't change between levels).
+// A level's kind. Deathmatch and CTF (MotS: Kill the Fool) levels share a
+// playlist: a CTF level's own cog turns on teams and its own scoring when it
+// starts, and every level starts with the Host screen's rules again
+// (sithMulti_StartupServer). Saber-only and co-op levels have playlists of
+// their own: those rules are the game's, set once when it's hosted (which
+// characters joiners may pick, how enemies sync), and can't change between
+// levels.
 #define JKPLAYLIST_KIND_DM (0)
 #define JKPLAYLIST_KIND_CTF (1)
 #define JKPLAYLIST_KIND_SABER (2)
@@ -72,6 +77,17 @@ void jkPlaylist_Save(int bMots);
 int jkPlaylist_KindOf(int type);
 const char16_t* jkPlaylist_KindName(int kind);
 
+// Whether levels of these episode types may share a playlist: the same
+// game-wide rules (saber only, co-op), whatever their kind.
+int jkPlaylist_CanMix(int typeA, int typeB);
+
+// The playlist's kind, for "A ... playlist.": its levels' kind, or
+// "deathmatch and Capture the Flag" when it has both. "" when it's empty.
+const char16_t* jkPlaylist_ListKindName(const jkPlaylist* pList);
+
+// Whether the playlist has deathmatch and CTF levels both.
+int jkPlaylist_IsMixed(const jkPlaylist* pList);
+
 // Host screen: this game hosts the playlist from level idx, or (bOn 0) the
 // episode's own order as before.
 void jkPlaylist_SetHosting(int bOn, int idx);
@@ -95,6 +111,11 @@ void jkPlaylist_Named(const jkPlaylistNext* pNext);
 // pressed Ok), and its two lines about what's next. 0 when nothing was named.
 int jkPlaylist_TallyMayEnd(uint32_t msElapsed, uint32_t msDelay, int bAsked);
 int jkPlaylist_TallyText(uint32_t msElapsed, uint32_t msDelay, char16_t* pLine1, char16_t* pLine2, int len);
+
+// The score screen: keeps each line on one line of its box (pRect1, pRect2)
+// in pFont. Line 1 drops "(2 of 3)", then "Up", and cuts the level's name
+// with "..." only when it's still too long; line 2 is cut with "...".
+void jkPlaylist_TallyFit(stdFont* pFont, const rdRect* pRect1, const rdRect* pRect2, char16_t* pLine1, char16_t* pLine2, int len);
 
 // This game couldn't get the next level: why, for the error after the score
 // screen ("" when it could).
