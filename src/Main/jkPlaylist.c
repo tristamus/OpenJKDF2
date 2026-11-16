@@ -8,6 +8,7 @@
 #include <emscripten.h>
 
 #include "General/stdString.h"
+#include "General/stdFont.h"
 #include "Dss/sithMulti.h"
 #include "Main/jkRes.h"
 #include "Platform/Networking/Imperial/stdComm_Imperial.h"
@@ -192,6 +193,97 @@ const char16_t* jkPlaylist_KindName(int kind)
         case JKPLAYLIST_KIND_SABER: return u"saber only";
         case JKPLAYLIST_KIND_COOP: return u"co-op";
         default: return u"deathmatch";
+    }
+}
+
+// Co-op is the game's, set once when it's hosted (jkGuiNetHost_Show): how
+// enemies sync. A saber-only level makes the game a ranked Jedi game, which
+// deathmatch and CTF levels can be too, and saber only goes on and off with
+// the level (jkPlaylist_LevelRules).
+int jkPlaylist_CanMix(int typeA, int typeB)
+{
+    return !(typeA & JK_EPISODE_SINGLEPLAYER) == !(typeB & JK_EPISODE_SINGLEPLAYER);
+}
+
+static int jkPlaylist_Kinds(const jkPlaylist* pList)
+{
+    int kinds = 0;
+    for (int i = 0; i < pList->count && i < JKPLAYLIST_MAX; i++)
+    {
+        int type = pList->entries[i].type;
+        kinds |= 1 << jkPlaylist_KindOf(type);
+        // Saber only and CTF: both.
+        if (type & JKM_EPISODE_SABER)
+            kinds |= 1 << JKPLAYLIST_KIND_SABER;
+    }
+    return kinds;
+}
+
+int jkPlaylist_IsMixed(const jkPlaylist* pList)
+{
+    int kinds = jkPlaylist_Kinds(pList);
+    return (kinds & (1 << JKPLAYLIST_KIND_DM)) && (kinds & (1 << JKPLAYLIST_KIND_CTF));
+}
+
+int jkPlaylist_HasSaber(const jkPlaylist* pList)
+{
+    for (int i = 0; i < pList->count && i < JKPLAYLIST_MAX; i++)
+    {
+        if (pList->entries[i].type & JKM_EPISODE_SABER)
+            return 1;
+    }
+    return 0;
+}
+
+int jkPlaylist_IsSaberMixed(const jkPlaylist* pList)
+{
+    for (int i = 0; i < pList->count && i < JKPLAYLIST_MAX; i++)
+    {
+        if (!(pList->entries[i].type & JKM_EPISODE_SABER))
+            return jkPlaylist_HasSaber(pList);
+    }
+    return 0;
+}
+
+const char16_t* jkPlaylist_ListKindName(const jkPlaylist* pList)
+{
+    static char16_t name[96];
+    static const int order[] = { JKPLAYLIST_KIND_DM, JKPLAYLIST_KIND_CTF, JKPLAYLIST_KIND_SABER, JKPLAYLIST_KIND_COOP };
+    const char16_t* parts[4];
+    int n = 0;
+    int kinds = jkPlaylist_Kinds(pList);
+
+    if (pList->count <= 0)
+        return u"";
+    for (int i = 0; i < 4; i++)
+    {
+        if (kinds & (1 << order[i]))
+            parts[n++] = jkPlaylist_KindName(order[i]);
+    }
+    if (n >= 3)
+        jk_snwprintf(name, 96, u"%s, %s and %s", parts[0], parts[1], parts[2]);
+    else if (n == 2)
+        jk_snwprintf(name, 96, u"%s and %s", parts[0], parts[1]);
+    else
+        jk_snwprintf(name, 96, u"%s", n ? parts[0] : u"");
+    return name;
+}
+
+void jkPlaylist_LevelRules(int type)
+{
+    // Only a ranked Jedi game: a personalities game has no saber-only levels
+    // (the Host screen makes a playlist with any a ranked Jedi game).
+    if (!Main_bMotsCompat || !(sithMulti_multiModeFlags & MULTIMODEFLAG_1000))
+        return;
+    if (type & JKM_EPISODE_SABER)
+    {
+        sithMulti_multiModeFlags |= MULTIMODEFLAG_2000;
+        sithNet_MultiModeFlags |= MULTIMODEFLAG_2000;
+    }
+    else
+    {
+        sithMulti_multiModeFlags &= ~MULTIMODEFLAG_2000;
+        sithNet_MultiModeFlags &= ~MULTIMODEFLAG_2000;
     }
 }
 
@@ -388,6 +480,60 @@ int jkPlaylist_TallyText(uint32_t msElapsed, uint32_t msDelay, char16_t* pLine1,
         jk_snwprintf(pLine2, len, u"Next level in %d", secs);
     }
     return 1;
+}
+
+// Whether pText is one line in pRect, wrapped as the menu draws it
+// (stdFont_sub_4357C0 measures it the way stdFont_Draw3 wraps it).
+static int jkPlaylist_OneLine(stdFont* pFont, const rdRect* pRect, const char16_t* pText)
+{
+    rdRect rect = *pRect;
+    int lineHeight = stdFont_sub_4357C0(pFont, u"A", &rect);
+    rect = *pRect;
+    return stdFont_sub_4357C0(pFont, pText, &rect) <= lineHeight;
+}
+
+// Cuts pText, a letter at a time, until it and "..." are one line.
+static void jkPlaylist_CutToLine(stdFont* pFont, const rdRect* pRect, char16_t* pText, int len)
+{
+    char16_t whole[128];
+    int n = 0;
+
+    if (jkPlaylist_OneLine(pFont, pRect, pText))
+        return;
+    stdString_SafeWStrCopy(whole, pText, 128);
+    while (whole[n])
+        n++;
+    while (--n > 0)
+    {
+        int end = n;
+        while (end > 0 && whole[end - 1] == ' ')
+            end--;
+        if (end <= 0 || end + 4 > len)
+            continue;
+        memcpy(pText, whole, end * sizeof(char16_t));
+        memcpy(pText + end, u"...", 4 * sizeof(char16_t));
+        if (jkPlaylist_OneLine(pFont, pRect, pText))
+            return;
+    }
+}
+
+void jkPlaylist_TallyFit(stdFont* pFont, const rdRect* pRect1, const rdRect* pRect2, char16_t* pLine1, char16_t* pLine2, int len)
+{
+    if (!pFont)
+        return;
+    // A long level name: the line goes without "(3 of 3)", then "Up", and
+    // the name is cut only when it's still too long.
+    if (pLine1[0] && jkPlaylist_next.bNamed && !jkPlaylist_next.bEnd && !jkPlaylist_OneLine(pFont, pRect1, pLine1))
+    {
+        jk_snwprintf(pLine1, len, u"Up next: %s", jkPlaylist_next.title);
+        if (!jkPlaylist_OneLine(pFont, pRect1, pLine1))
+            jk_snwprintf(pLine1, len, u"Next: %s", jkPlaylist_next.title);
+    }
+    if (pLine1[0])
+        jkPlaylist_CutToLine(pFont, pRect1, pLine1, len);
+    // A long reason the level couldn't be got.
+    if (pLine2[0])
+        jkPlaylist_CutToLine(pFont, pRect2, pLine2, len);
 }
 
 const char16_t* jkPlaylist_FailedText(void)

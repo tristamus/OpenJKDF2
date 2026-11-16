@@ -18,6 +18,7 @@
 #include "Gui/jkGUIPlayer.h"
 #include "Gui/jkGUISetup.h"
 #include "Gui/jkGUIMods.h"
+#include "Gui/jkGUILibrary.h"
 #include "Win95/stdComm.h"
 #include "Win95/stdGdi.h"
 #include "Win95/Windows.h"
@@ -31,10 +32,15 @@
 #include "stdPlatform.h"
 
 // Added: the browser build is multiplayer-only, so its main menu hides Single Player,
-// View Cutscenes and Expansions & Mods.
+// View Cutscenes and Expansions & Mods. Where the site serves the Mod Library,
+// its button takes Expansions & Mods' place, in the row with Choose Player,
+// Credits and Setup (jkGuiMain_LayOutRow).
 #if defined(ARCH_WASM)
 #define JKGUIMAIN_HIDE_SINGLEPLAYER
 #define JKGUIMAIN_HIDE_CUTSCENES_AND_MODS
+#ifdef PLATFORM_WSRELAY
+#define JKGUIMAIN_MOD_LIBRARY
+#endif
 #endif
 
 // Added
@@ -80,6 +86,75 @@ static jkGuiElement jkGuiMain_elements[11] = {
 };
 
 static jkGuiMenu jkGuiMain_menu = {jkGuiMain_elements, -1, 0xFFFF, 0xFFFF, 0xF, 0, 0, jkGui_stdBitmaps, jkGui_stdFonts, 0, 0, "thermloop01.wav", "thrmlpu2.wav", 0, 0, 0, 0, 0, 0};
+
+#ifdef JKGUIMAIN_MOD_LIBRARY
+// Added: whether the row under Multiplayer and Quit has the Mod Library.
+static int jkGuiMain_bModLibrary = 0;
+
+// The row under Multiplayer and Quit: Choose Player, Credits and Setup, evenly
+// spaced and centered; with the Mod Library, Choose Player, Mod Library,
+// Credits and Setup, four buttons across. Expansions & Mods' button is the
+// Mod Library's.
+static void jkGuiMain_LayOutRow(int bModLibrary)
+{
+    jkGuiElement* el = jkGuiMain_elements;
+    int y = el[3].rect.y;
+
+    jkGuiMain_bModLibrary = bModLibrary;
+    el[7].wstr = u"Mod Library";
+    el[7].bIsVisible = bModLibrary;
+    el[7].rect.y = y;
+    el[6].rect.y = y;
+    if (bModLibrary)
+    {
+        // Choose Player, Mod Library, Credits, Setup
+        el[3].rect.x = 10;
+        el[7].rect.x = 165;
+        el[6].rect.x = 320;
+        el[5].rect.x = 475;
+        el[3].rect.width = el[7].rect.width = el[6].rect.width = el[5].rect.width = 155;
+    }
+    else
+    {
+        el[3].rect.x = 20;
+        el[6].rect.x = 245;
+        el[5].rect.x = 470;
+        el[3].rect.width = el[7].rect.width = el[6].rect.width = el[5].rect.width = 150;
+    }
+}
+
+// The site's answer can come after the menu is up: the row changes then.
+static void jkGuiMain_Idle(jkGuiMenu *pMenu)
+{
+    if (!jkGuiMain_bModLibrary && jkGuiLibrary_ModsAvailable())
+    {
+        jkGuiMain_LayOutRow(1);
+        jkGuiRend_Paint(pMenu);
+    }
+}
+
+// The Mod Library over the main menu, in the Host screen's colors. After
+// Restart With It, the engine starts again with the mod: the menus return
+// to the main loop, which exits, and main() starts it on the mod's folder,
+// as Expansions & Mods does (jkGUIMods.c).
+static void jkGuiMain_ShowModLibrary()
+{
+    char path[sizeof(openjkdf2_aRestartPath)];
+
+    stdBitmap_EnsureData(jkGui_stdBitmaps[JKGUI_BM_BK_MULTI]);
+    jkGui_SetModeMenu(jkGui_stdBitmaps[JKGUI_BM_BK_MULTI]->palette);
+    if (jkGuiLibrary_ShowMods(Main_bMotsCompat, path, sizeof(path)))
+    {
+        stdPlatform_Printf("OpenJKDF2: Restarting with mod path \"%s\" from the Mod Library\n", path);
+        stdString_SafeStrCopy(openjkdf2_aRestartPath, path, sizeof(openjkdf2_aRestartPath));
+        openjkdf2_restartMode = OPENJKDF2_RESTART_PATH;
+        g_should_exit = 1;
+        return;
+    }
+    stdBitmap_EnsureData(jkGui_stdBitmaps[JKGUI_BM_BK_MAIN]);
+    jkGui_SetModeMenu(jkGui_stdBitmaps[JKGUI_BM_BK_MAIN]->palette);
+}
+#endif
 
 // MOTS altered
 void jkGuiMain_Show()
@@ -138,6 +213,10 @@ void jkGuiMain_Show()
     jkGuiMain_elements[7].bIsVisible = 0;
     jkGuiMain_elements[6].rect.x = 245;
     jkGuiMain_elements[6].rect.y = jkGuiMain_elements[3].rect.y;
+#ifdef JKGUIMAIN_MOD_LIBRARY
+    jkGuiMain_LayOutRow(jkGuiLibrary_ModsAvailable());
+    jkGuiMain_menu.idkFunc = jkGuiMain_Idle;
+#endif
 #endif
 
 #ifdef JKGUI_SMOL_SCREEN
@@ -222,7 +301,11 @@ LABEL_12:
                     break;
 #ifdef QOL_IMPROVEMENTS
                 case 17:
+#ifdef JKGUIMAIN_MOD_LIBRARY
+                    jkGuiMain_ShowModLibrary(); // Added
+#else
                     jkGuiMods_Show();
+#endif
                     v1 = -1;
                     break;
 #endif

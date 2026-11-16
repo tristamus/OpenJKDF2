@@ -9,7 +9,17 @@
 //                                starting places
 //   /levels/p/<id>-<m>.mat.json  its textures as PNGs, with their names
 //   /levels/p/<id>.tex.json      the textures and colormaps the level ships,
-//                                and each of its levels' master colormap
+//                                each of its levels' master colormap, and
+//                                the maps that have parts.json
+//   /levels/p/<id>-<m>.parts.json   the parts of map m's models that the
+//                                preview's data leaves out, made by the
+//                                site from the level's own files
+//
+// Parts: the preview's reader keeps only the last top-level part of a
+// model, so a model saved with its parts side by side at the top of its tree
+// (The Death Star's Millennium Falcon, 9 parts) is in its data with one. The
+// site makes the rest the way the preview makes the one it keeps, and the
+// view draws them with the map (levels-parts.js in the site's repository).
 //
 // Drawn with WebGL 2 on a canvas the page puts over a frame the game's menu
 // leaves for it, as it does the screenshot: a small one on the Overview that
@@ -359,7 +369,12 @@
         var out = [];
         for (var i = 0; i < (mats || []).length; i++) {
             var m = mats[i], name = m && m.name ? String(m.name).replace(/\\/g, '/').toLowerCase() : '';
-            if (!m || !m.data) {
+            if (m && m.part) {
+                // A part's texture that the preview's list doesn't have: the
+                // level's MAT, through its master colormap; else the game's.
+                var pb = m.mat ? b64bytes(m.mat) : (files ? findMat(files, name) : null);
+                out.push(pb && pal ? { src: m.mat ? 'mat' : 'game', name: name, bytes: pb } : { src: m.mat ? 'color' : 'standin', name: name });
+            } else if (!m || !m.data) {
                 out.push({ src: 'color', name: name });
             } else if (!tex || !pal || own[name] || own['mat/' + name.split('/').pop()] || own['3do/mat/' + name.split('/').pop()]) {
                 out.push({ src: tex && pal ? 'level' : 'standin', name: name });
@@ -727,6 +742,57 @@
         });
     }
 
+    // A MAT's size (as decodeMat makes it), or null.
+    function matDims(b) {
+        if (!b || b.length < 76 || u32(b, 0) !== 0x2054414d || i32(b, 4) !== 50)
+            return null;
+        var type = i32(b, 8), count = i32(b, 12);
+        if (type === 0)
+            return [1, 1];
+        var at = 76 + count * 40;
+        if (type !== 2 || count < 1 || count > 4096 || at + 8 > b.length)
+            return null;
+        var w = i32(b, at), h = i32(b, at + 4);
+        return w > 0 && h > 0 ? [w, h] : null;
+    }
+
+    // The parts' texture places on one of the game's textures whose size the
+    // site didn't know (raw): divided by the size of the game's MAT, from the
+    // player's files or the other game's, as the preview divides the rest.
+    async function partSizes(w, parts, mats) {
+        var files = null, other, sizes = {};
+        for (var i = parts.base; i < mats.length; i++) {
+            var m = mats[i];
+            if (!m.raw)
+                continue;
+            if (!files)
+                files = gameFiles(w.game);
+            var b = files.count ? findMat(files, m.name.toLowerCase()) : null;
+            if (!b) {
+                if (other === undefined)
+                    other = await otherFiles(w.game);
+                b = other ? await other.findMat(m.name.toLowerCase()) : null;
+            }
+            var d = matDims(b);
+            if (d)
+                sizes[i] = d;
+        }
+        for (var s of parts.model_surfaces) {
+            var d2 = sizes[s.material];
+            if (!d2)
+                continue;
+            for (var v of s.vertices || []) {
+                if (v && v[1])
+                    v[1] = [v[1][0] / d2[0], v[1][1] / d2[1]];
+            }
+        }
+    }
+
+    function partsMesh(r, parts) {
+        var g = buildGeometry([parts.model_surfaces]);
+        return g.empty ? null : r.mesh(g);
+    }
+
     async function load(w) {
         var ac = new AbortController();
         V.abort = ac;
@@ -742,17 +808,35 @@
             var got = await Promise.all([
                 fetchMap(w.id + '-' + w.m + '.map.json', ac.signal),
                 getJson(w.id + '-' + w.m + '.mat.json', ac.signal, true),
-                getJson(w.id + '.tex.json', ac.signal, true)
+                getJson(w.id + '.tex.json?v=2', ac.signal, true)
             ]);
             if (V.want !== w)
                 return;
             var map = got[0], mats = got[1] || [], tex = got[2];
             if (map.world.empty)
                 throw new Error('no surfaces');
+            var parts = null;
+            if (tex && Array.isArray(tex.parts) && tex.parts.indexOf(w.m) >= 0) {
+                parts = await getJson(w.id + '-' + w.m + '.parts.json', ac.signal, true);
+                if (V.want !== w)
+                    return;
+                // Made for this map's mat.json: else not drawn.
+                if (!parts || parts.base !== mats.length || !Array.isArray(parts.model_surfaces) || !Array.isArray(parts.mats))
+                    parts = null;
+            }
+            if (parts) {
+                mats = mats.concat(parts.mats.map(function(e) {
+                    return { name: e && e.name || '', mat: e && e.mat || null, raw: !!(e && e.raw), part: true };
+                }));
+                await partSizes(w, parts, mats);
+                if (V.want !== w)
+                    return;
+            }
             r.clear();
             r.colors = map.colors.map(hexColor);
             var scene = {
                 id: w.id, m: w.m, world: r.mesh(map.world), sky: map.sky.empty ? null : r.mesh(map.sky),
+                parts: parts ? partsMesh(r, parts) : null,
                 min: map.world.min, max: map.world.max, spawns: map.spawns, missing: 0, swapped: 0, total: 0
             };
             V.scene = scene;
@@ -787,6 +871,8 @@
                 px = decodeMat(s.bytes, srcs.pal);
                 if (px)
                     scene.swapped++;
+            } else if (s.src === 'mat') {
+                px = decodeMat(s.bytes, srcs.pal);
             }
             if (!px && mats[i] && mats[i].data) {
                 px = await pngPixels(mats[i].data);
@@ -1023,7 +1109,7 @@
             eye = [o.target[0] - dir[0] * o.dist, o.target[1] - dir[1] * o.dist, o.target[2] - dir[2] * o.dist];
             near = Math.max(0.01, o.dist - radius(s) * 1.5) * 0.5;
             far = o.dist + radius(s) * 3;
-            list = [{ mesh: s.world }];
+            list = s.parts ? [{ mesh: s.world }, { mesh: s.parts }] : [{ mesh: s.world }];
         } else {
             var wk = V.walk;
             eye = wk.pos;
@@ -1031,7 +1117,7 @@
             // As close as Massassi's preview draws (0.01).
             near = 0.01;
             far = radius(s) * 8 + 100;
-            list = s.sky ? [{ mesh: s.sky }, { mesh: s.world }] : [{ mesh: s.world }];
+            list = (s.sky ? [{ mesh: s.sky }, { mesh: s.world }] : [{ mesh: s.world }]).concat(s.parts ? [{ mesh: s.parts }] : []);
         }
         var mvp = mul(perspective(FOV, aspect, Math.min(near, 1), far), lookDir(eye, dir));
         V.renderer.draw(w, h, mvp, list);
@@ -1121,6 +1207,6 @@
         changed: function() { var c = V.changed; V.changed = false; return c; },
         // For tests.
         _decodeMat: decodeMat, _cmpColors: cmpColors, _gobFiles: gobFiles, _blobGob: blobGob, _forgetOther: function() { otherCache = {}; }, _buildGeometry: buildGeometry, _prepareMap: prepareMap, _worker: worker,
-        _textureSources: textureSources, _pngPixels: pngPixels, _V: V, _gameCache: gameCache
+        _textureSources: textureSources, _pngPixels: pngPixels, _V: V, _gameCache: gameCache, _partSizes: partSizes, _matDims: matDims
     };
 })();

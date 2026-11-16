@@ -801,6 +801,50 @@
                (modWhy || packWhy ? ' (the game restarts)' : '');
     }
 
+    // ---- The Mod Library's (modlibrary.js): the mods it saved in this
+    // browser, which carry its id (lib), and getting the engine ready to start
+    // again with one. Saved here, a mod is also one a joiner can use when the
+    // host runs it (fromStore), and one the page can unpack.
+
+    async function libraryList(game) {
+        var metas = [];
+        try { metas = await store.list(game); } catch (e) {}
+        return metas.filter(function(m) { return m.lib != null; });
+    }
+
+    function librarySave(game, name, ext, fp, bytes, extra) {
+        return store.put(game, cleanName(name), ext, fp, bytes, extra);
+    }
+
+    // The next restart's mod: the pack with fingerprint fp (bytes, or the one
+    // saved here), unpacked into netmods/ as a mod from a host is. A graphics
+    // pack (asPack) is unpacked into mods/ instead, which the engine loads
+    // whatever mod it runs, and the running mod stays. The Remastered pack
+    // stays as it is. Resolves to the path the engine restarts in.
+    async function libraryPrepare(fp, name, bytes, asPack) {
+        var root = core.gameRoot();
+        if (!bytes) {
+            var saved = await store.find(gameName(), fp);
+            if (!saved)
+                throw fail('not-saved');
+            bytes = new Uint8Array(saved.data);
+        }
+        if (await lib.sha256(bytes) !== fp)
+            throw fail('corrupt');
+        var keepPack = !!(remaster && remaster.on);
+        if (asPack) {
+            unpack(bytes, root + '/mods');
+            target = current ? { fp: current.fp, name: current.name, path: current.path, pack: keepPack }
+                             : { fp: null, name: null, path: '', pack: keepPack };
+            return target.path;
+        }
+        var path = netPath(fp);
+        unpack(bytes, root + '/' + path);
+        unpackedAs(root, path, fp);
+        target = { fp: fp, name: cleanName(name), path: path, pack: keepPack };
+        return path;
+    }
+
     Module.jkMods = {
         lib: { pack: pack, packFiles: packFiles, unpack: unpack, shareRanges: shareRanges, listFiles: listFiles,
                encodeTail: encodeTail, parseTail: parseTail, validRel: validRel, packable: packable },
@@ -812,7 +856,8 @@
         state: function() { return core.state(KIND_MOD); },
         restart: restart,
         describe: describe,
-        current: function() { return current; }
+        current: function() { return current; },
+        library: { list: libraryList, save: librarySave, prepare: libraryPrepare }
     };
 
     // Works out which mod the engine starts with, from -path: a mod folder the

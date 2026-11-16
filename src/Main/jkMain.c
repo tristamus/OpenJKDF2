@@ -1340,6 +1340,8 @@ static int jkMain_FollowPlaylist(void)
         return 1;
     }
     stdString_SafeStrCopy(jkMain_aLevelJklFname, aJkl, sizeof(jkMain_aLevelJklFname));
+    // Saber only, for this level (MotS), before this game's player spawns.
+    jkPlaylist_LevelRules(jkEpisode_mLoad.type);
     return 1;
 }
 #endif

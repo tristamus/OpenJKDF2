@@ -741,14 +741,16 @@ static int jkGuiNetHost_ShowPlaylistPicked(jkGuiElement* pList, jkGuiMenu* pMenu
     el[NETHOST_LEVEL_LISTBOX].selectedTextEntry = 0;
     el[NETHOST_LEVEL_LISTBOX].texInfo.textScrollY = 0;
 
-    // A playlist has levels of one kind: its first level's says what this game is.
+    // A playlist's levels are all co-op or none (jkPlaylist_CanMix), so its
+    // first level's say which. Any saber-only level makes it a ranked Jedi
+    // game, as a saber-only episode does.
     int type = jkPlaylist_list.entries[0].type;
 #ifdef QOL_IMPROVEMENTS
     jkGuiNetHost_bIsEpisodeCoop = !!(type & JK_EPISODE_SINGLEPLAYER);
 #endif
     if (Main_bMotsCompat)
     {
-        if (type & JKM_EPISODE_SABER)
+        if (jkPlaylist_HasSaber(&jkPlaylist_list))
         {
             jkGuiNetHost_aElementsMots[NETHOST_PERSONALITIES_CHECKBOX].bIsVisible = 0;
             jkGuiNetHost_aElementsMots[NETHOST_JEDIONLY_CHECKBOX].selectedTextEntry = 1;
@@ -1050,6 +1052,11 @@ int jkGuiNetHost_Show(jkMultiEntry3 *pMultiEntry)
             // only says (its tick is kept for next time).
             if (bPlaylist)
                 pMultiEntry->multiModeFlags &= ~MULTIMODEFLAG_SINGLE_LEVEL;
+            // A playlist with saber-only levels is a ranked Jedi game from its
+            // first level, whichever that is: saber only goes on and off with
+            // the level (jkPlaylist_LevelRules).
+            if (bPlaylist && Main_bMotsCompat && jkPlaylist_HasSaber(&jkPlaylist_list))
+                pMultiEntry->multiModeFlags |= MULTIMODEFLAG_1000;
             jkPlaylist_SetHosting(bPlaylist, playlistStart);
             wuRegistry_SaveBool("serverPlaylist", bPlaylist);
 #endif

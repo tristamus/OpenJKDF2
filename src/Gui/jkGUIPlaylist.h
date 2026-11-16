@@ -4,8 +4,9 @@
 #include "types.h"
 
 // Added: the Playlist screen, opened with Playlist... on the Host screen
-// (browser build only). The host picks up to JKPLAYLIST_MAX levels of one
-// kind from the episodes the Host screen lists (and the Level Library), puts
+// (browser build only). The host picks up to JKPLAYLIST_MAX levels (deathmatch,
+// CTF and saber-only together, or co-op ones by themselves: jkPlaylist.h)
+// from the episodes the Host screen lists (and the Level Library), puts
 // them in order and says whether they loop; Main/jkPlaylist.c keeps the
 // playlist in this browser and plays it.
 #ifdef PLATFORM_WSRELAY
