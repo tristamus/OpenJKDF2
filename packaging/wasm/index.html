@@ -48,7 +48,8 @@
       // instead of when the window opens. The names are the styles' own.
       var ROOM_PICTURES = {
         'nar-shaddaa': 'rooms/nar-shaddaa.df7543fa.webp',
-        'sith-asteroid': 'rooms/sith-asteroid.b6474833.jpg'
+        'sith-asteroid': 'rooms/sith-asteroid.b6474833.jpg',
+        'bespin-demo': 'rooms/bespin-demo.8b363cd3.webp'
       };
       (function() {
         var key = location.hash.substring(1);
@@ -516,6 +517,27 @@
       .note { color: var(--muted); }
       .lead-play { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 6px 0 4px; }
       .lead-play p { margin: 0; flex: 1 1 220px; color: var(--muted); }
+      .main p.lead-demo { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+      .lead-demo a { color: var(--gold); }
+
+      /* The Free Demo Room: its own panel closing the rooms, for players
+         without the game. Its picture is a demo match on this engine. */
+      .demo-room { margin-top: 18px; background-color: var(--teal-dark); border: 1px solid #000;
+                   box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35); }
+      #rooms .demo-room h3 { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
+                             gap: 0 12px; margin: 0; padding: 3px 8px; background-color: var(--gold);
+                             border-bottom: 1px solid #000; color: #000; font: bold 14px Verdana, Geneva, sans-serif; }
+      .demo-room h3 small { font: 12px Arial, sans-serif; }
+      .demo-room .demo-body { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; padding: 10px 12px; }
+      .demo-room .demo-shot { flex: none; width: 168px; height: 105px; border: 1px solid #000;
+                              background: #111 url("rooms/bespin-demo.8b363cd3.webp") 30% 50% / cover no-repeat; }
+      .demo-room .demo-text { flex: 1 1 260px; min-width: 0; }
+      .main .demo-room .demo-text p { margin: 0 0 6px; font-size: 13px; color: #eef; }
+      .main .demo-room .demo-text .fine { color: var(--muted); font-size: 12px; }
+      .demo-room ul.rooms { margin: 0 0 8px; grid-template-columns: 1fr; }
+      .demo-room .demo-actions { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-bottom: 6px; }
+      .demo-room .demo-actions .fine { color: var(--muted); font-size: 12px; }
+      .picker-demo { margin: 14px 0 0; padding: 8px 10px; border: 1px dashed #7aa; font-size: 13px; }
 
       .rooms {
         display: grid;
@@ -1346,6 +1368,8 @@
         font-weight: bold;
       }
       .style-2001 .rooms { display: block; margin: 6px 0 0; }
+      .style-2001 .main .demo-room .demo-text .fine, .style-2001 .demo-room .demo-actions .fine { color: #bde; }
+      .style-2001 .demo-room ul.rooms li { background: #e2eef6; }
       .style-2001 .rooms li { border-bottom: 0; }
       .style-2001 .rooms li:nth-child(odd) { background-color: var(--stripe); }
       .style-2001 .rooms .link-button {
@@ -1704,6 +1728,12 @@
       .room-games[data-room-key="sith-asteroid"] {
         --backdrop-cut: 640px 590px;
         --backdrop: url("rooms/sith-asteroid.b6474833.jpg");
+      }
+      /* The Free Demo Room's is a 720x321 WebP of a demo match on this
+         engine, its HUD cut off. */
+      .room-games[data-room-key="bespin-demo"] {
+        --backdrop-cut: 560px 330px;
+        --backdrop: url("rooms/bespin-demo.8b363cd3.webp");
       }
     </style>
   </head>
@@ -2214,6 +2244,7 @@
               <button class="play big" type="button" data-play>Play JKDF2</button>
               <p>Runs in this tab from your own copy of the game.</p>
             </div>
+            <p class="lead-demo">No copy of the game? <a href="#demo-room">Play the free Bespin demo</a>, no install needed.</p>
             <ol class="steps" aria-label="How it works">
               <li><b>1</b>Pick your game folder</li>
               <li><b>2</b>The game starts in this tab</li>
@@ -2230,7 +2261,8 @@
             <section id="rooms" aria-labelledby="rooms-title">
               <h2 class="ruled" id="rooms-title">Play in the rooms below <small id="total-players" aria-live="polite"></small></h2>
               <p class="note">Standard and Capture the Flag rooms start Jedi Knight, Sith rooms start Mysteries of the
-                Sith, and Play JKDF2 starts either. Open any room to see who's playing now.</p>
+                Sith, the Free Demo Room starts the free demo, and Play JKDF2 starts either game. Open any room to see
+                who's playing now.</p>
 
               <h3>Standard Rooms</h3>
               <p class="note counted"><span>Players</span><span>Open to everyone with Jedi Knight: Dark Forces II</span></p>
@@ -2256,6 +2288,24 @@
                 <li><button class="link-button" type="button" data-room="sith-asteroid" aria-haspopup="dialog"><span class="count busy">&ndash;</span><span><span class="room-name">Sith: Asteroid</span> <span class="tag game-count"></span></span></button></li>
                 <li><button class="link-button" type="button" data-opens-room="sith-asteroid" aria-haspopup="dialog"><span class="count"></span><span class="room-name">Sith: Altyr 5</span></button></li>
               </ul>
+
+              <div class="demo-room" id="demo-room">
+                <h3><span>Free Demo Room</span><small>No game needed</small></h3>
+                <div class="demo-body">
+                  <div class="demo-shot" role="img" aria-label="Bespin Mining Station, in a demo match"></div>
+                  <div class="demo-text">
+                    <ul class="rooms counted">
+                      <li><button class="link-button" type="button" data-room="bespin-demo" aria-haspopup="dialog"><span class="count busy">&ndash;</span><span><span class="room-name">Bespin Mining Station</span> <span class="tag">(Demo)</span> <span class="tag game-count"></span></span></button></li>
+                    </ul>
+                    <p>Don't have Jedi Knight? Play the free 1997 multiplayer demo's Bespin level with anyone here, in
+                      this tab.</p>
+                    <div class="demo-actions"><button class="play" type="button" data-play-demo>Play the Free Demo</button>
+                      <span class="fine">About 17 MB to download the first time.</span></div>
+                    <p class="fine">Demo matches count on the leaderboard too. Like it? Get the full game on Steam or GOG
+                      to play every level, Capture the Flag and mods.</p>
+                  </div>
+                </div>
+              </div>
             </section>
 
             <section id="leaderboard" aria-labelledby="leaderboard-title" data-matches hidden>
@@ -2368,8 +2418,9 @@
                 <li><b>Size limits.</b> A host can send a map of up to 1 GB and up to 1 GB of mods. Past that,
                   players need their own copy. Zipped mods open if they unzip to 2 GB or less. This browser
                   keeps up to 2 GB of maps and 2 GB of mods from hosts, dropping the least recently used.</li>
-                <li><b>Why we ask for the folder.</b> This site has no game files, so it runs from your copy. If
-                  your browser says "upload", that's just its word for reading a folder.</li>
+                <li><b>Why we ask for the folder.</b> This site has none of the full game's files, so it runs from
+                  your copy. If your browser says "upload", that's just its word for reading a folder. The
+                  <a href="#demo-room">free demo</a> needs no folder: its files come from this site.</li>
                 <li><b>You only pick the folder once.</b> This browser saves the files the game needs: about
                   250 MB for Jedi Knight, 500 MB for Mysteries of the Sith, plus mods. Added mods or maps? Pick
                   the folder again. To save nothing, untick "Save the game files in this browser".</li>
@@ -2453,8 +2504,8 @@
         <ul class="promises picker-intro">
           <li><b>Your game stays on your computer.</b> It's read in this tab, not uploaded. Only custom maps
             and mods you host go to players who lack them. Original game files are never sent.</li>
-          <li><b>It checks that you have your own copy.</b> This site has no game files, so it runs from
-            yours.</li>
+          <li><b>It checks that you have your own copy.</b> This site has none of the full game's files, so it
+            runs from yours.</li>
         </ul>
         <p class="fine picker-intro">If your browser says "upload", that's just its word for letting this page read
           the folder. Choose Upload to continue.</p>
@@ -2526,6 +2577,8 @@
           <p class="keep-folder keep-on" hidden><span class="keep-text"></span>
             <button class="text-button" type="button">Stop checking</button></p>
         </div>
+        <p class="picker-demo picker-intro" id="picker-demo"><b>Don't have the game?</b>
+          <button class="text-button" type="button">Play the free Bespin demo instead</button>. It needs no game folder.</p>
         <div id="picker-result" role="status"></div>
         <div class="actions" id="problem-reload" hidden><button class="play" type="button">Reload</button></div>
       </div>
@@ -4984,6 +5037,7 @@
 
       var picker = document.getElementById('picker');
       var pickerTitle = document.getElementById('picker-title');
+      var pickerDemo = document.getElementById('picker-demo');
       var chooseButton = picker.querySelector('label.play');
       var modChoice = document.getElementById('mod-choice');
       var readingFolder = false;
@@ -5002,6 +5056,8 @@
           'Jedi Knight: Dark Forces II (or Mysteries of the Sith)' :
           pickerWant.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight: Dark Forces II';
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = false; });
+        // Who has no Jedi Knight can play the free demo instead.
+        pickerDemo.hidden = !!pickerWant && pickerWant.game !== 'jk1';
         modChoice.hidden = true;
         problemReload.hidden = true;
         picker.onclick = null;
@@ -7669,6 +7725,158 @@
           openPicker(null);
         });
       });
+      // ---- The free multiplayer demo. Jedi Knight's 1997 multiplayer demo
+      // (its episode jk1mpdem.gob, with the Bespin Mining Station level, and
+      // its resource res1demo.gob) runs on this engine as it is, so players
+      // without the game can play it here, from the Free Demo Room. Its files
+      // are LucasArts', kept gzipped in the Level Library's storage under
+      // names with the start of their SHA-256 (/levels/demo/, levels.js in
+      // jkdf2mp-bb-server), so the browser keeps them for good. The engine
+      // starts with them and the standard CD key, in demo mode
+      // (Module.jkDemo): its Join screen lists only demo games
+      // (stdComm_WSRelay.c), and it has no playlists, Level Library, Mod
+      // Library or Imperial relay, which are for the full game. Demo and full
+      // games can't be played together (their files differ), so a demo game
+      // is the demo for everyone in it. Characters and settings are the
+      // full game's own, so they're there when a player gets it.
+      var DEMO_FILES = [
+        { path: 'episode/jk1mpdem.gob', size: 674061,
+          sha256: 'b7bab76a6552fed1f5e7fe120625dafb037f21b4645f05914326974fa966bc92' },
+        { path: 'resource/res1demo.gob', size: 31326451,
+          sha256: '9708ac558b00e76bc4e0dc2e663cc9e867b32bc1b283499734fad0982f8e852e' }
+      ];
+      // The demo's start from a room or the panel: the room Quit comes back to.
+      var DEMO_WANT = { game: 'jk1', room: 'Bespin Mining Station', lobbyRoom: 'bespin-demo', demo: true };
+      var demoDownloading = null;  // the AbortController of the download under way
+
+      function demoUrl(f) {
+        var name = f.path.substring(f.path.lastIndexOf('/') + 1).replace(/\.gob$/, '');
+        return '/levels/demo/' + name + '.' + f.sha256.substring(0, 12) + '.gob';
+      }
+
+      // One of the demo's files, as its bytes, telling progress(bytes) as
+      // they come. It has to be the demo's file, byte for byte. again asks
+      // the site, not the browser's copy.
+      async function demoDownload(f, progress, signal, again) {
+        var res = await fetch(demoUrl(f), { signal: signal, cache: again ? 'reload' : 'default' });
+        if (!res.ok) throw new Error('the site answered ' + res.status);
+        var data = new Uint8Array(f.size), got = 0;
+        var reader = res.body.getReader();
+        for (;;) {
+          var part = await reader.read();
+          if (part.done) break;
+          if (got + part.value.length > f.size) {
+            reader.cancel().catch(function() {});
+            throw Object.assign(new Error('a file came bigger than it is'), { wrong: true });
+          }
+          data.set(part.value, got);
+          got += part.value.length;
+          progress(got);
+        }
+        if (got !== f.size) throw Object.assign(new Error('a file came incomplete'), { wrong: true });
+        var hash = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+        var hex = Array.from(hash, function(b) { return (b < 16 ? '0' : '') + b.toString(16); }).join('');
+        if (hex !== f.sha256) throw Object.assign(new Error("a file came that isn't the demo's"), { wrong: true });
+        return data;
+      }
+
+      // Downloads the demo, in the folder prompt's box, and starts it.
+      async function startDemo(want) {
+        if (demoDownloading) return;
+        pickerWant = want;  // Quit comes back to its room window (jkQuitToLobby)
+        pickerTitle.textContent = 'Starting the free demo';
+        picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
+        modChoice.hidden = true;
+        problemReload.hidden = true;
+        picker.onclick = null;
+        picker.classList.remove('checking');
+        if (typeof stopRoomPictures === 'function') stopRoomPictures();
+        var problem = browserProblem() || (typeof crypto !== 'object' || !crypto.subtle ?
+          "This browser can't check the demo's files. Use a current Chrome or Firefox." : null);
+        if (problem) {
+          showProblem('Starting the free demo', problem);
+          return;
+        }
+        showGfxNotice(document.getElementById('picker-gfx'), gfxCheck);
+        showJitNotice(document.getElementById('picker-jit'), jitRatio !== null ? jitRatio : jitLastSlow());
+        showPrivacyNote(document.getElementById('picker-privacy'), privacyOn);
+        if (!picker.open) picker.showModal();
+        prefetchEngine();
+        var phone = phoneNote();
+        var total = DEMO_FILES.reduce(function(n, f) { return n + f.size; }, 0), done = 0;
+        function say(now) {
+          showPickerResult('Downloading the free demo (' + Math.floor((done + now) * 100 / total) + '%)...' +
+                           (phone ? '\n\n' + phone : ''));
+        }
+        say(0);
+        var abort = demoDownloading = new AbortController();
+        var loaded = [];
+        try {
+          for (var f of DEMO_FILES) {
+            var data;
+            try {
+              data = await demoDownload(f, say, abort.signal, false);
+            } catch (err) {
+              // A bad copy kept by the browser is asked for again, once.
+              if (!err.wrong) throw err;
+              console.warn('OpenJKDF2: ' + f.path + ' of the free demo came wrong (' + err.message + '), asking again');
+              data = await demoDownload(f, say, abort.signal, true);
+            }
+            done += f.size;
+            loaded.push({ path: '/jk1/' + f.path, data: data });
+          }
+        } catch (err) {
+          demoDownloading = null;
+          if (abort.signal.aborted) return;  // the box was closed
+          console.warn('OpenJKDF2: the free demo did not download (' + err + ')');
+          showProblem("The demo didn't download", "The free demo didn't download (" + err.message + '). ' +
+                      'Check your connection and try again.');
+          return;
+        }
+        var cd = new DataView(new ArrayBuffer(4));
+        cd.setUint32(0, CD_KEYS.jk1[0], true);
+        loaded.push({ path: '/jk1/' + CD_KEY_PATH, data: new Uint8Array(cd.buffer) });
+        Module.jkDemo = true;
+        delete Module.jkImperialUrl;  // no Imperial relay (stdComm_Imperial.c)
+        Module.preRun.push(function() {
+          var FS = Module.FS;
+          FS.mkdirTree('/jk1');
+          FS.mkdirTree('/mots');
+          for (var e of loaded) {
+            FS.mkdirTree(e.path.substring(0, e.path.lastIndexOf('/')));
+            FS.writeFile(e.path, e.data, { canOwn: true });
+          }
+          loaded = null;
+          mountSaves(FS, [], '/jk1/');
+        });
+        console.log('OpenJKDF2: starting the free multiplayer demo');
+        // It stays set: the demo starts once.
+        picker.close();
+        hideZone();
+        loadEngine(false);
+      }
+
+      // Closing the box while the demo downloads stops the download.
+      picker.addEventListener('close', function() {
+        if (demoDownloading && !Module.jkDemo) {
+          demoDownloading.abort();
+          demoDownloading = null;
+        }
+      });
+      document.querySelectorAll('[data-play-demo]').forEach(function(b) {
+        b.addEventListener('click', function() {
+          delete Module.jkJoinRoom;
+          delete Module.jkJoinImperial;
+          startDemo(DEMO_WANT);
+        });
+      });
+      // The folder prompt's offer opens the Free Demo Room (the rooms'
+      // script, below), with its games.
+      pickerDemo.querySelector('button').addEventListener('click', function() {
+        closePicker();
+        if (typeof openRoom === 'function') openRoom('bespin-demo');
+      });
+
       picker.querySelector('.close').addEventListener('click', closePicker);
       picker.querySelector('.cancel').addEventListener('click', closePicker);
       // Escape closes the prompt, except while the folder is being read.
@@ -7732,7 +7940,10 @@
       var ROOM_MIN_TABLES = 9;  // tables a room window shows at least, games and open ones (not on a phone)
       var ROOMS = {
         'nar-shaddaa': { game: 'jk1', name: 'Nar Shaddaa', title: 'Jedi Knight: Dark Forces II - Nar Shaddaa' },
-        'sith-asteroid': { game: 'mots', name: 'Sith: Asteroid', title: 'Mysteries of the Sith - Sith: Asteroid' }
+        'sith-asteroid': { game: 'mots', name: 'Sith: Asteroid', title: 'Mysteries of the Sith - Sith: Asteroid' },
+        // The free demo's games (startDemo), apart from Nar Shaddaa's.
+        'bespin-demo': { game: 'jk1', name: 'Bespin Mining Station', title: 'Free Demo Room - Bespin Mining Station',
+                         demo: true }
       };
       var room = document.getElementById('room');
       var roomGames = document.getElementById('room-games');
@@ -7786,13 +7997,29 @@
                  match: typeof s.match === 'number' && isFinite(s.match) && s.match >= 0 ? Math.floor(s.match) : null };
       }
 
-      // One room's part of the status: its game's players and games.
+      // A game of the free demo's (startDemo), which only the demo can join.
+      function isDemoGame(g) { return /^jk1mpdem(\.gob)?$/i.test(g.episode); }
+
+      // One room's part of the status: its game's players and games. The
+      // Free Demo Room has the demo's games, and their players, who are
+      // Jedi Knight's to the lobby, so Nar Shaddaa has the rest. The lobby
+      // doesn't say who of those not in a game runs the demo, so they're all
+      // Nar Shaddaa's.
       function roomStatus(s, key) {
         if (!s) return null;
-        var game = ROOMS[key].game;
-        return { online: s.byGame[game].online, lobby: s.byGame[game].lobby,
-                 games: s.games.filter(function(g) { return g.game === game; }) };
+        var game = ROOMS[key].game, demo = !!ROOMS[key].demo;
+        var demoPlayers = 0;
+        var games = s.games.filter(function(g) {
+          if (g.game !== game) return false;
+          if (isDemoGame(g)) demoPlayers += g.players;
+          return isDemoGame(g) === demo;
+        });
+        if (demo) return { online: demoPlayers, lobby: [], games: games };
+        return { online: Math.max(0, s.byGame[game].online - demoPlayers), lobby: s.byGame[game].lobby, games: games };
       }
+
+      // The Imperial relay's games a room lists: none in the Free Demo Room.
+      function roomImperial(key) { return ROOMS[key].demo ? [] : imperialLive.games; }
 
       // ---- The Imperial relay's games. The Imperial Network Protocol
       // connection (stdComm_Imperial.c, on when Module.jkImperialUrl is set)
@@ -7949,7 +8176,7 @@
         var s = lobbyLive.status;
         document.querySelectorAll('[data-room]').forEach(function(b) {
           var r = roomStatus(s, b.dataset.room);
-          var games = roomGameList(r ? r.games : [], imperialLive.games, ROOMS[b.dataset.room].game)
+          var games = roomGameList(r ? r.games : [], roomImperial(b.dataset.room), ROOMS[b.dataset.room].game)
             .filter(function(g) { return !g.imperial || g.listed; }).length;
           var count = b.querySelector('.count');
           count.textContent = r ? r.online : '–';
@@ -7974,11 +8201,13 @@
       // "Names of Levels" in its misc/cogstrings.uni (the key there is the
       // level's file without .jkl, in capitals), read from the Steam copies of
       // JK1MP.GOB, JK1CTF.GOB, JK1.GOB, JKM_MP.GOO, JKM_KFY.GOO, JKM_SABER.GOO
-      // and JKM.GOO. The host's game names its level itself (title, from the
+      // and JKM.GOO, and the free multiplayer demo's JK1MPDEM.GOB (startDemo).
+      // The host's game names its level itself (title, from the
       // same file); these name the retail levels until it has, and in the
       // Imperial relay's games, which only give the file. The single-player
       // episodes are hosted as Co-op.
       var RETAIL_LEVELS = {
+        jk1mpdem: { title: 'Jedi Knight Multiplayer Demo', levels: { 'm4.jkl': 'Bespin Mining Station' } },
         jk1mp: { title: 'Jedi Training', levels: {
           'm2.jkl': 'Nar Shaddaa Loading Terminal', 'm4.jkl': 'Bespin Mining Station', 'm5.jkl': 'Blades of Death',
           'm10.jkl': 'Canyon Oasis', 'm_boss15.jkl': 'The Valley of the Jedi Tower', 'm_boss17.jkl': 'Battleground Jedi' } },
@@ -8265,7 +8494,7 @@
 
       function renderRoster() {
         var s = roomStatus(lobbyLive.status, lobbyLive.room);
-        var list = roomGameList(s ? s.games : [], imperialLive.games, ROOMS[lobbyLive.room].game);
+        var list = roomGameList(s ? s.games : [], roomImperial(lobbyLive.room), ROOMS[lobbyLive.room].game);
         var relay = list.filter(function(g) { return g.imperial && g.listed; });
         var head = el('div', 'roster-head');
         head.append(el('span', null, 'Latency'), el('span', null, 'Name'));
@@ -8318,7 +8547,7 @@
         if (lobbyRows.length < inLobby) lobbyRows.push(['+' + (inLobby - lobbyRows.length) + ' without a name', null, true]);
         if (playing.length < inGames) playing.push(['+' + (inGames - playing.length) + ' without a name', null, true]);
         section('Total players', String(s.online));
-        section('Looking', String(inLobby), lobbyRows, 'Nobody');
+        if (!ROOMS[lobbyLive.room].demo) section('Looking', String(inLobby), lobbyRows, 'Nobody');
         section('Playing', String(inGames), playing, 'Nobody');
         relaySection();
       }
@@ -8337,6 +8566,7 @@
           summary.textContent = lobbyLive.state === 'down' ? 'Trying again' : 'Waiting for the lobby';
         }
         // The relay's games and players, on their own.
+        if (ROOMS[lobbyLive.room].demo) return;
         var game = ROOMS[lobbyLive.room].game;
         var relay = imperialLive.games.filter(function(g) { return g.game === game && g.listed; });
         if (imperialLive.state === 'down')
@@ -8348,7 +8578,7 @@
 
       function renderRoom() {
         var s = roomStatus(lobbyLive.status, lobbyLive.room);
-        var list = roomGameList(s ? s.games : [], imperialLive.games, ROOMS[lobbyLive.room].game);
+        var list = roomGameList(s ? s.games : [], roomImperial(lobbyLive.room), ROOMS[lobbyLive.room].game);
         document.getElementById('room-title').textContent = ROOMS[lobbyLive.room].title;
         // A redraw keeps what has focus and which Info panels are open.
         var active = document.activeElement;
@@ -8417,7 +8647,7 @@
       function quickJoinGame() {
         var s = roomStatus(lobbyLive.status, lobbyLive.room);
         var best = null, bestIndex = -1;
-        roomGameList(s ? s.games : [], imperialLive.games, ROOMS[lobbyLive.room].game).forEach(function(g, i) {
+        roomGameList(s ? s.games : [], roomImperial(lobbyLive.room), ROOMS[lobbyLive.room].game).forEach(function(g, i) {
           if (g.imperial) return;
           if (!isFull(g) && !g.locked && !otherVersion(g) && (!best || g.players > best.players)) { best = g; bestIndex = i; }
         });
@@ -8431,7 +8661,9 @@
       // relay's connection (Module.jkJoinImperial).
       function roomAction(kind, id, label) {
         // lobbyRoom: Quit comes back to this room window (jkQuitToLobby).
-        var want = { game: ROOMS[lobbyLive.room].game, room: ROOMS[lobbyLive.room].name, lobbyRoom: lobbyLive.room };
+        // The Free Demo Room's start the demo (startDemo).
+        var want = { game: ROOMS[lobbyLive.room].game, room: ROOMS[lobbyLive.room].name, lobbyRoom: lobbyLive.room,
+                     demo: !!ROOMS[lobbyLive.room].demo };
         var quick = kind === 'quick-join';
         if (quick) {
           var pick = quickJoinGame();
@@ -8449,7 +8681,8 @@
         if (kind === 'join-imperial' && /^[0-9a-f]{32}$/.test(id)) Module.jkJoinImperial = id;
         else delete Module.jkJoinImperial;
         room.close();
-        openPicker(want);
+        if (want.demo) startDemo(want);
+        else openPicker(want);
       }
 
       roomGames.addEventListener('click', function(ev) {

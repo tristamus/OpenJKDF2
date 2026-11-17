@@ -644,10 +644,10 @@ static jkEpisodeTypeFlags_t jkGuiNetHost_EpisodeMask()
 
 #ifdef PLATFORM_WSRELAY
 // Games on the Imperial Network Protocol have desktop players, whose games
-// work the next level out by themselves.
+// work the next level out by themselves. The free demo has one level.
 static int jkGuiNetHost_PlaylistAllowed()
 {
-    return !stdComm_Imperial_bActive;
+    return !stdComm_Imperial_bActive && !stdComm_WSRelay_IsDemo();
 }
 
 static int jkGuiNetHost_IsPlaylistRow(jkGuiElement* pList)

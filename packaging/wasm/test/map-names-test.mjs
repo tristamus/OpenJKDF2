@@ -39,7 +39,7 @@ function check(name, fn) {
 
 check('the retail list has every level the games ship, under its episode', () => {
     const counts = Object.fromEntries(Object.entries(RETAIL_LEVELS).map(([k, e]) => [k, Object.keys(e.levels).length]));
-    assert.deepEqual(counts, { jk1mp: 6, jk1ctf: 3, jk1: 25, jkm_mp: 16, jkm_kfy: 5, jkm_saber: 4, jkm: 14 });
+    assert.deepEqual(counts, { jk1mpdem: 1, jk1mp: 6, jk1ctf: 3, jk1: 25, jkm_mp: 16, jkm_kfy: 5, jkm_saber: 4, jkm: 14 });
     for (const [k, e] of Object.entries(RETAIL_LEVELS)) {
         assert.ok(e.title, k + ' has a title');
         for (const [file, name] of Object.entries(e.levels)) {
@@ -57,6 +57,7 @@ check('a retail level is named before its host has said, whatever the case of it
     assert.equal(levelTitle({ map: 'k3.jkl', episode: 'JKM_KFY.goo' }), 'Imperial Training Facility');
     assert.equal(levelTitle({ map: '01narshadda.jkl', episode: 'JK1.gob' }), '1 - Double-Cross on Nar Shaddaa', 'Co-op');
     assert.equal(levelTitle({ map: 's5l4_lowersith.jkl', episode: 'JKM.goo' }), '14 - Sith Temple Catacombs');
+    assert.equal(levelTitle({ map: 'm4.jkl', episode: 'jk1mpdem' }), 'Bespin Mining Station', "the free demo's");
 });
 
 check("the host's name for its level comes first, unless it's only the file's", () => {

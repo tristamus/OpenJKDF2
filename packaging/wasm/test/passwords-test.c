@@ -69,6 +69,18 @@ static void stdPlatform_Printf(const char* fmt, ...)
 static uint32_t now = 1000;
 static uint32_t stdPlatform_GetTimeMsec(void) { return now; }
 
+static int __strnicmp(const char* a, const char* b, size_t n)
+{
+    for (; n; a++, b++, n--)
+    {
+        int ca = *a >= 'A' && *a <= 'Z' ? *a + 32 : *a, cb = *b >= 'A' && *b <= 'Z' ? *b + 32 : *b;
+        if (ca != cb || !ca)
+            return ca - cb;
+    }
+    return 0;
+}
+static int __strcmpi(const char* a, const char* b) { return __strnicmp(a, b, (size_t)-1); }
+
 static void stdString_SafeStrCopy(char* pDst, const char* pSrc, uint32_t lenDst)
 {
     strncpy(pDst, pSrc, lenDst - 1);
@@ -134,6 +146,9 @@ static int wsrelay_js_state(void)
     return state;
 }
 static int wsrelay_js_list_pw(void) { return lobbyPw; }
+// Whether the page started the free demo (Module.jkDemo).
+static int demoMode = 0;
+static int wsrelay_js_demo(void) { return demoMode; }
 static void wsrelay_js_rtc_begin(int isHost) {}
 static void wsrelay_js_rtc_end(void) {}
 static void wsrelay_js_map_unhost(void) {}
@@ -191,15 +206,16 @@ static int same16(const char16_t* a, const char16_t* b)
     return *a == *b;
 }
 
-// An entry for room as the lobby lists it, in hex: its password and flags.
-static void entryHex(char* pOut, const char16_t* pPassword, int flags)
+// An entry for room as the lobby lists it, in hex: its password, flags and
+// episode.
+static void entryHexOf(char* pOut, const char16_t* pPassword, int flags, const char* pEpisode)
 {
     jkMultiEntry e;
     memset(&e, 0, sizeof(e));
     e.maxPlayers = 4;
     e.numPlayers = 1;
     put16(e.serverName, u"t_Private");
-    strcpy(e.episodeGobName, "JK1MP");
+    strcpy(e.episodeGobName, pEpisode);
     strcpy(e.mapJklFname, "01narshadda.jkl");
     put16(e.wPassword, pPassword);
     e.sessionFlags = flags;
@@ -207,6 +223,11 @@ static void entryHex(char* pOut, const char16_t* pPassword, int flags)
     const uint8_t* b = (const uint8_t*)&e;
     for (size_t i = 0; i < sizeof(e); i++)
         sprintf(pOut + i * 2, "%02x", b[i]);
+}
+
+static void entryHex(char* pOut, const char16_t* pPassword, int flags)
+{
+    entryHexOf(pOut, pPassword, flags, "JK1MP");
 }
 
 // The join screen asking for its list: rooms 3 (with a password) and 4
@@ -756,6 +777,45 @@ static void test_lobby_checks_password(void)
     CHECK(!stdComm_WSRelay_LobbyChecksPassword(far), "far past it");
 }
 
+// The free demo's games and the full game's can't be played together (their
+// files differ), so each one's join screen lists only its own kind.
+static void test_demo_list(void)
+{
+    static char line[2048];
+    char a[sizeof(jkMultiEntry) * 2 + 1], b[sizeof(jkMultiEntry) * 2 + 1], c[sizeof(jkMultiEntry) * 2 + 1];
+    CHECK(stdComm_WSRelay_IsDemoEpisode("jk1mpdem") && stdComm_WSRelay_IsDemoEpisode("JK1MPDEM.GOB") &&
+          stdComm_WSRelay_IsDemoEpisode("Jk1MpDem.gob"), "the demo's episode, as the lobby or a GOB names it");
+    CHECK(!stdComm_WSRelay_IsDemoEpisode("JK1MP") && !stdComm_WSRelay_IsDemoEpisode("jk1mpdemo") &&
+          !stdComm_WSRelay_IsDemoEpisode("jk1mpdem.goo") && !stdComm_WSRelay_IsDemoEpisode("jk1") &&
+          !stdComm_WSRelay_IsDemoEpisode(""), "and no other");
+    entryHex(a, u"", 8);
+    entryHexOf(b, u"", 8, "jk1mpdem");
+    entryHexOf(c, u"", 8, "JK1MPDEM.GOB");
+    // (Two games to a line: the made-up lobby's lines are 1 KB.)
+    snprintf(line, sizeof(line), "list 5 1 %s 6 1 %s", a, b);
+    lobbyPw = 1;
+    lobbySays(line);
+    stdComm_EnumSessions(1, NULL);
+    CHECK(wsrelay_numShown == 1 && wsrelay_aShownRooms[0] == 5, "the full game lists only its game: %d shown",
+          wsrelay_numShown);
+    demoMode = 1;
+    lobbySays(line);
+    stdComm_EnumSessions(1, NULL);
+    CHECK(wsrelay_numShown == 1 && wsrelay_aShownRooms[0] == 6, "the demo lists only the demo's: %d shown",
+          wsrelay_numShown);
+    snprintf(line, sizeof(line), "list 6 1 %s 7 1 %s", b, c);
+    lobbySays(line);
+    stdComm_EnumSessions(1, NULL);
+    CHECK(wsrelay_numShown == 2 && wsrelay_aShownRooms[0] == 6 && wsrelay_aShownRooms[1] == 7,
+          "all of them: %d shown", wsrelay_numShown);
+    // A list of only the other kind's games is an empty one.
+    snprintf(line, sizeof(line), "list 5 1 %s", a);
+    lobbySays(line);
+    stdComm_EnumSessions(1, NULL);
+    CHECK(wsrelay_numShown == 0 && wsrelay_bListReceived, "none shown, and the list came");
+    demoMode = 0;
+}
+
 int main(void)
 {
     // Each line as it's printed, should a test crash.
@@ -768,6 +828,7 @@ int main(void)
     test_list_dropped();
     test_screen_opens();
     test_give_up();
+    test_demo_list();
 
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

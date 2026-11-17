@@ -87,6 +87,8 @@ statics() {
     cut_out "$relay" 'static int wsrelay_SendText('
     cut_out "$relay" 'static int wsrelay_SendJoin('
     cut_out "$relay" 'static void wsrelay_ResetSession('
+    cut_out "$relay" 'int stdComm_WSRelay_IsDemo('
+    cut_out "$relay" 'int stdComm_WSRelay_IsDemoEpisode('
     cut_out "$relay" 'static void wsrelay_HandleList('
     cut_out "$relay" 'static void wsrelay_HandleText('
     cut_out "$relay" 'static void wsrelay_PumpControl('

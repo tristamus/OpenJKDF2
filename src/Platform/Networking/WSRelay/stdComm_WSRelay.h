@@ -403,6 +403,11 @@ void stdComm_WSRelay_MatchScores(void);
 void stdComm_WSRelay_MatchScripted(int what);
 void stdComm_WSRelay_MatchEnd(int bLeft);
 
+// The free multiplayer demo: whether this game runs it (the page's
+// Module.jkDemo), and whether an episode is its own.
+int stdComm_WSRelay_IsDemo(void);
+int stdComm_WSRelay_IsDemoEpisode(const char* pGobName);
+
 #endif // PLATFORM_WSRELAY
 
 #ifdef __cplusplus

@@ -1573,6 +1573,12 @@ EM_JS(int, wsrelay_js_list_pw, (), {
     return net && net.listPw ? 1 : 0;
 });
 
+// Whether the page started the free multiplayer demo (Module.jkDemo) instead
+// of a player's own game files.
+EM_JS(int, wsrelay_js_demo, (), {
+    return Module.jkDemo ? 1 : 0;
+});
+
 // Sends a game packet for player idTo over the link it takes (net.route): a
 // data channel if it's open, else the relay. ownPos marks this player's own
 // position updates, which take the fast lane where there is one.
@@ -2292,11 +2298,24 @@ static void wsrelay_CheckLeftPending()
     }
 }
 
+int stdComm_WSRelay_IsDemo(void)
+{
+    return wsrelay_js_demo();
+}
+
+// The free multiplayer demo's episode (jk1mpdem.gob, its Bespin level).
+int stdComm_WSRelay_IsDemoEpisode(const char* pGobName)
+{
+    return pGobName && !__strnicmp(pGobName, "jk1mpdem", 8) &&
+           (!pGobName[8] || !__strcmpi(pGobName + 8, ".gob"));
+}
+
 static void wsrelay_HandleList(char* pArgs)
 {
     char* pSave = NULL;
     int n = 0;
     int lobbyPw = wsrelay_js_list_pw();
+    int demo = stdComm_WSRelay_IsDemo();
 
     for (char* pTok = strtok_r(pArgs, " ", &pSave); pTok; pTok = strtok_r(NULL, " ", &pSave))
     {
@@ -2309,6 +2328,10 @@ static void wsrelay_HandleList(char* pArgs)
 
         jkMultiEntry* pEntry = &wsrelay_aListEntries[n];
         if (!wsrelay_EntryFromHex(pHex, pEntry, wsrelay_aListTails[n]))
+            continue;
+        // Demo games and full games run different files, so nobody can join
+        // across: each kind lists only its own.
+        if (stdComm_WSRelay_IsDemoEpisode(pEntry->episodeGobName) != demo)
             continue;
 
         int room = atoi(pTok);

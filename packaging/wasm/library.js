@@ -77,6 +77,8 @@
     }
 
     function available() {
+        if (Module.jkDemo) // the free demo has its own level and no mods
+            return false;
         var game = isMots() ? 'mots' : 'jk1';
         if (!L.avail[game])
             ask(game);

@@ -1,6 +1,7 @@
 // Tests for the room list in packaging/wasm/index.html: every room opens a
 // room window, Jedi Knight's rooms Nar Shaddaa's and the Sith rooms Sith:
-// Asteroid's, since the lobby keeps one room for each game. And for how many
+// Asteroid's, since the lobby keeps one room for each game, and the Free Demo
+// Room its own, for the free demo's games. And for how many
 // tables a room window shows: at least nine, more as games fill them. In Node:
 // node packaging/wasm/test/rooms-test.mjs
 //
@@ -28,8 +29,9 @@ function roomButtons() {
     const list = cut('<section id="rooms"', '</section>');
     const out = [];
     let heading = '';
-    for (const m of list.matchAll(/<h3>([^<]*)<\/h3>|<button([^>]*)>([\s\S]*?)<\/button>/g)) {
-        if (m[1] !== undefined) { heading = m[1]; continue; }
+    for (const m of list.matchAll(/<h3>([\s\S]*?)<\/h3>|<button([^>]*)>([\s\S]*?)<\/button>/g)) {
+        // A heading's words, without its <small> aside (the Free Demo Room's).
+        if (m[1] !== undefined) { heading = m[1].replace(/<small>[\s\S]*?<\/small>|<[^>]+>/g, '').trim(); continue; }
         const dataset = {};
         for (const a of m[2].matchAll(/data-([a-z-]+)(?:="([^"]*)")?/g))
             dataset[a[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = a[2] ?? '';
@@ -68,31 +70,43 @@ function clicked(buttons) {
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 
-const GAME_OF_HEADING = { 'Standard Rooms': 'jk1', 'Capture the Flag Rooms': 'jk1', 'Mysteries of the Sith Rooms': 'mots' };
-const MAIN_ROOM = { jk1: 'nar-shaddaa', mots: 'sith-asteroid' };
+const GAME_OF_HEADING = { 'Standard Rooms': 'jk1', 'Capture the Flag Rooms': 'jk1', 'Mysteries of the Sith Rooms': 'mots',
+                          'Free Demo Room': 'jk1' };
+const ROOM_OF_HEADING = { 'Standard Rooms': 'nar-shaddaa', 'Capture the Flag Rooms': 'nar-shaddaa',
+                          'Mysteries of the Sith Rooms': 'sith-asteroid', 'Free Demo Room': 'bespin-demo' };
 
-test('the list has the rooms it always had', () => {
+// The list's room buttons, without the Free Demo Room's Play the Free Demo.
+function rooms() {
+    return roomButtons().filter(b => !('playDemo' in b.dataset));
+}
+
+test('the list has the rooms it always had, and the Free Demo Room', () => {
     assert.deepEqual(roomButtons().map(b => b.name), [
         'Nar Shaddaa', 'The Cantina', 'Sulon', 'Bespin', 'Canyon Oasis', 'Dark Palace',
-        'CTF Room 1', 'CTF Room 2', 'Sith: Asteroid', 'Sith: Altyr 5']);
+        'CTF Room 1', 'CTF Room 2', 'Sith: Asteroid', 'Sith: Altyr 5', 'Bespin Mining Station', 'Play the Free Demo']);
+    const play = roomButtons().find(b => b.name === 'Play the Free Demo');
+    assert.equal(play.heading, 'Free Demo Room');
+    assert.ok(!('room' in play.dataset) && !('opensRoom' in play.dataset), 'Play the Free Demo starts the demo, not a window');
+    assert.ok(ROOMS['bespin-demo'].demo && !ROOMS['nar-shaddaa'].demo && !ROOMS['sith-asteroid'].demo,
+              "only the Free Demo Room's games are the demo's");
 });
 
 test("every room opens its game's room window", () => {
-    const buttons = roomButtons();
+    const buttons = rooms();
     const opens = clicked(buttons);
     buttons.forEach((b, i) => {
-        const game = GAME_OF_HEADING[b.heading];
+        const game = GAME_OF_HEADING[b.heading], key = ROOM_OF_HEADING[b.heading];
         assert.ok(game, b.name + ' is under a known heading');
-        assert.deepEqual(opens[i].opened, [MAIN_ROOM[game]], b.name + ' opens ' + MAIN_ROOM[game]);
-        assert.equal(ROOMS[MAIN_ROOM[game]].game, game, MAIN_ROOM[game] + ' is ' + game + "'s room");
+        assert.deepEqual(opens[i].opened, [key], b.name + ' opens ' + key);
+        assert.equal(ROOMS[key].game, game, key + ' is ' + game + "'s room");
         assert.ok(b.haspopup, b.name + ' says it opens a window');
         assert.ok(!('play' in b.dataset), b.name + ' does not skip the window for the folder prompt');
     });
 });
 
-test('only the two main rooms show live counts', () => {
+test('only the main rooms show live counts', () => {
     const counted = roomButtons().filter(b => 'room' in b.dataset);
-    assert.deepEqual(counted.map(b => b.dataset.room), ['nar-shaddaa', 'sith-asteroid']);
+    assert.deepEqual(counted.map(b => b.dataset.room), ['nar-shaddaa', 'sith-asteroid', 'bespin-demo']);
     // renderRoomCount fills in both spans on every [data-room] button.
     counted.forEach(b => assert.ok(b.count && b.gameCount, b.name + ' has the count spans'));
     roomButtons().filter(b => 'opensRoom' in b.dataset).forEach(b =>
@@ -224,6 +238,7 @@ test('a resize redraws the tables on the next frame, not while the observer repo
 // at a room.
 
 const pictures = new Function(cut('      var ROOM_PICTURES = {', '      (function() {') + 'return ROOM_PICTURES;')();
+const nPictures = Object.keys(pictures).length;
 
 test('each room picture is a file named by its content, the same in the styles', () => {
     assert.deepEqual(Object.keys(pictures).sort(), Object.keys(ROOMS).sort());
@@ -243,6 +258,7 @@ test('each room picture is a file named by its content, the same in the styles',
 test("a link to a room window asks for that room's picture with the page, and nothing else does", () => {
     const head = cut('      var ROOM_PICTURES = {', '    </script>\n    <style>\n      body {');
     for (const [hash, want] of [['#nar-shaddaa', [pictures['nar-shaddaa']]], ['#sith-asteroid', [pictures['sith-asteroid']]],
+                                ['#bespin-demo', [pictures['bespin-demo']]],
                                 ['', []], ['#rooms', []], ['#bundled', []], ['#__proto__', []], ['#toString', []]]) {
         const links = [];
         const document = { createElement: () => ({}), head: { appendChild: l => links.push(l) } };
@@ -274,7 +290,7 @@ function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {
         }
     }
     const arrived = src => images.filter(i => i.url === src).forEach(i => { i.complete = true; });
-    const els = roomButtons().map(b => ({ dataset: b.dataset, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; } }));
+    const els = rooms().map(b => ({ dataset: b.dataset, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; } }));
     const document = { querySelectorAll: () => els, readyState };
     const loads = [], idles = [], timers = [];
     const window = { addEventListener(type, fn) { if (type === 'load') loads.push(fn); } };
@@ -311,10 +327,10 @@ test("pointing at a room, tabbing to it or touching it asks for its picture once
     els.forEach(e => assert.equal(typeof e.listeners.click, 'function', 'each still opens its window'));
     w.load();
     w.idle();
-    assert.equal(w.asked.length, 2, 'the idle fetch asks for neither again');
+    assert.deepEqual(w.srcs().slice(2), [pictures['bespin-demo']], 'the idle fetch asks only for the one not asked for yet');
 });
 
-test('once the page has loaded and the browser is idle, both pictures are asked for at low priority', () => {
+test('once the page has loaded and the browser is idle, every picture is asked for at low priority', () => {
     let w = roomPictureWiring();
     assert.equal(w.loads.length, 1, 'waits for the load event');
     assert.equal(w.idles.length + w.timers.length + w.asked.length, 0, 'nothing before it');
@@ -324,20 +340,20 @@ test('once the page has loaded and the browser is idle, both pictures are asked 
     w.idle();
     assert.deepEqual(w.asked, Object.values(pictures).map(src => ({ src, priority: 'low' })));
     w.els.forEach(e => { e.listeners.pointerenter(); e.listeners.focus(); });
-    assert.equal(w.asked.length, 2, 'and never again');
+    assert.equal(w.asked.length, nPictures, 'and never again');
 
     // One pointed at before the browser was idle isn't asked for twice.
     w = roomPictureWiring();
     w.els.find(e => (e.dataset.room || e.dataset.opensRoom) === 'sith-asteroid').listeners.pointerenter();
     w.load();
     w.idle();
-    assert.deepEqual(w.srcs(), [pictures['sith-asteroid'], pictures['nar-shaddaa']]);
+    assert.deepEqual(w.srcs(), [pictures['sith-asteroid'], pictures['nar-shaddaa'], pictures['bespin-demo']]);
 
     // A page that has already loaded asks for the idle time at once.
     w = roomPictureWiring({ readyState: 'complete' });
     assert.equal(w.loads.length, 0);
     w.idle();
-    assert.equal(w.asked.length, 2);
+    assert.equal(w.asked.length, nPictures);
 
     // No requestIdleCallback (Safari): a second after the load event.
     w = roomPictureWiring({ idle: false });
@@ -345,13 +361,13 @@ test('once the page has loaded and the browser is idle, both pictures are asked 
     assert.equal(w.timers.length, 1);
     assert.equal(w.timers[0].ms, 1000);
     w.timer();
-    assert.equal(w.asked.length, 2);
+    assert.equal(w.asked.length, nPictures);
 
     // Save-Data off is the same as no Save-Data.
     w = roomPictureWiring({ saveData: false });
     w.load();
     w.idle();
-    assert.equal(w.asked.length, 2);
+    assert.equal(w.asked.length, nPictures);
 });
 
 test('with Save-Data on, only a room pointed at asks for its picture', () => {
@@ -388,19 +404,19 @@ test("once a game is starting, the idle fetch doesn't start, and pictures on the
     w = roomPictureWiring();
     w.load();
     w.idle();
-    assert.equal(w.asked.length, 2);
+    assert.equal(w.asked.length, nPictures);
     w.arrived(pictures['nar-shaddaa']);
     w.stop();
-    assert.deepEqual(w.dropped, [pictures['sith-asteroid']]);
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid'], pictures['bespin-demo']]);
     // Pointed at again (the prompt closed without a game): the one let go
     // is asked for again, at the usual priority; the one that came isn't.
     w.point('sith-asteroid');
     w.point('nar-shaddaa');
-    assert.deepEqual(w.asked.slice(2), [{ src: pictures['sith-asteroid'], priority: undefined }]);
+    assert.deepEqual(w.asked.slice(nPictures), [{ src: pictures['sith-asteroid'], priority: undefined }]);
     // A second prompt lets go of what's on its way again, and only that.
     w.stop();
     w.stop();
-    assert.deepEqual(w.dropped, [pictures['sith-asteroid'], pictures['sith-asteroid']]);
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid'], pictures['bespin-demo'], pictures['sith-asteroid']]);
 
     // A picture asked for by pointing at its room is let go the same way.
     w = roomPictureWiring({ readyState: 'complete' });
@@ -420,11 +436,11 @@ test("Host or Join in a room's window lets that room's picture come: the window'
     w.idle();
     w.open('nar-shaddaa');
     w.stop();
-    assert.deepEqual(w.dropped, [pictures['sith-asteroid']], "only the other room's picture is let go");
+    assert.deepEqual(w.dropped, [pictures['sith-asteroid'], pictures['bespin-demo']], "only the other rooms' pictures are let go");
     // Its room doesn't ask for it again (it's still coming); the other does.
     w.point('nar-shaddaa');
     w.point('sith-asteroid');
-    assert.deepEqual(w.srcs().slice(2), [pictures['sith-asteroid']]);
+    assert.deepEqual(w.srcs().slice(nPictures), [pictures['sith-asteroid']]);
 
     // Every window opened counts: Nar Shaddaa's, then Sith: Asteroid's.
     w = roomPictureWiring();
@@ -432,6 +448,7 @@ test("Host or Join in a room's window lets that room's picture come: the window'
     w.idle();
     w.open('nar-shaddaa');
     w.open('sith-asteroid');
+    w.open('bespin-demo');
     w.stop();
     assert.deepEqual(w.dropped, []);
 
