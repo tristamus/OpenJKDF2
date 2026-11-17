@@ -537,7 +537,6 @@
       .demo-room ul.rooms { margin: 0 0 8px; grid-template-columns: 1fr; }
       .demo-room .demo-actions { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-bottom: 6px; }
       .demo-room .demo-actions .fine { color: var(--muted); font-size: 12px; }
-      .picker-demo { margin: 14px 0 0; padding: 8px 10px; border: 1px dashed #7aa; font-size: 13px; }
 
       .rooms {
         display: grid;
@@ -2301,8 +2300,6 @@
                       this tab.</p>
                     <div class="demo-actions"><button class="play" type="button" data-play-demo>Play the Free Demo</button>
                       <span class="fine">About 17 MB to download the first time.</span></div>
-                    <p class="fine">Demo matches count on the leaderboard too. Like it? Get the full game on Steam or GOG
-                      to play every level, Capture the Flag and mods.</p>
                   </div>
                 </div>
               </div>
@@ -2577,8 +2574,6 @@
           <p class="keep-folder keep-on" hidden><span class="keep-text"></span>
             <button class="text-button" type="button">Stop checking</button></p>
         </div>
-        <p class="picker-demo picker-intro" id="picker-demo"><b>Don't have the game?</b>
-          <button class="text-button" type="button">Play the free Bespin demo instead</button>. It needs no game folder.</p>
         <div id="picker-result" role="status"></div>
         <div class="actions" id="problem-reload" hidden><button class="play" type="button">Reload</button></div>
       </div>
@@ -5037,7 +5032,6 @@
 
       var picker = document.getElementById('picker');
       var pickerTitle = document.getElementById('picker-title');
-      var pickerDemo = document.getElementById('picker-demo');
       var chooseButton = picker.querySelector('label.play');
       var modChoice = document.getElementById('mod-choice');
       var readingFolder = false;
@@ -5056,8 +5050,6 @@
           'Jedi Knight: Dark Forces II (or Mysteries of the Sith)' :
           pickerWant.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight: Dark Forces II';
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = false; });
-        // Who has no Jedi Knight can play the free demo instead.
-        pickerDemo.hidden = !!pickerWant && pickerWant.game !== 'jk1';
         modChoice.hidden = true;
         problemReload.hidden = true;
         picker.onclick = null;
@@ -7870,13 +7862,6 @@
           startDemo(DEMO_WANT);
         });
       });
-      // The folder prompt's offer opens the Free Demo Room (the rooms'
-      // script, below), with its games.
-      pickerDemo.querySelector('button').addEventListener('click', function() {
-        closePicker();
-        if (typeof openRoom === 'function') openRoom('bespin-demo');
-      });
-
       picker.querySelector('.close').addEventListener('click', closePicker);
       picker.querySelector('.cancel').addEventListener('click', closePicker);
       // Escape closes the prompt, except while the folder is being read.
