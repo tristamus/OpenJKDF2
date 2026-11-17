@@ -151,6 +151,24 @@ test('the demo starts in demo mode, with no Imperial relay, from its own files a
     }
 });
 
+// maps.js as the engine bundles it, with a made-up Module: what its preRun
+// does at the engine's start.
+function mapsStart(demo) {
+    const deps = [];
+    const Module = { jkDemo: demo, preRun: [], arguments: [],
+                     addRunDependency: d => deps.push('+' + d), removeRunDependency: d => deps.push('-' + d) };
+    // An IndexedDB that never opens: only whether it's asked matters here.
+    const indexedDB = { open: () => { deps.push('open'); return {}; } };
+    new Function('Module', 'indexedDB', readFileSync(new URL('../maps.js', import.meta.url), 'utf8'))(Module, indexedDB);
+    Module.preRun.forEach(f => f());
+    return deps;
+}
+
+test("the demo's Host screen doesn't get the maps saved for the full game", () => {
+    assert.deepEqual(mapsStart(true), [], "the demo doesn't load them");
+    assert.ok(mapsStart(false).includes('+jk-maps'), 'the full game does, as before');
+});
+
 let failed = 0;
 for (const t of tests) {
     try {

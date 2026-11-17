@@ -2655,11 +2655,16 @@
 
     // Maps saved from earlier games go into episode/ before the engine starts,
     // after the page has written the picked folder (its preRun runs first).
+    // Not for the free demo (the page's Module.jkDemo), which plays only its
+    // own level: the maps this browser saved for the full game would be on
+    // its Host screen, and nobody playing the demo could load them.
     if (typeof indexedDB !== 'undefined') {
         Module.preRun = Module.preRun || [];
         if (typeof Module.preRun === 'function')
             Module.preRun = [Module.preRun];
         Module.preRun.push(function() {
+            if (Module.jkDemo)
+                return;
             var mots = (Module['arguments'] || []).indexOf('-motsCompat') >= 0;
             Module.addRunDependency('jk-maps');
             installStoredMaps(mots ? '/mots' : '/jk1', mots ? 'mots' : 'jk1').then(function(names) {
