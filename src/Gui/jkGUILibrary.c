@@ -147,7 +147,7 @@ static const int jkGuiLibrary_aModTabWidths[] = {92, 84, 76};
 // The selected level's 3D view: 0 none, 1 coming, 2 there, 3 failed.
 #define LIB_NUM_PV (7)
 // 1 when the selected level has no page to open (one from jkdf2.net): no
-// Massassi Page. The Mod Library's mods always have one (0).
+// Massassi Page. The same for a mod from jkdf2.net in the Mod Library.
 #define LIB_NUM_NO_PAGE (8)
 
 #define LIB_NUM_SORTS (6)

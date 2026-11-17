@@ -96,7 +96,18 @@ const MODS = [
     mod(801, 'mots', 'gameplay', 'MotS Saber Mod', [{ name: 'cog/force_pull.cog', bytes: text('# saber') }],
         { files: [['cog/force_pull.cog', 'cog/force_pull.cog']] }, { dl: 20 }),
 ];
-const byId = Object.fromEntries(MODS.map(m => [m.entry.id, m]));
+// One of jkdf2.net's: no page, rating or downloads, its files loose in its
+// zip (placed by kind), named by its zip, found by its models' names.
+const masters = mod(1000123, 'jk1', 'characters', 'Masters', [{ name: 'skeletor.3do', bytes: text('3DO skeletor') },
+                                                               { name: 'heman.3do', bytes: text('3DO heman') }],
+                    { files: [['skeletor.3do', '3do/skeletor.3do'], ['heman.3do', '3do/heman.3do']] }, { sh: 0 });
+Object.assign(masters.entry, { o: 'jkdf2.net', z: 'MASTERS.ZIP', f: ['skeletor', 'heman'], ty: true, add: undefined, r: undefined,
+                               v: undefined, dl: undefined });
+Object.assign(masters.detail, { from: 'jkdf2.net', url: 'https://www.jkdf2.net/JKBot/JKArchive/JKDF2/JKDF2/Game%20Files/jkmod/skins/MASTERS.ZIP' });
+const DF2_MODS = [masters];
+const byId = Object.fromEntries(MODS.concat(DF2_MODS).map(m => [m.entry.id, m]));
+// Whether the site has the list of both sources' mods (a site from before it doesn't).
+const SITE = { all: false };
 
 // ---- The site, as fetch() sees it.
 
@@ -108,6 +119,10 @@ async function siteFetch(url, opts = {}) {
     const json = body => new Response(method === 'HEAD' ? null : JSON.stringify(body),
                                       { status: 200, headers: { 'Content-Type': 'application/json' } });
     let m;
+    if (SITE.all && (m = /^\/levels\/mods\/all\/(jk1|mots)\.json$/.exec(path)))
+        return json({ v: 1, game: m[1], built: '2026-11-17T00:00:00Z', source: 'https://www.massassi.net',
+                      sources: ['https://www.massassi.net', 'https://www.jkdf2.net'], listed: 10, left: 1, from: { 'jkdf2.net': 1 },
+                      mods: MODS.concat(DF2_MODS).filter(x => x.game === m[1]).map(x => x.entry) });
     if ((m = /^\/levels\/mods\/(jk1|mots)\.json$/.exec(path)))
         return json({ v: 1, game: m[1], built: '2026-11-15T00:00:00Z', source: 'https://www.massassi.net', listed: 9, left: 1,
                       mods: MODS.filter(x => x.game === m[1]).map(x => x.entry) });
@@ -397,6 +412,49 @@ await test('Mysteries of the Sith: its own list and its own game files', async (
     const saved = await mots.jkMods.library.list('mots');
     assert.equal(saved.length, 1);
     assert.equal(saved[0].ext, 'goo');
+});
+
+await test('jkdf2.net\'s mods: from the list of both, said where they\'re from, found by their files\' names', async () => {
+    SITE.all = true;
+    try {
+        const t2 = await makeTab({ idb: makeIDB() });
+        await until(() => L(t2).available(), 'available');
+        await open(t2);
+        assert.ok(requests.includes('GET /levels/mods/all/jk1.json'));
+        assert.equal(L(t2).text(T.STATUS), '8 mods from Massassi.net and jkdf2.net so far, 1 more coming');
+        pick(t2, 'Masters');
+        await details(t2);
+        const ov = L(t2).text(T.OVERVIEW).split('\n');
+        assert.ok(ov.includes('From:\tjkdf2.net (Massassi doesn\'t have it)'), ov.join('|'));
+        assert.ok(ov.includes('Includes:\tskeletor, heman'), ov.join('|'));
+        assert.ok(ov.includes('Credit:\tjkdf2.net\'s archive kept it; copied with its owner\'s permission.'), ov.join('|'));
+        assert.equal(L(t2).text(T.FILES).split('\n')[0],
+                     'Credit:\tjkdf2.net\'s archive (Game Files/jkmod/skins/MASTERS.ZIP), copied with its owner\'s permission.');
+        assert.ok(!ov.some(l => /^Rating:/.test(l)), 'no rating or downloads');
+        assert.match(L(t2).text(T.OVERVIEW), /Its files were loose in its zip/);
+        assert.equal(L(t2).number(8), 1, 'no Massassi Page');
+        pick(t2, 'Kyle Skin');
+        assert.equal(L(t2).number(8), 0);
+        await details(t2);
+        assert.ok(L(t2).text(T.OVERVIEW).split('\n').includes('From:\tMassassi.net'));
+        assert.ok(!/Credit:/.test(L(t2).text(T.FILES)));
+        // Found by a model's name, and by its zip's.
+        L(t2).query('skeletor', ALL_KINDS, 1);
+        assert.deepEqual(rows(t2).map(titleOf), ['Masters']);
+        L(t2).query('masters.zip', ALL_KINDS, 1);
+        assert.deepEqual(rows(t2).map(titleOf), ['Masters']);
+        // With no downloads, last when sorted by them.
+        L(t2).query('', ALL_KINDS, 0);
+        assert.equal(titleOf(rows(t2).at(-1)), 'Masters');
+        // Get Mod as for one of Massassi's.
+        pick(t2, 'Masters');
+        L(t2).use();
+        await settled(t2);
+        const saved = await t2.jkMods.library.list('jk1');
+        assert.deepEqual(saved.map(x => x.lib), [1000123]);
+    } finally {
+        SITE.all = false;
+    }
 });
 
 await test('every request for a zip asked for its SHA-256', async () => {

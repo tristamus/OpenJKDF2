@@ -195,6 +195,9 @@ const DF2_LEVELS = [
     level(1000001, 'mp', 'Omega Outpost', 'jk1', [{ n: 'omega.gob', bytes: omega, ep: 'Omega Outpost', ty: 2, lv: ['omega.jkl'] }],
           { o: 'jkdf2.net', add: undefined, r: undefined, v: undefined, dl: undefined, sh: 0 }),
 ];
+// Its detail says where it came from, as the Worker's does.
+Object.assign(DF2_LEVELS[0].detail, { from: 'jkdf2.net', massassi: undefined,
+                                       url: 'https://www.jkdf2.net/JKBot/JKArchive/JKDF2/JKDF2/Game%20Files/jkmp/omega%20outpost.zip' });
 const ALL = { on: false };
 const byId = Object.fromEntries(LEVELS.concat(DF2_LEVELS).map(l => [l.entry.id, l]));
 const byTitle = Object.fromEntries(LEVELS.concat(DF2_LEVELS).map(l => [l.entry.t, l.entry.id]));
@@ -1104,7 +1107,11 @@ await test('both sources: jkdf2.net\'s levels in the list, said where they\'re f
         await details(m.page);
         const facts = (await libText(m.page, T.OVERVIEW)).split('\n');
         assert.ok(facts.includes('From:\tjkdf2.net (Massassi doesn\'t have it)'), facts.join('|'));
+        assert.ok(facts.includes('Credit:\tjkdf2.net\'s archive kept it; copied with its owner\'s permission.'), facts.join('|'));
         assert.equal(facts[1], 'Released:\tMay 2, 1999 (from its readme)');
+        // Credited in its file list, with its place in jkdf2.net's archive.
+        assert.equal((await libText(m.page, T.FILES)).split('\n')[0],
+                     'Credit:\tjkdf2.net\'s archive (Game Files/jkmp/omega outpost.zip), copied with its owner\'s permission.');
         assert.ok(!facts.some(f => /^Rating:/.test(f)));
         assert.equal(await number(m.page, 8), 1);
         assert.equal(await call(m.page, 'page'), false);
@@ -1114,6 +1121,7 @@ await test('both sources: jkdf2.net\'s levels in the list, said where they\'re f
         await details(m.page);
         assert.equal(await number(m.page, 8), 0);
         assert.ok((await libText(m.page, T.OVERVIEW)).split('\n').includes('From:\tMassassi.net'));
+        assert.ok(!/Credit:/.test(await libText(m.page, T.FILES)));
         // It's used as any other.
         assert.equal(await useLevel(m.page, 1000001), 'omega');
         assert.equal(await fileSha(m.page, '/jk1/episode/omega.gob'), sha(omega));

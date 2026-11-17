@@ -6,9 +6,15 @@
 //
 // The site's Worker (src/levels.js in the jkdf2mp-bb-server repository)
 // copies Massassi.net's two mod lists (JK and MotS) the way it copies levels,
-// works out what each mod is, and serves
+// and the mods in jkdf2.net's archive that Massassi doesn't have (no page,
+// screenshots, rating or downloads; their title from their readme or zip,
+// and f the names of their files, to find them by), works out what each mod
+// is, and serves
 //
-//   /levels/mods/jk1.json, /levels/mods/mots.json  the mods that are ready
+//   /levels/mods/all/jk1.json, /levels/mods/all/mots.json  the mods of both
+//                         that are ready; one of jkdf2.net's has o: 'jkdf2.net'
+//   /levels/mods/jk1.json, /levels/mods/mots.json  Massassi's alone (what this
+//                         reads from a site without the other)
 //   /levels/d/<id>.json   one mod's description, readmes, files, and its plan
 //                         (detail.mod): which zip entries make up the mod's
 //                         folder and where each goes, which are episodes,
@@ -108,11 +114,18 @@
 
     // ---- The list, from the site
 
+    // Both sources' mods, or Massassi's alone from a site that doesn't have
+    // that list (yet).
     async function loadIndex(game) {
         var have = M.index[game];
         if (have && Date.now() - have.at < 5 * 60000)
             return have.data;
-        var data = await getJson('mods/' + game + '.json');
+        var data = null;
+        try {
+            data = await getJson('mods/all/' + game + '.json');
+        } catch (e) {}
+        if (!data || !Array.isArray(data.mods))
+            data = await getJson('mods/' + game + '.json');
         if (!data || !Array.isArray(data.mods))
             throw new Error('not a mod list');
         M.index[game] = { at: Date.now(), data: data };
@@ -189,7 +202,7 @@
                 return false;
             if (f.mine && !isSaved(l))
                 return false;
-            return !q || ((l.t || '') + ' ' + (l.a || '')).toLowerCase().indexOf(q) >= 0;
+            return !q || searchText(l).indexOf(q) >= 0;
         });
         var groups = new Map();
         for (var l of list) {
@@ -220,6 +233,16 @@
         return rows;
     }
 
+    // What the search looks in: the title, the author, the zip's name, and
+    // for one of jkdf2.net's the names of its models, scripts and sounds (a
+    // pack of skins named only by its zip is found by its characters).
+    function searchText(l) {
+        return ((l.t || '') + ' ' + (l.a || '') + ' ' + (l.z || '') + ' ' + (l.f || []).join(' ')).toLowerCase();
+    }
+
+    // A mod from jkdf2.net's archive: no page there to open, no screenshots.
+    function fromJkdf2(l) { return !!l && l.o === 'jkdf2.net'; }
+
     function touch(bits) { M.changed |= bits; }
 
     function selected() { return M.sel != null ? byId(M.sel) : null; }
@@ -233,9 +256,12 @@
         var data = have.data, n = data.mods.length;
         if (M.filters.mine && !M.rows.length)
             return M.q.trim() ? 'None of the mods saved in this browser match.' : 'No mods saved in this browser yet.';
+        var both = Array.isArray(data.sources) && data.sources.length > 1;
         if (!n && data.left)
-            return 'The site is still copying the mods from Massassi.net: ' + count(data.left, 'mod') + ' to go.';
-        return count(n, 'mod') + ' from Massassi.net' +
+            return 'The site is still copying the mods from Massassi.net' + (both ? ' and jkdf2.net' : '') + ': ' +
+                count(data.left, 'mod') + ' to go.';
+        var other = data.from && data.from['jkdf2.net'] > 0;
+        return count(n, 'mod') + ' from Massassi.net' + (other ? ' and jkdf2.net' : '') +
             (data.left ? ' so far, ' + data.left.toLocaleString('en-US') + ' more coming' : '');
     }
 
@@ -265,6 +291,9 @@
         fact('Author', l.a || 'unknown');
         fact('Released', dateText(l.rel || l.add, l.rel ? l.rp : 'd') + (src ? ' (' + src + ')' : ''));
         fact('Kind', l.gp ? 'Graphics pack' : KINDS[l.k] || l.k);
+        fact('From', fromJkdf2(l) ? 'jkdf2.net (Massassi doesn\'t have it)' : 'Massassi.net');
+        if (fromJkdf2(l))
+            fact('Credit', U().DF2_CREDIT || 'jkdf2.net\'s archive kept it; copied with its owner\'s permission.');
         var what = [];
         if (l.n > 0)
             what.push(count(l.n, 'file') + ' for the game');
@@ -280,6 +309,8 @@
                 fact('Versions', 'an older one (' + (at + 1) + ' of ' + versions.length + '); the newest is ' +
                      versions[0].t + ', ' + dateText(versions[0].rel || versions[0].add, versions[0].rel ? versions[0].rp : 'd'));
         }
+        if (l.f && l.f.length)
+            fact('Includes', l.f.join(', '));
         var dls = l.dl ? l.dl.toLocaleString('en-US') + ' downloads on Massassi' : '';
         if (l.r != null)
             fact('Rating', l.r + ' of 10' + (l.v ? ' (' + l.v + ' votes)' : '') + (dls ? ', ' + dls : ''));
@@ -301,6 +332,8 @@
             notes.push('When you host with it, players who join get it from you.');
         if (l.x)
             notes.push('Its zip has ' + count(l.x, 'program') + ', which the browser can\'t run, so it\'s left out.');
+        if (l.ty)
+            notes.push('Its files were loose in its zip: the library put each in the game\'s folder for its kind.');
         if (notes.length)
             out.push('', plain(notes.join(' ')));
         out.push('');
@@ -328,7 +361,9 @@
             return 'Getting the file list...';
         if (d.failed || !d.files)
             return 'The file list can\'t be shown right now.';
-        return d.files.map(function(f) { return size(f.b) + '\t' + plain(f.n).replace(/\n/g, ' '); }).join('\n');
+        var credit = U().df2Credit ? U().df2Credit(d) : null;
+        return (credit ? credit + '\n\n' : '') +
+            d.files.map(function(f) { return size(f.b) + '\t' + plain(f.n).replace(/\n/g, ' '); }).join('\n');
     }
 
     // ---- What it changes: the mod's files by name against the game's own
@@ -727,7 +762,7 @@
 
     function openPage() {
         var l = selected();
-        if (!l || typeof window === 'undefined' || !window.open)
+        if (!l || fromJkdf2(l) || typeof window === 'undefined' || !window.open)
             return false;
         try {
             window.open('https://www.massassi.net/levels/files/' + l.id + '.shtml', '_blank', 'noopener');
@@ -935,6 +970,8 @@
         case 5: return M.done ? 1 : 0;
         case 6: { var l = selected(); return l && l.sh > 0 ? Math.min(l.sh, 2) : 0; }
         case 7: return 0;
+        // The picked mod has no page to open (Massassi Page): one of jkdf2.net's.
+        case 8: return fromJkdf2(selected()) ? 1 : 0;
         }
         return 0;
     }
@@ -1002,7 +1039,7 @@
             return path;
         },
         // For tests.
-        _M: M, _visible: visible, _changesText: changesText, _packablePath: packablePath,
+        _M: M, _visible: visible, _searchText: searchText, _changesText: changesText, _packablePath: packablePath,
         _ch: { STATUS: CH_STATUS, ROWS: CH_ROWS, PANEL: CH_PANEL, MSG: CH_MSG, USE: CH_USE, PV: CH_PV }
     };
 

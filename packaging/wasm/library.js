@@ -352,6 +352,8 @@
         fact('Size', size(l.sz) + ' zip');
         fact('Type', KINDS[l.k] || l.k);
         fact('From', fromJkdf2(l) ? 'jkdf2.net (Massassi doesn\'t have it)' : 'Massassi.net');
+        if (fromJkdf2(l))
+            fact('Credit', DF2_CREDIT);
         var gobs = episodeGobs(l, L.game);
         if (gobs.length) {
             var g = gobs[0];
@@ -404,15 +406,37 @@
     }
 
     // A size, a tab, then the file's name.
+    // The credit to jkdf2.net on each level or mod from it (Overview).
+    var DF2_CREDIT = 'jkdf2.net\'s archive kept it; copied with its owner\'s permission.';
+
+    // Where a level or mod from jkdf2.net came from, as a credit to the site
+    // at the top of the Files tab: its place in jkdf2.net's archive (from the
+    // detail's url). Null for one of Massassi's.
+    function df2Credit(d) {
+        if (!d || d.from !== 'jkdf2.net')
+            return null;
+        var place = '';
+        var m = /\/JKArchive\/JKDF2\/JKDF2\/(.+)$/.exec(String(d.url || ''));
+        if (m) {
+            try {
+                place = decodeURIComponent(m[1]);
+            } catch (e) {
+                place = m[1];
+            }
+        }
+        return 'Credit:\tjkdf2.net\'s archive' + (place ? ' (' + plain(place) + ')' : '') + ', copied with its owner\'s permission.';
+    }
+
     function filesText(l, d) {
         if (!d)
             return 'Getting the file list...';
         if (d.failed || !d.files)
             return 'The file list can\'t be shown right now.';
+        var credit = df2Credit(d);
         var eps = {};
         for (var e of episodeGobs(l, L.game))
             eps[((e.in ? e.in + '/' : '') + e.n).toLowerCase()] = e;
-        return d.files.map(function(f) {
+        return (credit ? credit + '\n\n' : '') + d.files.map(function(f) {
             var g = eps[String(f.n).toLowerCase()];
             return size(f.b) + '\t' + plain(f.n + (g ? '  (episode: ' + g.ep + ')' : '')).replace(/\n/g, ' ');
         }).join('\n');
@@ -1107,7 +1131,8 @@
         // For the Mod Library (modlibrary.js), which reads the site's zips and
         // writes episodes the same way.
         util: {
-            size: size, dateText: dateText, plain: plain, sha256: sha256, fail: fail, readmeBody: readmeBody,
+            size: size, dateText: dateText, plain: plain, sha256: sha256, fail: fail, readmeBody: readmeBody, df2Credit: df2Credit,
+            DF2_CREDIT: DF2_CREDIT,
             zipEntries: zipEntries, zipData: zipData, download: download,
             placeEpisode: function(g, l, game, bytes, job) { return place(g, l, game, bytes, job, true); }
         },
