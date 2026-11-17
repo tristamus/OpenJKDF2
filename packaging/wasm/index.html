@@ -535,6 +535,13 @@
       .main .demo-room .demo-text p { margin: 0 0 6px; font-size: 13px; color: #eef; }
       .main .demo-room .demo-text .fine { color: var(--muted); font-size: 12px; }
       .demo-room ul.rooms { margin: 0 0 8px; grid-template-columns: 1fr; }
+      /* The room's name on the left and who's in it on the right, said in
+         words: the panel has no Players heading over its count. On a
+         narrow screen the counts go under the name. */
+      .demo-room .rooms.counted .link-button { display: flex; flex-wrap: wrap; justify-content: space-between;
+                                               align-items: baseline; gap: 0 12px; }
+      .demo-room .demo-counts { color: var(--muted); font-size: 13px; font-weight: normal; white-space: nowrap; }
+      .demo-room .demo-counts .game-count:not(:empty)::before { content: "\00b7\00a0"; }
       .demo-room .demo-actions { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-bottom: 6px; }
       .demo-room .demo-actions .fine { color: var(--muted); font-size: 12px; }
 
@@ -1369,6 +1376,7 @@
       .style-2001 .rooms { display: block; margin: 6px 0 0; }
       .style-2001 .main .demo-room .demo-text .fine, .style-2001 .demo-room .demo-actions .fine { color: #bde; }
       .style-2001 .demo-room ul.rooms li { background: #e2eef6; }
+      .style-2001 .demo-room .demo-counts { color: var(--navy-muted); font-size: 11px; }
       .style-2001 .rooms li { border-bottom: 0; }
       .style-2001 .rooms li:nth-child(odd) { background-color: var(--stripe); }
       .style-2001 .rooms .link-button {
@@ -2294,7 +2302,7 @@
                   <div class="demo-shot" role="img" aria-label="Bespin Mining Station, in a demo match"></div>
                   <div class="demo-text">
                     <ul class="rooms counted">
-                      <li><button class="link-button" type="button" data-room="bespin-demo" aria-haspopup="dialog"><span class="count busy">&ndash;</span><span><span class="room-name">Bespin Mining Station</span> <span class="tag">(Demo)</span> <span class="tag game-count"></span></span></button></li>
+                      <li><button class="link-button" type="button" data-room="bespin-demo" aria-haspopup="dialog"><span><span class="room-name">Bespin Mining Station</span> <span class="tag">(Demo)</span></span><span class="demo-counts"><span class="count busy">&ndash;</span> <span class="count-label">players</span> <span class="game-count"></span></span></button></li>
                     </ul>
                     <p>Don't have Jedi Knight? Play the free 1997 multiplayer demo's Bespin level with anyone here, in
                       this tab.</p>
@@ -8166,6 +8174,9 @@
           var count = b.querySelector('.count');
           count.textContent = r ? r.online : '–';
           count.classList.toggle('busy', !r);
+          // The Free Demo Room's count says what it counts.
+          var label = b.querySelector('.count-label');
+          if (label) label.textContent = r && r.online === 1 ? 'player' : 'players';
           b.querySelector('.game-count').textContent = r || games ? plural(games, 'game', 'games') : '';
         });
         var total = document.getElementById('total-players');
