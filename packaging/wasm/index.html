@@ -1785,10 +1785,10 @@
         <nav class="goldnav" aria-label="Sections">
           <a href="#rooms">Game Rooms</a>
           <a href="#leaderboard" data-matches hidden>Leaderboard</a>
+          <a href="#screenshots">Screenshots</a>
           <a href="#features">Features</a>
           <a href="#start">Getting Started</a>
           <a href="#files">Your Files</a>
-          <a href="#screenshots">Screenshots</a>
           <a href="#help">Help</a>
         </nav>
         <p class="tagline">Free to play. No account needed.</p>
@@ -2210,10 +2210,10 @@
             <ul>
               <li><a href="#rooms" class="here">Game Rooms</a></li>
               <li data-matches hidden><a href="#leaderboard">Leaderboard</a></li>
+              <li><a href="#screenshots">Your Screenshots</a></li>
               <li><a href="#features">Features</a></li>
               <li><a href="#start">Getting Started</a></li>
               <li><a href="#files">Your Files</a></li>
-              <li><a href="#screenshots">Your Screenshots</a></li>
               <li><a href="#help">Game Help</a></li>
             </ul>
             <div class="side-matches" id="side-top" data-matches hidden>
@@ -2351,6 +2351,21 @@
                   and they aren't kept together as one player's.</span></span></label>
             </section>
 
+            <section id="screenshots" aria-labelledby="screenshots-title">
+              <h2 class="ruled" id="screenshots-title">Your Screenshots <small id="shots-summary"></small></h2>
+              <p class="note">Press F8 or F12 in a game (or your screenshot key) to save a picture here, in this
+                browser. In Edge, use F8.</p>
+              <label class="match-name shots-share" data-shots hidden><input type="checkbox" data-shots-share checked>
+                <span>Share my screenshots on match pages <span class="fine">A screenshot you take in a recorded match
+                  also goes on that match's page, as a smaller copy anyone can see, with your name. You can take any of
+                  them off again. Unticked, they stay in this browser.</span></span></label>
+              <div class="shots-bar" id="shots-bar" hidden>
+                <button class="zone-button" type="button" id="shots-zip">Download all (.zip)</button>
+                <button class="zone-button" type="button" id="shots-clear">Delete all</button>
+              </div>
+              <ul class="shots" id="shots"></ul>
+            </section>
+
             <section id="features" aria-labelledby="features-title">
               <h2 class="ruled" id="features-title">Features <small>What this web version adds</small></h2>
               <p class="note">Works in both Jedi Knight and Mysteries of the Sith.</p>
@@ -2437,21 +2452,6 @@
                   over from jkdf2mp.jkdf2mp-lobby.workers.dev.</button> If the game then asks for your folder,
                   pick it once more.</li>
               </ul>
-            </section>
-
-            <section id="screenshots" aria-labelledby="screenshots-title">
-              <h2 class="ruled" id="screenshots-title">Your Screenshots <small id="shots-summary"></small></h2>
-              <p class="note">Press F8 or F12 in a game (or your screenshot key) to save a picture here, in this
-                browser. In Edge, use F8.</p>
-              <label class="match-name shots-share" data-shots hidden><input type="checkbox" data-shots-share checked>
-                <span>Share my screenshots on match pages <span class="fine">A screenshot you take in a recorded match
-                  also goes on that match's page, as a smaller copy anyone can see, with your name. You can take any of
-                  them off again. Unticked, they stay in this browser.</span></span></label>
-              <div class="shots-bar" id="shots-bar" hidden>
-                <button class="zone-button" type="button" id="shots-zip">Download all (.zip)</button>
-                <button class="zone-button" type="button" id="shots-clear">Delete all</button>
-              </div>
-              <ul class="shots" id="shots"></ul>
             </section>
 
             <section id="help" aria-labelledby="help-title">

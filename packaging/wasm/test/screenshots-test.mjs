@@ -926,6 +926,20 @@ test('the page has what the sharing fills in, and the box is in the prompt a gam
     assert.match(glue, /function shotShareAllowed\(\) \{\s+return shotSharing\.on && shotSharing\.told && !Module\.jkLadderAnon &&/);
 });
 
+test('Your Screenshots is right under the Leaderboard, and both section lists say so', () => {
+    const at = id => html.indexOf(`<section id="${id}"`);
+    const order = ['rooms', 'leaderboard', 'screenshots', 'features', 'start', 'files', 'help', 'support'];
+    assert.ok(order.every((id, i) => at(id) > 0 && (!i || at(id) > at(order[i - 1]))), 'sections in that order');
+    const board = at('leaderboard');
+    assert.ok(!html.substring(html.indexOf('</section>', board) + 10, at('screenshots')).trim(), 'nothing between them');
+    // The sidebar and the gold bar list them in the same order.
+    for (const list of [html.substring(html.indexOf('<nav class="goldnav"'), html.indexOf('</nav>', html.indexOf('<nav class="goldnav"'))),
+                        html.substring(html.indexOf('<aside class="sidebar">'), html.indexOf('</ul>', html.indexOf('<aside class="sidebar">')))]) {
+        const links = [...list.matchAll(/href="#([a-z]+)"/g)].map(m => m[1]);
+        assert.deepEqual(links, ['rooms', 'leaderboard', 'screenshots', 'features', 'start', 'files', 'help']);
+    }
+});
+
 test('the page tells the sharer which level is being played, lets one tab send at a time, and asks again when it gets the list', async () => {
     const glue = cut('      // ---- Sharing them (shotSharer above).', '      function sizeText(bytes)');
     assert.match(glue, /levelSince: shotPlayingSince,/);
