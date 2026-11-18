@@ -509,10 +509,12 @@ EM_JS(void, Window_wasmPaceInit, (), {
     });
   };
   /* The graphics card's queue with Vsync on (Window_wasmEndFrame). queueCap false turns it
-     off, for tests; queueWaits and queueStalls count, for tests too. */
+     off, for tests; queueWaits, queueStalls and queueSlow (long waits on a busy card)
+     count, for tests too. */
   pace.queueCap = true;
   pace.queueWaits = 0;
   pace.queueStalls = 0;
+  pace.queueSlow = 0;
   pace.queueOffUntil = 0;
   pace.queueBackoff = 1000;
   pace.queueGood = 0;
@@ -531,8 +533,9 @@ EM_JS(void, Window_wasmPaceInit, (), {
 // hasn't drawn the frame before this one, a refresh at a time and at most 8, which keeps
 // two frames on the card: the same frame rate, and on a test PC 40-55% less time from the
 // mouse to a drawn frame. A card that keeps up never waits. Where a refresh the game
-// skips stalls (Chrome with its frame limit off, about 17 ms), the waits stop for a
-// second, then two, and so on.
+// skips stalls while the card sits idle (Chrome with its frame limit off, about 17 ms),
+// the waits stop for a second, then two, and so on. A long wait while the card is still
+// busy is the browser holding back for it, and doesn't count.
 // With Vsync off, a frame yields through a MessageChannel, which has no
 // clamp, while the card has finished the frame before this one and for at most two frames
 // in a refresh; otherwise it waits for the refresh. A hidden tab gets no refreshes, so there
@@ -580,7 +583,12 @@ EM_ASYNC_JS(void, Window_wasmEndFrame, (int bVsync, int bInGame, int bInMatch), 
         var asked = performance.now();
         await pace.refresh();
         pace.queueWaits++;
-        if (pace.refreshMs && performance.now() - asked > 3 * pace.refreshMs + 2) {
+        /* A long wait is the browser's own holding back while the card is busy, as with a
+           very slow card, unless the card has drawn this frame too: then it sat idle and the
+           wait cost frames. */
+        var tookLong = pace.refreshMs && performance.now() - asked > 3 * pace.refreshMs + 2;
+        if (tookLong && !drawn(last)) pace.queueSlow++;
+        if (tookLong && drawn(last)) {
           pace.queueStalls++;
           pace.queueGood = 0;
           pace.queueOffUntil = performance.now() + pace.queueBackoff;
