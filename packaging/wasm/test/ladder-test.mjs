@@ -98,6 +98,8 @@ function makeGame({ can = ['links', 'pw', 'match'], key = 'ab'.repeat(16), anon 
                 assert.deepEqual(c.sb, r.sb || null);
                 assert.deepEqual(c.teams, r.teams || null);
                 assert.equal(c.scr, r.scr || 0);
+                assert.equal(c.gt, r.gt ?? null);
+                assert.deepEqual(c.pl, r.pl || null);
             }
             return r;
         });
@@ -496,6 +498,67 @@ test("a joiner's game says nothing of scripts, and a kept last report still does
     assert.deepEqual([got[1].map, got[1].scr], ['m5.jkl', undefined]);
 });
 
+test("the host's reports have its game's clock while the level's on, and nobody else's do", () => {
+    const g = makeGame();
+    let clock = 0;
+    g.Module._stdComm_WSRelay_MatchClock = () => clock;
+    start(g, { host: true });
+    g.world.run(0);
+    assert.equal(g.reports()[0].gt, 0);
+    clock = 29500;
+    g.world.run(30000);
+    assert.equal(g.reports()[0].gt, 29500, "the game's, which can be behind the page's");
+    clock = -1;
+    g.world.run(30000);
+    assert.equal(g.reports()[0].gt, undefined, 'none when the engine has none');
+    clock = 61000;
+    g.net.state = 0;
+    g.L.end(false);
+    start(g, { host: true, map: 'm5.jkl' });
+    g.net.state = 1;
+    g.world.run(1000);
+    const got = g.reports();
+    assert.deepEqual([got[0].end, got[0].gt], ['level', undefined], "a kept last report's level is over");
+    assert.equal(got[1].gt, 61000);
+    const j = makeGame();
+    j.Module._stdComm_WSRelay_MatchClock = () => 5000;
+    start(j);
+    j.world.run(0);
+    assert.equal(j.reports()[0].gt, undefined, "a joiner's game says no clock");
+    const old = makeGame();
+    start(old, { host: true });
+    old.world.run(0);
+    assert.equal(old.reports()[0].gt, undefined, 'an engine without the clock');
+});
+
+test("a host hosting a playlist says where in it the level is and what's next, until the next level's start", () => {
+    const g = makeGame();
+    start(g, { host: true });
+    g.L.playlist(1, 3, true, 'Bespin Mining Station');
+    g.world.run(0);
+    assert.deepEqual(g.reports()[0].pl, { i: 1, n: 3, loop: 1, next: 'Bespin Mining Station' });
+    g.world.run(30000);
+    assert.deepEqual(g.reports()[0].pl, { i: 1, n: 3, loop: 1, next: 'Bespin Mining Station' }, 'in every report');
+    start(g, { host: true, map: 'm5.jkl' });
+    g.L.playlist(2, 3, false, '');
+    g.world.run(0);
+    assert.deepEqual(g.reports()[0].pl, { i: 2, n: 3, loop: 0, next: '' }, 'the last of one that ends');
+    start(g, { host: true, map: 'm6.jkl' });
+    g.world.run(0);
+    assert.equal(g.reports()[0].pl, undefined, 'a level that is no playlist\'s');
+    for (const [i, n] of [[3, 3], [-1, 3], [0, 0]]) {
+        start(g, { host: true });
+        g.L.playlist(i, n, false, 'x');
+        g.world.run(0);
+        assert.equal(g.reports()[0].pl, undefined, i + ' of ' + n);
+    }
+    const j = makeGame();
+    start(j);
+    j.L.playlist(0, 2, true, 'x');
+    j.world.run(0);
+    assert.equal(j.reports()[0].pl, undefined, "only the host's");
+});
+
 test("a level's file is named as the lobby takes it", () => {
     for (const [file, name] of [['M4.JKL', 'M4.JKL'], ['my level (v2).jkl', 'my_level__v2_.jkl'], ['', 'unknown'],
                                 ['a'.repeat(40) + '.jkl', 'a'.repeat(32)]]) {
@@ -578,10 +641,13 @@ test("the lobby's word that a match was saved reaches the page", () => {
 
 test('the engine calls what ladder.js has, and is built with it', () => {
     for (const call of ['Module.jkLadder.start(', 'Module.jkLadder.kill(', 'Module.jkLadder.scores(',
-                        'Module.jkLadder.end(', 'Module.jkLadder.saved('])
+                        'Module.jkLadder.end(', 'Module.jkLadder.saved(', 'Module.jkLadder.playlist('])
         assert.ok(relayC.includes(call), 'stdComm_WSRelay.c has ' + call);
-    for (const name of ['start', 'kill', 'scores', 'end', 'saved'])
+    for (const name of ['start', 'kill', 'scores', 'end', 'saved', 'playlist'])
         assert.equal(typeof makeGame().L[name], 'function');
+    // The host's game clock, which the engine keeps for ladder.js to call.
+    assert.ok(relayC.includes('EMSCRIPTEN_KEEPALIVE int stdComm_WSRelay_MatchClock(void)'));
+    assert.ok(source.includes('Module._stdComm_WSRelay_MatchClock()'));
     // The scoreboard goes with the mode as it is and what the level's script
     // has set, which each of the four calls a script has for it tells.
     assert.ok(relayC.includes('Module.jkLadder.scores(rows, teams, mode, scripted);'));

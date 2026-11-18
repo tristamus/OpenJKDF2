@@ -149,6 +149,7 @@
 #include "General/stdStrTable.h"
 #include "Main/jkStrings.h"
 #include "Main/jkRes.h"
+#include "Main/jkPlaylist.h"
 
 #include <emscripten.h>
 #include <math.h>
@@ -3620,6 +3621,19 @@ EM_JS(void, wsrelay_js_match_start, (const char* pMap, const char16_t* pTitle, i
                           !!bHost, !!bIdle, UTF8ToString(pBuild));
 });
 
+// The host hosting its playlist (jkPlaylist_Position): this level's place in
+// it from 0, how many levels it has, whether it loops and the next one's name.
+EM_JS(void, wsrelay_js_match_playlist, (int idx, int count, int bLoop, const char16_t* pNext), {
+    if (!Module.jkLadder || !Module.jkLadder.playlist) return;
+    var chars = [];
+    for (var i = 0; pNext && i < 64; i++) {
+        var ch = HEAPU16[(pNext >> 1) + i];
+        if (!ch) break;
+        chars.push(ch);
+    }
+    Module.jkLadder.playlist(idx, count, !!bLoop, String.fromCharCode.apply(null, chars));
+});
+
 EM_JS(void, wsrelay_js_match_kill, (int victim, int killer, int kind), {
     if (Module.jkLadder) Module.jkLadder.kill(victim, killer, kind);
 });
@@ -3680,6 +3694,18 @@ void stdComm_WSRelay_MatchScores(void)
     wsrelay_js_match_scores(aRows, n, aTeams, sithNet_MultiModeFlags, wsrelay_matchScripted);
 }
 
+// The host's game clock in its level, in ms: what its time limit goes by
+// (sithMulti.c), which falls behind the wall clock when frames take longer
+// than the game lets one run (SITHTIME_MAXDELTA). ladder.js reads it for each
+// report, for the lobby to show the time left by. -1 when this game isn't the
+// host of a level that's reported.
+EMSCRIPTEN_KEEPALIVE int stdComm_WSRelay_MatchClock(void)
+{
+    if (!wsrelay_bMatchOn || !sithNet_isServer)
+        return -1;
+    return (int)sithTime_g_msecGameTime;
+}
+
 void stdComm_WSRelay_MatchScripted(int what)
 {
     // The host's only: its scoreboard is the one the others take over.
@@ -3720,6 +3746,12 @@ void stdComm_WSRelay_MatchStart(void)
                            wsrelay_matchTitle(sithWorld_g_pCurrentWorld->map_jkl_fname),
                            sithNet_MultiModeFlags, sithNet_scorelimit, sithNet_multiplayer_timelimit / 60000,
                            sithNet_isServer, sithNet_isServer && jkGuiNetHost_bIsDedicated, openjkdf2_aReleaseCommitShort);
+    // The host's playlist, for the lobby's room windows to say what's next.
+    int count = 0, bLoop = 0;
+    const char16_t* pNext = NULL;
+    int idx = jkPlaylist_Position(&count, &bLoop, &pNext);
+    if (idx >= 0)
+        wsrelay_js_match_playlist(idx, count, bLoop, pNext);
     stdComm_WSRelay_MatchScores();
 }
 

@@ -15,8 +15,12 @@
 // level that gives points for its enemies, and not what the kills add up to.
 //
 // The engine calls in here (stdComm_WSRelay.c, the match record): start when
-// a multiplayer level is loaded, kill for each kill it counts, scores when
-// the scoreboard may have changed, end when the level is left. Reports go to
+// a multiplayer level is loaded, playlist right after it from a host hosting
+// one, kill for each kill it counts, scores when the scoreboard may have
+// changed, end when the level is left. The host's reports also have its
+// game's clock in the level (gt), which its time limit goes by, read from the
+// engine (stdComm_WSRelay_MatchClock) as each goes, for the lobby's room
+// windows to show the time left by. Reports go to
 // the lobby as text lines on the socket the game already has,
 //
 //   match <base64 of UTF-8 JSON>
@@ -99,6 +103,7 @@
         waiting: [],    // kills not reported yet: {n, at, victim, killer, kind}
         sb: null, teams: null,
         scr: 0,         // what the level's script set of a player's by itself
+        pl: null,       // the host's playlist: { i, n, loop, next }
         sentAt: 0,
         timer: null, soon: null,
         last: null,     // an ended level's last report, still to go (L.keep)
@@ -116,6 +121,15 @@
         return !!(net && net.ws && net.state === 1 && net.session && net.seat && net.lobbyCan &&
                   net.lobbyCan.indexOf('match') >= 0);
     };
+
+    // The host's game clock in its level (ms), -1 when there's none to say.
+    function gameClock() {
+        try {
+            return typeof Module._stdComm_WSRelay_MatchClock === 'function' ? Module._stdComm_WSRelay_MatchClock() : -1;
+        } catch (e) {
+            return -1;
+        }
+    }
 
     // A report of a level: the one being played, or a kept one (of), whose
     // time in the level stopped when it ended.
@@ -144,6 +158,12 @@
             }
             if (s.scr)
                 r.scr = s.scr;
+            if (s.pl)
+                r.pl = s.pl;
+            // Only while the level's on: a kept report's level has ended.
+            var gt = of ? -1 : gameClock();
+            if (gt >= 0)
+                r.gt = gt;
         }
         if (end)
             r.end = end;
@@ -184,7 +204,8 @@
         var t = now();
         L.last = { room: net.seat.room, seat: net.seat.id, until: t + LAST_MS, endAt: t,
                    lv: L.lv, map: L.map, title: L.title, build: L.build, host: L.host, idle: L.idle, rules: L.rules,
-                   since: L.since, waiting: L.waiting, sb: L.sb, teams: L.teams, scr: L.scr, sentAt: L.sentAt };
+                   since: L.since, waiting: L.waiting, sb: L.sb, teams: L.teams, scr: L.scr, pl: L.pl,
+                   sentAt: L.sentAt };
         L.lastTimer = setInterval(L.flush, RETRY_MS);
     };
 
@@ -261,10 +282,20 @@
         L.n = 0;
         L.sb = L.teams = null;
         L.scr = 0;
+        L.pl = null;
         L.sentAt = 0;
         L.timer = setInterval(L.tick, RETRY_MS);
         // Once the engine has given the scoreboard, which comes right after.
         L.soon = setTimeout(function() { L.soon = null; if (L.on) L.send(''); }, 0);
+    };
+
+    // The host hosting a playlist, right after start: this level's place in
+    // it from 0, how many levels it has, whether it starts over after the
+    // last, and the next level's name ('' after the last).
+    L.playlist = function(idx, count, loop, next) {
+        if (!L.on || !L.host || !(count > 0) || !(idx >= 0) || idx >= count)
+            return;
+        L.pl = { i: idx | 0, n: count | 0, loop: loop ? 1 : 0, next: String(next || '').slice(0, 48) };
     };
 
     L.kill = function(victim, killer, kind) {

@@ -27,7 +27,7 @@ window.jkLobbyMock = (function() {
               dedicated: true, pinned: true, listed: false, joinable: false, why: 'not-listed' } :
             { key: '13e5dd93743f59055bbf297508845b2b', name: 'Coruscant', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF',
               mod: '', locked: false, players: players, max: 31, dedicated: true, pinned: true, listed: true,
-              joinable: true, why: '' };
+              joinable: true, why: '', mode: 24 };
         return { state: 'live', server: 'lobby.jkjunkie.com', checked: '2026-10-31T19:00:00.000Z',
                  games: [coruscant].concat(hosted || []) };
     }
@@ -54,19 +54,34 @@ window.jkLobbyMock = (function() {
                 lobby: { jk1: ['DarkJedi_7', 'Tusken_Raider', 'Qu_Rahn'], mots: ['Corran_H', 'Saber_Kyp'] },
                 games: [
                     { id: 41, name: 'No mods dueling', game: 'jk1', map: 'm_boss17.jkl', episode: 'JK1MP.gob',
-                      mod: '', locked: false, players: 2, max: 4, names: ['Kyle_K', 'MaraJade'] },
+                      mod: '', locked: false, players: 2, max: 4, names: ['Kyle_K', 'MaraJade'], rank: 8,
+                      live: { mode: 0x18, sl: 20, tl: 15, ago: 378, count: 120,
+                              sb: [['Kyle_K', 12, 12, 7, 0], ['MaraJade', 7, 7, 12, 0]],
+                              last: ['Kyle_K', 'MaraJade', 1, 14], streak: ['Kyle_K', 4] } },
                     { id: 44, name: 'SBX 3.1 sabers', game: 'jk1', map: 'jhs.jkl', title: "Jedi's High School", episode: 'jhs.gob',
-                      mod: 'Saber Battle X', locked: true, players: 4, max: 4, names: ['Jerec', 'Sariss', 'Yun', 'Gorc'] },
+                      mod: 'Saber Battle X', locked: true, players: 4, max: 4, names: ['Jerec', 'Sariss', 'Yun', 'Gorc'],
+                      rank: 4, live: { mode: 0x8, sl: 0, tl: 20, ago: 300, nocount: 'password' } },
                     { id: 45, name: 'Asteroid duels', game: 'mots', map: 'mdm02_freezer.jkl', episode: 'JKM_MP.goo',
                       mod: '', locked: false, players: 1, max: 4, names: ['Dash_R'] },
                     { id: 46, name: 'MotS FFA', game: 'mots', map: 'msb2_gantry.jkl', episode: 'JKM_SABER.goo',
-                      mod: '', locked: false, players: 3, max: 8, names: ['Vima_D', 'Rax_J', 'Talon_K'] },
+                      mod: '', locked: false, players: 3, max: 8, names: ['Vima_D', 'Rax_J', 'Talon_K'], rank: 8,
+                      live: { mode: 0x1018, sl: 10, tl: 10, ago: 620, overAgo: 20, count: 120,
+                              sb: [['Rax_J', 10, 10, 4, 0], ['Vima_D', 6, 6, 8, 0], ['Talon_K', 2, 3, 7, 0]],
+                              last: ['Rax_J', 'Talon_K', 1, 22] } },
                     { id: 47, name: 'CTF practice', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF.gob',
-                      mod: '', locked: false, players: 3, max: 8, names: ['Boc', 'Maw', 'RahnJedi'] },
+                      mod: '', locked: false, players: 3, max: 8, names: ['Boc', 'Maw', 'RahnJedi'], rank: 4,
+                      live: { mode: 0x15, sl: 10, tl: 0, ago: 725, count: 120, teams: [0, 4, 6, 0, 0],
+                              sb: [['Maw', 6, 9, 4, 2], ['Boc', 3, 5, 6, 1], ['RahnJedi', 1, 4, 8, 1]],
+                              last: ['Maw', 'RahnJedi', 3, 41] } },
                     { id: 52, name: 'Rotating maps', game: 'jk1', map: 'APG_Deathmatch_Castle.jkl', title: 'APG_DEATHMATCH_CASTLE',
                       episode: 'APG_Deathmatch_Castle.gob',
                       mod: '', locked: false, players: 6, max: 8,
-                      names: ['Katarn99', 'NightSister', 'ForceGrip', 'Rodian_Ace', 'Gran_Pilot', 'SaberStorm'] },
+                      names: ['Katarn99', 'NightSister', 'ForceGrip', 'Rodian_Ace', 'Gran_Pilot', 'SaberStorm'], rank: 8,
+                      live: { mode: 0x8, sl: 0, tl: 10, ago: 95, count: 120,
+                              pl: { i: 1, n: 3, loop: 1, next: 'Canyon Oasis' },
+                              sb: [['ForceGrip', 3, 3, 0, 0], ['Katarn99', 2, 2, 1, 0], ['NightSister', 1, 1, 1, 0],
+                                   ['Rodian_Ace', 1, 1, 2, 0], ['Gran_Pilot', 0, 0, 1, 0], ['SaberStorm', -1, 0, 2, 0]],
+                              last: ['', 'SaberStorm', 5, 3], streak: ['ForceGrip', 3] } },
                     { id: 53, name: 'newbies welcome', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1.gob',
                       mod: '', locked: false, players: 1, max: 2, names: ['Ewok_Assassin'] }
                 ]
@@ -217,13 +232,24 @@ window.jkLobbyMock = (function() {
         });
         // Each game's netcode: the page's, or the next for a newer one.
         var page = typeof window.NETCODE === 'number' ? window.NETCODE : 0;
+        // A game's match as it's played (the lobby's liveView): its times
+        // are given here as so many seconds ago.
+        var now = Date.now();
         var games = copy(s.games).map(function(g) {
             g.net = page + (g.newer ? 1 : 0);
             delete g.newer;
+            if (g.live) {
+                var v = g.live;
+                v.at = now - v.ago * 1000;
+                if (v.overAgo) v.over = now - v.overAgo * 1000;
+                if (v.last) v.last[3] = now - v.last[3] * 1000;
+                delete v.ago;
+                delete v.overAgo;
+            }
             return g;
         });
         return { online: online, lobby: all.sort(), byGame: byGame, games: games,
-                 match: current === 'empty' ? 0 : MATCHES.jk1[0].id };
+                 match: current === 'empty' ? 0 : MATCHES.jk1[0].id, now: now };
     }
 
     // One thing happens in one game: someone comes online, leaves, joins or

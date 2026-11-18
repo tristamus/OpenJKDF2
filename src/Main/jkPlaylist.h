@@ -116,6 +116,13 @@ void jkPlaylist_GameStarted(void);
 // A level begins (every game): what was named at the last one's end is used.
 void jkPlaylist_LevelStarted(void);
 
+// The host hosting its playlist, as its level begins, for the match record
+// (stdComm_WSRelay_MatchStart): this level's place in the playlist from 0, or
+// -1 when it isn't hosting one; how many levels it has (*pCount); whether it
+// starts over after the last (*pbLoop); and the next level's name (*ppNext),
+// "" after the last of one that doesn't.
+int jkPlaylist_Position(int* pCount, int* pbLoop, const char16_t** ppNext);
+
 // The host, as its level ends: works the next level out (once a level) and
 // gets it ready for players who don't have it. 1 if it named one.
 int jkPlaylist_HostPick(void);

@@ -92,6 +92,10 @@ static void wsrelay_js_match_scores(const int32_t* pRows, int n, const int32_t* 
 
 static void wsrelay_js_match_end(int bLeft) { ends++; }
 
+// Not hosting a playlist: the level's place in none.
+static int jkPlaylist_Position(int* pCount, int* pbLoop, const char16_t** ppNext) { return -1; }
+static void wsrelay_js_match_playlist(int idx, int count, int bLoop, const char16_t* pNext) {}
+
 // The tree's own code.
 #include "scripted-code.inc"
 

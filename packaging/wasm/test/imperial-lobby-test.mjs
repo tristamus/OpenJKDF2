@@ -18,10 +18,12 @@ function cut(from, to) {
 const code = cut('      var IMPERIAL_POLL_MS = 20000;', "      // Takes the lobby's latest status, or null with why there's none:");
 assert.match(html, /var IMPERIAL_LOBBY_LIST = true;/, 'the page lists the relay\'s games');
 
-// The real Worker's answer on 31 Oct 2026, from the real relay.
+// The real Worker's answer on 31 Oct 2026, from the real relay, with the
+// mode the Worker has passed on since (its session's user data, the same
+// reply's: time limit and score limit on).
 const CORUSCANT = { key: '13e5dd93743f59055bbf297508845b2b', name: 'Coruscant', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF',
                     mod: '', locked: false, players: 0, max: 31, dedicated: true, pinned: true, listed: true,
-                    joinable: true, why: '' };
+                    joinable: true, why: '', mode: 24 };
 const LIVE = { state: 'live', server: 'lobby.jkjunkie.com', checked: '2026-10-31T19:20:01.000Z', games: [CORUSCANT] };
 
 // The page's code with made-up surroundings. fetch answers with what
@@ -75,10 +77,19 @@ test("the real answer: Coruscant, joinable, credited to nobody", () => {
     assert.deepEqual(a.games, [{
         uid: 'i13e5dd93743f59055bbf297508845b2b', key: '13e5dd93743f59055bbf297508845b2b', imperial: true,
         name: 'Coruscant', game: 'jk1', map: 'c3.jkl', title: '', episode: 'JK1CTF', mod: '', locked: false, players: 0, max: 31,
-        names: [], net: 0, dedicated: true, pinned: true, listed: true, joinable: true, why: '' }]);
+        names: [], net: 0, dedicated: true, pinned: true, listed: true, joinable: true, why: '', mode: 24, rank: -1,
+        live: null }]);
     assert.equal(p.imperialStop(a.games[0]), null);
     // sithmartyr asked for no credit on the card (31 Oct 2026).
     assert.doesNotMatch(html, /sithmartyr|run by/i);
+});
+
+test("a game's mode is taken only as a number, and not from a server that isn't running", () => {
+    const { p } = page();
+    const g = mode => p.cleanImperial({ ...LIVE, games: [{ ...CORUSCANT, mode }] }).games[0].mode;
+    assert.deepEqual([g(1), g(0), g(-1), g('24'), g(undefined), g(NaN)], [1, 0, -1, -1, -1, -1]);
+    const off = p.cleanImperial({ ...LIVE, games: [{ ...CORUSCANT, key: '', listed: false, mode: 24 }] }).games[0];
+    assert.equal(off.mode, -1);
 });
 
 test('a pinned server that isn\'t running, and the relay down', () => {

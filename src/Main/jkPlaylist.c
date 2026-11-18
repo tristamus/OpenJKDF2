@@ -323,6 +323,38 @@ void jkPlaylist_LevelStarted(void)
     jkPlaylist_wFailed[0] = 0;
 }
 
+int jkPlaylist_Position(int* pCount, int* pbLoop, const char16_t** ppNext)
+{
+    // A level without a name of its own goes by its file's.
+    static char16_t wFile[JKPLAYLIST_JKL_LEN];
+
+    *pCount = 0;
+    *pbLoop = 0;
+    *ppNext = u"";
+    if (!jkPlaylist_IsHosting())
+        return -1;
+    *pCount = jkPlaylist_list.count;
+    *pbLoop = jkPlaylist_list.bLoop;
+    int next = jkPlaylist_cur + 1;
+    if (next >= jkPlaylist_list.count)
+    {
+        if (!jkPlaylist_list.bLoop)
+            return jkPlaylist_cur;
+        next = 0;
+    }
+    const jkPlaylistEntry* pEntry = &jkPlaylist_list.entries[next];
+    if (pEntry->title[0])
+    {
+        *ppNext = pEntry->title;
+    }
+    else
+    {
+        jkPlaylist_ToWide(wFile, pEntry->jkl, JKPLAYLIST_JKL_LEN);
+        *ppNext = wFile;
+    }
+    return jkPlaylist_cur;
+}
+
 int jkPlaylist_HostPick(void)
 {
     if (!jkPlaylist_IsHosting())

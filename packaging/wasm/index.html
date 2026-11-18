@@ -1060,6 +1060,59 @@
       }
       .table-info dt { font-weight: bold; }
       .table-info dd { margin: 0; overflow-wrap: anywhere; }
+      /* A match being played (liveRows): its clock, scores and last kill
+         first, then its rules, then the game's. */
+      .table-info dl.live { min-width: 236px; }
+      .table-info .info-sec {
+        grid-column: 1 / -1;
+        margin-top: 5px;
+        padding-top: 4px;
+        border-top: 1px solid #bbb;
+        font: bold 9px Verdana, sans-serif;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #555;
+      }
+      .table-info .info-sec:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+      .table-info .info-wide { grid-column: 1 / -1; }
+      .table-info .info-clock { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+      .table-info .info-clock b { font: bold 15px Verdana, sans-serif; font-variant-numeric: tabular-nums; }
+      .table-info .info-clock small, .table-info .info-note { font-size: 10px; color: #555; }
+      .table-info .info-bar { height: 4px; margin-top: 1px; background-color: #ddd; }
+      .table-info .info-bar span { display: block; height: 100%; background-color: #1f5f8b; }
+      .table-info table { grid-column: 1 / -1; width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      .table-info th { padding: 0 0 1px 6px; font: bold 9px Verdana, sans-serif; color: #555; text-align: right; }
+      .table-info td { padding: 1px 0 1px 6px; text-align: right; }
+      .table-info th:first-child, .table-info td:first-child { padding-left: 0; text-align: left; overflow-wrap: anywhere; }
+      .table-info td.score { font-weight: bold; }
+      .table-info .lead::after { content: " \2605"; color: #b8860b; }
+      .team-chip {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 4px;
+        border: 1px solid #000;
+        vertical-align: 0;
+      }
+      .team-chip.t1 { background-color: #dd2222; }
+      .team-chip.t2 { background-color: #e8b400; }
+      .team-chip.t3 { background-color: #2a6fd6; }
+      .team-chip.t4 { background-color: #2a9d3a; }
+      .table-info .info-teams b { margin-right: 8px; }
+      /* The Info button and, for a match being played, a line on how it
+         stands. */
+      .table-meta { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+      .table-summary {
+        min-width: 0;
+        margin: 3px 0 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font: 11px/14px Verdana, sans-serif;
+        font-variant-numeric: tabular-nums;
+        color: var(--gold);
+        text-shadow: 1px 1px 0 #000, 0 0 3px #000;
+      }
       .table-body { display: flex; align-items: center; gap: 8px; min-height: 104px; }
       .ring { position: relative; flex: none; width: 100px; height: 100px; }
       .ring::before {
@@ -7943,7 +7996,7 @@
       var roster = document.getElementById('roster');
       var roomNote = document.getElementById('room-note');
       var lobbyLive = { state: 'connecting', status: null, updated: null, view: 'table', seen: {}, cols: 0,
-                        stacked: false, room: 'nar-shaddaa' };
+                        stacked: false, room: 'nar-shaddaa', skew: 0 };
       try {
         if (localStorage.getItem('jkdf2mp-room-view') === 'list') lobbyLive.view = 'list';
       } catch (e) {}
@@ -7966,6 +8019,28 @@
         function names(v) {
           return Array.isArray(v) ? v.slice(0, 64).map(function(n) { return str(n, 32); }) : [];
         }
+        // A score, which a level's script can take below zero.
+        function score(v) { return typeof v === 'number' && isFinite(v) ? Math.max(-99999, Math.min(99999, Math.round(v))) : 0; }
+        function obj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
+        // A game's match as it's played (the lobby's liveView), or null.
+        function live(v) {
+          if (!obj(v) || !num(v.at)) return null;
+          var out = { mode: num(v.mode), sl: num(v.sl), tl: num(v.tl), at: num(v.at), over: num(v.over),
+                      nocount: v.nocount === 'password' || v.nocount === 'coop' ? v.nocount : '', count: num(v.count),
+                      pl: null, sb: [], teams: null, last: null, streak: null };
+          if (obj(v.pl) && num(v.pl.n) > 0 && num(v.pl.i) < num(v.pl.n))
+            out.pl = { i: num(v.pl.i), n: num(v.pl.n), loop: !!v.pl.loop, next: str(v.pl.next, 48) };
+          if (Array.isArray(v.sb)) {
+            out.sb = v.sb.slice(0, 64).filter(Array.isArray).map(function(r) {
+              return [str(r[0], 32), score(r[1]), score(r[2]), score(r[3]), Math.min(num(r[4]), 4)];
+            });
+          }
+          if (Array.isArray(v.teams) && v.teams.length === 5) out.teams = v.teams.map(score);
+          if (Array.isArray(v.last) && num(v.last[3]))
+            out.last = [str(v.last[0], 32), str(v.last[1], 32), Math.min(num(v.last[2]), 5), num(v.last[3])];
+          if (Array.isArray(v.streak) && num(v.streak[1])) out.streak = [str(v.streak[0], 32), num(v.streak[1])];
+          return out;
+        }
         if (!s || typeof s !== 'object') return null;
         var games = (Array.isArray(s.games) ? s.games : []).slice(0, 64).filter(function(g) {
           return g && typeof g === 'object';
@@ -7973,7 +8048,7 @@
           return { id: num(g.id), name: str(g.name, 32), game: g.game === 'mots' ? 'mots' : 'jk1',
                    map: str(g.map, 64), title: str(g.title, 48), episode: str(g.episode, 64), mod: str(g.mod, 64),
                    locked: !!g.locked, players: num(g.players), max: num(g.max), names: names(g.names),
-                   net: num(g.net) };
+                   net: num(g.net), rank: g.rank === undefined ? -1 : Math.min(num(g.rank), 99), live: live(g.live) };
         });
         var lobby = names(s.lobby);
         var by = s.byGame && typeof s.byGame === 'object' ? s.byGame : {};
@@ -7987,7 +8062,8 @@
           byGame[k] = { online: b ? num(b.online) : waiting.length + playing, lobby: waiting };
         });
         return { online: num(s.online), lobby: lobby, byGame: byGame, games: games,
-                 match: typeof s.match === 'number' && isFinite(s.match) && s.match >= 0 ? Math.floor(s.match) : null };
+                 match: typeof s.match === 'number' && isFinite(s.match) && s.match >= 0 ? Math.floor(s.match) : null,
+                 now: num(s.now) };
       }
 
       // A game of the free demo's (startDemo), which only the demo can join.
@@ -8024,7 +8100,9 @@
       //   { state: 'live', server: 'lobby.jkjunkie.com', checked: '2026-10-31T19:00:00.000Z',
       //     games: [{ key: '13e5dd93743f59055bbf297508845b2b', name: 'Coruscant', game: 'jk1',
       //               map: 'c3.jkl', episode: 'JK1CTF', mod: '', locked: false, players: 0, max: 31,
-      //               dedicated: true, pinned: true, listed: true, joinable: true, why: '' }] }
+      //               dedicated: true, pinned: true, listed: true, joinable: true, why: '', mode: 24 }] }
+      // mode is the game's multiplayer mode flags (MODE_*). The relay keeps
+      // no record of its matches, so there's nothing live of them.
       // state is 'down' when the relay didn't answer the Worker. Pinned
       // servers (the Worker's IMPERIAL_PINNED) come first, and are there
       // even while they aren't running (listed false). why says why a game
@@ -8065,7 +8143,9 @@
                    mod: str(g.mod, 64), locked: !!g.locked, players: listed ? num(g.players) : 0,
                    max: listed ? num(g.max) : 0, names: [], net: NETCODE, dedicated: dedicated, pinned: pinned,
                    listed: listed, joinable: joinable,
-                   why: joinable ? '' : has(IMPERIAL_STATE, g.why) ? g.why : listed ? 'closed' : 'not-listed' };
+                   why: joinable ? '' : has(IMPERIAL_STATE, g.why) ? g.why : listed ? 'closed' : 'not-listed',
+                   mode: listed && typeof g.mode === 'number' && isFinite(g.mode) && g.mode >= 0 ? Math.floor(g.mode) : -1,
+                   rank: -1, live: null };
         });
         return { state: a.state, server: server, games: games };
       }
@@ -8158,6 +8238,9 @@
       // 'connecting' or 'down'.
       function lobbyShow(status, state) {
         lobbyLive.status = status ? cleanStatus(status) : null;
+        // How far the lobby's clock is from this computer's, which the
+        // times of a match being played go by (lobbyNow).
+        if (lobbyLive.status && lobbyLive.status.now) lobbyLive.skew = lobbyLive.status.now - Date.now();
         lobbyLive.state = lobbyLive.status ? 'live' : (state || 'down');
         if (lobbyLive.status) lobbyLive.updated = new Date();
         renderRoomCount();
@@ -8296,6 +8379,211 @@
         }
       }
 
+      // ---- A match as it's played, from the lobby's status (live, its
+      // liveView in src/ladder.js): its host's rules, when its host's game
+      // clock started (at, by the lobby's clock), its scoreboard, last kill
+      // and longest run of kills going, and the host's playlist. A game with
+      // a password has no scores in it. The times count on by themselves
+      // between statuses (tickLive).
+      var MODE_TEAMS = 0x1, MODE_COG_SCORES = 0x4;
+      var TEAM_NAMES = ['', 'Red', 'Gold', 'Blue', 'Green'];
+      // What killed a player, as the lobby has it (KINDS in src/ladder.js).
+      var KILL_WORDS = [['killed', ''], ['killed', ' with a lightsaber'], ['shot', ''], ['blew up', ''],
+                        ['killed', ' with the Force'], ['killed', '']];
+      // A match's level that ended is shown that way for this long, as the
+      // lobby keeps it; a page that's been asleep shouldn't show it longer.
+      var LIVE_OVER_MS = 2 * 60 * 1000;
+
+      // The lobby's clock now, which a match's times go by.
+      function lobbyNow() { return Date.now() + (lobbyLive.skew || 0); }
+
+      // m:ss, or h:mm:ss from an hour on.
+      function clockText(ms) {
+        var s = Math.max(0, Math.floor(ms / 1000));
+        var h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = s % 60;
+        return (h ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
+      }
+
+      function agoText(ms) {
+        var s = Math.max(0, Math.floor(ms / 1000));
+        return s < 5 ? 'just now' : s < 60 ? s + ' s ago' : Math.floor(s / 60) + ' min ago';
+      }
+
+      // A game's match, while it's worth showing.
+      function gameLive(g) {
+        var v = g.live;
+        return v && !(v.over && lobbyNow() - v.over > LIVE_OVER_MS) ? v : null;
+      }
+
+      function isCtf(g) { return /^jk1ctf(\.gob)?$/i.test(g.episode); }
+
+      // A game's mode, in words: from its match, or for the relay's games
+      // from its listing.
+      function modeText(g, mode, coop) {
+        if (coop) return 'Co-op';
+        var text = isCtf(g) ? 'Capture the Flag' : mode & MODE_TEAMS ? 'Teams' : 'Free-for-all';
+        return text + (mode & MODE_COG_SCORES && !isCtf(g) ? ', scored by the level' : '');
+      }
+
+      // The clock's line: the time left, or played with no time limit, or
+      // how long the level ran once it's over.
+      function liveClock(v) {
+        var now = v.over || lobbyNow();
+        if (v.over) return { big: 'Level over', small: clockText(now - v.at) + ' played' };
+        if (v.tl) {
+          var total = v.tl * 60000, left = v.at + total - now;
+          return left > 0 ? { big: clockText(left), small: 'left of ' + clockText(total), part: 1 - left / total } :
+                            { big: "Time's up", small: '', part: 1 };
+        }
+        return { big: clockText(now - v.at), small: 'played' };
+      }
+
+      // The latest kill, and the longest run of kills going.
+      function liveFeed(v) {
+        var parts = [];
+        if (v.last) {
+          var w = KILL_WORDS[v.last[2]] || KILL_WORDS[0];
+          var who = v.last[1] || 'A player';
+          parts.push((v.last[0] ? v.last[0] + ' ' + w[0] + ' ' + who + w[1] : who + ' died') + ', ' +
+                     agoText(lobbyNow() - v.last[3]) + '.');
+        }
+        if (v.streak) parts.push(v.streak[0] + ': ' + v.streak[1] + ' in a row.');
+        return parts.join(' ');
+      }
+
+      function liveTeams(v) {
+        if (!v.teams || !(v.mode & MODE_TEAMS)) return [];
+        var used = {};
+        v.sb.forEach(function(r) { if (r[4]) used[r[4]] = true; });
+        return [1, 2, 3, 4].filter(function(t) { return used[t] || v.teams[t]; })
+          .sort(function(a, b) { return v.teams[b] - v.teams[a]; });
+      }
+
+      // The line on a game's table: who leads, and the clock.
+      function liveSummary(v) {
+        var parts = [];
+        if (v.over) {
+          parts.push('Level over');
+        } else {
+          var teams = liveTeams(v);
+          if (teams.length) {
+            parts.push(teams.slice(0, 2).map(function(t) { return TEAM_NAMES[t] + ' ' + v.teams[t]; }).join(', '));
+          } else if (v.sb.length) {
+            var top = v.sb[0][1];
+            var tied = v.sb.filter(function(r) { return r[1] === top; }).length;
+            parts.push(tied > 1 ? 'Tied at ' + top : v.sb[0][0] + ' leads with ' + top);
+          }
+          var c = liveClock(v);
+          parts.push(v.tl ? (c.small ? c.big + ' left' : c.big) : c.big + ' played');
+        }
+        return parts.join(' · ');
+      }
+
+      // The Info rows for a game's match being played, into dl.
+      function liveRows(dl, g, v) {
+        function wide(cls, text) {
+          var e = el('div', 'info-wide' + (cls ? ' ' + cls : ''), text);
+          dl.append(e);
+          return e;
+        }
+        dl.classList.add('live');
+        wide('info-sec', v.over ? 'Last level' : 'Match in progress');
+        var c = liveClock(v);
+        var clock = wide('info-clock');
+        var big = el('b', null, c.big);
+        big.dataset.tick = 'big';
+        var small = el('small', null, c.small);
+        small.dataset.tick = 'small';
+        var left = el('span');
+        left.append(big, ' ', small);
+        clock.append(left);
+        if (v.sl) clock.append(el('small', null, (v.mode & MODE_TEAMS ? 'first team to ' : 'first to ') + v.sl));
+        if (v.tl && !v.over) {
+          var bar = wide('info-bar');
+          var fill = el('span');
+          fill.dataset.tick = 'bar';
+          fill.style.width = Math.round(c.part * 100) + '%';
+          bar.append(fill);
+        }
+        if (v.nocount === 'password') {
+          wide('info-note', "Scores aren't shown for games with a password.");
+        } else {
+          var teams = liveTeams(v);
+          if (teams.length) {
+            var line = wide('info-teams');
+            teams.forEach(function(t) {
+              var b = el('b');
+              b.append(el('span', 'team-chip t' + t), TEAM_NAMES[t] + ' ' + v.teams[t]);
+              line.append(b);
+            });
+          }
+          if (v.sb.length) {
+            var rows = v.sb.slice();
+            if (teams.length) {
+              rows.sort(function(a, b) { return teams.indexOf(a[4]) - teams.indexOf(b[4]) || b[1] - a[1]; });
+            }
+            var table = el('table');
+            var head = el('tr');
+            ['Player', 'Score', 'Kills', 'Deaths'].forEach(function(h) { head.append(el('th', null, h)); });
+            table.append(head);
+            var lead = !teams.length && rows.length > 1 && rows[0][1] > rows[1][1] && rows[0][1] > 0;
+            rows.forEach(function(r, i) {
+              var tr = el('tr');
+              var name = el('td', i === 0 && lead ? 'lead' : null);
+              if (teams.length && r[4]) name.append(el('span', 'team-chip t' + r[4]));
+              name.append(r[0] || 'Player');
+              tr.append(name, el('td', 'score', String(r[1])), el('td', null, String(r[2])), el('td', null, String(r[3])));
+              table.append(tr);
+            });
+            dl.append(table);
+          }
+          var feed = liveFeed(v);
+          if (feed) wide(null, feed).dataset.tick = 'feed';
+        }
+        if (v.pl) {
+          var next = v.pl.i + 1 < v.pl.n || v.pl.loop ? (v.pl.next || 'the next level') : '';
+          wide(null, 'Playlist: level ' + (v.pl.i + 1) + ' of ' + v.pl.n + '. ' +
+                     (next ? 'Up next: ' + next + '.' : 'This is its last level.'));
+        }
+      }
+
+      // The rules of a game's match, as Info rows.
+      function ruleRows(g, v) {
+        var since = lobbyNow() - v.at;
+        return [['Mode', modeText(g, v.mode, v.nocount === 'coop')],
+                ['Time limit', v.tl ? v.tl + ' min' : 'None'], ['Score limit', v.sl ? String(v.sl) : 'None'],
+                g.rank >= 0 ? ['Max Force rank', String(g.rank)] : null,
+                ['Leaderboard', v.nocount === 'password' ? "Doesn't count (password)" :
+                                v.nocount === 'coop' ? "Doesn't count (co-op level)" :
+                                v.count && since < v.count * 1000 && !v.over ? 'Counts after ' + Math.round(v.count / 60) + ' min' :
+                                'Counts']].filter(Boolean);
+      }
+
+      // Every second while a room window is open, its matches' times move
+      // on: the clocks in Info, the bars, the last kill's "ago" and the
+      // lines on the tables. Nothing else is redrawn.
+      function tickLive() {
+        if (!room.open || document.hidden) return;
+        roomGames.querySelectorAll('[data-live]').forEach(function(box) {
+          var g = liveGames[box.dataset.live];
+          var v = g && gameLive(g);
+          if (!v) return;
+          var c = liveClock(v);
+          box.querySelectorAll('[data-tick]').forEach(function(e) {
+            switch (e.dataset.tick) {
+            case 'big': e.textContent = c.big; break;
+            case 'small': e.textContent = c.small; break;
+            case 'bar': e.style.width = Math.round((c.part || 0) * 100) + '%'; break;
+            case 'feed': e.textContent = liveFeed(v); break;
+            case 'summary': e.textContent = liveSummary(v); break;
+            }
+          });
+        });
+      }
+      // uid -> the game, as last drawn.
+      var liveGames = {};
+      setInterval(tickLive, 1000);
+
       // g is one of roomGameList's: the lobby's game or the relay's.
       function gameTable(g, i) {
         var stop = imperialStop(g);
@@ -8328,15 +8616,39 @@
         summary.dataset.key = 'sum-' + g.uid;
         var dl = el('dl');
         var level = levelTitle(g);
-        [['Game', g.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight'],
+        var v = gameLive(g);
+        var gameRows = [['Game', g.game === 'mots' ? 'Mysteries of the Sith' : 'Jedi Knight'],
          ['Relay', g.imperial ? 'Imperial (' + (imperialLive.server || 'Unknown') + ')' : 'OpenJKDF2'],
          g.imperial ? ['Server', g.dedicated ? 'Dedicated' : 'Hosted by a player'] : null,
          ['Map', level || g.map || 'Unknown'], ['Episode', episodeTitle(g) || g.episode || 'Unknown'],
-         ['Mod', g.mod || 'None'], ['Password', g.locked ? 'Yes' : 'No']].filter(Boolean).forEach(function(row) {
-          dl.append(el('dt', null, row[0]), el('dd', null, row[1]));
-        });
+         ['Mod', g.mod || 'None'], ['Password', g.locked ? 'Yes' : 'No']].filter(Boolean);
+        function rows(list) {
+          list.forEach(function(row) { dl.append(el('dt', null, row[0]), el('dd', null, row[1])); });
+        }
+        if (v) {
+          liveRows(dl, g, v);
+          dl.append(el('div', 'info-wide info-sec', 'Rules'));
+          rows(ruleRows(g, v));
+          dl.append(el('div', 'info-wide info-sec', 'Game'));
+          rows(gameRows);
+        } else {
+          // Before its host's game has reported (or the relay's, which
+          // never does): what the listing says.
+          if (g.imperial && g.mode >= 0) gameRows.splice(3, 0, ['Mode', modeText(g, g.mode, false)]);
+          if (g.rank >= 0) gameRows.push(['Max Force rank', String(g.rank)]);
+          rows(gameRows);
+        }
         info.append(summary, dl);
-        li.append(info);
+        var meta = el('div', 'table-meta');
+        meta.append(info);
+        if (v) {
+          var line = el('p', 'table-summary', liveSummary(v));
+          line.dataset.tick = 'summary';
+          meta.append(line);
+          li.dataset.live = g.uid;
+          liveGames[g.uid] = g;
+        }
+        li.append(meta);
 
         var body = el('div', 'table-body');
         var ring = el('div', 'ring');
@@ -8581,6 +8893,7 @@
         var focusKey = active && roomGames.contains(active) ? active.dataset.key : null;
         var openInfo = Array.from(roomGames.querySelectorAll('details[open]')).map(function(d) { return d.dataset.key; });
         roomGames.replaceChildren();
+        liveGames = {};
         // While the lobby isn't answering, the relay's games still show.
         if (!s) {
           roomGames.append(el('p', 'room-message', lobbyLive.state !== 'down' ? 'Connecting to the lobby…' :
