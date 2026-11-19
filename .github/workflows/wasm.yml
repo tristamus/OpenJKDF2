@@ -167,6 +167,12 @@ jobs:
       # deaths or suicides, and when it's forgotten again.
       - name: Test a level whose script keeps the score
         run: sh packaging/wasm/test/scripted-test.sh
+      # The milliseconds each fixed physics step counts, in C with the tree's
+      # own sithTime_StepMs cut out of sithTime.c and sithUpdate's step loop
+      # rebuilt around it, at 30 to 1000 Hz: a 60 s item respawn takes 60 s,
+      # not the 66.7 s that 6 ms steps took.
+      - name: Test the time each physics step counts
+        run: sh packaging/wasm/test/steptime-test.sh
       # A host's map upload to a player joining mid-match, over a modelled
       # upload with queues the page can't see, through the lobby, over the
       # map channel and on the Imperial Network Protocol: the map comes, sent

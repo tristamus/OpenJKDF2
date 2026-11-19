@@ -18,6 +18,26 @@ static size_t sithTime_deltaUs_history_collected_entries = 0;
 // Added
 flex_d_t sithTime_physicsRolloverFrames = 0.0;
 
+// Added: the part of a millisecond that the fixed physics steps have stood
+// for and no step has counted yet (sithTime_StepMs).
+flex_d_t sithTime_physicsRolloverMs = 0.0;
+
+// Added: the whole milliseconds that the next fixed physics step, secStep
+// long, stands for. A step is 1/150 s, 6.67 ms, and the timers that count
+// down in whole milliseconds (a thing's msecLifeLeft: an item's respawn, a
+// force pulled item's return, a dropped weapon, a corpse, a shot's range;
+// and an actor's air underwater) used to get (int)6.67 = 6 ms a step. They
+// ran 10% slow: a 60 s respawn took 66.7 s. This carries the part of a
+// millisecond over to the next step instead (6, 7, 7, ...), so the steps
+// count the time they stand for.
+uint32_t sithTime_StepMs(flex_d_t secStep)
+{
+    flex_d_t msec = sithTime_physicsRolloverMs + secStep * 1000.0;
+    uint32_t msecWhole = (uint32_t)msec;
+    sithTime_physicsRolloverMs = msec - (flex_d_t)msecWhole;
+    return msecWhole;
+}
+
 // MOTS altered
 void sithTime_Advance()
 {
@@ -35,6 +55,7 @@ void sithTime_Pause()
 #endif
 
         sithTime_physicsRolloverFrames = 0.0; // Added
+        sithTime_physicsRolloverMs = 0.0; // Added
     }
 }
 
@@ -49,6 +70,7 @@ void sithTime_Resume()
 #endif
 
         sithTime_physicsRolloverFrames = 0.0; // Added
+        sithTime_physicsRolloverMs = 0.0; // Added
     }
 }
 
@@ -131,6 +153,7 @@ void sithTime_Startup()
     sithTime_g_clockTime = stdPlatform_GetTimeMsec();
 
     sithTime_physicsRolloverFrames = 0.0; // Added
+    sithTime_physicsRolloverMs = 0.0; // Added
 }
 
 void sithTime_SetGameTime(uint32_t msecTime)

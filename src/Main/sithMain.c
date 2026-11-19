@@ -282,10 +282,14 @@ int sithUpdate()
             flex_t tmp = sithTime_g_frameTimeFlex;
             uint32_t tmp2 = sithTime_g_frameTime;
             sithTime_g_frameTimeFlex = DELTA_PHYSTICK_FPS;
-            sithTime_g_frameTime = (int)(DELTA_PHYSTICK_FPS * 1000.0);
 
-            for (int i = (int)framesToApply; i > 0; i--)
+            // Added: as many steps as the rollover above counted
+            // ((int)framesToApply rounded down where wholeFramesToApply
+            // rounds to nearest, so steps went missing), each with the
+            // milliseconds it stands for, not (int)6.67 = 6 (sithTime_StepMs).
+            for (uint32_t i = 0; i < wholeFramesToApply; i++)
             {
+                sithTime_g_frameTime = sithTime_StepMs(DELTA_PHYSTICK_FPS);
                 sithSurface_Tick(sithTime_g_frameTimeFlex);
                 sithThing_Update(sithTime_g_frameTimeFlex, sithTime_g_frameTime);
             }
@@ -342,7 +346,7 @@ int sithUpdate()
             uint32_t tmp6 = sithTime_g_msecGameTime;
             sithTime_g_msecGameTime -= sithTime_g_frameTime;
             sithTime_g_frameTimeFlex = DELTA_PHYSTICK_FPS;
-            sithTime_g_frameTime = (int)(DELTA_PHYSTICK_FPS * 1000.0);
+            sithTime_g_frameTime = 0; // Added: set for each step below
             sithTime_g_fps = 1.0 / sithTime_g_frameTimeFlex;
             //stdControl_updateKHz = 1.0 / (DELTA_PHYSTICK_FPS * 1000.0);
             //stdControl_updateHz = sithTime_g_fps;        
@@ -358,6 +362,11 @@ int sithUpdate()
 
             for (int i = 0; i < wholeFramesToApply; i++)
             {
+                // Added: the milliseconds this step stands for, not
+                // (int)6.67 = 6, which ran every whole-millisecond timer 10%
+                // slow (sithTime_StepMs).
+                sithTime_g_frameTime = sithTime_StepMs(DELTA_PHYSTICK_FPS);
+
                 // Added: render interpolation blends each thing's pose from
                 // the top of the frame's last step to its end.
                 if (i == wholeFramesToApply - 1)
@@ -393,6 +402,13 @@ int sithUpdate()
                 // COG scripts will sleep for periods of time based on sithTime_g_msecGameTime,
                 // so we have to emulate the current time as well
                 sithTime_g_msecGameTime += sithTime_g_frameTime;
+                // Added: but not past the frame's own time, which it's set back
+                // to below. Steps that run a little ahead of the frame (the
+                // rollover rounds to nearest) would otherwise move the clock
+                // back there, and a periodic task (sithEvent_Process) that ran
+                // in between would see a time before its last run.
+                if (sithTime_g_msecGameTime > tmp6)
+                    sithTime_g_msecGameTime = tmp6;
             }
             if (wholeFramesToApply)
                 sithInterp_CaptureCur(); // Added

@@ -19,5 +19,7 @@ void sithTime_Startup();
 MATH_FUNC void sithTime_SetGameTime(uint32_t msecTime);
 
 extern flex_d_t sithTime_physicsRolloverFrames;
+extern flex_d_t sithTime_physicsRolloverMs; // Added
+uint32_t sithTime_StepMs(flex_d_t secStep); // Added
 
 #endif // _SITHTIME_H
