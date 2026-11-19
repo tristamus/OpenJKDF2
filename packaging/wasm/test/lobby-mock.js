@@ -54,10 +54,12 @@ window.jkLobbyMock = (function() {
                 lobby: { jk1: ['DarkJedi_7', 'Tusken_Raider', 'Qu_Rahn'], mots: ['Corran_H', 'Saber_Kyp'] },
                 games: [
                     { id: 41, name: 'No mods dueling', game: 'jk1', map: 'm_boss17.jkl', episode: 'JK1MP.gob',
-                      mod: '', locked: false, players: 2, max: 4, names: ['Kyle_K', 'MaraJade'], rank: 8,
+                      mod: '', locked: false, players: 2, max: 4, names: ['Kyle_K', 'MaraJade'], rank: 8, watchers: 3,
                       live: { mode: 0x18, sl: 20, tl: 15, ago: 378, count: 120,
                               sb: [['Kyle_K', 12, 12, 7, 0], ['MaraJade', 7, 7, 12, 0]],
-                              last: ['Kyle_K', 'MaraJade', 1, 14], streak: ['Kyle_K', 4] } },
+                              last: ['Kyle_K', 'MaraJade', 1, 14], streak: ['Kyle_K', 4],
+                              kills: [['MaraJade', 'Kyle_K', 2, 96], ['Kyle_K', 'MaraJade', 4, 71], ['Kyle_K', 'MaraJade', 1, 48],
+                                      ['Kyle_K', 'MaraJade', 1, 30], ['Kyle_K', 'MaraJade', 1, 14]] } },
                     { id: 44, name: 'SBX 3.1 sabers', game: 'jk1', map: 'jhs.jkl', title: "Jedi's High School", episode: 'jhs.gob',
                       mod: 'Saber Battle X', locked: true, players: 4, max: 4, names: ['Jerec', 'Sariss', 'Yun', 'Gorc'],
                       rank: 4, live: { mode: 0x8, sl: 0, tl: 20, ago: 300, nocount: 'password' } },
@@ -70,20 +72,25 @@ window.jkLobbyMock = (function() {
                               last: ['Rax_J', 'Talon_K', 1, 22] } },
                     { id: 47, name: 'CTF practice', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF.gob',
                       mod: '', locked: false, players: 3, max: 8, names: ['Boc', 'Maw', 'RahnJedi'], rank: 4,
+                      watchers: 1,
                       live: { mode: 0x15, sl: 10, tl: 0, ago: 725, count: 120, teams: [0, 4, 6, 0, 0],
                               sb: [['Maw', 6, 9, 4, 2], ['Boc', 3, 5, 6, 1], ['RahnJedi', 1, 4, 8, 1]],
-                              last: ['Maw', 'RahnJedi', 3, 41] } },
+                              last: ['Maw', 'RahnJedi', 3, 41],
+                              kills: [['Boc', 'Maw', 2, 130], ['RahnJedi', 'Boc', 2, 88], ['Maw', 'RahnJedi', 3, 41]] } },
                     { id: 52, name: 'Rotating maps', game: 'jk1', map: 'APG_Deathmatch_Castle.jkl', title: 'APG_DEATHMATCH_CASTLE',
                       episode: 'APG_Deathmatch_Castle.gob',
                       mod: '', locked: false, players: 6, max: 8,
                       names: ['Katarn99', 'NightSister', 'ForceGrip', 'Rodian_Ace', 'Gran_Pilot', 'SaberStorm'], rank: 8,
+                      watchers: 6,
                       live: { mode: 0x8, sl: 0, tl: 10, ago: 95, count: 120,
                               pl: { i: 1, n: 3, loop: 1, next: 'Canyon Oasis' },
                               sb: [['ForceGrip', 3, 3, 0, 0], ['Katarn99', 2, 2, 1, 0], ['NightSister', 1, 1, 1, 0],
                                    ['Rodian_Ace', 1, 1, 2, 0], ['Gran_Pilot', 0, 0, 1, 0], ['SaberStorm', -1, 0, 2, 0]],
-                              last: ['', 'SaberStorm', 5, 3], streak: ['ForceGrip', 3] } },
+                              last: ['', 'SaberStorm', 5, 3], streak: ['ForceGrip', 3],
+                              kills: [['ForceGrip', 'Gran_Pilot', 4, 52], ['ForceGrip', 'Katarn99', 1, 31],
+                                      ['ForceGrip', 'Rodian_Ace', 2, 17], ['', 'SaberStorm', 5, 3]] } },
                     { id: 53, name: 'newbies welcome', game: 'jk1', map: '01narshadda.jkl', episode: 'JK1.gob',
-                      mod: '', locked: false, players: 1, max: 2, names: ['Ewok_Assassin'] }
+                      mod: '', locked: false, players: 1, max: 2, names: ['Ewok_Assassin'], spect: 0 }
                 ]
             }
         },
@@ -213,6 +220,7 @@ window.jkLobbyMock = (function() {
                            { rank: 3, score: 12 }) }
     };
     var live = null;      // the status as players come and go
+    var spectating = 0;   // the game this page says it watches (say)
     var moving = null;    // the timer making them
     var nextId = 60;
     var controls = [];
@@ -238,11 +246,19 @@ window.jkLobbyMock = (function() {
         var games = copy(s.games).map(function(g) {
             g.net = page + (g.newer ? 1 : 0);
             delete g.newer;
+            // Whether it can be watched (unless it has a password, or its
+            // host said no), and how many watch it: the made-up others
+            // (watchers), and this page while it does (say).
+            if (g.spect === undefined) g.spect = g.locked ? 0 : 1;
+            var watching = g.spect ? (g.watchers || 0) + (spectating === g.id ? 1 : 0) : 0;
+            delete g.watchers;
+            if (watching) g.watching = watching;
             if (g.live) {
                 var v = g.live;
                 v.at = now - v.ago * 1000;
                 if (v.overAgo) v.over = now - v.overAgo * 1000;
                 if (v.last) v.last[3] = now - v.last[3] * 1000;
+                if (v.kills) v.kills.forEach(function(k) { k[3] = now - k[3] * 1000; });
                 delete v.ago;
                 delete v.overAgo;
             }
@@ -396,6 +412,13 @@ window.jkLobbyMock = (function() {
             if (extra) extra.append(makeControls('room'));
             show(null, 'connecting');
             setTimeout(function() { choose(current); }, 700);
+        },
+        // A line the page sends the lobby: which game it watches.
+        say: function(line) {
+            var m = /^spectate ([0-9]+)$/.exec(line);
+            if (!m) return;
+            spectating = Number(m[1]);
+            if (live) show(toStatus(live));
         },
         // What the lobby's /ladder/recent would answer.
         recent: function() {

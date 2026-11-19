@@ -34,7 +34,7 @@ function page({ url = 'lobby.jkjunkie.com', listed = true, protocol = 'https:', 
     const shown = [];
     const env = {
         NETCODE: 0, IMPERIAL_LOBBY_LIST: listed, Module: url ? { jkImperialUrl: url } : {},
-        location: { protocol }, room: { open: true }, asks: 0,
+        location: { protocol }, room: { open: true }, watchDlg: { open: false }, asks: 0,
         document: { hidden: false, addEventListener(type, fn) { listeners[type] = fn; } },
         fetch(path, opts) {
             env.asks++;
@@ -51,7 +51,7 @@ function page({ url = 'lobby.jkjunkie.com', listed = true, protocol = 'https:', 
         },
         setTimeout(fn, ms) { const t = { fn, ms, id: timers.length + 1 }; timers.push(t); return t.id; },
         clearTimeout(id) { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); },
-        renderRoomCount() {}, renderRoom() { shown.push(JSON.parse(JSON.stringify(env.p.imperialLive))); }
+        renderRoomCount() {}, renderRoom() { shown.push(JSON.parse(JSON.stringify(env.p.imperialLive))); }, renderWatch() {}
     };
     const names = Object.keys(env).filter(k => k !== 'asks' && k !== 'p');
     env.p = new Function(...names, code + '\nreturn { cleanImperial, roomGameList, imperialStop, imperialShow, ' +

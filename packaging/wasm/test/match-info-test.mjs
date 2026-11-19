@@ -52,7 +52,7 @@ check("the page keeps a game's live part as it shows it, whatever arrives", () =
     assert.equal(s.now, NOW);
     assert.equal(s.games[0].rank, 8);
     assert.deepEqual(s.games[0].live, { mode: 0x18, sl: 20, tl: 15, at: FFA.at, over: 0, nocount: '', count: 120, pl: null,
-                                        sb: FFA.sb, teams: null, last: FFA.last, streak: FFA.streak });
+                                        sb: FFA.sb, teams: null, last: FFA.last, kills: null, streak: FFA.streak });
     // Nothing live, or nothing it can use.
     for (const v of [undefined, null, 5, 'x', [], {}, { at: -1 }, { at: 'now' }])
         assert.equal(status([game(v)]).games[0].live, null, JSON.stringify(v));
@@ -67,6 +67,21 @@ check("the page keeps a game's live part as it shows it, whatever arrives", () =
     assert.deepEqual([v.teams, v.pl, v.nocount, v.last, v.streak], [null, null, '', null, null]);
     const p = status([game({ ...FFA, pl: { i: 2, n: 3, loop: 1, next: 'Canyon\u0000 Oasis' }, nocount: 'coop' })]).games[0].live;
     assert.deepEqual([p.pl, p.nocount], [{ i: 2, n: 3, loop: true, next: 'Canyon Oasis' }, 'coop']);
+    // The latest kills, for watching it: at most 8, each as last is, odd ones dropped.
+    const k = status([game({ ...FFA, kills: [['Kyle_K', 'Maw', 1, NOW - 5 * SEC], 'x', ['Maw', 'Kyle_\u0007K', 9, NOW], [1, 2, 3, 0]] })]).games[0].live;
+    assert.deepEqual(k.kills, [['Kyle_K', 'Maw', 1, NOW - 5 * SEC], ['Maw', 'Kyle_K', 5, NOW]]);
+    const many = Array.from({ length: 12 }, (_, i) => ['A', 'B', 1, NOW - (12 - i) * SEC]);
+    assert.deepEqual(status([game({ ...FFA, kills: many })]).games[0].live.kills, many.slice(-8));
+    for (const bad of [[], 'x', [['A', 'B', 1, 0]]])
+        assert.equal(status([game({ ...FFA, kills: bad })]).games[0].live.kills, null, JSON.stringify(bad));
+});
+
+check('the page keeps whether a game can be watched, and how many are watching it', () => {
+    const g = more => status([game(null, more)]).games[0];
+    assert.deepEqual([g({ spect: 1, watching: 4 }).spect, g({ spect: 1, watching: 4 }).watching], [1, 4]);
+    assert.deepEqual([g({ spect: 0 }).spect, g({ spect: 0 }).watching], [0, 0]);
+    assert.equal(g({}).spect, -1, "a lobby that doesn't say: no Watch at all");
+    assert.deepEqual([g({ spect: 'yes', watching: -3 }).spect, g({ spect: 'yes', watching: 'x' }).watching], [1, 0]);
 });
 
 check('the clock: the time left with a time limit, the time played without, and a level that ended', () => {
