@@ -60,6 +60,10 @@
         link.href = ROOM_PICTURES[key];
         document.head.appendChild(link);
       })();
+      // #watch-<room>-window is the viewing page in a window of its own
+      // (Pop out): only that, filling the window, so the lobby page under
+      // it is never drawn.
+      if (/^#watch-[0-9]{1,9}-window$/.test(location.hash)) document.documentElement.classList.add('watch-window');
     </script>
     <style>
       body {
@@ -1492,15 +1496,118 @@
       .details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0; }
       .details dt { color: #808080; }
       .details dd { margin: 0; overflow-wrap: anywhere; }
+      /* The match's view, as big as the window lets it be while the clock
+         still shows under it. */
+      .watch-info { display: contents; }
+      .stage .watch-screen {
+        flex: none;
+        align-self: center;
+        width: min(100%, max(320px, calc((min(760px, 100vh - 32px) - 210px) * 16 / 9)));
+      }
+      html.watch-window .stage .watch-screen { width: min(100%, max(320px, calc((100vh - 190px) * 16 / 9))); }
+      /* Full screen: the view fills the screen, with the match over it. */
+      .watch-screen.full {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        max-width: none;
+        background-color: #000;
+        color: #fff;
+      }
+      .watch-screen:focus { outline: none; }
+      .watch-screen.full .watch-view { position: absolute; inset: 0; aspect-ratio: auto; border: 0; }
+      .watch-screen.full .watch-view .watch-badge { display: none; }
+      .watch-screen.full .watch-view .no-pic { font-size: clamp(15px, 2vw, 30px); }
+      .watch-screen.full.idle { cursor: none; }
+      .watch-hud { display: none; }
+      .watch-screen.full .watch-hud {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        gap: 12px;
+        padding: max(12px, 2vh) max(12px, 2vw);
+        pointer-events: none;
+        font: clamp(12px, 1.2vw, 20px)/1.35 Verdana, Geneva, sans-serif;
+      }
+      .hud-top { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.8em; min-width: 0; }
+      .hud-top .watch-badge { position: static; flex: none; display: inline-flex; font-size: 0.8em; }
+      .hud-top .grow { flex: 1; }
+      .hud-title { min-width: 0; padding: 0.3em 0.7em; background-color: rgba(0, 0, 0, 0.6); }
+      .hud-title b, .hud-title span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hud-title span { color: #bbb; font-size: 0.8em; }
+      .hud-clock { flex: none; min-width: 9em; padding: 0.3em 0.7em; background-color: rgba(0, 0, 0, 0.6); }
+      .watch-hud .watch-clock b { font-size: 1.6em; }
+      .watch-hud .watch-clock small { font-size: 0.8em; }
+      .hud-count { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 0.35em; padding: 0.3em 0.7em; background-color: rgba(0, 0, 0, 0.6); }
+      .hud-count .eye { width: 1.1em; height: 1.1em; }
+      .hud-exit {
+        flex: none;
+        white-space: nowrap;
+        pointer-events: auto;
+        padding: 0.35em 0.8em;
+        border: 1px solid rgba(255, 255, 255, 0.5);
+        background-color: rgba(0, 0, 0, 0.6);
+        color: #fff;
+        font: inherit;
+        font-size: 0.85em;
+        cursor: pointer;
+        transition: opacity 0.3s;
+      }
+      .hud-exit:hover { background-color: rgba(31, 95, 107, 0.85); }
+      .hud-panel { padding: 0.5em 0.8em; background-color: rgba(0, 0, 0, 0.6); }
+      .hud-scores { grid-column: 2; grid-row: 2; align-self: start; width: min(24em, 36vw); max-height: 100%; overflow: hidden; }
+      .hud-kills { grid-column: 1; grid-row: 3; align-self: end; justify-self: start; max-width: min(36em, 60vw); }
+      .watch-hud .watch-teams { margin-bottom: 0.3em; }
+      #watch .watch-hud th { font-size: 0.65em; }
+      #watch .watch-hud td { padding: 0.15em 0 0.15em 0.6em; }
+      .watch-hud .watch-kills { font-size: 0.85em; }
+      .hud-keys { grid-column: 2; grid-row: 3; align-self: end; justify-self: end; color: #bbb; font-size: 0.75em; transition: opacity 0.3s; }
+      .watch-screen.full.idle .hud-exit, .watch-screen.full.idle .hud-keys { opacity: 0; }
+      /* On a narrow or upright screen (a phone), the match's name and clock
+         get lines of their own, and the scores the width. */
+      @media (max-width: 700px), (max-aspect-ratio: 1/1) {
+        .watch-screen.full .watch-hud { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; font-size: 13px; }
+        .hud-top { flex-wrap: wrap; row-gap: 0.5em; }
+        .hud-title, .hud-clock { order: 1; flex: 1 1 100%; }
+        .hud-scores { grid-column: 1; grid-row: 2; width: auto; }
+        .hud-kills { grid-column: 1; grid-row: 4; max-width: none; }
+        .hud-keys { display: none; }
+      }
+      @media (pointer: coarse) {
+        .hud-keys { display: none; }
+      }
+      /* The viewing page in a window of its own (Pop out): only it, filling
+         the window. */
+      html.watch-window body > :not(#watch) { display: none !important; }
+      html.watch-window #watch {
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        max-width: none;
+        max-height: none;
+        border: 0;
+        box-shadow: none;
+      }
+      html.watch-window #watch::backdrop { background-color: #000; }
+      html.watch-window #watch [data-wact=back], html.watch-window #watch [data-wact=back] + .sep,
+      html.watch-window #watch [data-wact=pop] { display: none; }
       @media (max-width: 900px) {
         .watch-body { flex-direction: column; overflow-y: auto; }
         .mlist, .details { width: auto; overflow: visible; border-right: 0; }
         .mlist { border-bottom: 2px solid var(--win-dark); max-height: 30vh; overflow-y: auto; }
         .stage { flex: none; overflow: visible; border-right: 0; }
+        /* In a window of its own, the match comes first. */
+        html.watch-window .watch-body .stage, html.watch-window .watch-body .details { order: -1; }
+        html.watch-window .watch-body .details { border-bottom: 2px solid var(--win-dark); }
       }
 
       @media (max-width: 700px) {
         #room, #watch { width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; box-shadow: none; }
+        #watch [data-wact=pop] { display: none; }
         .pv { order: -1; width: auto; overflow: visible; border-bottom: 2px solid var(--win-dark); }
         .watch-body .stage, .watch-body .details { order: -1; }
         .watch-body .details { border-bottom: 2px solid var(--win-dark); }
@@ -2919,11 +3026,18 @@
         <button type="button" data-wact="next"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M12 2v10M2 2l7 5-7 5z" fill="#336666" stroke="#336666"/></svg>Next match</button>
         <span class="grow"></span>
         <span class="wcount" id="watch-count"></span>
+        <button type="button" data-wact="pop" title="Watch in a window of its own, to move and size as you like"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M6 2H1.5v10.5H12V8" fill="none" stroke="#336666" stroke-width="1.6"/><path d="M8 1h5v5M13 1L6.5 7.5" fill="none" stroke="#336666" stroke-width="1.6"/></svg>Pop out</button>
+        <button type="button" data-wact="full" aria-pressed="false" title="The match's view on the whole screen (F; Esc to leave)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9" fill="none" stroke="#336666" stroke-width="1.8"/></svg>Full screen</button>
         <button type="button" class="watch-btn go" data-wact="join" id="watch-join">Join</button>
       </div>
       <div class="watch-body">
         <nav class="mlist" id="watch-list" aria-label="Matches to watch"></nav>
-        <section class="stage" id="watch-stage" aria-live="off"></section>
+        <section class="stage" id="watch-stage" aria-live="off">
+          <!-- The match's view: kept from one drawing to the next, so it can
+               stay on the whole screen (Full screen). -->
+          <div class="watch-screen" id="watch-screen" tabindex="-1" hidden></div>
+          <div class="watch-info" id="watch-info"></div>
+        </section>
         <aside class="details" id="watch-details" aria-label="Match details"></aside>
       </div>
       <div class="room-status">
@@ -9339,6 +9453,14 @@
                     '4.8-7 4.8S1 8 1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="8" r="2.3" ' +
                     'fill="currentColor"/></svg>';
       var watchDlg = document.getElementById('watch');
+      // The match's view on it, which Full screen puts on the whole screen.
+      var watchScreen = document.getElementById('watch-screen');
+      // This page is the viewing page in a window of its own (Pop out,
+      // #watch-<room>-window), set in the head.
+      var watchWindow = document.documentElement.classList.contains('watch-window');
+      // Full screen, where the browser has it for a part of a page (not an
+      // iPhone's).
+      var watchCanFull = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
       // id: the lobby room watched, 0 for none; sent: what the lobby was
       // last told; last: the watched game as last seen ({key, g, no}), to say
       // so once it has ended; fromLink: a #watch-<room> waiting for the
@@ -9401,6 +9523,10 @@
         var w = watchLive.id ? watchedGame() : null;
         watchLive.last = w;
         sayWatching();
+        // A window of its own opens on this match again if reloaded.
+        if (watchWindow && watchLive.id) {
+          history.replaceState(history.state, '', location.pathname + location.search + '#watch-' + watchLive.id + '-window');
+        }
         if (room.open) renderRoom();
         if (watchDlg.open) renderWatch();
       }
@@ -9698,6 +9824,177 @@
         return b;
       }
 
+      // What Full screen shows over the view: the match and its clock, how
+      // many are watching, the scores, the latest kills and the way out. w
+      // null: only the way out (the match has ended).
+      function watchHud(w, v, list) {
+        var hud = el('div', 'watch-hud');
+        var top = el('div', 'hud-top');
+        if (w) {
+          var live = el('span', 'watch-badge live' + (!v || v.over ? ' over' : ''));
+          live.append(el('i'), !v ? 'NO SCORES YET' : v.over ? 'LEVEL OVER' : 'LIVE SCORES');
+          var title = el('div', 'hud-title');
+          title.append(el('b', null, w.no + ' · ' + (w.g.name || '(no name)')),
+                       el('span', null, (levelTitle(w.g) || w.g.map || '') + ' · ' + ROOMS[w.key].name));
+          top.append(live, title);
+          if (v) {
+            var clock = el('div', 'hud-clock');
+            watchClock(clock, v);
+            top.append(clock);
+          }
+        }
+        top.append(el('span', 'grow'));
+        if (w && w.g.watching) {
+          var count = el('span', 'hud-count');
+          count.insertAdjacentHTML('beforeend', EYE_SVG);
+          count.append(w.g.watching + ' watching');
+          top.append(count);
+        }
+        var exit = el('button', 'hud-exit', 'Exit full screen');
+        exit.type = 'button';
+        exit.dataset.wact = 'full';
+        top.append(exit);
+        hud.append(top);
+        if (w && v && v.nocount !== 'password') {
+          if (v.sb.length || liveTeams(v).length) {
+            var scores = el('div', 'hud-panel hud-scores');
+            watchScores(scores, w.g, v);
+            hud.append(scores);
+          }
+          var kills = el('div', 'hud-panel hud-kills');
+          kills.append(watchKills(v, 4));
+          hud.append(kills);
+        }
+        var others = (list || []).filter(function(x) { return canWatch(x.g) && x.g.id !== watchLive.id; }).length;
+        hud.append(el('div', 'hud-keys', (others ? '← → other matches · ' : '') + 'Esc to leave'));
+        return hud;
+      }
+
+      // ---- Full screen: the match's view on the whole screen. The page
+      // goes on drawing it there (renderWatch), so the scores stay live.
+      function watchFullOn() {
+        return !!watchScreen && (document.fullscreenElement || document.webkitFullscreenElement || null) === watchScreen;
+      }
+      function watchFull(on) {
+        if (on === watchFullOn()) return;
+        var p = null;
+        try {
+          if (on) {
+            if (!watchCanFull || watchScreen.hidden) return;
+            p = watchScreen.requestFullscreen ? watchScreen.requestFullscreen({ navigationUI: 'hide' }) :
+                watchScreen.webkitRequestFullscreen();
+          } else {
+            p = document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen();
+          }
+        } catch (e) {}
+        if (p && p.catch) p.catch(function() {});
+      }
+      // The pointer and the way out fade after a while with nothing moving.
+      var watchIdleTimer = 0;
+      function watchAwake() {
+        watchScreen.classList.remove('idle');
+        clearTimeout(watchIdleTimer);
+        if (watchFullOn()) watchIdleTimer = setTimeout(function() { watchScreen.classList.add('idle'); }, 2500);
+      }
+      // When Full screen was last left (Esc does that, not close the page).
+      var watchFullLeft = 0;
+      function watchFullChanged() {
+        var on = watchFullOn();
+        if (on === watchScreen.classList.contains('full')) return;
+        watchScreen.classList.toggle('full', on);
+        var b = watchDlg.querySelector('.room-toolbar [data-wact=full]');
+        b.setAttribute('aria-pressed', String(on));
+        watchAwake();
+        if (watchDlg.open) renderWatch();
+        // The keys go to the view, not to the button that put it there (a
+        // Space would press it again), and back after.
+        if (on) {
+          watchScreen.focus({ preventScroll: true });
+        } else {
+          watchFullLeft = Date.now();
+          if (watchDlg.open && (document.activeElement === watchScreen || document.activeElement === document.body)) {
+            b.focus({ preventScroll: true });
+          }
+        }
+      }
+      document.addEventListener('fullscreenchange', watchFullChanged);
+      document.addEventListener('webkitfullscreenchange', watchFullChanged);
+      watchScreen.addEventListener('pointermove', watchAwake);
+      watchScreen.addEventListener('dblclick', function(ev) {
+        if (ev.target.closest('button')) return;
+        watchFull(!watchFullOn());
+      });
+      // F for Full screen while the viewing page shows; on the whole screen,
+      // the arrows go to the previous and next match.
+      document.addEventListener('keydown', function(ev) {
+        if (!watchDlg.open || ev.altKey || ev.ctrlKey || ev.metaKey || ev.repeat) return;
+        if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
+        if (ev.key === 'f' || ev.key === 'F') {
+          if (!watchCanFull || (!watchFullOn() && watchScreen.hidden)) return;
+          ev.preventDefault();
+          watchFull(!watchFullOn());
+        } else if (watchFullOn() && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
+          ev.preventDefault();
+          watchStep(ev.key === 'ArrowLeft' ? -1 : 1);
+        }
+      });
+
+      // ---- Pop out: the viewing page in a window of its own, to move and
+      // size as one likes (or put on the whole screen from there). That
+      // window is this page at #watch-<room>-window and watches the match
+      // itself, so this one stops (one watcher, not two); a second Pop out
+      // takes the same window to its match.
+      function popWatch() {
+        var id = watchLive.id;
+        if (!id) return;
+        var width = Math.min(1280, (screen.availWidth || 1280) - 40);
+        var height = Math.min(800, (screen.availHeight || 800) - 40);
+        var win = null;
+        try {
+          win = window.open(location.pathname + location.search + '#watch-' + id + '-window', 'jkdf2mp-watch',
+                            'popup,width=' + width + ',height=' + height);
+        } catch (e) {}
+        if (!win) {
+          document.getElementById('watch-summary').textContent =
+            "Your browser didn't open the window. Let this site open pop-ups, then try again.";
+          return;
+        }
+        try { win.focus(); } catch (e) {}
+        watchFull(false);
+        watchGame(0);
+        watchDlg.close();
+      }
+      // In that window: the lobby page's Join, from the page that opened it
+      // (jkJoinWatched), so the game starts there, where the player is. With
+      // no page behind it, this window becomes the lobby page.
+      function openerLobby() {
+        try {
+          var o = window.opener;
+          return o && !o.closed && typeof o.jkJoinWatched === 'function' ? o : null;
+        } catch (e) {
+          return null;
+        }
+      }
+      function leaveWatchWindow() {
+        watchFull(false);
+        watchWindow = false;
+        document.documentElement.classList.remove('watch-window');
+        document.title = 'jkdf2mp Game Rooms';
+        history.replaceState(history.state, '', location.pathname + location.search);
+      }
+      window.jkJoinWatched = function(id) {
+        var w = watchedGame(Number(id));
+        if (!w || isFull(w.g) || otherVersion(w.g)) return false;
+        try { window.focus(); } catch (e) {}
+        joinWatched(w.g.id);
+        return true;
+      };
+      // Esc leaves Full screen, and only that; and it doesn't close the
+      // window's only page.
+      watchDlg.addEventListener('cancel', function(ev) {
+        if (watchWindow || watchFullOn() || Date.now() - watchFullLeft < 500) ev.preventDefault();
+      });
+
       // ---- The viewing page.
       function renderWatch() {
         var list = watchList();
@@ -9707,6 +10004,8 @@
         document.getElementById('watch-title').textContent = shown ?
           'Watching ' + shown.no + ' · ' + (shown.g.name || '(no name)') + ' — ' + ROOMS[shown.key].name :
           'Watching';
+        // A window of its own is named for it, in the taskbar too.
+        if (watchWindow) document.title = document.getElementById('watch-title').textContent + ' · jkdf2mp';
         watchGames = {};
 
         // The matches, by room.
@@ -9754,32 +10053,49 @@
           nav.append(sec);
         });
 
-        // The match.
+        // The match: its view (watchScreen, which stays put so Full screen
+        // can keep it) and what's under it (info).
         var stage = document.getElementById('watch-stage');
+        var info = document.getElementById('watch-info');
         var details = document.getElementById('watch-details');
-        stage.replaceChildren();
+        info.replaceChildren();
         details.replaceChildren();
         delete stage.dataset.live;
         delete details.dataset.live;
         var joinB = document.getElementById('watch-join');
         joinB.hidden = !w;
-        if (!lobbyLive.status) {
-          stage.append(el('p', 'empty', lobbyLive.state === 'down' ? "The lobby isn't answering right now." : 'Connecting to the lobby…'));
-        } else if (!watchLive.id) {
-          stage.append(el('p', 'empty', list.some(function(x) { return canWatch(x.g); }) ?
-            'Pick a match on the left to watch it.' : 'Nobody is playing a match that can be watched right now.'));
-        } else if (!w) {
-          stage.append(el('p', 'empty', (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ') has' : 'This game has') +
-                                        ' ended. Pick another match on the left.'));
+        var fullB = watchDlg.querySelector('.room-toolbar [data-wact=full]');
+        fullB.hidden = !watchCanFull;
+        fullB.disabled = !w;
+        var empty = !lobbyLive.status ?
+          (lobbyLive.state === 'down' ? "The lobby isn't answering right now." : 'Connecting to the lobby…') :
+          !watchLive.id ? (list.some(function(x) { return canWatch(x.g); }) ?
+            'Pick a match on the left to watch it.' : 'Nobody is playing a match that can be watched right now.') :
+          !w ? (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ') has' : 'This game has') +
+               ' ended. Pick another match on the left.' : '';
+        if (empty) {
+          info.append(el('p', 'empty', empty));
+          // On the whole screen, it says so there, until Esc.
+          if (watchFullOn()) {
+            var note = el('div', 'watch-view');
+            note.append(el('span', 'no-pic', empty.replace(' on the left', '')));
+            watchScreen.replaceChildren(note, watchHud(null, null, list));
+          } else {
+            watchScreen.replaceChildren();
+            watchScreen.hidden = true;
+          }
         } else {
           var v = gameLive(w.g);
-          stage.append(watchView(w, v));
+          var view = watchView(w, v);
+          if (watchCanFull) view.title = 'Double-click for full screen';
+          watchScreen.replaceChildren(view, watchHud(w, v, list));
+          watchScreen.hidden = false;
           if (v) {
             stage.dataset.live = details.dataset.live = w.g.uid;
             watchGames[w.g.uid] = w.g;
             var clock = el('div');
             watchClock(clock, v);
-            stage.append(clock);
+            info.append(clock);
             if (v.nocount !== 'password') {
               var teams = liveTeams(v);
               if (teams.length) {
@@ -9789,15 +10105,15 @@
                   b.append(el('span', 'team-chip t' + t), TEAM_NAMES[t] + ' ' + v.teams[t]);
                   line.append(b);
                 });
-                stage.append(line);
+                info.append(line);
               }
-              stage.append(el('div', 'watch-h', 'Last kills'), watchKills(v, 5));
-              if (v.streak) stage.append(el('p', 'watch-note', v.streak[0] + ': ' + v.streak[1] + ' kills in a row.'));
+              info.append(el('div', 'watch-h', 'Last kills'), watchKills(v, 5));
+              if (v.streak) info.append(el('p', 'watch-note', v.streak[0] + ': ' + v.streak[1] + ' kills in a row.'));
             }
           } else {
-            stage.append(el('p', 'watch-note', "Its host's game hasn't sent the lobby its scores yet."));
+            info.append(el('p', 'watch-note', "Its host's game hasn't sent the lobby its scores yet."));
           }
-          stage.append(watchFacts(w.g, v));
+          info.append(watchFacts(w.g, v));
 
           var sec = el('section');
           sec.append(el('h2', 'watch-h', 'Scores'));
@@ -9882,9 +10198,18 @@
       // Leaving the viewing page goes back to the room window of the game
       // watched, with it beside the tables (or the window it came from).
       watchDlg.addEventListener('close', function() {
+        watchFull(false);
         // Not for Join, or a game starting: the close event comes after.
         if (watchLive.joining) {
           watchLive.joining = false;
+          return;
+        }
+        // A window of its own closes with it; if the browser keeps it (it
+        // wasn't opened by Pop out), it's the lobby page from then on.
+        if (watchWindow) {
+          watchGame(0);
+          try { window.close(); } catch (e) {}
+          leaveWatchWindow();
           return;
         }
         var w = watchLive.id ? watchedGame() : null;
@@ -9902,13 +10227,25 @@
         if (act.dataset.wact === 'back') watchDlg.close();
         else if (act.dataset.wact === 'prev') watchStep(-1);
         else if (act.dataset.wact === 'next') watchStep(1);
+        else if (act.dataset.wact === 'pop') popWatch();
+        else if (act.dataset.wact === 'full') watchFull(!watchFullOn());
         else if (act.dataset.wact === 'join') joinWatched();
       });
 
-      // Join from watching: the game's room window takes it from there.
-      function joinWatched() {
-        var w = watchedGame();
+      // Join from watching (the game watched, or the one with room id id):
+      // the game's room window takes it from there.
+      function joinWatched(id) {
+        var w = watchedGame(id);
         if (!w || isFull(w.g) || otherVersion(w.g)) return;
+        if (watchWindow) {
+          var o = openerLobby();
+          if (o && o.jkJoinWatched(w.g.id)) {
+            watchGame(0);
+            window.close();
+            return;
+          }
+          leaveWatchWindow();
+        }
         if (watchDlg.open) {
           watchLive.joining = true;
           watchDlg.close();
@@ -9941,9 +10278,14 @@
       // A link to #watch-<room>: the viewing page on that match, once the
       // lobby's status is in.
       function watchFromLink() {
-        var m = /^#watch-([0-9]{1,9})$/.exec(location.hash);
+        var m = /^#watch-([0-9]{1,9})(-window)?$/.exec(location.hash);
         if (!m) return false;
         watchLive.fromLink = Number(m[1]);
+        // A window of its own shows the viewing page at once, connecting.
+        if (watchWindow && !watchDlg.open) {
+          watchDlg.showModal();
+          renderWatch();
+        }
         watchLinkReady();
         return true;
       }
@@ -9952,7 +10294,7 @@
         var id = watchLive.fromLink;
         watchLive.fromLink = 0;
         var w = watchedGame(id);
-        if (w && !room.open) openRoom(w.key);
+        if (w && !room.open && !watchWindow) openRoom(w.key);
         openWatch(w && canWatch(w.g) ? id : 0);
       }
       // Pointing at a room, tabbing to it or touching it starts its picture's
@@ -9981,7 +10323,7 @@
       // the browser's data saver on (Save-Data): then only a room pointed at
       // or opened asks for its picture. Nor once a game is starting.
       function askRoomPicturesWhenIdle() {
-        if (typeof ROOM_PICTURES !== 'object' || (navigator.connection && navigator.connection.saveData)) return;
+        if (typeof ROOM_PICTURES !== 'object' || (navigator.connection && navigator.connection.saveData) || watchWindow) return;
         var whenIdle = typeof requestIdleCallback === 'function' ? requestIdleCallback :
             function(fn) { setTimeout(fn, 1000); };
         whenIdle(function() {

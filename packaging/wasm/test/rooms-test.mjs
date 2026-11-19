@@ -275,7 +275,7 @@ test("a link to a room window asks for that room's picture with the page, and no
 // pictures have come (arrived), opens a room's window (open: a click on its
 // room, which marks the window with its key as openRoom does) and starts a
 // game (stop: what openPicker calls).
-function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {}) {
+function roomPictureWiring({ readyState = 'loading', saveData, idle = true, watchWindow = false } = {}) {
     const code = cut('      var roomPicturesAsked = {};', "      if (typeof ResizeObserver === 'function') {");
     const asked = [], images = [], dropped = [];
     // An image is complete once it has come or failed (or has no src), and
@@ -302,10 +302,10 @@ function roomPictureWiring({ readyState = 'loading', saveData, idle = true } = {
     const hold = {};
     const openRoom = key => hold.open(key);
     const stop = new Function('document', 'openRoom', 'Image', 'ROOM_PICTURES', 'window', 'navigator', 'requestIdleCallback',
-                              'setTimeout', 'roomGames', 'hold', code +
+                              'setTimeout', 'roomGames', 'hold', 'watchWindow', code +
                               '\nhold.open = function(key) { roomGames.dataset.roomKey = key; roomWindowsOpened[key] = true; };' +
                               '\nreturn stopRoomPictures;')(
-        document, openRoom, Image, pictures, window, navigator, requestIdleCallback, setTimeout, roomGames, hold);
+        document, openRoom, Image, pictures, window, navigator, requestIdleCallback, setTimeout, roomGames, hold, watchWindow);
     const run = list => list.splice(0).forEach(f => (f.fn || f)());
     const button = key => els.find(e => (e.dataset.room || e.dataset.opensRoom) === key);
     return { els, asked, loads, idles, timers, dropped, arrived, stop, srcs: () => asked.map(a => a.src),
@@ -348,6 +348,11 @@ test('once the page has loaded and the browser is idle, every picture is asked f
     w.load();
     w.idle();
     assert.deepEqual(w.srcs(), [pictures['sith-asteroid'], pictures['nar-shaddaa'], pictures['bespin-demo']]);
+
+    // The viewing page in a window of its own (Pop out) shows no room.
+    w = roomPictureWiring({ watchWindow: true });
+    w.load();
+    assert.equal(w.idles.length + w.timers.length + w.asked.length, 0, 'a window of its own fetches none');
 
     // A page that has already loaded asks for the idle time at once.
     w = roomPictureWiring({ readyState: 'complete' });
