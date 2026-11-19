@@ -32,7 +32,9 @@
 #endif
 
 // Added
-static int sithControl_followingPlayer = 0;
+// Added: the slot of the player a spectator's camera follows
+// (sithMulti_IsSpectating), -1 for none: the free camera.
+static int sithControl_followingPlayer = -1;
 static int sithControl_curDebugCam = 0;
 static char16_t sithControl_debugWStrTmp[256];
 
@@ -251,7 +253,7 @@ int sithControl_Shutdown()
     // Added: clean reset
 #ifdef QOL_IMPROVEMENTS
     // Added
-    sithControl_followingPlayer = 0;
+    sithControl_followingPlayer = -1;
     sithControl_curDebugCam = 0;
     memset(sithControl_debugWStrTmp, 0, sizeof(sithControl_debugWStrTmp));
 
@@ -1150,8 +1152,8 @@ int sithControl_HandlePlayer(SithThing *player, flex_t deltaSecs)
     if ( player->moveType != SITH_MT_PHYSICS )
         return 0;
 
-    // Added: dedicated
-    if (sithNet_isServer && jkGuiNetHost_bIsDedicated) {
+    // Added: dedicated, or a viewer watching a match (spectator mode)
+    if (sithMulti_IsSpectating()) {
         sithControl_PlayerLook(player, deltaSecs);
         sithControl_FreeCam(player);
         sithControl_GetKey(INPUT_FUNC_MAP, &input_read);
@@ -1287,15 +1289,19 @@ debug_controls:
     if ( player->moveType == SITH_MT_PHYSICS )
         sithPhysics_ResetThingMovement(player);
 
-    // Added
-    if (sithControl_followingPlayer > 0) {
+    // Added. The player followed left: the free camera, from where they were.
+    if (sithControl_followingPlayer >= 0 && !(jkPlayer_playerInfos[sithControl_followingPlayer].flags & 1)) {
+        sithControl_followingPlayer = -1;
+        sithWorld_g_pCurrentWorld->pCameraFocusThing = player;
+    }
+    if (sithControl_followingPlayer >= 0) {
         SithThing* pThing = jkPlayer_playerInfos[sithControl_followingPlayer].pLocalPlayer;
         if (pThing) {
             rdVector_Copy3(&player->position, &pThing->position);
             rdMatrix_Copy34(&player->orient, &pThing->orient);
             sithThing_SetSector(player, pThing->sector, 0);
             sithWorld_g_pCurrentWorld->pCameraFocusThing = pThing;
-            sithWorld_g_pCurrentWorld->pLocalPlayer = jkPlayer_playerInfos[0].pLocalPlayer;
+            sithWorld_g_pCurrentWorld->pLocalPlayer = player; // Fixed: this game's own, not slot 0's (a viewer's isn't)
             stdPalEffects_FlushAllAdds();
         }
     }
@@ -1305,7 +1311,8 @@ debug_controls:
         sithControl_GetKey(v3, &input_read);
         if ( input_read )
         {
-            sithControl_followingPlayer = 0; // Added
+            sithControl_followingPlayer = -1; // Added
+            sithWorld_g_pCurrentWorld->pCameraFocusThing = player; // Added
             int old = jkPlayer_maxPlayers;// Added
             jkPlayer_maxPlayers = 10; // Added
             sithControl_curDebugCam = v3 - INPUT_FUNC_SELECT1; // Added
@@ -1320,31 +1327,35 @@ debug_controls:
         }
     }
     sithControl_GetKey(INPUT_FUNC_JUMP, &input_read);
-    if ( input_read )
+    // Added: a spectator's next player is Jump or Fire, the one before Alt
+    // Fire.
+    int spectatorStep = 0;
+    if (sithMulti_IsSpectating()) {
+        int fireRead = 0;
+        if (input_read)
+            spectatorStep = 1;
+        sithControl_GetKey(INPUT_FUNC_FIRE1, &fireRead);
+        if (fireRead)
+            spectatorStep = 1;
+        sithControl_GetKey(INPUT_FUNC_FIRE2, &fireRead);
+        if (fireRead)
+            spectatorStep = -1;
+    }
+    if ( input_read || spectatorStep )
     {
         result = 0; // Added
 
-        // Added: dedicated
-        if (!(sithNet_isServer && jkGuiNetHost_bIsDedicated)) {
+        // Added: dedicated, or a viewer
+        if (!sithMulti_IsSpectating()) {
             sithActor_DamageActor(player, player, 200.0, 1);
             result = 1;
         }
         else {
-            for (sithControl_followingPlayer++; sithControl_followingPlayer < jkPlayer_maxPlayers; sithControl_followingPlayer++) {
-                if (!sithControl_followingPlayer || jkPlayer_playerInfos[sithControl_followingPlayer].flags & 1) {
-                    break;
-                }
-            }
-            if (sithControl_followingPlayer >= jkPlayer_maxPlayers) {
-                sithControl_followingPlayer = 0;
-            }
-            if (sithControl_followingPlayer)
-                jk_snwprintf(sithControl_debugWStrTmp, 256, u"Following %s", jkPlayer_playerInfos[sithControl_followingPlayer].player_name);
-            else
+            sithControl_SpectatorNext(spectatorStep);
+            // The dedicated host's free camera starts at a starting place.
+            if (sithControl_followingPlayer < 0 && sithNet_isServer && jkGuiNetHost_bIsDedicated) {
                 jk_snwprintf(sithControl_debugWStrTmp, 256, u"Spawn cam %u", sithControl_curDebugCam);
-            sithConsole_PrintWString(sithControl_debugWStrTmp);
-            
-            if (!sithControl_followingPlayer) {
+                sithConsole_PrintWString(sithControl_debugWStrTmp);
                 sithPlayerActions_MoveToPlayerPosition(player, sithControl_curDebugCam);
             }
         }
@@ -1423,12 +1434,45 @@ debug_controls:
         if ( input_read )
             g_mapModeFlags ^= 0x42u;
         sithCamera_g_pCurCamera->type = 128;
-        if (!(sithNet_isServer && jkGuiNetHost_bIsDedicated)) // Added
+        if (!sithMulti_IsSpectating()) // Added
             result = 1;
         else
             result = 0;
     }
     return result;
+}
+
+// Added: a spectator's camera (sithMulti_IsSpectating) on to the next player
+// in the match (dir 1) or the one before (-1). Past the last, the free
+// camera, from where the last one was.
+void sithControl_SpectatorNext(int dir)
+{
+    int n = (int)jkPlayer_maxPlayers;
+    if (n > JKPLAYER_NUM_INFOS)
+        n = JKPLAYER_NUM_INFOS;
+    int i = sithControl_followingPlayer;
+    if (i >= n)
+        i = -1;
+    for (int tries = 0; tries <= n; tries++)
+    {
+        i += (dir < 0) ? -1 : 1;
+        if (i >= n)
+            i = -1;
+        else if (i < -1)
+            i = n - 1;
+        if (i < 0)
+            break;
+        if (i != (int)playerThingIdx && (jkPlayer_playerInfos[i].flags & 1) && jkPlayer_playerInfos[i].pLocalPlayer)
+            break;
+    }
+    sithControl_followingPlayer = i;
+    if (i >= 0)
+        jk_snwprintf(sithControl_debugWStrTmp, 256, u"Following %s", jkPlayer_playerInfos[i].player_name);
+    else
+        jk_snwprintf(sithControl_debugWStrTmp, 256, u"Free camera");
+    sithConsole_PrintWString(sithControl_debugWStrTmp);
+    if (i < 0 && sithWorld_g_pCurrentWorld && sithPlayer_g_pLocalPlayerThing)
+        sithWorld_g_pCurrentWorld->pCameraFocusThing = sithPlayer_g_pLocalPlayerThing;
 }
 
 void sithControl_PlayerLook(SithThing *player, flex_t deltaSecs)

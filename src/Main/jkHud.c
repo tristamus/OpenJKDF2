@@ -474,7 +474,7 @@ void jkHud_Draw()
     stdDisplay_VBufferLock(Video_pCanvas->pVBuffer);
 #endif
 
-    if ( v4->type == SITH_THING_PLAYER && !(sithNet_isServer && jkGuiNetHost_bIsDedicated) )
+    if ( v4->type == SITH_THING_PLAYER && !sithMulti_IsSpectating() )
     {
         v5 = (int32_t)sithInventory_GetInventory(v4, SITHBIN_BATTERY);
         if ( v5 < 0 )
@@ -897,7 +897,7 @@ LABEL_116:
     {
         jkHud_idk16 = 0;
     }
-    if ( Video_modeStruct.viewSizeIdx < 0xAu  && !(sithNet_isServer && jkGuiNetHost_bIsDedicated))
+    if ( Video_modeStruct.viewSizeIdx < 0xAu  && !sithMulti_IsSpectating())
     {
         stdDisplay_VBufferCopy(Video_pMenuBuffer, *jkHud_pStatusLeftBm->mipSurfaces, jkHud_leftBlitX, jkHud_leftBlitY, 0, 1);
         stdDisplay_VBufferCopy(Video_pMenuBuffer, *jkHud_pStatusRightBm->mipSurfaces, jkHud_rightBlitX, jkHud_rightBlitY, 0, 1);
@@ -1012,7 +1012,7 @@ void jkHud_DrawGPU()
     if (!jkHud_bOpened)
         return;
 
-    if (!(Video_modeStruct.viewSizeIdx < 0xAu  && !(sithNet_isServer && jkGuiNetHost_bIsDedicated)))
+    if (!(Video_modeStruct.viewSizeIdx < 0xAu  && !sithMulti_IsSpectating()))
     {
         return;
     }
@@ -1056,7 +1056,7 @@ void jkHud_DrawGPU()
     std3D_DrawUIBitmap(jkHud_pStatusLeftBm, 0, jkHud_leftBlitX, jkHud_leftBlitY, NULL, jkPlayer_hudScale, 1);
     std3D_DrawUIBitmap(jkHud_pStatusRightBm, 0, jkHud_rightBlitX, jkHud_rightBlitY, NULL, jkPlayer_hudScale, 1);
 
-    if ( v4->type == SITH_THING_PLAYER && !(sithNet_isServer && jkGuiNetHost_bIsDedicated) )
+    if ( v4->type == SITH_THING_PLAYER && !sithMulti_IsSpectating() )
     {
         v5 = (int32_t)sithInventory_GetInventory(v4, SITHBIN_BATTERY);
         if ( v5 < 0 )

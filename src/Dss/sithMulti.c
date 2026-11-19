@@ -656,12 +656,27 @@ int sithMulti_ProcessWelcome(SithMessage *pMsg)
         }
         while ( v4 );
     }
+#ifdef PLATFORM_WSRELAY
+    // Added: a viewer watching the match's feed (spectator mode) is welcomed
+    // into a slot past the room's players (stdComm_WSRelay.c), which the
+    // asserts below take as in the match only while it's set up.
+    uint32_t viewerMaxPlayers = jkPlayer_maxPlayers;
+    if ( stdComm_WSRelay_bViewer && v1 >= 0 && v1 < JKPLAYER_NUM_INFOS && (uint32_t)v1 >= jkPlayer_maxPlayers )
+        jkPlayer_maxPlayers = v1 + 1;
+#endif
     g_submodeFlags &= ~8u;
     sithInterp_Reset(); // Added: render interpolation starts over with the joined world
     sithThing_LoadPostProcess();
     sithPlayer_ShowPlayer(v1, v2);
     sithPlayer_SetLocalPlayer(v1); // sets playerThingIdx and info
     sithPlayer_ResetPalEffects();
+#ifdef PLATFORM_WSRELAY
+    if ( stdComm_WSRelay_bViewer )
+    {
+        jkPlayer_maxPlayers = viewerMaxPlayers;
+        stdComm_WSRelay_ViewerJoined(v1);
+    }
+#endif
     sithEvent_RegisterTask(2, sithMulti_CheckPlayers, sithNet_tickrate, 1);
     sithMessage_StopProcessMessages();
     return 1;

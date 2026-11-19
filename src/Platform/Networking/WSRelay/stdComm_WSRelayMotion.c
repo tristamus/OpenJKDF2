@@ -272,6 +272,12 @@ int stdComm_WSRelay_SendOwnPos(SithThing* pThing, int toID, int dpFlags)
     }
     // And to a recording, once, as it was.
     pMsg->netMsg.msg_size = size;
+    // Added: and to the room's feed, once, as it was (spectator mode): these
+    // go to each player, not through the send to everyone that copies the
+    // rest (stdComm_SendToPlayer), and a game watching the feed draws
+    // players from untimed updates.
+    pMsg->netMsg.msgId = 0;
+    stdComm_WSRelay_FeedCopy(&pMsg->netMsg.cogMsgId, size + 4);
     sithComm_SendMsgToPlayer(pMsg, -1, 4, 0);
     return 1;
 }
@@ -293,6 +299,9 @@ static WSRelayPlayoutVec motion_Vec(const uint8_t* p)
 
 int stdComm_WSRelay_TakeMotion(SithThing* pThing, SithMessage* pMsg)
 {
+    // Not in a game watching a match's feed (see the timeline below).
+    if (stdComm_WSRelay_bViewer)
+        return 0;
     if (!pThing || pThing->type != SITH_THING_PLAYER || pThing == sithPlayer_g_pLocalPlayerThing || pThing->moveType != SITH_MT_PHYSICS)
         return 0;
     int slot = motion_SlotOf(pThing);
@@ -422,7 +431,9 @@ static uint32_t motion_TimedFields(const SithMessage* pMsg, int* pAt, int* pbInd
 
 int stdComm_WSRelay_HoldForTimeline(SithMessage* pMsg)
 {
-    if (!motion_bRunning)
+    // A game watching a match's feed has no clock in common with its players
+    // and draws them from untimed updates: their messages play as they come.
+    if (!motion_bRunning || stdComm_WSRelay_bViewer)
         return 0;
     const uint8_t* d = (const uint8_t*)pMsg->pktData;
     uint32_t size = pMsg->netMsg.msg_size;

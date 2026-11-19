@@ -184,6 +184,23 @@
         font: bold 17px Verdana, Geneva, sans-serif;
         text-align: center;
       }
+      /* Over the bottom of the game while it watches a match: what it says
+         (Module.jkViewNotice). It leaves the game playable underneath. */
+      .view-note {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        z-index: 25;
+        max-width: min(640px, calc(100% - 32px));
+        margin: 0;
+        padding: 8px 16px;
+        transform: translateX(-50%);
+        background-color: rgba(0, 0, 0, 0.85);
+        color: var(--gold);
+        font: bold 14px Verdana, Geneva, sans-serif;
+        text-align: center;
+        pointer-events: none;
+      }
       /* Over the top of the game in a tab that another tab's game took the
          saves from. It leaves the game playable underneath. */
       .saves-elsewhere {
@@ -1429,6 +1446,8 @@
       .watch-kills span { color: #808080; }
       .watch-facts { color: var(--muted); font-size: 11px; }
       .watch-note { margin: 0; color: #808080; font-size: 11px; }
+      /* What the game said when it stopped watching, over the match. */
+      .watch-said { order: -1; margin: 0; color: var(--gold); font-weight: bold; text-align: center; }
       .watch-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
       .watch-acts .watch-btn { height: 28px; padding: 0 12px; font-size: 13px; }
       .watch-acts .watch-btn.go { flex: 1; }
@@ -2152,6 +2171,7 @@
       <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
     </div>
     <p class="quit-note" id="quit-note" role="status" hidden>Saving your settings and going back to the lobby&hellip;</p>
+    <p class="view-note" id="view-note" role="status" hidden></p>
     <p class="saves-elsewhere" id="saves-elsewhere" role="status" hidden>The game was started in another tab, so this one no longer saves controls or games. Close this tab, or reload it to play and save here.</p>
 <div class="spinner" id='spinner'></div>
     <div class="emscripten" id="status">Downloading...</div>
@@ -3028,6 +3048,7 @@
         <span class="wcount" id="watch-count"></span>
         <button type="button" data-wact="pop" title="Watch in a window of its own, to move and size as you like"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M6 2H1.5v10.5H12V8" fill="none" stroke="#336666" stroke-width="1.6"/><path d="M8 1h5v5M13 1L6.5 7.5" fill="none" stroke="#336666" stroke-width="1.6"/></svg>Pop out</button>
         <button type="button" data-wact="full" aria-pressed="false" title="The match's view on the whole screen (F; Esc to leave)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9" fill="none" stroke="#336666" stroke-width="1.8"/></svg>Full screen</button>
+        <button type="button" data-wact="game" id="watch-game"><svg viewBox="0 0 14 14" aria-hidden="true"><rect x="1" y="2.5" width="12" height="9" rx="1" fill="none" stroke="#336666" stroke-width="1.6"/><path d="M5.5 5v4l3.5-2z" fill="#336666"/></svg>Watch in the game</button>
         <button type="button" class="watch-btn go" data-wact="join" id="watch-join">Join</button>
       </div>
       <div class="watch-body">
@@ -8157,6 +8178,7 @@
         b.addEventListener('click', function() {
           delete Module.jkJoinRoom;
           delete Module.jkJoinImperial;
+          delete Module.jkWatchRoom;
           openPicker(null);
         });
       });
@@ -8302,6 +8324,7 @@
         b.addEventListener('click', function() {
           delete Module.jkJoinRoom;
           delete Module.jkJoinImperial;
+          delete Module.jkWatchRoom;
           startDemo(DEMO_WANT);
         });
       });
@@ -8437,8 +8460,11 @@
                    locked: !!g.locked, players: num(g.players), max: num(g.max), names: names(g.names),
                    net: num(g.net), rank: g.rank === undefined ? -1 : Math.min(num(g.rank), 99), live: live(g.live),
                    // Whether its match can be watched (1 or 0; -1 from a
-                   // lobby that doesn't say), and by how many pages.
-                   spect: g.spect === undefined ? -1 : g.spect ? 1 : 0, watching: num(g.watching) };
+                   // lobby that doesn't say), and by how many pages; feed: 1
+                   // when its host's game sends the feed a game watches it
+                   // from ("Watch in the game", playWatched).
+                   spect: g.spect === undefined ? -1 : g.spect ? 1 : 0, watching: num(g.watching),
+                   feed: g.feed ? 1 : 0 };
         });
         var lobby = names(s.lobby);
         var by = s.byGame && typeof s.byGame === 'object' ? s.byGame : {};
@@ -9412,6 +9438,7 @@
         else delete Module.jkJoinRoom;
         if (kind === 'join-imperial' && /^[0-9a-f]{32}$/.test(id)) Module.jkJoinImperial = id;
         else delete Module.jkJoinImperial;
+        delete Module.jkWatchRoom;
         room.close();
         if (want.demo) startDemo(want);
         else openPicker(want);
@@ -9465,7 +9492,9 @@
       // last told; last: the watched game as last seen ({key, g, no}), to say
       // so once it has ended; fromLink: a #watch-<room> waiting for the
       // status that has it; joining: the viewing page is closing for Join.
-      var watchLive = { id: 0, sent: 0, last: null, fromLink: 0, joining: false };
+      // note: what the game said when it stopped watching (takeViewNote),
+      // on the viewing page until another match is picked.
+      var watchLive = { id: 0, sent: 0, last: null, fromLink: 0, joining: false, note: '' };
       // uid -> the game, as the viewing page last drew it (tickLive).
       var watchGames = {};
 
@@ -9519,6 +9548,7 @@
       // Watches a game, by its room id (0 to stop): beside the tables, or on
       // the viewing page while that's open.
       function watchGame(id) {
+        if ((id || 0) !== watchLive.id) watchLive.note = '';
         watchLive.id = id || 0;
         var w = watchLive.id ? watchedGame() : null;
         watchLive.last = w;
@@ -10064,6 +10094,13 @@
         delete details.dataset.live;
         var joinB = document.getElementById('watch-join');
         joinB.hidden = !w;
+        var gameB = document.getElementById('watch-game');
+        var inGame = w ? watchInGame(w) : null;
+        gameB.hidden = !inGame;
+        if (inGame) {
+          gameB.disabled = !!inGame.why;
+          gameB.title = inGame.why || 'Watch it in the game, from any player\'s view or a free camera (with your game files)';
+        }
         var fullB = watchDlg.querySelector('.room-toolbar [data-wact=full]');
         fullB.hidden = !watchCanFull;
         fullB.disabled = !w;
@@ -10073,6 +10110,7 @@
             'Pick a match on the left to watch it.' : 'Nobody is playing a match that can be watched right now.') :
           !w ? (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ') has' : 'This game has') +
                ' ended. Pick another match on the left.' : '';
+        if (watchLive.note) info.append(el('p', 'watch-said', watchLive.note));
         if (empty) {
           info.append(el('p', 'empty', empty));
           // On the whole screen, it says so there, until Esc.
@@ -10199,6 +10237,7 @@
       // watched, with it beside the tables (or the window it came from).
       watchDlg.addEventListener('close', function() {
         watchFull(false);
+        watchLive.note = '';
         // Not for Join, or a game starting: the close event comes after.
         if (watchLive.joining) {
           watchLive.joining = false;
@@ -10230,6 +10269,7 @@
         else if (act.dataset.wact === 'pop') popWatch();
         else if (act.dataset.wact === 'full') watchFull(!watchFullOn());
         else if (act.dataset.wact === 'join') joinWatched();
+        else if (act.dataset.wact === 'game') playWatched();
       });
 
       // Join from watching (the game watched, or the one with room id id):
@@ -10252,6 +10292,100 @@
         }
         if (lobbyLive.room !== w.key || !room.open) openRoom(w.key);
         roomAction('join', w.g.id, w.no);
+      }
+
+      // ---- Watch in the game: the game itself plays the match's feed (the
+      // lobby's /feed/<room>, which its host's game sends), as a player with
+      // no body who sends nothing, takes no seat and follows any player or
+      // flies free (stdComm_WSRelay.c), from the player's own game files.
+      // null when it can't be watched that way; why: what stands in the way.
+      function watchInGame(w) {
+        if (!w || w.g.imperial || !canWatch(w.g) || !w.g.feed) return null;
+        return { why: otherVersion(w.g) ? VERSION_STATE[otherVersion(w.g)] :
+                      w.g.mod ? 'Not yet for a match played with a mod' : '' };
+      }
+      // Starts the game watching the match watched (or the one with room id
+      // id), as Join starts it joining (roomAction): Module.jkWatchRoom
+      // tells the engine which. In a window of its own, the page that opened
+      // it does it (jkPlayWatched), as for Join.
+      function playWatched(id) {
+        var w = watchedGame(id);
+        var can = watchInGame(w);
+        if (!can || can.why) return;
+        if (watchWindow) {
+          var o = openerLobby();
+          if (o && typeof o.jkPlayWatched === 'function' && o.jkPlayWatched(w.g.id)) {
+            watchGame(0);
+            window.close();
+            return;
+          }
+          leaveWatchWindow();
+        }
+        var key = w.key;
+        // watch: the way back once it stops watching (jkViewLeft).
+        var want = { game: ROOMS[key].game, room: ROOMS[key].name, lobbyRoom: key, demo: !!ROOMS[key].demo,
+                     watch: w.g.id };
+        if (window.jkLobbyMock) {
+          document.getElementById('watch-summary').textContent = 'Mock-up: on the live page, this asks for your ' +
+            GAME_NAMES[want.game] + ' folder, and the game starts watching ' + w.no + ', 30 seconds behind.';
+          return;
+        }
+        delete Module.jkJoinRoom;
+        delete Module.jkJoinImperial;
+        Module.jkWatchRoom = w.g.id;
+        watchFull(false);
+        watchGame(0);
+        if (watchDlg.open) {
+          watchLive.joining = true;
+          watchDlg.close();
+        }
+        if (room.open) room.close();
+        if (want.demo) startDemo(want);
+        else openPicker(want);
+      }
+      window.jkPlayWatched = function(id) {
+        var w = watchedGame(Number(id));
+        var can = watchInGame(w);
+        if (!can || can.why || leaveGuard) return false;
+        try { window.focus(); } catch (e) {}
+        playWatched(w.g.id);
+        return true;
+      };
+      // What the game says while it watches (Module.jkView's say), over the
+      // game for a while; the last of it goes back with the player.
+      var viewNoteTimer = 0, viewNoteLast = '';
+      var VIEW_NOTE_KEY = 'jkdf2mp-watch-note';
+      Module.jkViewNotice = function(text) {
+        var note = document.getElementById('view-note');
+        viewNoteLast = String(text || '');
+        note.textContent = viewNoteLast;
+        note.hidden = !viewNoteLast;
+        clearTimeout(viewNoteTimer);
+        viewNoteTimer = setTimeout(function() { note.hidden = true; }, 10000);
+      };
+      // The game stopped watching (the match ended, the player left it, or it
+      // couldn't be watched): back to the viewing page on that match, as
+      // Quit goes back to the lobby (jkQuitToLobby), saying why.
+      Module.jkViewLeft = function(id) {
+        if (!pickerWant || !pickerWant.watch) return false;
+        leaveGuard = false;
+        try { sessionStorage.setItem(VIEW_NOTE_KEY, viewNoteLast); } catch (e) {}
+        document.getElementById('quit-note').textContent = 'Going back to watching\u2026';
+        document.getElementById('quit-note').hidden = false;
+        saveThenLeave(function(done) { Module.FS.syncfs(false, done); }, QUIT_SAVE_MS, function() {
+          history.replaceState(null, '', location.pathname + location.search + '#watch-' + (Number(id) || pickerWant.watch));
+          location.reload();
+        });
+        return true;
+      };
+      // Back on the viewing page: what the game said last, once.
+      function takeViewNote() {
+        var text = '';
+        try {
+          text = sessionStorage.getItem(VIEW_NOTE_KEY) || '';
+          sessionStorage.removeItem(VIEW_NOTE_KEY);
+        } catch (e) {}
+        return text.substring(0, 200);
       }
 
       // The room window's Watch, the preview's close, Watch full size and
@@ -10281,6 +10415,7 @@
         var m = /^#watch-([0-9]{1,9})(-window)?$/.exec(location.hash);
         if (!m) return false;
         watchLive.fromLink = Number(m[1]);
+        watchLive.fromLinkNote = takeViewNote();
         // A window of its own shows the viewing page at once, connecting.
         if (watchWindow && !watchDlg.open) {
           watchDlg.showModal();
@@ -10296,6 +10431,9 @@
         var w = watchedGame(id);
         if (w && !room.open && !watchWindow) openRoom(w.key);
         openWatch(w && canWatch(w.g) ? id : 0);
+        watchLive.note = watchLive.fromLinkNote || '';
+        watchLive.fromLinkNote = '';
+        if (watchLive.note) renderWatch();
       }
       // Pointing at a room, tabbing to it or touching it starts its picture's
       // download (ROOM_PICTURES), so it's mostly there by the time the window

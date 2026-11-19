@@ -250,6 +250,8 @@ window.jkLobbyMock = (function() {
             // host said no), and how many watch it: the made-up others
             // (watchers), and this page while it does (say).
             if (g.spect === undefined) g.spect = g.locked ? 0 : 1;
+            // And its host's game sends the feed a game watches it from.
+            if (g.spect) g.feed = 1;
             var watching = g.spect ? (g.watchers || 0) + (spectating === g.id ? 1 : 0) : 0;
             delete g.watchers;
             if (watching) g.watching = watching;

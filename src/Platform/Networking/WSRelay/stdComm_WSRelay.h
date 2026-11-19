@@ -50,6 +50,22 @@ void stdComm_WSRelay_FeedCopy(const void* pData, uint32_t size);
 // feed a keyframe (sithMulti_FeedKeyframe) when it's due.
 void stdComm_WSRelay_FeedFrame();
 
+// Watching a match in the game (spectator mode): this game plays a room's
+// feed as a player with no body, who sends nothing (see "Watching a match in
+// the game" in stdComm_WSRelay.c). Set from the page's Module.jkWatchRoom
+// when the engine starts.
+extern int stdComm_WSRelay_bViewer;
+
+// Main_StartupViewer: waits for the feed's level. 1 with its episode, map and
+// multiplayer mode flags, and this game set up to play it as a joiner would;
+// 0 if it can't be watched (the page says why) and the viewer is off.
+int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int mapLen, int* pModeFlags);
+
+// sithMulti_ProcessWelcome, once the viewer is in the level in this slot:
+// its body is hidden and the camera follows the first player.
+void stdComm_WSRelay_ViewerJoined(int slot);
+void stdComm_WSRelay_ViewerNoLevel(const char* pEpisode);
+
 // Called each frame of the join screen: 1 once the games stdComm_EnumSessions
 // asked for are in jkGuiMultiplayer_aEntries, for the screen to put up as it
 // does after stdComm_EnumSessions returns 0.

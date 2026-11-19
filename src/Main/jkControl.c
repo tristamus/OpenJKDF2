@@ -60,7 +60,7 @@ int jkControl_HandleHudKeys(SithThing *player, flex_t b)
     char16_t a4[256]; // [esp+108h] [ebp-200h] BYREF
 
     // Added: dedicated
-    if ((sithNet_isServer && jkGuiNetHost_bIsDedicated) || (player->actorParams.flags & SITH_TF_RENDERWEAPON) == 0 )
+    if (sithMulti_IsSpectating() || (player->actorParams.flags & SITH_TF_RENDERWEAPON) == 0 )
     {
         if ( !jkHud_bChatOpen )
         {

@@ -146,6 +146,16 @@ void sithMulti_SyncPlayers(int idTo, int dpFlags);
 #ifdef PLATFORM_WSRELAY
 void sithMulti_FeedKeyframe(int idTo);
 #endif
+
+// Added: this game's player has no body and only watches, with a free camera
+// that can follow the players: the dedicated host's, or a viewer's watching a
+// match in the game (spectator mode, stdComm_WSRelay.c).
+#ifdef PLATFORM_WSRELAY
+extern int stdComm_WSRelay_bViewer;
+#define sithMulti_IsSpectating() ((sithNet_isServer && jkGuiNetHost_bIsDedicated) || stdComm_WSRelay_bViewer)
+#else
+#define sithMulti_IsSpectating() (sithNet_isServer && jkGuiNetHost_bIsDedicated)
+#endif
 int sithMulti_ProcessSyncPlayers(SithMessage *pMsg);
 void sithMulti_ProcessPlayerLost(int idPlayer);
 void sithMulti_InitTick(uint32_t tickrate);
