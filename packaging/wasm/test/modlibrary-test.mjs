@@ -457,6 +457,32 @@ await test('jkdf2.net\'s mods: from the list of both, said where they\'re from, 
     }
 });
 
+await test('a game watching a match played with a library mod gets it by its id, with no menu open (viewGet)', async () => {
+    const w = await makeTab({ idb: makeIDB() });
+    const progress = [];
+    const got = await L(w).viewGet('jk1', 701, (d, t) => progress.push([d, t]));
+    assert.equal(got.fp, sbxFp, 'the fingerprint Get Mod gives');
+    assert.ok(progress.length && progress.at(-1)[0] === progress.at(-1)[1], 'the download, to its end');
+    const saved = await w.jkMods.library.list('jk1');
+    assert.deepEqual(saved.map(x => [x.lib, x.sha256]), [[701, sbxFp]], 'saved as Get Mod saves it');
+    assert.equal(L(w).text(T.MESSAGE), '', 'nothing left for the menu to show');
+    assert.equal(await L(w).viewGet('jk1', 999999, () => {}), null, 'an id it does not list');
+    assert.equal(await L(w).viewGet('x', 701, () => {}), null);
+    // Through mods.js, as the engine asks for it from the host's keyframe.
+    const v = await makeTab({ idb: makeIDB() });
+    v.jkMods.viewFetch(v.jkMods.lib.encodeTail(sbxFp, 'SBX-JK v3.1', null), '701', () => {});
+    await until(() => v.jkMods.state() !== 0, 'the mod');
+    assert.equal(v.jkMods.state(), 3, 'restart');
+    const path = v.jkMods.restart();
+    assert.equal(path, 'netmods/' + sbxFp.slice(0, 16));
+    assert.ok(v.FS.files.has('/jk1/' + path + '/cog/new.cog'));
+    // Cancelled while it downloads: aborted, nothing set up.
+    const c = await makeTab({ idb: makeIDB() });
+    const ac = new AbortController();
+    ac.abort();
+    await assert.rejects(L(c).viewGet('jk1', 701, () => {}, ac.signal));
+});
+
 await test('every request for a zip asked for its SHA-256', async () => {
     for (const r of requests.filter(r => / \/levels\/z\//.test(r)))
         assert.match(r, /\?h=[0-9a-f]{64}$/);

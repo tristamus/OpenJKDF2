@@ -59,6 +59,9 @@ extern int stdComm_WSRelay_bViewer;
 // Main_StartupViewer: waits for the feed's level. 1 with its episode, map and
 // multiplayer mode flags, and this game set up to play it as a joiner would;
 // 0 if it can't be watched (the page says why) and the viewer is off.
+// 1 watching, 0 it can't, or STDCOMM_WSRELAY_VIEW_RESTART: the engine is
+// restarting into the match's mod (g_should_exit is set), to watch again.
+#define STDCOMM_WSRELAY_VIEW_RESTART (2)
 int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int mapLen, int* pModeFlags);
 
 // sithMulti_ProcessWelcome, once the viewer is in the level in this slot:

@@ -307,7 +307,12 @@ static int Main_StartupViewer()
     stdString_SafeStrCopy(jkGuiMultiplayer_mpcInfo.tipMat, "sabergreen0.mat", 32);
     jkGuiMultiplayer_mpcInfo.jediRank = 0;
 
-    if (!stdComm_WSRelay_ViewerOpen(aEpisode, sizeof(aEpisode), aMap, sizeof(aMap), &modeFlags))
+    int opened = stdComm_WSRelay_ViewerOpen(aEpisode, sizeof(aEpisode), aMap, sizeof(aMap), &modeFlags);
+    // Onto the match's mod first: the main loop exits at once (g_should_exit)
+    // and main() starts the engine again with it, watching the same room.
+    if (opened == STDCOMM_WSRELAY_VIEW_RESTART)
+        return 1;
+    if (!opened)
         return 0;
 
     // As the join screen does with the game picked (jkGuiMultiplayer_Show),

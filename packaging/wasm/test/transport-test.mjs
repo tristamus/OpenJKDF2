@@ -2371,35 +2371,111 @@ test('a viewer can\'t watch a match with another mod than the one it runs, and s
     assert.equal(viewLevel(v2.game).r, 1);
 });
 
-test('a viewer says what\'s wrong when the match\'s Remastered pack or mod isn\'t its own, as mods.js reads the tails', async () => {
-    // mods.js's parseTail, for these made-up tails.
+test('a viewer whose mod or Remastered pack isn\'t the match\'s goes to get it (2), as mods.js reads the tails', async () => {
+    // mods.js's parseTail, for these made-up tails. M2 is M's mod under
+    // another folder name.
     const TAILS = { P1: { fp: null, name: null, pack: 'aa' }, P2: { fp: null, name: null, pack: 'bb' },
-                    M: { fp: 'ff', name: 'M', pack: null }, X: { bad: true } };
-    async function watch(hostTail, ownTail) {
+                    M: { fp: 'ff', name: 'M', pack: null }, M2: { fp: 'ff', name: 'Other', pack: null }, X: { bad: true } };
+    async function watch(hostTail, ownTail, mods = {}) {
         const world = makeWorld();
         const { game, feed } = await viewer(world);
-        game.Module.jkMods = { tail: () => ownTail, lib: { parseTail: t => TAILS[t] || null } };
+        game.Module.jkMods = { tail: () => ownTail, lib: { parseTail: t => TAILS[t] || null }, viewFetch: () => {}, ...mods };
         const said = [];
         game.Module.jkViewNotice = t => said.push(t);
         feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('JKMP', 'mdm02.jkl', { game: 'mots', tail: hostTail }), keyEnd()])));
-        return { r: viewLevel(game).r, said: said.join('\n') };
+        return { r: viewLevel(game).r, said: said.join('\n'), game, feed };
     }
-    let v = await watch('P1', '');
+    for (const [host, own] of [['P1', ''], ['P1', 'P2'], ['', 'P1'], ['M', 'P1'], ['', 'M'], ['M', '']]) {
+        const v = await watch(host, own);
+        assert.equal(v.r, 2, host + ' watched from ' + own);
+        assert.equal(v.said, '');
+        assert.equal(v.feed.readyState, 1, 'the feed stays open');
+    }
+    let v = await watch('X', '');
     assert.equal(v.r, -1);
-    assert.match(v.said, /with the MotS Remastered pack, which your game folder doesn't have/);
-    v = await watch('P1', 'P2');
-    assert.match(v.said, /different version/);
-    v = await watch('', 'P1');
-    assert.match(v.said, /without the MotS Remastered pack/);
-    v = await watch('M', 'P1');
-    assert.match(v.said, /played with a mod\. Watching mod matches in the game is not ready yet/);
-    v = await watch('', 'M');
-    assert.match(v.said, /played without a mod/);
-    v = await watch('X', '');
     assert.match(v.said, /can't read/);
-    // The same pack: it watches.
+    // Without mods.js's viewFetch (an older page), it says it can't.
+    v = await watch('M', '', { viewFetch: undefined });
+    assert.equal(v.r, -1);
+    assert.match(v.said, /played with a mod, and this game can't get onto it/);
+    // Restarted for this match's mod already, and still not on it: once only.
+    const world = makeWorld();
+    const { game, feed } = await viewer(world);
+    game.Module.jkMods = { tail: () => '', lib: { parseTail: t => TAILS[t] || null }, viewFetch: () => {} };
+    game.Module.jkWatchModFor = 'M';
+    const said = [];
+    game.Module.jkViewNotice = t => said.push(t);
+    feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('JKMP', 'mdm02.jkl', { game: 'mots', tail: 'M' }), keyEnd()])));
+    assert.equal(viewLevel(game).r, -1);
+    assert.match(said.join('\n'), /couldn't start with the mod this match is played with/);
+    // The same pack, or the same mod in a folder of another name: it watches,
+    // and forgets the restart.
     v = await watch('P1', 'P1');
     assert.equal(v.r, 1);
+    v = await watch('M', 'M2', {});
+    assert.equal(v.r, 1);
+    v.game.Module.jkWatchModFor = 'M';
+    assert.equal(viewLevel(v.game).r, 1);
+    assert.equal('jkWatchModFor' in v.game.Module, false);
+});
+
+test('a viewer gets the match\'s mod with mods.js, says how far along it is, and restarts to watch the same room', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world, 12);
+    const said = [], asked = [];
+    let left = 0, error = '';
+    game.Module.jkViewNotice = t => said.push(t);
+    game.Module.jkViewLeft = () => { left++; return true; };
+    game.Module.jkMods = {
+        tail: () => '', lib: { parseTail: t => (t ? { fp: 'ff', name: 'Saber Pack', pack: null } : null) },
+        viewFetch: (tail, lib, onProgress) => { asked.push([tail, lib]); onProgress(1, 4); onProgress(3, 4); onProgress(4, 4); },
+        viewError: () => error
+    };
+    feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('JK1MP', 'm2.jkl', { tail: 'T', lib: '634' }), keyEnd()])));
+    assert.equal(viewLevel(game).r, 2);
+    game.js.wsrelay_js_view_fetch_mod();
+    assert.deepEqual(asked, [['T', '634']], "the host's tail and the Mod Library's id from the keyframe");
+    assert.deepEqual(said.filter(t => /Mod Library/.test(t)), ["Getting this match's mod from the Mod Library: 25 percent"],
+                     'at most once a second');
+    game.js.wsrelay_js_view_mod_error(1000, 100);
+    assert.equal(game.mem[1000], 0, 'nothing to say yet');
+    error = "The Mod Library's copy isn't it.";
+    game.js.wsrelay_js_view_mod_error(1000, 100);
+    assert.equal(new TextDecoder().decode(game.mem.slice(1000, game.mem.indexOf(0, 1000))), error);
+    // Restarting: the page isn't asked to take the player back, the feed
+    // closes, and the same room is watched again after the restart.
+    game.js.wsrelay_js_view_restart(12);
+    assert.equal(left, 0);
+    assert.equal(game.Module.jkWatchRoom, 12);
+    assert.equal(game.Module.jkWatchModFor, 'T');
+    assert.equal(game.Module.jkView, null);
+    assert.equal(feed.readyState, 3);
+    // No keyframe, or no mods.js: nothing is asked.
+    const w2 = makeWorld();
+    const v2 = await viewer(w2);
+    v2.game.Module.jkMods = { viewFetch: () => assert.fail('asked') };
+    v2.game.js.wsrelay_js_view_fetch_mod();
+    v2.game.Module.jkMods = undefined;
+    v2.game.js.wsrelay_js_view_mod_error(1000, 100);
+    assert.equal(v2.game.mem[1000], 0);
+});
+
+test('the host\'s keyframe names the Mod Library\'s id for its mod, when it has one', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    let id = '634';
+    host.Module.jkMods = { tail: () => 'm-1234', libId: () => id };
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    const feed = world.feeds.at(-1);
+    feedKey(host, [[1]]);
+    await world.run(250);
+    assert.equal(keyHead(chunkOf(feed.sent.at(-1)).packets[0]).lib, '634');
+    id = '';
+    feedKey(host, [[1]]);
+    await world.run(250);
+    assert.equal(keyHead(chunkOf(feed.sent.at(-1)).packets[0]).lib, undefined, 'none for a mod the library didn\'t save');
 });
 
 test('synchronizing, a viewer gets the keyframe and all after it at once, then the welcome, then the rest at its pace', async () => {

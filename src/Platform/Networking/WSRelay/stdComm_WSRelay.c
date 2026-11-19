@@ -1854,11 +1854,15 @@ EM_JS(void, wsrelay_js_feed_key_begin, (const char* pEpisode, const char* pMap, 
     // sha: the SHA-256 of the episode's GOB, as joiners get it (maps.js), so
     // a viewer without it can get it from the Level Library; '' for a retail
     // one, or until it's been hashed.
+    // lib: the Mod Library's id for the host's mod, when the library saved it
+    // (mods.js libId), so a viewer without it can get it from there.
     var episode = UTF8ToString(pEpisode);
     var sha = Module.jkMaps && Module.jkMaps.hostedSha ? Module.jkMaps.hostedSha(episode, mots ? 'goo' : 'gob') : '';
+    var modLib = Module.jkMods && Module.jkMods.libId ? Module.jkMods.libId() : '';
     var head = 'JKF1' + JSON.stringify({ v: 1, game: mots ? 'mots' : 'jk1', episode: episode, map: UTF8ToString(pMap),
                                          t: gameMs >>> 0, mode: modeFlags, sum: checksum >>> 0,
-                                         tail: Module.jkMods ? Module.jkMods.tail() : '', sha: sha || undefined });
+                                         tail: Module.jkMods ? Module.jkMods.tail() : '', sha: sha || undefined,
+                                         lib: modLib || undefined });
     net.feedKeyBegin(new TextEncoder().encode(head));
 });
 
@@ -2160,32 +2164,31 @@ EM_JS(int, wsrelay_js_view_level, (char* pEpisode, int episodeLen, char* pMap, i
         }
         return 0;
     }
+    /* The match's mod and MotS Remastered pack (its tail, mods.js) and this
+       game's, by their fingerprints (a mod folder's name may differ). When
+       they aren't the same, 2: mods.js gets the match's (view_fetch_mod) and
+       the engine restarts into it, once (jkWatchModFor). */
     var h = view.level, tail = Module.jkMods ? Module.jkMods.tail() : '';
-    if ((h.tail || '') !== tail) {
-        /* The match's mod and MotS Remastered pack (its tail, mods.js) and
-           this game's: the page starts a watcher with the pack or without it
-           as the match is played (Module.jkWatchPack), so what's left is a
-           mod, or a pack this player hasn't got. */
-        var lib = Module.jkMods && Module.jkMods.lib;
-        var want = (lib && lib.parseTail(h.tail || '')) || {}, have = (lib && lib.parseTail(tail)) || {};
-        var why;
-        if (!lib)
-            why = h.tail ? 'This match is played with a mod. Watching mod matches in the game is not ready yet.'
+    var lib = Module.jkMods && Module.jkMods.lib;
+    var want = (lib && lib.parseTail(h.tail || '')) || {}, have = (lib && lib.parseTail(tail)) || {};
+    var same = (h.tail || '') === tail ||
+               (!!lib && !want.bad && (want.fp || null) === (have.fp || null) && (want.pack || null) === (have.pack || null));
+    if (!same) {
+        var why = '';
+        if (!lib || !Module.jkMods.viewFetch)
+            why = h.tail ? "This match is played with a mod, and this game can't get onto it."
                          : 'This match is played without a mod. To watch it here, start the game without one first.';
         else if (want.bad)
             why = "This match is played with a mod this game can't read.";
-        else if ((want.fp || null) !== (have.fp || null))
-            why = want.fp ? 'This match is played with a mod. Watching mod matches in the game is not ready yet.'
-                          : 'This match is played without a mod. To watch it here, start the game without one first.';
-        else if (want.pack && have.pack)
-            why = 'Your MotS Remastered pack is a different version from the one this match is played with.';
-        else if (want.pack)
-            why = "This match is played with the MotS Remastered pack, which your game folder doesn't have.";
-        else
-            why = "This match is played without the MotS Remastered pack, and this game couldn't leave yours out.";
-        view.end('mod', why);
-        return -1;
+        else if (Module.jkWatchModFor === (h.tail || ''))
+            why = "This game couldn't start with the mod this match is played with.";
+        if (why) {
+            view.end('mod', why);
+            return -1;
+        }
+        return 2;
     }
+    delete Module.jkWatchModFor;
     stringToUTF8(h.episode, pEpisode, episodeLen);
     stringToUTF8(h.map, pMap, mapLen);
     HEAP32[pInfo >> 2] = h.mode | 0;
@@ -2220,6 +2223,41 @@ EM_JS(int, wsrelay_js_view_recv, (void* pBuf, int maxLen, int* pFrom), {
 EM_JS(void, wsrelay_js_view_end, (const char* pWhy, const char* pText), {
     var view = Module.jkView;
     if (view) view.end(UTF8ToString(pWhy), UTF8ToString(pText));
+});
+
+// Starts getting this game onto the match's mod and Remastered pack, as the
+// keyframe says the host runs them (mods.js viewFetch, with the Mod Library's
+// id for the mod if it has one); wsrelay_js_mod_state says when it's done.
+// How far along a download from the Mod Library is shows over the game, at
+// most once a second.
+EM_JS(void, wsrelay_js_view_fetch_mod, (), {
+    var view = Module.jkView, mods = Module.jkMods;
+    if (!view || !view.level || !mods || !mods.viewFetch) return;
+    var h = view.level, shown = -1, last = 0;
+    mods.viewFetch(h.tail || '', h.lib || '', function(done, total) {
+        var pct = total ? Math.floor(100 * Math.min(done, total) / total) : 0, now = performance.now();
+        if (pct === shown || now - last < 1000) return;
+        shown = pct;
+        last = now;
+        view.say("Getting this match's mod from the Mod Library: " + pct + ' percent');
+    });
+});
+
+// Why mods.js couldn't get the match's mod (viewError), "" for nothing to say.
+EM_JS(void, wsrelay_js_view_mod_error, (char* pOut, int maxLen), {
+    var mods = Module.jkMods;
+    stringToUTF8(mods && mods.viewError ? mods.viewError() : '', pOut, maxLen);
+});
+
+// The engine restarts into the match's mod: it watches the same room again
+// once it has (stdComm_WSRelay_Startup takes it again), and the page doesn't
+// take the player back. jkWatchModFor: the tail it restarted for, so it
+// doesn't restart for it again if that didn't work.
+EM_JS(void, wsrelay_js_view_restart, (int room), {
+    var view = Module.jkView;
+    Module['jkWatchModFor'] = view && view.level ? view.level.tail || '' : '';
+    if (view) view.close();
+    Module['jkWatchRoom'] = room;
 });
 
 // Starts getting the feed's level as the host runs it, when its keyframe
@@ -3763,6 +3801,43 @@ static int wsrelay_ViewerNextLooks(int* pIdOut, int* pMsgIdOut, int* pLenOut, in
     return -1;
 }
 
+// The match is played with another mod (or none) or Remastered pack than
+// this game runs: mods.js gets the host's, as a joiner's game does but
+// without asking the host, and the engine restarts into it to watch the same
+// room again (as wsrelay_JoinRoom restarts for a joiner).
+// STDCOMM_WSRELAY_VIEW_RESTART once it's restarting, 0 if it can't (the
+// player has been told why).
+static int wsrelay_ViewerGetMod()
+{
+    wsrelay_js_view_fetch_mod();
+    int got;
+    while ((got = wsrelay_js_mod_state()) == WSRELAY_MAP_BUSY)
+    {
+        if (!wsrelay_js_view_alive())
+            wsrelay_js_mod_abort("cancelled");
+        emscripten_sleep(50);
+    }
+    if (got == WSRELAY_MOD_RESTART)
+    {
+        char path[sizeof(openjkdf2_aRestartPath)];
+        wsrelay_js_mod_restart(path, sizeof(path));
+        stdPlatform_Printf("OpenJKDF2: Watching room %d: restarting with mod path \"%s\".\n", wsrelay_viewRoom, path);
+        wsrelay_js_view_restart(wsrelay_viewRoom);
+        stdComm_WSRelay_bViewer = 0;
+        stdString_SafeStrCopy(openjkdf2_aRestartPath, path, sizeof(openjkdf2_aRestartPath));
+        openjkdf2_restartMode = OPENJKDF2_RESTART_PATH;
+        g_should_exit = 1;
+        return STDCOMM_WSRELAY_VIEW_RESTART;
+    }
+    char aText[400];
+    wsrelay_js_view_mod_error(aText, sizeof(aText));
+    stdPlatform_Printf("OpenJKDF2: Watching room %d: can't get onto the match's mod.\n", wsrelay_viewRoom);
+    if (wsrelay_js_view_alive())
+        wsrelay_js_view_end("mod", aText[0] ? aText : "This game couldn't get onto the mod this match is played with.");
+    wsrelay_ViewerOff();
+    return 0;
+}
+
 int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int mapLen, int* pModeFlags)
 {
     if (!stdComm_WSRelay_bViewer)
@@ -3782,6 +3857,8 @@ int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int m
     int state;
     while ((state = wsrelay_js_view_level(pEpisode, episodeLen, pMap, mapLen, aInfo)) == 0)
         emscripten_sleep(50);
+    if (state == 2)
+        return wsrelay_ViewerGetMod();
     if (state > 0 && aInfo[1] != Main_bMotsCompat)
     {
         wsrelay_js_view_end("game", aInfo[1] ? "This match is in Mysteries of the Sith. Watch it from a MotS room."

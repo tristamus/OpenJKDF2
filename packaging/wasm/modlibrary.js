@@ -653,6 +653,8 @@
         var plan = d.mod.plan;
         job.progress = function(got, total) {
             progress(total ? got / total : 0, 'Getting ' + l.t + ': ' + size(got) + ' of ' + size(total));
+            if (job.onProgress)
+                job.onProgress(got, total);
         };
         var zip = await u.download(job);
         alive(job);
@@ -714,6 +716,42 @@
         }
         await loadSaved(game);
         return out;
+    }
+
+    // A game watching a match played with one of the library's mods (mods.js
+    // viewFetch; the host's keyframe names its id): gets it as Get Mod does,
+    // saving it in this browser, with no menu open. Resolves to { fp, bytes }
+    // (fp null for a mod that's only episodes), or null when the library
+    // doesn't list that id. onProgress(done, total) for the download.
+    async function viewGet(game, id, onProgress, signal) {
+        if (!EXT[game])
+            return null;
+        var data = await loadIndex(game);
+        var l = null;
+        for (var x of data.mods) {
+            if (String(x.id) === String(id)) {
+                l = x;
+                break;
+            }
+        }
+        if (!l)
+            return null;
+        var abort = new AbortController();
+        if (signal) {
+            if (signal.aborted)
+                abort.abort();
+            else
+                signal.addEventListener('abort', function() { abort.abort(); });
+        }
+        try {
+            return await fetchMod({ l: l, game: game, abort: abort, onProgress: onProgress });
+        } finally {
+            // What it said is no one's: the menu isn't showing it.
+            if (!M.job) {
+                M.msg = '';
+                touch(CH_MSG);
+            }
+        }
     }
 
     // A mod restarted with starts ticked in the start page's Choose mods
@@ -1022,6 +1060,7 @@
         use: use,
         cancel: cancel,
         page: openPage,
+        viewGet: viewGet,
         shot: function(on, x, y, w, h) { shots[0].set(on, x, y, w, h); },
         preview: function(on, x, y, w, h) { shots[1].set(on, x, y, w, h); },
         view: function() {},
