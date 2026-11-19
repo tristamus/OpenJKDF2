@@ -14,6 +14,7 @@
 #include "World/sithActor.h"
 #include "Engine/sithCamera.h"
 #include "Engine/sithCollision.h"
+#include "Engine/sithIntersect.h"
 #include "General/stdPalEffects.h"
 #include "Gameplay/sithTime.h"
 #include "Dss/sithGamesave.h"
@@ -1474,6 +1475,8 @@ debug_controls:
     return result;
 }
 
+static void sithControl_SpectatorMoveTo(SithThing *player, const rdVector3 *dir, flex_t dist);
+
 // Added: a spectator's free camera (sithMulti_IsSpectating) turns as a
 // player does and flies where it looks, through adjoins but not walls:
 // Forward/Back and Slide move it, Run (Fast) goes faster. Its body has no
@@ -1525,12 +1528,38 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
     if (dist <= 0.0)
         return;
 
+    sithControl_SpectatorMoveTo(player, &move, dist);
+}
+
+// Added: moves a spectator's body (disabled, so with no physics) dist along
+// dir, as far as it can go: through adjoins, stopping a little short of a
+// wall or of a thing a player can't walk through (a railing, a crate, a
+// player), as the camera behind a player does (sithCamera_Update). It only
+// ever ends up inside a sector of the level: kit 159's free camera flew
+// through a railing into the dark outside.
+static void sithControl_SpectatorMoveTo(SithThing *player, const rdVector3 *dir, flex_t dist)
+{
+    if (!player->sector || dist <= 0.0)
+        return;
     rdVector3 from = player->position;
     rdVector3 to = from;
-    rdVector_ScaleAdd3Acc(&to, &move, dist);
-    // Through adjoins; at a wall it stops short of it.
-    SithSector* pSector = sithCollision_FindSectorInRadius(player->sector, &from, &to, 0.02);
-    if (!pSector)
+    rdVector_ScaleAdd3Acc(&to, dir, dist);
+    if (!sithCamera_SearchSectorInRadius(0, player->sector, &from, &to, 0.02, RAYCAST_2000 | RAYCAST_200))
+        return;
+    rdVector3 moved;
+    rdVector_Sub3(&moved, &to, &from);
+    flex_t got = rdVector_Len3(&moved);
+    if (got < dist - 0.0001)
+    {
+        // Stopped: short of what it hit, so it's never touching it.
+        got -= 0.01;
+        if (got <= 0.0)
+            return;
+        to = from;
+        rdVector_ScaleAdd3Acc(&to, dir, got);
+    }
+    SithSector* pSector = sithCollision_FindSectorInRadius(player->sector, &from, &to, 0.0);
+    if (!pSector || !sithIntersect_IsSphereInSector(&to, 0.0, pSector))
         return;
     rdVector_Copy3(&player->position, &to);
     if (pSector != player->sector)
@@ -1560,7 +1589,17 @@ void sithControl_SpectatorNext(int dir)
         if (i != (int)playerThingIdx && (jkPlayer_playerInfos[i].flags & 1) && jkPlayer_playerInfos[i].pLocalPlayer)
             break;
     }
+    int wasFollowing = sithControl_followingPlayer >= 0;
     sithControl_followingPlayer = i;
+    // The free camera starts where the player followed was, a step behind
+    // their eyes rather than inside their body.
+    if (i < 0 && wasFollowing && sithPlayer_g_pLocalPlayerThing)
+    {
+        SithThing* pSelf = sithPlayer_g_pLocalPlayerThing;
+        rdVector3 back;
+        rdVector_Neg3(&back, &pSelf->orient.lvec);
+        sithControl_SpectatorMoveTo(pSelf, &back, 0.25);
+    }
     if (i >= 0)
         jk_snwprintf(sithControl_debugWStrTmp, 256, u"Following %s", jkPlayer_playerInfos[i].player_name);
     else
