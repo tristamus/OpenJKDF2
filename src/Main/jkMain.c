@@ -760,6 +760,10 @@ LABEL_28:
 #if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_WSRELAY)
                 // Added: the match record, this game is in the level
                 stdComm_WSRelay_MatchStart();
+                // Added: watching a match, the players' looks from its
+                // keyframe again, now that jkPlayer_InitSaber has put
+                // everyone on the default saber
+                stdComm_WSRelay_ViewerInLevel();
 #endif
             }
         }

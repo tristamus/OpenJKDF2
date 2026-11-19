@@ -202,6 +202,11 @@ function makeWebSocket(world) {
                 (world.feeds = world.feeds || []).push(this);
                 world.later(() => {
                     if (this.readyState !== 0) return;
+                    // A feed out of reach (world.feedDown): it never opens.
+                    if (world.feedDown) {
+                        this.end(1006);
+                        return;
+                    }
                     this.readyState = 1;
                     if (this.onopen) this.onopen();
                 }, 1);
@@ -2100,6 +2105,28 @@ test('feed off, leaving the room, or the feed closing it stop the copies; a drop
     await world.run(10000);
     assert.equal(world.feeds.at(-1), again);
     assert.equal(host.net.feed, null);
+    // A feed that stays out of reach: tried again after 1, 2, 4, 8, 8 and 8 s,
+    // then no more.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    const first = world.feeds.length;
+    world.feedDown = true;
+    const dropped = world.now();
+    world.feeds.at(-1).end(1006);
+    const made = [];
+    for (let i = 0; i < 6; i++) {
+        const n = world.feeds.length;
+        while (world.feeds.length === n)
+            await world.run(10);
+        made.push(world.now());
+    }
+    // Each fails a millisecond after it's made, then waits.
+    const waits = made.map((t, i) => Math.round((t - (i ? made[i - 1] : dropped)) / 100) / 10);
+    assert.deepEqual(waits, [1, 2, 4, 8, 8, 8]);
+    await world.run(30000);
+    assert.equal(world.feeds.length, first + 6);
+    assert.equal(host.net.feed, null);
+    assert.ok(host.net.log.some(l => /feed: stopped, closed \(1006\)/.test(l)));
 });
 
 test('every minute the network log says how much the feed took', async () => {
@@ -2342,6 +2369,37 @@ test('a viewer can\'t watch a match with another mod than the one it runs, and s
     v2.game.Module.jkMods = { tail: () => 'abc' };
     v2.feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('JK1MP', 'm2.jkl', { tail: 'abc' }), keyEnd()])));
     assert.equal(viewLevel(v2.game).r, 1);
+});
+
+test('a viewer says what\'s wrong when the match\'s Remastered pack or mod isn\'t its own, as mods.js reads the tails', async () => {
+    // mods.js's parseTail, for these made-up tails.
+    const TAILS = { P1: { fp: null, name: null, pack: 'aa' }, P2: { fp: null, name: null, pack: 'bb' },
+                    M: { fp: 'ff', name: 'M', pack: null }, X: { bad: true } };
+    async function watch(hostTail, ownTail) {
+        const world = makeWorld();
+        const { game, feed } = await viewer(world);
+        game.Module.jkMods = { tail: () => ownTail, lib: { parseTail: t => TAILS[t] || null } };
+        const said = [];
+        game.Module.jkViewNotice = t => said.push(t);
+        feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('JKMP', 'mdm02.jkl', { game: 'mots', tail: hostTail }), keyEnd()])));
+        return { r: viewLevel(game).r, said: said.join('\n') };
+    }
+    let v = await watch('P1', '');
+    assert.equal(v.r, -1);
+    assert.match(v.said, /with the MotS Remastered pack, which your game folder doesn't have/);
+    v = await watch('P1', 'P2');
+    assert.match(v.said, /different version/);
+    v = await watch('', 'P1');
+    assert.match(v.said, /without the MotS Remastered pack/);
+    v = await watch('M', 'P1');
+    assert.match(v.said, /played with a mod\. Watching mod matches in the game is not ready yet/);
+    v = await watch('', 'M');
+    assert.match(v.said, /played without a mod/);
+    v = await watch('X', '');
+    assert.match(v.said, /can't read/);
+    // The same pack: it watches.
+    v = await watch('P1', 'P1');
+    assert.equal(v.r, 1);
 });
 
 test('synchronizing, a viewer gets the keyframe and all after it at once, then the welcome, then the rest at its pace', async () => {

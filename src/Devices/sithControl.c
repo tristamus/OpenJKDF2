@@ -1385,6 +1385,13 @@ debug_controls:
             }
         }
     }
+    // Added: a spectator's view is cameras 0 and 1 (above): the debug camera
+    // below would orbit whichever is current, made type 128 every frame,
+    // which neither the camera key nor following a player then undoes.
+    else if (sithMulti_IsSpectating())
+    {
+        result = 0;
+    }
     else
     {
         sithControl_GetKey(INPUT_FUNC_ACTIVATE, &input_read);
@@ -1497,11 +1504,13 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
         slide = -slide; // as sithControl_FreeCam's
     if (forward == 0.0 && slide == 0.0)
         return;
+    // As a player's walking (sithControl_PlayerMovement): Run or always run
+    // twice as fast, Walk half. GetKey's return is whether it's held.
     flex_t speed = SITHCONTROL_SPECTATOR_SPEED;
-    int fast = 0;
-    sithControl_GetKey(INPUT_FUNC_FAST, &fast);
-    if (fast || (sithWeapon_controlOptions & 2))
+    if ((sithWeapon_controlOptions & 2) || sithControl_GetKey(INPUT_FUNC_FAST, 0))
         speed *= 2.0;
+    if (sithControl_GetKey(INPUT_FUNC_SLOW, 0))
+        speed *= 0.5;
 
     // Where it looks: its turn, then its head's pitch.
     rdMatrix34 look;

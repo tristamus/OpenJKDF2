@@ -1435,7 +1435,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
            order and at most FEED_SENDS go a tick: a lobby's feed takes at
            most 64 KiB a chunk and 20 chunks a second. Every minute the
            network log says how much went, to measure a match's feed. */
-        var FEED_BATCH_MS = 250, FEED_MAX_CHUNK = 60000, FEED_LOG_MS = 60000, FEED_RETRIES = 3;
+        var FEED_BATCH_MS = 250, FEED_MAX_CHUNK = 60000, FEED_LOG_MS = 60000, FEED_RETRIES = 6, FEED_RETRY_MAX_MS = 8000;
         var FEED_KEY_MS = 60000, FEED_KEY_ASK_MS = 5000, FEED_KEY_MAX = 4 * 1024 * 1024, FEED_SENDS = 4, FEED_QUEUE_MAX = 400;
         net.feed = null;
         net.askFeed = function() {
@@ -1488,13 +1488,17 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 var code = ev && ev.code;
                 /* The feed ended it, or another socket of this game took its
                    place: no more. Otherwise (a network blip, the feed
-                   restarting) try again a few times. */
+                   restarting) try again soon, then less often: 1, 2, 4, 8,
+                   8 and 8 s, for about half a minute. What's sent meanwhile
+                   is lost, and watchers set it right from the keyframe that
+                   follows (keyWant). */
                 if (code === 1000 || code === 1003 || code === 1008 || code === 4001 || code === 4002 || feed.tries >= FEED_RETRIES) {
                     net.feedStop('closed (' + code + ')');
                     return;
                 }
                 feed.tries++;
-                setTimeout(function() { if (net.feed === feed && !feed.ws) net.feedOpen(feed); }, 2000 * feed.tries);
+                setTimeout(function() { if (net.feed === feed && !feed.ws) net.feedOpen(feed); },
+                           Math.min(1000 * Math.pow(2, feed.tries - 1), FEED_RETRY_MAX_MS));
             };
         };
         /* A chunk of this kind of these records, as the feed takes it. */
@@ -2153,8 +2157,28 @@ EM_JS(int, wsrelay_js_view_level, (char* pEpisode, int episodeLen, char* pMap, i
     }
     var h = view.level, tail = Module.jkMods ? Module.jkMods.tail() : '';
     if ((h.tail || '') !== tail) {
-        view.end('mod', h.tail ? 'This match is played with a mod. To watch it here, start the game with that mod first.'
-                               : 'This match is played without a mod. To watch it here, start the game without one first.');
+        /* The match's mod and MotS Remastered pack (its tail, mods.js) and
+           this game's: the page starts a watcher with the pack or without it
+           as the match is played (Module.jkWatchPack), so what's left is a
+           mod, or a pack this player hasn't got. */
+        var lib = Module.jkMods && Module.jkMods.lib;
+        var want = (lib && lib.parseTail(h.tail || '')) || {}, have = (lib && lib.parseTail(tail)) || {};
+        var why;
+        if (!lib)
+            why = h.tail ? 'This match is played with a mod. Watching mod matches in the game is not ready yet.'
+                         : 'This match is played without a mod. To watch it here, start the game without one first.';
+        else if (want.bad)
+            why = "This match is played with a mod this game can't read.";
+        else if ((want.fp || null) !== (have.fp || null))
+            why = want.fp ? 'This match is played with a mod. Watching mod matches in the game is not ready yet.'
+                          : 'This match is played without a mod. To watch it here, start the game without one first.';
+        else if (want.pack && have.pack)
+            why = 'Your MotS Remastered pack is a different version from the one this match is played with.';
+        else if (want.pack)
+            why = "This match is played with the MotS Remastered pack, which your game folder doesn't have.";
+        else
+            why = "This match is played without the MotS Remastered pack, and this game couldn't leave yours out.";
+        view.end('mod', why);
         return -1;
     }
     stringToUTF8(h.episode, pEpisode, episodeLen);
@@ -3645,12 +3669,75 @@ void stdComm_WSRelay_ViewerNoLevel(const char* pEpisode)
     wsrelay_js_view_end("level", aText);
 }
 
+// The players' looks (model, saber, sparks: DSS_SABERINFO1-3) as the feed's
+// keyframe and what came after it gave them. Once Synchronizing is over, the
+// level's start (jkMain, jkPlayer_InitSaber) puts every player back on the
+// default green saber, which a joiner sets right from what each player sends
+// it when it joins. A viewer joins no one, so it plays these again then
+// (stdComm_WSRelay_ViewerInLevel). Each: u16 length, u16 0, i32 seat, then
+// the message from cogMsgId on.
+#define WSRELAY_VIEW_LOOKS_MAX (32 * 1024)
+static uint8_t wsrelay_aViewLooks[WSRELAY_VIEW_LOOKS_MAX];
+static int wsrelay_viewLooksLen = 0;
+static int wsrelay_viewLooksAt = -1; // the next to play again, -1 until due
+
+static void wsrelay_ViewerKeepLooks(const uint8_t* pMsg, int len, int from)
+{
+    if (wsrelay_viewLooksAt >= 0 || len <= 0 || len > 0xffff || wsrelay_viewLooksLen + 8 + len > WSRELAY_VIEW_LOOKS_MAX)
+        return;
+    uint8_t* p = wsrelay_aViewLooks + wsrelay_viewLooksLen;
+    uint16_t len16 = (uint16_t)len, zero = 0;
+    int32_t from32 = from;
+    memcpy(p, &len16, 2);
+    memcpy(p + 2, &zero, 2);
+    memcpy(p + 4, &from32, 4);
+    memcpy(p + 8, pMsg, len);
+    wsrelay_viewLooksLen += 8 + len;
+}
+
+// In the level, after jkPlayer_InitSaber: the looks kept are due.
+void stdComm_WSRelay_ViewerInLevel()
+{
+    if (!stdComm_WSRelay_bViewer)
+        return;
+    wsrelay_viewLooksAt = 0;
+    stdPlatform_Printf("OpenJKDF2: Watching room %d: the players' looks again, %d bytes.\n", wsrelay_viewRoom, wsrelay_viewLooksLen);
+}
+
+// The next look kept, as DirectPlay_Receive gives a message: 0, or -1 when
+// there's none left.
+static int wsrelay_ViewerNextLooks(int* pIdOut, int* pMsgIdOut, int* pLenOut, int maxLen)
+{
+    if (wsrelay_viewLooksAt < 0)
+        return -1;
+    while (wsrelay_viewLooksAt + 8 <= wsrelay_viewLooksLen)
+    {
+        uint8_t* p = wsrelay_aViewLooks + wsrelay_viewLooksAt;
+        uint16_t len16;
+        int32_t from32;
+        memcpy(&len16, p, 2);
+        memcpy(&from32, p + 4, 4);
+        wsrelay_viewLooksAt += 8 + len16;
+        if ((int)len16 > maxLen)
+            continue;
+        memcpy(pMsgIdOut, p + 8, len16);
+        *pIdOut = from32;
+        *pLenOut = len16;
+        return 0;
+    }
+    wsrelay_viewLooksLen = 0;
+    wsrelay_viewLooksAt = -1;
+    return -1;
+}
+
 int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int mapLen, int* pModeFlags)
 {
     if (!stdComm_WSRelay_bViewer)
         return 0;
     wsrelay_bViewSyncing = 0;
     wsrelay_bViewEnded = 0;
+    wsrelay_viewLooksLen = 0;
+    wsrelay_viewLooksAt = -1;
     if (!wsrelay_js_view_open(wsrelay_viewRoom))
     {
         wsrelay_ViewerOff();
@@ -3799,6 +3886,10 @@ static int wsrelay_ViewerReceive(int* pIdOut, int* pMsgIdOut, int* pLenOut, int 
             jkPlayer_playerInfos[i].msecLastCommTime = sithTime_g_msecGameTime;
     }
 
+    // In the level: the players' looks from before it started, first.
+    if (!bSync && wsrelay_ViewerNextLooks(pIdOut, pMsgIdOut, pLenOut, maxLen) == 0)
+        return 0;
+
     while (1)
     {
         int from = 0;
@@ -3832,6 +3923,8 @@ static int wsrelay_ViewerReceive(int* pIdOut, int* pMsgIdOut, int* pLenOut, int 
         // games, and nothing a viewer takes part in.
         if (id == STDCOMM_WSRELAY_HITS_MSG || (bSync && wsrelay_ViewerSkipsWhileSyncing(id)))
             continue;
+        if (bSync && (id == DSS_SABERINFO1 || id == DSS_SABERINFO2 || id == DSS_SABERINFO3))
+            wsrelay_ViewerKeepLooks(wsrelay_recvBuf, len, from);
         memcpy(pMsgIdOut, wsrelay_recvBuf, len);
         *pIdOut = from;
         *pLenOut = len;

@@ -20,7 +20,7 @@ const STATE_BUSY = 0, STATE_READY = 1, STATE_FAILED = 2, STATE_RESTART = 3;
 
 // A tab as the page starts it: picked files written, then the engine's
 // preRun steps, which mods.js uses to work out the running mod.
-async function makeTab({ files, args = [], folders = [], idb = makeIDB(), cwd = '/jk1' }) {
+async function makeTab({ files, args = [], folders = [], idb = makeIDB(), cwd = '/jk1', watchPack }) {
     const tab = {
         FS: makeFS(files, cwd),
         arguments: args,
@@ -31,6 +31,9 @@ async function makeTab({ files, args = [], folders = [], idb = makeIDB(), cwd = 
         addRunDependency(d) { this.deps.add(d); },
         removeRunDependency(d) { this.deps.delete(d); },
     };
+    // The page's say, watching a match, on whether it runs the pack.
+    if (watchPack !== undefined)
+        tab.jkWatchPack = watchPack;
     new Function('Module', 'indexedDB', mapsSource)(tab, idb);
     new Function('Module', 'indexedDB', modsSource)(tab, idb);
     for (const step of tab.preRun)
@@ -603,11 +606,11 @@ const PACK_AT = '/mots/mods/JKMRemasteredAssets.goo';
 const PACK_OFF = '/mots/jkpack-off/JKMRemasteredAssets.goo';
 const packFp = bytes => sha(bytes).slice(0, 32);
 
-function motsTab({ pack = null, at = PACK_AT, extra = {}, args = [], folders = [] } = {}) {
+function motsTab({ pack = null, at = PACK_AT, extra = {}, args = [], folders = [], watchPack } = {}) {
     const files = { ...motsRetail, ...extra };
     if (pack)
         files[at] = pack;
-    return makeTab({ files, cwd: '/mots', args: ['-motsCompat', ...args], folders });
+    return makeTab({ files, cwd: '/mots', args: ['-motsCompat', ...args], folders, watchPack });
 }
 
 // The reason a job gave up, from the line maps.js logs for it.
@@ -634,6 +637,19 @@ test('a MotS player\'s Remastered pack is fingerprinted before the engine starts
     assert.equal(inRes.jkMods.lib.parseTail(tailOf(inRes)).pack, packFp(remaster));
     // Jedi Knight has no such pack.
     assert.equal(tailOf(await makeTab({ files: { ...retailInstall, '/jk1/mods/JKMRemasteredAssets.goo': remaster } })), '');
+});
+
+test('a game watching a match played without the Remastered pack starts without its own; one with it, with it', async () => {
+    const off = await motsTab({ pack: remaster, watchPack: false });
+    assert.equal(tailOf(off), '', 'so its lobby tail is the match\'s');
+    assert.equal(off.FS.files.get(PACK_AT), undefined, 'out of where the engine loads it from');
+    assert.deepEqual(off.FS.files.get(PACK_OFF), new Uint8Array(remaster));
+    assert.equal(off.jkWatchPack, undefined, 'taken once');
+    const on = await motsTab({ pack: remaster, watchPack: true });
+    assert.equal(on.jkMods.lib.parseTail(tailOf(on)).pack, packFp(remaster));
+    assert.deepEqual(on.FS.files.get(PACK_AT), new Uint8Array(remaster));
+    // Nothing to leave out.
+    assert.equal(tailOf(await motsTab({ watchPack: false })), '');
 });
 
 test('a joiner without the host\'s Remastered pack is told to add it, and nothing is sent', async () => {

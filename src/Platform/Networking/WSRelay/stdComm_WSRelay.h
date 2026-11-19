@@ -65,6 +65,7 @@ int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int m
 // its body is hidden and the camera follows the first player.
 void stdComm_WSRelay_ViewerJoined(int slot);
 void stdComm_WSRelay_ViewerNoLevel(const char* pEpisode);
+void stdComm_WSRelay_ViewerInLevel();
 
 // Called each frame of the join screen: 1 once the games stdComm_EnumSessions
 // asked for are in jkGuiMultiplayer_aEntries, for the screen to put up as it

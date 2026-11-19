@@ -902,6 +902,15 @@
         (async function() {
             var fp = (await lib.sha256(FS().readFile(found.dir + '/' + found.file))).substring(0, 2 * PACK_FP_BYTES);
             remaster = { fp: fp, dir: found.dir, file: found.file, root: root, on: true };
+            // Watching a match played without it (index.html's playWatched):
+            // this run leaves it out, as a joiner's restart for such a match
+            // does, so its files are the match's.
+            var watchPack = Module.jkWatchPack;
+            delete Module.jkWatchPack;
+            if (watchPack === false) {
+                setPack(false);
+                return;
+            }
             console.log('OpenJKDF2: running the ' + PACK_TITLE + ' (' + fp + ')');
         })().catch(function(e) {
             // Without a fingerprint it can't be matched with the host's, so

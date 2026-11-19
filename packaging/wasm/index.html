@@ -8179,6 +8179,7 @@
           delete Module.jkJoinRoom;
           delete Module.jkJoinImperial;
           delete Module.jkWatchRoom;
+          delete Module.jkWatchPack;
           openPicker(null);
         });
       });
@@ -8325,6 +8326,7 @@
           delete Module.jkJoinRoom;
           delete Module.jkJoinImperial;
           delete Module.jkWatchRoom;
+          delete Module.jkWatchPack;
           startDemo(DEMO_WANT);
         });
       });
@@ -9439,6 +9441,7 @@
         if (kind === 'join-imperial' && /^[0-9a-f]{32}$/.test(id)) Module.jkJoinImperial = id;
         else delete Module.jkJoinImperial;
         delete Module.jkWatchRoom;
+        delete Module.jkWatchPack;
         room.close();
         if (want.demo) startDemo(want);
         else openPicker(want);
@@ -10299,10 +10302,14 @@
       // no body who sends nothing, takes no seat and follows any player or
       // flies free (stdComm_WSRelay.c), from the player's own game files.
       // null when it can't be watched that way; why: what stands in the way.
+      // The lobby's name for a match played with the MotS Remastered pack and
+      // no mod (jkdf2mp-bb-server's modName): one the game can watch, with
+      // the player's own pack.
+      var PACK_ONLY = 'Remastered pack';
       function watchInGame(w) {
         if (!w || w.g.imperial || !canWatch(w.g) || !w.g.feed) return null;
         return { why: otherVersion(w.g) ? VERSION_STATE[otherVersion(w.g)] :
-                      w.g.mod ? 'Not yet for a match played with a mod' : '' };
+                      w.g.mod && w.g.mod !== PACK_ONLY ? 'Not yet for a match played with a mod' : '' };
       }
       // Starts the game watching the match watched (or the one with room id
       // id), as Join starts it joining (roomAction): Module.jkWatchRoom
@@ -10333,6 +10340,9 @@
         delete Module.jkJoinRoom;
         delete Module.jkJoinImperial;
         Module.jkWatchRoom = w.g.id;
+        // MotS: the game runs the player's Remastered pack only if the match
+        // does (mods.js), as a joiner's does once it's restarted for it.
+        Module.jkWatchPack = w.g.mod === PACK_ONLY;
         watchFull(false);
         watchGame(0);
         if (watchDlg.open) {
