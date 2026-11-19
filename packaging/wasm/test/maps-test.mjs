@@ -1359,6 +1359,64 @@ test('a level the site can\'t give comes from the host', async () => {
     }
 });
 
+// ---- Watching a match (stdComm_WSRelay.c's view): the level, by the
+// SHA-256 the host's keyframes carry, without asking the host anything.
+
+test('a host\'s keyframes can say which version of its level it runs, once it\'s hashed for joiners', async () => {
+    const g = makeGame({ hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap }, joinFiles: { ...retailInstall } });
+    assert.equal(g.host.jkMaps.hostedSha('ctf_test', 'gob'), '', 'not hosting yet');
+    g.host.jkMaps.host('ctf_test', 'gob');
+    await hostReady(g.host);
+    assert.equal(g.host.jkMaps.hostedSha('CTF_Test', 'gob'), sha(customMap));
+    assert.equal(g.host.jkMaps.hostedSha('ctf_test', 'goo'), '');
+    assert.equal(g.host.jkMaps.hostedSha('other', 'gob'), '');
+    g.host.jkMaps.host('JK1MP', 'gob');
+    await hostReady(g.host);
+    assert.equal(g.host.jkMaps.hostedSha('JK1MP', 'gob'), '', 'a retail level: none');
+});
+
+test('a watcher without the host\'s level gets it from the Level Library, and one with it gets nothing', async () => {
+    const g = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall } });
+    const asked = [], progress = [];
+    g.join.jkLibrary = {
+        async gobFromSite(game, sha256, onProgress) {
+            asked.push([game, sha256]);
+            onProgress(1, 2);
+            return { bytes: new Uint8Array(customMap), lib: 7 };
+        }
+    };
+    g.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap), (done, total) => progress.push([done, total]));
+    assert.equal(await waitState(g.join), 1);
+    assert.deepEqual(asked, [['jk1', sha(customMap)]]);
+    assert.deepEqual(progress, [[1, 2]]);
+    assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
+    assert.equal(g.log.length, 0, 'nothing to or from the host');
+    // Now it has it.
+    g.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap));
+    assert.equal(await waitState(g.join), 1);
+    assert.equal(asked.length, 1);
+    // A retail level: nothing to get.
+    g.join.jkMaps.viewFetch('JK1MP', 'gob', 'ab'.repeat(32));
+    assert.equal(await waitState(g.join), 1);
+    assert.equal(asked.length, 1);
+});
+
+test('a watcher with another version keeps its own when the site hasn\'t the host\'s; without one it can\'t watch', async () => {
+    const mine = makeGob([{ name: 'jkl\\ctf_test.jkl', bytes: randomBytes(300) }]);
+    for (const site of [async () => null, async () => { throw new Error('HTTP 500'); }]) {
+        const g = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': mine } });
+        g.join.jkLibrary = { gobFromSite: site };
+        g.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap));
+        assert.equal(await waitState(g.join), 1);
+        assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(mine));
+        const none = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall } });
+        none.join.jkLibrary = { gobFromSite: site };
+        none.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap));
+        assert.equal(await waitState(none.join), 2);
+        assert.equal(none.join.FS.files.get('/jk1/episode/ctf_test.gob'), undefined);
+    }
+});
+
 let failed = 0;
 for (const t of tests) {
     try {

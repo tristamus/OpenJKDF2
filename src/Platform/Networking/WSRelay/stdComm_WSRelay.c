@@ -1851,9 +1851,14 @@ EM_JS(void, wsrelay_js_feed_key_begin, (const char* pEpisode, const char* pMap, 
     if (!net || !net.feedKeyBegin) return;
     // tail: the host's mod as the lobby lists it ("" for none), which a
     // viewer needs to be running.
-    var head = 'JKF1' + JSON.stringify({ v: 1, game: mots ? 'mots' : 'jk1', episode: UTF8ToString(pEpisode), map: UTF8ToString(pMap),
+    // sha: the SHA-256 of the episode's GOB, as joiners get it (maps.js), so
+    // a viewer without it can get it from the Level Library; '' for a retail
+    // one, or until it's been hashed.
+    var episode = UTF8ToString(pEpisode);
+    var sha = Module.jkMaps && Module.jkMaps.hostedSha ? Module.jkMaps.hostedSha(episode, mots ? 'goo' : 'gob') : '';
+    var head = 'JKF1' + JSON.stringify({ v: 1, game: mots ? 'mots' : 'jk1', episode: episode, map: UTF8ToString(pMap),
                                          t: gameMs >>> 0, mode: modeFlags, sum: checksum >>> 0,
-                                         tail: Module.jkMods ? Module.jkMods.tail() : '' });
+                                         tail: Module.jkMods ? Module.jkMods.tail() : '', sha: sha || undefined });
     net.feedKeyBegin(new TextEncoder().encode(head));
 });
 
@@ -2215,6 +2220,34 @@ EM_JS(int, wsrelay_js_view_recv, (void* pBuf, int maxLen, int* pFrom), {
 EM_JS(void, wsrelay_js_view_end, (const char* pWhy, const char* pText), {
     var view = Module.jkView;
     if (view) view.end(UTF8ToString(pWhy), UTF8ToString(pText));
+});
+
+// Starts getting the feed's level as the host runs it, when its keyframe
+// says which (sha) and this player may not have it (maps.js viewFetch): 1
+// started (wsrelay_js_map_state says when it's done), 0 nothing to get.
+// How far along it is shows over the game.
+EM_JS(int, wsrelay_js_view_fetch_level, (const char* pExt), {
+    var view = Module.jkView, h = view && view.level;
+    if (!h || !h.sha || !Module.jkMaps || !Module.jkMaps.viewFetch) return 0;
+    var name = h.episode, ext = UTF8ToString(pExt), shown = 0;
+    function say(text) {
+        if (typeof Module['jkViewNotice'] === 'function') {
+            try { Module['jkViewNotice'](text); } catch (e) {}
+        }
+    }
+    Module.jkMaps.viewFetch(name, ext, h.sha, function(done, total) {
+        var now = performance.now();
+        if (!(total > 0) || now - shown < 1000) return;
+        shown = now;
+        say("Getting this match's level from the Level Library: " + Math.floor(100 * done / total) + ' percent');
+    });
+    return 1;
+});
+
+// The view is still on (the feed hasn't ended, nor the player left it).
+EM_JS(int, wsrelay_js_view_alive, (), {
+    var view = Module.jkView;
+    return view && !view.ended ? 1 : 0;
 });
 
 // The engine left the match, or never got into it. 1 if the page takes the
@@ -3763,6 +3796,31 @@ int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int m
     }
     stdPlatform_Printf("OpenJKDF2: Watching room %d: episode %s, level %s.\n", wsrelay_viewRoom, pEpisode, pMap);
     *pModeFlags = aInfo[0];
+
+    // The host's version of its level: the player's own, one saved from an
+    // earlier game, or the Level Library's (maps.js viewFetch).
+    if (wsrelay_js_view_fetch_level(JKRES_GOB_EXT))
+    {
+        int got;
+        while ((got = wsrelay_js_map_state()) == WSRELAY_MAP_BUSY)
+        {
+            if (!wsrelay_js_view_alive())
+                wsrelay_js_map_abort("cancelled");
+            emscripten_sleep(50);
+        }
+        if (got != WSRELAY_MAP_READY)
+        {
+            char aText[200];
+            stdPlatform_Printf("OpenJKDF2: Watching room %d: couldn't get episode %s.\n", wsrelay_viewRoom, pEpisode);
+            if (wsrelay_js_view_alive())
+            {
+                snprintf(aText, sizeof(aText), "Your game files don't have this match's level (%s), and the Level Library doesn't have the host's version of it.", pEpisode);
+                wsrelay_js_view_end("level", aText);
+            }
+            wsrelay_ViewerOff();
+            return 0;
+        }
+    }
 
     // As stdComm_Open leaves a joiner, under an id no player has.
     stdComm_dword_8321DC = 1;

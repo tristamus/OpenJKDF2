@@ -2577,6 +2577,46 @@ test('the host\'s keyframe says the mod it runs', async () => {
     assert.equal(keyHead(chunkOf(feed.sent.at(-1)).packets[0]).tail, 'm-1234');
 });
 
+test('the host\'s keyframe says which version of its level it runs, and a viewer gets that one', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    const SHA = 'ab'.repeat(32);
+    const asked = [];
+    host.Module.jkMaps = { hostedSha: (name, ext) => (asked.push([name, ext]), name === 'mymap' ? SHA : '') };
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    const feed = world.feeds.at(-1);
+    feedKey(host, [[1]], { episode: 'mymap' });
+    await world.run(250);
+    assert.equal(keyHead(chunkOf(feed.sent.at(-1)).packets[0]).sha, SHA);
+    feedKey(host, [[1]], { episode: 'JK1MP', mots: 1 });
+    await world.run(250);
+    assert.equal(keyHead(chunkOf(feed.sent.at(-1)).packets[0]).sha, undefined, 'none to give');
+    assert.deepEqual(asked, [['mymap', 'gob'], ['JK1MP', 'goo']]);
+
+    // The viewer: nothing to get without a sha, or without maps.js.
+    const w2 = makeWorld();
+    const { game, feed: vfeed } = await viewer(w2);
+    const said = [], fetched = [];
+    game.Module.jkViewNotice = t => said.push(t);
+    vfeed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('mymap', 'ctf.jkl'), keyEnd()])));
+    assert.equal(viewLevel(game).r, 1);
+    game.mem.set([...new TextEncoder().encode('gob'), 0], 900);
+    assert.equal(game.js.wsrelay_js_view_fetch_level(900), 0, 'no sha');
+    vfeed.deliver(feedBatch(feedRecord(300, 1, 1, [keyLevel('mymap', 'ctf.jkl', { sha: SHA }), keyEnd()])));
+    assert.equal(viewLevel(game).r, 1);
+    assert.equal(game.js.wsrelay_js_view_fetch_level(900), 0, 'no maps.js');
+    game.Module.jkMaps = { viewFetch: (name, ext, sha, onProgress) => { fetched.push([name, ext, sha]); onProgress(1, 4); onProgress(2, 4); } };
+    assert.equal(game.js.wsrelay_js_view_fetch_level(900), 1);
+    assert.deepEqual(fetched, [['mymap', 'gob', SHA]]);
+    assert.deepEqual(said.filter(t => /Level Library/.test(t)), ["Getting this match's level from the Level Library: 25 percent"],
+                     'at most once a second');
+    assert.equal(game.js.wsrelay_js_view_alive(), 1);
+    vfeed.deliver('feed ended room ended');
+    assert.equal(game.js.wsrelay_js_view_alive(), 0);
+});
+
 let failed = 0;
 for (const t of tests) {
     try {

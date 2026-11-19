@@ -1978,6 +1978,67 @@
         startJob(KIND_MAP, { name: name, ext: ext, label: name + '.' + ext }, runJob);
     }
 
+    // A game watching a match (stdComm_WSRelay.c's view) gets the level the
+    // host runs, by its GOB's SHA-256 from the feed's keyframe: the player's
+    // own copy if it's that one, else one saved from an earlier game, else
+    // the Level Library's. It asks the host nothing (no game in the match
+    // knows it's there), and shows no panel: onProgress(done, total) says how
+    // far along the download is. With another version of its own and none of
+    // the host's to be got, it watches with its own.
+    function viewFetch(name, ext, sha, onProgress) {
+        startJob(KIND_MAP, { name: name, ext: ext, sha: sha, label: name + '.' + ext, quiet: true,
+                             onProgress: onProgress || function() {} }, runViewJob);
+    }
+
+    async function runViewJob(j) {
+        if (!validEpisodeName(j.name) || !validExt(j.ext) || !/^[0-9a-f]{64}$/.test(j.sha))
+            throw fail('bad-name');
+        if (isRetailEpisode(j.name))
+            return;
+        var root = gameRoot();
+        var local = findPath(root, 'episode/' + j.name + '.' + j.ext);
+        if (local && !isFile(local))
+            local = null;
+        if (local && await sha256(fileBytes(local)) === j.sha)
+            return;
+        check(j);
+        var game = j.ext === 'goo' ? 'mots' : 'jk1';
+        var stored = null;
+        try { stored = await store.get(game, j.name, j.sha); } catch (e) {}
+        check(j);
+        if (stored && await sha256(new Uint8Array(stored.data)) === (stored.meta.own || j.sha)) {
+            check(j);
+            install(root, j.name, j.ext, new Uint8Array(stored.data));
+            console.log('OpenJKDF2: installed map ' + j.label + ' saved from an earlier game, to watch a match');
+            return;
+        }
+        var site = null;
+        if (Module.jkLibrary && Module.jkLibrary.gobFromSite) {
+            try {
+                site = await Module.jkLibrary.gobFromSite(game, j.sha, j.onProgress);
+            } catch (e) {
+                console.log('OpenJKDF2: could not get ' + j.label + ' from the Level Library (' + (e && e.message || e) + ')');
+            }
+        }
+        check(j);
+        if (!site) {
+            if (local) {
+                console.log("OpenJKDF2: watching with this player's own " + j.label + ", another version than the host's");
+                return;
+            }
+            throw fail('not-in-library');
+        }
+        try {
+            install(root, j.name, j.ext, site.bytes);
+        } catch (e) {
+            throw fail('install');
+        }
+        console.log('OpenJKDF2: installed map ' + j.label + ' from the Level Library (' + site.lib + '), to watch a match');
+        store.put(game, j.name, j.ext, j.sha, site.bytes, { lib: site.lib }).catch(function(e) {
+            console.warn('OpenJKDF2: could not save map ' + j.label + ' for next time: ' + e);
+        });
+    }
+
     // The next level of the host's playlist: got as a map is, quietly (the
     // engine's score screen shows how far along it is), and the host hears
     // how far along it is.
@@ -2619,6 +2680,15 @@
             return { rate: up.rate, groups: up.groups.size, queued: Object.assign({}, up.queued), sent: up.sent };
         },
         fetch: fetchMap,
+        // Watching a match (stdComm_WSRelay.c): the GOB's SHA-256 the host's
+        // keyframes carry, '' for a retail level or until it's hashed for
+        // joiners (host), and getting it as a watcher.
+        hostedSha: function(name, ext) {
+            var o = offers[KIND_MAP];
+            return o && o.info && o.info.status === 'ok' && o.name === String(name).toLowerCase() && o.ext === ext ?
+                   o.info.sha256 : '';
+        },
+        viewFetch: viewFetch,
         abort: function(reason) { abort(reason, KIND_MAP); },
         state: function() { return state(KIND_MAP); },
         // The next level of the host's playlist (src/Main/jkPlaylist.c).
