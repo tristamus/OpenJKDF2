@@ -510,12 +510,8 @@ EM_JS(void, Window_wasmPaceInit, (), {
   };
   /* The graphics card's queue with Vsync on (Window_wasmEndFrame). queueCap false turns it
      off, for tests; queueWaits, queueStalls and queueSlow (long waits on a busy card)
-     count, for tests too. It is on only in Chromium-based browsers (Chrome, Edge, Opera,
-     Brave), where it cost no frames on a test PC. In Firefox 160 on the same PC it cost
-     about 19% of frames with a card just too slow for the screen (191 to 154 fps), so
-     there the game paces as before. Safari is untested. Only Chromium has
-     navigator.userAgentData. */
-  pace.queueCap = !!navigator.userAgentData;
+     count, for tests too. */
+  pace.queueCap = true;
   pace.queueWaits = 0;
   pace.queueStalls = 0;
   pace.queueSlow = 0;
@@ -533,8 +529,7 @@ EM_JS(void, Window_wasmPaceInit, (), {
 // frame is drawn in it. When the card is slower than the screen, the browser let the
 // game queue three frames on it (Chrome on Windows, measured), and the mouse's movement
 // waited behind them, most likely why a player with a 480 Hz screen found the game
-// sluggish until the screen ran at 144 Hz. So in Chromium-based browsers (queueCap in
-// Window_wasmPaceInit) the next frame also waits while the card
+// sluggish until the screen ran at 144 Hz. So the next frame also waits while the card
 // hasn't drawn the frame before this one, a refresh at a time and at most 8, which keeps
 // two frames on the card: the same frame rate, and on a test PC 40-55% less time from the
 // mouse to a drawn frame. A card that keeps up never waits. Where a refresh the game
