@@ -1481,6 +1481,11 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                     feed.keyAskAt = now;
                     feed.keyWant = true;
                 }
+                /* A game watching hasn't got this host's mod: mods.js puts
+                   it on the feed (feedUp), at its https address. */
+                var mod = ev && typeof ev.data === 'string' ? /^mod ([0-9a-f]{64})$/.exec(ev.data) : null;
+                if (mod && net.isHost && Module.jkMods && Module.jkMods.feedUp)
+                    Module.jkMods.feedUp(feed.url.replace(/^ws/, 'http'), mod[1], function() { return net.feed === feed; });
             };
             ws.onclose = function(ev) {
                 if (net.feed !== feed || feed.ws !== ws) return;
@@ -2227,20 +2232,28 @@ EM_JS(void, wsrelay_js_view_end, (const char* pWhy, const char* pText), {
 
 // Starts getting this game onto the match's mod and Remastered pack, as the
 // keyframe says the host runs them (mods.js viewFetch, with the Mod Library's
-// id for the mod if it has one); wsrelay_js_mod_state says when it's done.
-// How far along a download from the Mod Library is shows over the game, at
-// most once a second.
+// id for the mod if it has one, and the feed to ask the host's game by: "mod
+// <fp>" on the feed's socket); wsrelay_js_mod_state says when it's done. How
+// far along a download is shows over the game, at most once a second and
+// when it's all in.
 EM_JS(void, wsrelay_js_view_fetch_mod, (), {
     var view = Module.jkView, mods = Module.jkMods;
     if (!view || !view.level || !mods || !mods.viewFetch) return;
-    var h = view.level, shown = -1, last = 0;
-    mods.viewFetch(h.tail || '', h.lib || '', function(done, total) {
+    var h = view.level, shown = '', last = 0;
+    var feed = { url: view.url.replace(/^ws/, 'http'), ask: function(fp) {
+        if (view.ws && view.ws.readyState === 1) {
+            try { view.ws.send('mod ' + fp); } catch (e) {}
+        }
+    } };
+    mods.viewFetch(h.tail || '', h.lib || '', function(done, total, from) {
         var pct = total ? Math.floor(100 * Math.min(done, total) / total) : 0, now = performance.now();
-        if (pct === shown || now - last < 1000) return;
-        shown = pct;
+        var text = from === 'host' && !total ? "Asking the host's game for this match's mod." :
+                   "Getting this match's mod from " + (from === 'host' ? 'its host' : 'the Mod Library') + ': ' + pct + ' percent';
+        if (text === shown || (now - last < 1000 && pct < 100)) return;
+        shown = text;
         last = now;
-        view.say("Getting this match's mod from the Mod Library: " + pct + ' percent');
-    });
+        view.say(text);
+    }, feed);
 });
 
 // Why mods.js couldn't get the match's mod (viewError), "" for nothing to say.
@@ -2267,17 +2280,18 @@ EM_JS(void, wsrelay_js_view_restart, (int room), {
 EM_JS(int, wsrelay_js_view_fetch_level, (const char* pExt), {
     var view = Module.jkView, h = view && view.level;
     if (!h || !h.sha || !Module.jkMaps || !Module.jkMaps.viewFetch) return 0;
-    var name = h.episode, ext = UTF8ToString(pExt), shown = 0;
+    var name = h.episode, ext = UTF8ToString(pExt), shown = 0, said = -1;
     function say(text) {
         if (typeof Module['jkViewNotice'] === 'function') {
             try { Module['jkViewNotice'](text); } catch (e) {}
         }
     }
     Module.jkMaps.viewFetch(name, ext, h.sha, function(done, total) {
-        var now = performance.now();
-        if (!(total > 0) || now - shown < 1000) return;
+        var now = performance.now(), all = total > 0 && done >= total;
+        if (!(total > 0) || (now - shown < 1000 && !all) || said === 100) return;
         shown = now;
-        say("Getting this match's level from the Level Library: " + Math.floor(100 * done / total) + ' percent');
+        said = all ? 100 : Math.floor(100 * done / total);
+        say("Getting this match's level from the Level Library: " + said + ' percent');
     });
     return 1;
 });

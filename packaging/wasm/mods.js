@@ -33,11 +33,13 @@
 // be chosen next time from the folder prompt.
 //
 // A game watching a match (spectator mode, stdComm_WSRelay.c's view) whose
-// mod isn't the match's gets onto it the same way, restarting, but asks the
-// host for nothing: the host's mod from the player's own mod folders, one
-// saved in this browser (from an earlier game or the Mod Library), or else
-// the Mod Library's, when the host's keyframe names the library's id for it
-// (libId(): a host's mod that the Mod Library saved).
+// mod isn't the match's gets onto it the same way, restarting: the host's mod
+// from the player's own mod folders, one saved in this browser (from an
+// earlier game or the Mod Library), the Mod Library's, when the host's
+// keyframe names the library's id for it (libId(): a host's mod that the Mod
+// Library saved), or else from the host's game by way of the match's feed,
+// which asks it to put the mod there (feedUp, maps.js), sent as to a joiner
+// with the original game files left out.
 //
 // The MotS Remastered pack (JKMRemasteredAssets.goo) isn't a mod the player
 // picks: the page leaves it in mods/, which the engine always loads
@@ -547,6 +549,16 @@
         core.withdraw(KIND_MOD);
     }
 
+    // A game watching this host's match asked its feed for the mod with
+    // fingerprint fp (stdComm_WSRelay.c): this host's mod goes to feedUrl
+    // (its https address and token) if it's that one. alive() says whether
+    // that's still the host's feed.
+    function feedUp(feedUrl, fp, alive) {
+        if (!current || current.fp !== fp)
+            return false;
+        return core.feedUp(KIND_MOD, feedUrl, fp, alive);
+    }
+
     // ---- Joiner.
 
     var MESSAGES = {
@@ -835,10 +847,12 @@
     // ---- A game watching a match (stdComm_WSRelay.c's view) whose mod or
     // Remastered pack isn't the match's: the host's (or none) as the host
     // runs them, for the engine to restart into. The host's mod comes from the
-    // player's own (findLocal, then any other mod folder with the same files)
-    // or the Mod Library's, when the host's keyframe names it (lib). It asks
-    // the host nothing and shows no panel (quiet): onProgress(done, total)
-    // says how far along a download is, and viewError() why it couldn't.
+    // player's own (findLocal, then any other mod folder with the same files),
+    // the Mod Library's, when the host's keyframe names it (lib), or the
+    // host's game by way of the match's feed (feed: its https address, and
+    // ask(fp) to ask it). It shows no panel (quiet): onProgress(done, total,
+    // from) says how far along a download is, from 'library' or 'host' (total
+    // 0 while the host's game is asked), and viewError() why it couldn't.
 
     var viewJob = null;
 
@@ -860,17 +874,40 @@
             return "The Mod Library's copy of " + name + " isn't the version this match is played with." + how;
         case 'library-error':
             return "The Mod Library couldn't be reached to get " + name + '. Try again in a minute.';
+        case 'host-silent':
+            return "The host's game didn't send " + name + ". It may be on an older version of the page." + how;
+        case 'host-stalled':
+            return "The host's game stopped sending " + name + '. Try again in a minute.';
+        case 'too-big':
+            return name + ' is over 1 GB, too big to send.' + how;
+        case 'too-many-files':
+            return name + ' has too many files to send.' + how;
+        case 'changed':
+            return "The host's mod files changed after their game started, so " + name + " can't be sent.";
+        case 'retail-only':
+            return name + ' is made only of original game files, so it isn\'t sent.' + how;
+        case 'other-mod':
+            return 'The host is running a different mod now.';
+        case 'corrupt':
+        case 'mismatch':
+            return name + " didn't arrive intact. Try again in a minute.";
+        case 'memory':
+            return 'This tab ran out of memory for ' + name + '. Close other tabs and try again.';
+        case 'bad-files':
+        case 'install':
+            return name + " couldn't be set up in this tab.";
         case 'cancelled':
             return '';
         }
         return "This game couldn't get " + name + ' to watch this match (' + reason + ').';
     }
 
-    function viewFetch(tailHex, libIdArg, onProgress) {
+    function viewFetch(tailHex, libIdArg, onProgress, feed) {
         var want = parseTail(tailHex);
         viewJob = core.startJob(KIND_MOD, {
             want: want,
             lib: libIdArg != null && libIdArg !== '' ? String(libIdArg) : '',
+            feed: feed && typeof feed.url === 'string' && feed.url && typeof feed.ask === 'function' ? feed : null,
             label: want && !want.bad ? want.name || PACK_TITLE : 'Unknown mod',
             ext: gameExt(),
             quiet: true,
@@ -906,12 +943,23 @@
             found = { fp: null, name: null, path: '' };
         } else {
             found = await findLocal(j, want);
-            if (!found && j.lib)
-                found = await fromLibrary(j, want);
+            // The Mod Library's failing, the host's game may still send it.
+            var libFailed = null;
+            if (!found && j.lib) {
+                try {
+                    found = await fromLibrary(j, want);
+                } catch (e) {
+                    if (!j.feed || !e.reason || e.reason === 'cancelled')
+                        throw e;
+                    libFailed = e;
+                }
+            }
             if (!found)
                 found = await findAnyFolder(j, want);
+            if (!found && j.feed)
+                found = await fromHost(j, want);
             if (!found)
-                throw fail(j.lib ? 'library-missing' : 'not-found');
+                throw libFailed || fail(j.lib ? 'library-missing' : 'not-found');
             if (!found.downloaded)
                 console.log('OpenJKDF2: watching with mod ' + want.name + ' from ' + found.path);
         }
@@ -952,7 +1000,8 @@
         j.cancel = function() { stop.abort(); };
         var got;
         try {
-            got = await ml.viewGet(gameName(), j.lib, j.onProgress, stop.signal);
+            got = await ml.viewGet(gameName(), j.lib, function(done, total) { j.onProgress(done, total, 'library'); },
+                                   stop.signal);
         } catch (e) {
             core.check(j);
             console.log('OpenJKDF2: could not get mod ' + want.name + ' from the Mod Library (' + (e && e.message || e) + ')');
@@ -969,6 +1018,36 @@
         unpackedAs(root, path, want.fp);
         console.log('OpenJKDF2: installed mod ' + want.name + ' from the Mod Library (' + j.lib + ', ' + count +
                     ' files), to watch a match');
+        return { fp: want.fp, name: want.name, path: path, downloaded: true };
+    }
+
+    // The host's mod from the host's game, by way of the match's feed
+    // (maps.js feedGet), checked as a joiner checks it, then saved in this
+    // browser as one from a host is.
+    async function fromHost(j, want) {
+        var root = core.gameRoot();
+        var ext = gameExt();
+        var src = { base: j.feed.url + '/mod/' + want.fp + '/', ask: function() { j.feed.ask(want.fp); } };
+        var bytes = await core.feedGet(j, src, function(info) {
+            if (info.ext !== ext)
+                throw fail('other-game');
+            core.checkInfo(info, MAX_SEND_BYTES);
+            if (info.sha256 !== want.fp)
+                throw fail('other-mod');
+        }, function(done, total) { j.onProgress(done, total, 'host'); });
+        core.check(j);
+        var path = netPath(want.fp);
+        var count;
+        try {
+            count = unpack(bytes, root + '/' + path);
+        } catch (e) {
+            throw fail(e.reason || 'install');
+        }
+        unpackedAs(root, path, want.fp);
+        console.log('OpenJKDF2: installed mod ' + want.name + " from the host's game (" + count + ' files), to watch a match');
+        store.put(gameName(), want.name, ext, want.fp, bytes).catch(function(e) {
+            console.warn('OpenJKDF2: could not save mod ' + want.name + ' for next time: ' + e);
+        });
         return { fp: want.fp, name: want.name, path: path, downloaded: true };
     }
 
@@ -1022,6 +1101,7 @@
         tail: tail,
         host: host,
         unhost: unhost,
+        feedUp: feedUp,
         fetch: fetchMod,
         abort: function(reason) { core.abort(reason, KIND_MOD); },
         state: function() { return core.state(KIND_MOD); },

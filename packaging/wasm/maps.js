@@ -1410,6 +1410,251 @@
         });
     }
 
+    // ---- Watching a match (spectator mode): what the host offers, for the
+    // games watching its match from inside the game that don't have it
+    // (mods.js, for its mod). One of them asks the match's feed
+    // (jkdf2mp-bb-server's src/feed.js), the feed asks the host's game ("mod
+    // <fp>" on its feed socket, stdComm_WSRelay.c), and it puts it there
+    // (feedUp): its INFO with parts (how many blocks) at <feed>/mod/<fp>/info,
+    // then each block b at <feed>/mod/<fp>/<b>, a byte for its codec and the
+    // block as a joiner gets it, squeezed where that makes it smaller. The
+    // original game files are left out as for a joiner. The game watching
+    // gets them from there (feedGet).
+    //
+    // The host is playing on the same upload, so blocks go one at a time and
+    // no faster than FEED_UP_RATE, and one that takes longer than that (the
+    // upload is slower) is followed by a pause half as long, so the game's
+    // own packets aren't left waiting behind the mod. Once for each feed,
+    // unless that failed or a game asks again FEED_UP_AGAIN_MS later.
+    var FEED_UP_RATE = 256 * 1024;
+    var FEED_UP_TRIES = 5;
+    var FEED_UP_READY_MS = 120000;
+    var FEED_UP_AGAIN_MS = 60000;
+    var feedUps = {}; // feed address + fp -> { running, ok, at }
+
+    function delay(ms) {
+        return new Promise(function(resolve) { setTimeout(resolve, ms); });
+    }
+
+    // feedUrl: the feed's https address with the host's token (?up=), as
+    // the host's game sends to it. alive(): whether that's still its feed.
+    function feedUp(kind, feedUrl, fp, alive) {
+        var q = String(feedUrl).indexOf('?');
+        if (q < 0 || !/^[0-9a-f]{64}$/.test(fp) || !offers[kind])
+            return false;
+        var key = feedUrl + ' ' + fp;
+        var u = feedUps[key];
+        if (u && (u.running || (u.ok && Date.now() - u.at < FEED_UP_AGAIN_MS)))
+            return false;
+        if (Object.keys(feedUps).length > 16)
+            feedUps = {};
+        u = feedUps[key] = { running: true, ok: false, at: Date.now() };
+        var base = feedUrl.substring(0, q) + '/mod/' + fp + '/', query = feedUrl.substring(q);
+        runFeedUp(kind, base, query, fp, alive || function() { return true; }).then(function(r) {
+            u.ok = r.ok;
+            if (r.ok)
+                console.log('OpenJKDF2: sent ' + r.what + ' to the match\'s feed for a game watching (' + r.parts +
+                            ' blocks, ' + Math.round(r.bytes / 1024) + ' KiB in ' + Math.round(r.ms / 1000) + ' s)');
+            else
+                console.log('OpenJKDF2: did not send ' + (kind === KIND_MOD ? 'the mod' : 'the map') +
+                            ' to the match\'s feed: ' + r.why);
+        }, function(e) {
+            console.warn('OpenJKDF2: could not send to the match\'s feed: ' + e);
+        }).finally(function() {
+            u.running = false;
+            u.at = Date.now();
+        });
+        return true;
+    }
+
+    async function runFeedUp(kind, base, query, fp, alive) {
+        var o, waited = 0;
+        for (;;) {
+            o = offers[kind];
+            if (!o || !alive())
+                return { ok: false, why: 'gone' };
+            if (o.info)
+                break;
+            if (waited >= FEED_UP_READY_MS)
+                return { ok: false, why: 'not ready' };
+            await delay(500);
+            waited += 500;
+        }
+        var info, parts = 0;
+        if (o.info.status === 'ok' && o.stream) {
+            if (o.info.sha256 !== fp)
+                return { ok: false, why: 'another one asked for' };
+            parts = Math.ceil(o.stream.length / BLOCK_BYTES);
+            info = Object.assign({}, o.info, { z: BLOCK_BYTES, parts: parts });
+        } else {
+            // Why it can't be sent, for the game watching to say.
+            info = { status: o.info.status === 'ok' ? 'error' : o.info.status || 'error', name: o.info.name, ext: o.info.ext };
+        }
+        var began = Date.now(), sent = 0;
+        async function put(part, body) {
+            for (var t = 0; ; t++) {
+                var status = 0;
+                try {
+                    var r = await fetch(base + part + query, { method: 'PUT', body: body,
+                                                               headers: { 'Content-Type': 'application/octet-stream' } });
+                    status = r.status;
+                    if (r.ok)
+                        return;
+                } catch (e) {}
+                // The feed ended, isn't this game's, or won't take it.
+                if (status === 400 || status === 403 || status === 404 || status === 413)
+                    throw fail('refused (' + status + ')');
+                if (t + 1 >= FEED_UP_TRIES || offers[kind] !== o || !alive())
+                    throw fail(status ? 'failed (' + status + ')' : 'failed');
+                await delay(2000 * Math.pow(2, t));
+            }
+        }
+        try {
+            var json = new TextEncoder().encode(JSON.stringify(info));
+            await put('info', json);
+            sent += json.length;
+            for (var b = 0; b < parts; b++) {
+                if (offers[kind] !== o || !alive())
+                    return { ok: false, why: 'gone' };
+                var blk = await block(o, b, CODEC_DEFLATE);
+                var body = new Uint8Array(1 + blk.bytes.length);
+                body[0] = blk.codec;
+                body.set(blk.bytes, 1);
+                var t0 = Date.now();
+                await put(String(b), body);
+                var took = Date.now() - t0, budget = body.length * 1000 / FEED_UP_RATE;
+                sent += body.length;
+                await delay(took > budget ? took / 2 : budget - took);
+            }
+        } catch (e) {
+            return { ok: false, why: e.reason || String(e) };
+        }
+        return { ok: info.status === 'ok', why: info.status, what: (kind === KIND_MOD ? 'mod ' : 'map ') + (info.name || ''),
+                 parts: parts, bytes: sent, ms: Date.now() - began };
+    }
+
+    // A game watching: the host's offer from the match's feed, src.base its
+    // <feed>/mod/<fp>/ (https) and src.ask() what asks the feed for it. The
+    // INFO is looked for every FEED_POLL_MS, asked for when it isn't there
+    // and every FEED_ASK_MS while it doesn't come, up to FEED_WAIT_MS;
+    // check(info) throws if it isn't the one wanted. Then the blocks,
+    // FEED_GETS at a time: one not there yet (the host is still sending) is
+    // looked for again, up to FEED_STALL_MS with none coming, asking again
+    // as above. onProgress(done, total) says how far along it is (total 0
+    // while asking). Resolves to the file, checked against the host's
+    // SHA-256.
+    var FEED_POLL_MS = 2000, FEED_ASK_MS = 20000, FEED_WAIT_MS = 90000, FEED_STALL_MS = 60000, FEED_GETS = 4;
+
+    async function feedGet(j, src, check, onProgress) {
+        var stop = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        var wake = null;
+        j.cancel = function(e) {
+            if (stop)
+                stop.abort();
+            if (wake)
+                wake(e || fail('cancelled'));
+        };
+        function pause(ms) {
+            return new Promise(function(resolve, reject) {
+                if (j.done)
+                    return reject(fail('cancelled'));
+                wake = reject;
+                j.timers.push(setTimeout(function() {
+                    wake = null;
+                    resolve();
+                }, ms));
+            });
+        }
+        // A part's bytes, or null while it isn't there.
+        async function get(part) {
+            var r;
+            try {
+                r = await fetch(src.base + part, { cache: 'no-store', signal: stop ? stop.signal : undefined });
+            } catch (e) {
+                if (j.done)
+                    throw fail('cancelled');
+                return null;
+            }
+            if (j.done)
+                throw fail('cancelled');
+            if (!r.ok)
+                return null;
+            return new Uint8Array(await r.arrayBuffer());
+        }
+        onProgress = onProgress || function() {};
+        var began = Date.now(), asked = 0, info = null;
+        onProgress(0, 0);
+        for (;;) {
+            var raw = await get('info');
+            if (raw) {
+                try { info = JSON.parse(new TextDecoder().decode(raw)); } catch (e) {}
+                if (!info || typeof info !== 'object')
+                    throw fail('corrupt');
+                break;
+            }
+            var now = Date.now();
+            if (now - began > FEED_WAIT_MS)
+                throw fail('host-silent');
+            if (now - asked >= FEED_ASK_MS) {
+                asked = now;
+                src.ask();
+            }
+            await pause(FEED_POLL_MS);
+        }
+        if (info.status !== 'ok')
+            throw fail(typeof info.status === 'string' && /^[a-z-]{1,32}$/.test(info.status) ? info.status : 'error');
+        check(info);
+        var parts = Math.ceil(info.streamSize / BLOCK_BYTES);
+        if (info.z !== BLOCK_BYTES || info.parts !== parts)
+            throw fail('corrupt');
+        var rb = rebuilder(info, retailSources(gameRoot(), info.ext));
+        var next = 0, done = 0, bytes = 0, lastNew = Date.now();
+        onProgress(0, info.streamSize);
+
+        async function one(b) {
+            for (;;) {
+                var body = await get(String(b));
+                if (body) {
+                    var size = Math.min(BLOCK_BYTES, info.streamSize - b * BLOCK_BYTES);
+                    var data = body.subarray(1);
+                    if (body[0] === CODEC_DEFLATE)
+                        data = await inflate(data, size);
+                    else if (body[0] !== CODEC_STORED || data.length !== size)
+                        throw fail('corrupt');
+                    if (j.done)
+                        throw fail('cancelled');
+                    rb.put(b * BLOCK_BYTES, data);
+                    done++;
+                    bytes += size;
+                    lastNew = Date.now();
+                    onProgress(bytes, info.streamSize);
+                    return;
+                }
+                var now = Date.now();
+                if (now - lastNew > FEED_STALL_MS)
+                    throw fail('host-stalled');
+                // Not sent yet, or the host stopped: ask again once in a while.
+                if (now - lastNew >= FEED_ASK_MS && now - asked >= FEED_ASK_MS) {
+                    asked = now;
+                    src.ask();
+                }
+                await pause(FEED_POLL_MS);
+            }
+        }
+        async function lane() {
+            while (next < parts)
+                await one(next++);
+        }
+        var lanes = [];
+        for (var i = 0; i < Math.min(FEED_GETS, parts); i++)
+            lanes.push(lane());
+        await Promise.all(lanes);
+        var result = await rb.finish();
+        if (!result.ok)
+            throw fail(result.reason);
+        return result.bytes;
+    }
+
     // ---- Host: what joiners ask for goes out paced.
     //
     // Parts wait here and go one at a time from each block (or a joiner's
@@ -2714,6 +2959,7 @@
             STATE_FAILED: STATE_FAILED, STATE_RESTART: STATE_RESTART,
             CHUNK_DIRECT: CHUNK_DIRECT, CHUNK_RELAY: CHUNK_RELAY, CHECKING_UI_MS: CHECKING_UI_MS,
             offer: offer, withdraw: withdraw, startJob: startJob, abort: abort, state: state,
+            feedUp: feedUp, feedGet: feedGet,
             askInfo: askInfo, checkInfo: checkInfo, download: download, receive: receive,
             waitForDirect: waitForDirect, directUp: directUp, fail: fail, check: check, sleep: sleep, ui: ui,
             findPath: findPath, isFile: isFile, fileBytes: fileBytes, gameRoot: gameRoot,

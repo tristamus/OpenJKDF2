@@ -2428,15 +2428,36 @@ test('a viewer gets the match\'s mod with mods.js, says how far along it is, and
     game.Module.jkViewLeft = () => { left++; return true; };
     game.Module.jkMods = {
         tail: () => '', lib: { parseTail: t => (t ? { fp: 'ff', name: 'Saber Pack', pack: null } : null) },
-        viewFetch: (tail, lib, onProgress) => { asked.push([tail, lib]); onProgress(1, 4); onProgress(3, 4); onProgress(4, 4); },
+        viewFetch: (tail, lib, onProgress, src) => {
+            asked.push([tail, lib, src]);
+            onProgress(1, 4, 'library'); onProgress(2, 4, 'library'); onProgress(3, 4, 'library'); onProgress(4, 4, 'library');
+        },
         viewError: () => error
     };
     feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('JK1MP', 'm2.jkl', { tail: 'T', lib: '634' }), keyEnd()])));
     assert.equal(viewLevel(game).r, 2);
     game.js.wsrelay_js_view_fetch_mod();
-    assert.deepEqual(asked, [['T', '634']], "the host's tail and the Mod Library's id from the keyframe");
-    assert.deepEqual(said.filter(t => /Mod Library/.test(t)), ["Getting this match's mod from the Mod Library: 25 percent"],
-                     'at most once a second');
+    assert.deepEqual(asked.map(a => a.slice(0, 2)), [['T', '634']], "the host's tail and the Mod Library's id from the keyframe");
+    assert.deepEqual(said.filter(t => /Mod Library/.test(t)), ["Getting this match's mod from the Mod Library: 25 percent",
+                                                                "Getting this match's mod from the Mod Library: 100 percent"],
+                     'at most once a second, and when it is all in');
+    // The feed, for the host's game: its https address, and asking it on
+    // the feed's socket.
+    const src = asked[0][2];
+    assert.equal(src.url, feed.url.replace(/^ws/, 'http'));
+    assert.match(src.url, /^https?:[/][/][^/]+[/]feed[/]12$/);
+    const before = feed.sent.length;
+    src.ask('ab'.repeat(32));
+    assert.deepEqual(feed.sent.slice(before), ['mod ' + 'ab'.repeat(32)]);
+    said.length = 0;
+    game.Module.jkMods.viewFetch = (tail, lib, onProgress) => {
+        onProgress(0, 0, 'host'); onProgress(0, 0, 'host'); onProgress(5, 10, 'host');
+    };
+    game.js.wsrelay_js_view_fetch_mod();
+    assert.deepEqual(said, ["Asking the host's game for this match's mod."], 'from the host, the same at most once a second');
+    await world.run(1100);
+    game.js.wsrelay_js_view_fetch_mod();
+    assert.deepEqual(said.slice(1), ["Asking the host's game for this match's mod."]);
     game.js.wsrelay_js_view_mod_error(1000, 100);
     assert.equal(game.mem[1000], 0, 'nothing to say yet');
     error = "The Mod Library's copy isn't it.";
@@ -2458,6 +2479,32 @@ test('a viewer gets the match\'s mod with mods.js, says how far along it is, and
     v2.game.Module.jkMods = undefined;
     v2.game.js.wsrelay_js_view_mod_error(1000, 100);
     assert.equal(v2.game.mem[1000], 0);
+});
+
+test('a game watching asks for the host\'s mod: the host\'s game has mods.js put it on the feed, at its https address', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host, other] = await room(world, [2, 3]);
+    const ups = [];
+    for (const g of [host, other])
+        g.Module.jkMods = { tail: () => '', feedUp: (url, fp, alive) => { ups.push([g === host, url, fp, alive]); return true; } };
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    other.net.ws.deliver('feed 1 ' + 'cd'.repeat(16));
+    await world.run(5);
+    const [hf, of] = world.feeds.slice(-2);
+    const fp = 'cd'.repeat(32);
+    hf.deliver('mod ' + fp);
+    of.deliver('mod ' + fp);
+    hf.deliver('mod nope');
+    hf.deliver('key');
+    assert.equal(ups.length, 1, "only the host's game, only for a fingerprint");
+    assert.equal(ups[0][0], true);
+    assert.equal(ups[0][1], hf.url.replace(/^ws/, 'http'));
+    assert.match(ups[0][1], /^https?:[/][/][^/]+[/]feed[/]1[?]up=[0-9a-f]{32}$/);
+    assert.equal(ups[0][2], fp);
+    assert.equal(ups[0][3](), true, 'while that is its feed');
+    host.net.ws.deliver('feed off');
+    assert.equal(ups[0][3](), false);
 });
 
 test('the host\'s keyframe names the Mod Library\'s id for its mod, when it has one', async () => {
