@@ -511,9 +511,10 @@ EM_JS(void, Window_wasmPaceInit, (), {
   /* The graphics card's queue with Vsync on (Window_wasmEndFrame). queueCap false turns it
      off, for tests; queueWaits, queueStalls and queueSlow (long waits on a busy card)
      count, for tests too. It is on only in Chromium-based browsers (Chrome, Edge, Opera,
-     Brave), the only ones it was measured in: it depends on when the browser reports a
-     frame drawn, and one that reported late would wait refreshes it didn't need. Only
-     Chromium has navigator.userAgentData. */
+     Brave), where it cost no frames on a test PC. In Firefox 160 on the same PC it cost
+     about 19% of frames with a card just too slow for the screen (191 to 154 fps), so
+     there the game paces as before. Safari is untested. Only Chromium has
+     navigator.userAgentData. */
   pace.queueCap = !!navigator.userAgentData;
   pace.queueWaits = 0;
   pace.queueStalls = 0;
