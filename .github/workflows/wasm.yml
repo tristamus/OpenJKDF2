@@ -129,6 +129,10 @@ jobs:
       # pictures (rooms/) are named by their content.
       - name: Test the room list
         run: node packaging/wasm/test/rooms-test.mjs
+      # A page the browser keeps in its back/forward cache closes its sockets,
+      # so the lobby doesn't count it as watching or playing.
+      - name: Test leaving for another page
+        run: node packaging/wasm/test/pagehide-test.mjs
       # The files the page loads or opens by name beside itself: all in the
       # web folder collected below and in build_run_openjkdf2_wasm.sh's.
       - name: Test the web folder's files

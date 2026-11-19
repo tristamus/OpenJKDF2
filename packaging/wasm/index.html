@@ -42,6 +42,38 @@
       })();
     </script>
     <script>
+      // ---- Left for another page, but kept by the browser (its back/forward
+      // cache): a page kept that way keeps its sockets open, so the lobby
+      // still counted it, watching a match or in a game, for minutes, until
+      // the tab was closed (seen in Edge, kit 161). So every socket the page
+      // or the game opens is closed as it goes into the cache, as a page
+      // closed would be, and the page starts again if it's come back to.
+      (function() {
+        var Real = window.WebSocket;
+        if (typeof Real !== 'function' || typeof Set !== 'function') return;
+        var open = new Set();
+        function WebSocket(url, protocols) {
+          var ws = arguments.length > 1 ? new Real(url, protocols) : new Real(url);
+          open.add(ws);
+          ws.addEventListener('close', function() { open.delete(ws); });
+          return ws;
+        }
+        WebSocket.prototype = Real.prototype;
+        ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(function(k) { WebSocket[k] = Real[k]; });
+        window.WebSocket = WebSocket;
+        window.addEventListener('pagehide', function(ev) {
+          if (!ev.persisted) return;
+          open.forEach(function(ws) {
+            try { ws.close(); } catch (e) {}
+          });
+          open.clear();
+        });
+        window.addEventListener('pageshow', function(ev) {
+          if (ev.persisted) location.reload();
+        });
+      })();
+    </script>
+    <script>
       // The room pictures (Room pictures, in the styles). A link to a room
       // window (#nar-shaddaa, which Quit also comes back to) opens it with
       // the page, so its picture is asked for here, alongside the page,

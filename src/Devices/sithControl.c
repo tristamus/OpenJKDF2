@@ -1531,33 +1531,55 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
     sithControl_SpectatorMoveTo(player, &move, dist);
 }
 
+// Added: how far a spectator's body can go from from along dir (a unit
+// vector), up to dist: through adjoins a player can pass, up to a wall or a
+// thing in the way, other than its own body, an item, a weapon or the dead
+// (a railing, a crate, a door, a player standing still). As the camera
+// behind a player searches (sithCamera_SearchSectorInRadius), but that one
+// (RAYCAST_2000) only sees things with a cog, so kit 161's free camera flew
+// through players.
+static flex_t sithControl_SpectatorReach(SithThing *player, const rdVector3 *from, const rdVector3 *dir, flex_t dist)
+{
+    flex_t got = dist;
+    sithCollision_SearchForCollisions(player->sector, 0, from, dir, dist, 0.02, RAYCAST_200 | RAYCAST_800);
+    for (SithCollision* c = sithCollision_PopStack(); c; c = sithCollision_PopStack())
+    {
+        if (c->type & SITHCOLLISION_ADJOINCROSS)
+            continue;
+        if (c->type & SITHCOLLISION_THING)
+        {
+            SithThing* t = c->pThingCollided;
+            // One it's already touching doesn't hold it: it can get away.
+            if (!t || t == player || t->type == SITH_THING_ITEM || t->type == SITH_THING_WEAPON
+                || (t->flags & SITH_TF_DEAD) || c->distance <= 0.0)
+                continue;
+        }
+        got = c->distance < dist ? c->distance : dist;
+        break;
+    }
+    sithCollision_DecreaseStackLevel();
+    return got;
+}
+
 // Added: moves a spectator's body (disabled, so with no physics) dist along
-// dir, as far as it can go: through adjoins, stopping a little short of a
-// wall or of a thing a player can't walk through (a railing, a crate, a
-// player), as the camera behind a player does (sithCamera_Update). It only
-// ever ends up inside a sector of the level: kit 159's free camera flew
-// through a railing into the dark outside.
+// dir, as far as it can go (sithControl_SpectatorReach), stopping a little
+// short of what's in the way. It only ever ends up inside a sector of the
+// level: kit 159's free camera flew through a railing into the dark outside.
 static void sithControl_SpectatorMoveTo(SithThing *player, const rdVector3 *dir, flex_t dist)
 {
     if (!player->sector || dist <= 0.0)
         return;
     rdVector3 from = player->position;
     rdVector3 to = from;
-    rdVector_ScaleAdd3Acc(&to, dir, dist);
-    if (!sithCamera_SearchSectorInRadius(0, player->sector, &from, &to, 0.02, RAYCAST_2000 | RAYCAST_200))
-        return;
-    rdVector3 moved;
-    rdVector_Sub3(&moved, &to, &from);
-    flex_t got = rdVector_Len3(&moved);
+    flex_t got = sithControl_SpectatorReach(player, &from, dir, dist);
     if (got < dist - 0.0001)
     {
         // Stopped: short of what it hit, so it's never touching it.
         got -= 0.01;
         if (got <= 0.0)
             return;
-        to = from;
-        rdVector_ScaleAdd3Acc(&to, dir, got);
     }
+    rdVector_ScaleAdd3Acc(&to, dir, got);
     SithSector* pSector = sithCollision_FindSectorInRadius(player->sector, &from, &to, 0.0);
     if (!pSector || !sithIntersect_IsSphereInSector(&to, 0.0, pSector))
         return;
