@@ -143,6 +143,9 @@ int sithMulti_ProcessPong(SithMessage *pMsg);
 int sithMulti_ProcessQuit(SithMessage *pMsg);
 int sithMulti_CheckPlayers(int32_t msecTime, SithEventParams* pParam);
 void sithMulti_SyncPlayers(int idTo, int dpFlags);
+#ifdef PLATFORM_WSRELAY
+void sithMulti_FeedKeyframe(int idTo);
+#endif
 int sithMulti_ProcessSyncPlayers(SithMessage *pMsg);
 void sithMulti_ProcessPlayerLost(int idPlayer);
 void sithMulti_InitTick(uint32_t tickrate);

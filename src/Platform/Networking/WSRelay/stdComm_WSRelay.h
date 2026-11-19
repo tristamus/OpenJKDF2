@@ -46,6 +46,10 @@ void stdComm_WSRelay_Shutdown();
 // one. pData is the message from cogMsgId on.
 void stdComm_WSRelay_FeedCopy(const void* pData, uint32_t size);
 
+// Called each frame by the host's game (sithMulti_Update): sends the room's
+// feed a keyframe (sithMulti_FeedKeyframe) when it's due.
+void stdComm_WSRelay_FeedFrame();
+
 // Called each frame of the join screen: 1 once the games stdComm_EnumSessions
 // asked for are in jkGuiMultiplayer_aEntries, for the screen to put up as it
 // does after stdComm_EnumSessions returns 0.

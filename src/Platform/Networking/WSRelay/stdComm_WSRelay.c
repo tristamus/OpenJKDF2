@@ -1423,10 +1423,18 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         /* Watching a match: this game's copy of what it sends everyone, to
            its room's feed while the lobby says (feed <room> <token>), one
            binary chunk every FEED_BATCH_MS: a 0 (packets), then each packet
-           as u16 length (LE) and its bytes from cogMsgId on. A lobby's feed
-           takes at most 64 KiB a chunk and 20 chunks a second. Every minute
-           the network log says how much went, to measure a match's feed. */
+           as u16 length (LE) and its bytes from cogMsgId on. The host's game
+           also sends keyframes: the world as a player joining now would be
+           sent it (sithMulti_FeedKeyframe), as a chunk of kind 1 and, past
+           FEED_MAX_CHUNK, more of kind 2. One goes once the feed is open, at
+           each new level, every FEED_KEY_MS, and when the feed asks ("key":
+           a page is waiting for one). Its first packet is JKF1 and a line of
+           JSON on the level (wsrelay_js_feed_key_begin). Chunks queue in
+           order and at most FEED_SENDS go a tick: a lobby's feed takes at
+           most 64 KiB a chunk and 20 chunks a second. Every minute the
+           network log says how much went, to measure a match's feed. */
         var FEED_BATCH_MS = 250, FEED_MAX_CHUNK = 60000, FEED_LOG_MS = 60000, FEED_RETRIES = 3;
+        var FEED_KEY_MS = 60000, FEED_KEY_ASK_MS = 5000, FEED_KEY_MAX = 4 * 1024 * 1024, FEED_SENDS = 4, FEED_QUEUE_MAX = 400;
         net.feed = null;
         net.askFeed = function() {
             if (Module['jkNetOld'] || net.state !== 1 || net.lobbyCan.indexOf('feed') < 0) return;
@@ -1445,7 +1453,8 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             var url = (cut >= 0 ? base.substring(0, cut) : base) + '/feed/' + room + '?up=' + token;
             if (net.feed && net.feed.url === url) return;
             net.feedStop();
-            net.feed = { url: url, ws: null, parts: [], size: 0, chunks: 0, bytes: 0, packets: 0,
+            net.feed = { url: url, ws: null, parts: [], size: 0, out: [], chunks: 0, bytes: 0, packets: 0, keys: 0,
+                         key: null, keyWant: true, keyAt: 0, keyAskAt: 0,
                          since: performance.now(), timer: setInterval(function() { net.feedFlush(); }, FEED_BATCH_MS), tries: 0 };
             net.feedOpen(net.feed);
         };
@@ -1461,9 +1470,16 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             feed.ws = ws;
             ws.onopen = function() {
                 feed.tries = 0;
+                feed.keyWant = true;
                 net.note('feed: sending to ' + feed.url.split('?')[0]);
             };
-            ws.onmessage = function() {};
+            ws.onmessage = function(ev) {
+                var now = performance.now();
+                if (ev && ev.data === 'key' && now - feed.keyAskAt >= FEED_KEY_ASK_MS) {
+                    feed.keyAskAt = now;
+                    feed.keyWant = true;
+                }
+            };
             ws.onclose = function(ev) {
                 if (net.feed !== feed || feed.ws !== ws) return;
                 feed.ws = null;
@@ -1479,43 +1495,127 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 setTimeout(function() { if (net.feed === feed && !feed.ws) net.feedOpen(feed); }, 2000 * feed.tries);
             };
         };
-        net.feedCopy = function(bytes) {
-            var feed = net.feed;
-            if (!feed || !feed.ws || feed.ws.readyState !== 1 || bytes.length > 0xffff) return;
-            if (feed.size + 2 + bytes.length > FEED_MAX_CHUNK) net.feedFlush();
+        /* A chunk of this kind of these records, as the feed takes it. */
+        net.feedChunk = function(kind, parts, size) {
+            var out = new Uint8Array(1 + size), at = 1;
+            out[0] = kind;
+            for (var i = 0; i < parts.length; i++) {
+                out.set(parts[i], at);
+                at += parts[i].length;
+            }
+            return out;
+        };
+        net.feedRecord = function(bytes) {
             var rec = new Uint8Array(2 + bytes.length);
             rec[0] = bytes.length & 255;
             rec[1] = bytes.length >> 8;
             rec.set(bytes, 2);
+            return rec;
+        };
+        /* The packets so far, as a chunk in the queue. */
+        net.feedClose = function(feed) {
+            if (!feed.size) return;
+            feed.out.push(net.feedChunk(0, feed.parts, feed.size));
+            feed.parts = [];
+            feed.size = 0;
+        };
+        net.feedCopy = function(bytes) {
+            var feed = net.feed;
+            if (!feed || !feed.ws || feed.ws.readyState !== 1 || bytes.length > 0xffff) return;
+            if (feed.size + 2 + bytes.length > FEED_MAX_CHUNK) net.feedClose(feed);
+            var rec = net.feedRecord(bytes);
             feed.parts.push(rec);
             feed.size += rec.length;
             feed.packets++;
+        };
+        /* Whether the host's game is to make a keyframe now (it does at
+           once: feedKeyBegin, feedKeyAdd for each message, feedKeyEnd). */
+        net.feedKeyWanted = function(newLevel) {
+            var feed = net.feed;
+            if (!feed || !net.isHost || !feed.ws || feed.ws.readyState !== 1 || feed.key || feed.out.length > 8) return 0;
+            var now = performance.now();
+            if (!newLevel && !feed.keyWant && now - feed.keyAt < FEED_KEY_MS) return 0;
+            feed.keyWant = false;
+            feed.keyAt = now;
+            return 1;
+        };
+        net.feedKeyBegin = function(head) {
+            var feed = net.feed;
+            if (!feed) return;
+            net.feedClose(feed);
+            feed.key = { parts: [], size: 0, kind: 1, chunks: [], bytes: 0, packets: 0, failed: '' };
+            net.feedKeyAdd(head);
+        };
+        net.feedKeyAdd = function(bytes) {
+            var key = net.feed && net.feed.key;
+            if (!key || key.failed) return;
+            if (bytes.length > 0xffff) {
+                key.failed = 'a message of ' + bytes.length + ' bytes';
+                return;
+            }
+            if (key.size + 2 + bytes.length > FEED_MAX_CHUNK) {
+                key.chunks.push(net.feedChunk(key.kind, key.parts, key.size));
+                key.parts = [];
+                key.size = 0;
+                key.kind = 2;
+            }
+            var rec = net.feedRecord(bytes);
+            key.parts.push(rec);
+            key.size += rec.length;
+            key.bytes += rec.length;
+            key.packets++;
+            if (key.bytes > FEED_KEY_MAX) key.failed = 'over ' + (FEED_KEY_MAX / 1048576) + ' MiB';
+        };
+        net.feedKeyEnd = function() {
+            var feed = net.feed, key = feed && feed.key;
+            if (!key) return;
+            feed.key = null;
+            if (key.failed) {
+                net.note('feed: keyframe not sent, ' + key.failed);
+                return;
+            }
+            if (key.size) key.chunks.push(net.feedChunk(key.kind, key.parts, key.size));
+            Array.prototype.push.apply(feed.out, key.chunks);
+            feed.keys++;
+            net.note('feed: keyframe, ' + key.packets + ' packets in ' + key.chunks.length + ' chunks, ' + (key.bytes / 1024).toFixed(1) + ' KiB');
         };
         net.feedFlush = function() {
             var feed = net.feed;
             if (!feed) return;
             var now = performance.now();
-            if (feed.size && feed.ws && feed.ws.readyState === 1) {
-                var out = new Uint8Array(1 + feed.size), at = 1;
-                for (var i = 0; i < feed.parts.length; i++) {
-                    out.set(feed.parts[i], at);
-                    at += feed.parts[i].length;
+            if (feed.ws && feed.ws.readyState === 1) {
+                net.feedClose(feed);
+                for (var n = 0; n < FEED_SENDS && feed.out.length; n++) {
+                    var chunk = feed.out.shift();
+                    try {
+                        feed.ws.send(chunk.buffer);
+                        feed.chunks++;
+                        feed.bytes += chunk.length;
+                    } catch (e) {}
                 }
-                try {
-                    feed.ws.send(out.buffer);
-                    feed.chunks++;
-                    feed.bytes += out.length;
-                } catch (e) {}
+                /* Too far behind: watchers start again from the next keyframe. */
+                if (feed.out.length > FEED_QUEUE_MAX) {
+                    feed.out = [];
+                    feed.keyWant = true;
+                    net.note('feed: too far behind, starting again from a keyframe');
+                }
+            } else {
+                /* Nothing goes while it's closed, and what watchers missed
+                   takes a keyframe once it's back. */
+                feed.parts = [];
+                feed.size = 0;
+                feed.out = [];
+                feed.keyWant = true;
             }
-            feed.parts = [];
-            feed.size = 0;
             if (now - feed.since >= FEED_LOG_MS) {
                 var secs = (now - feed.since) / 1000;
                 net.note('feed: ' + feed.packets + ' packets in ' + feed.chunks + ' chunks, ' + (feed.bytes / 1024).toFixed(1) + ' KiB in ' +
-                         Math.round(secs) + ' s (' + (feed.bytes / 1024 / secs).toFixed(2) + ' KiB/s)');
+                         Math.round(secs) + ' s (' + (feed.bytes / 1024 / secs).toFixed(2) + ' KiB/s)' +
+                         (feed.keys ? ', ' + feed.keys + (feed.keys > 1 ? ' keyframes' : ' keyframe') : ''));
                 feed.packets = 0;
                 feed.chunks = 0;
                 feed.bytes = 0;
+                feed.keys = 0;
                 feed.since = now;
             }
         };
@@ -1726,6 +1826,34 @@ EM_JS(int, wsrelay_js_send_packet, (const void* pData, int len, int idTo, int ow
 EM_JS(void, wsrelay_js_feed_copy, (const void* pData, int len), {
     var net = Module.jkNet;
     if (net && net.feed) net.feedCopy(HEAPU8.subarray(pData, pData + len));
+});
+
+// Whether the host's game is to send its room's feed a keyframe now
+// (net.feedKeyWanted); newLevel: the level isn't the last keyframe's.
+EM_JS(int, wsrelay_js_feed_key_wanted, (int newLevel), {
+    var net = Module.jkNet;
+    return net && net.feedKeyWanted ? net.feedKeyWanted(newLevel) : 0;
+});
+
+// A keyframe's start: its first packet is JKF1 and a line of JSON on the
+// level, for a viewer to load it and for pages to read without the game.
+EM_JS(void, wsrelay_js_feed_key_begin, (const char* pEpisode, const char* pMap, uint32_t gameMs, int modeFlags, uint32_t checksum, int mots), {
+    var net = Module.jkNet;
+    if (!net || !net.feedKeyBegin) return;
+    var head = 'JKF1' + JSON.stringify({ v: 1, game: mots ? 'mots' : 'jk1', episode: UTF8ToString(pEpisode), map: UTF8ToString(pMap),
+                                         t: gameMs >>> 0, mode: modeFlags, sum: checksum >>> 0 });
+    net.feedKeyBegin(new TextEncoder().encode(head));
+});
+
+// One of a keyframe's messages, from cogMsgId on (net.feedKeyAdd).
+EM_JS(void, wsrelay_js_feed_key_packet, (const void* pData, int len), {
+    var net = Module.jkNet;
+    if (net && net.feedKeyAdd) net.feedKeyAdd(HEAPU8.subarray(pData, pData + len));
+});
+
+EM_JS(void, wsrelay_js_feed_key_end, (), {
+    var net = Module.jkNet;
+    if (net && net.feedKeyEnd) net.feedKeyEnd();
 });
 
 // Starts a session's WebRTC side: a client offers a data channel to the host,
@@ -3206,8 +3334,43 @@ void stdComm_WSRelay_FeedCopy(const void* pData, uint32_t size)
     wsrelay_js_feed_copy(pData, (int)size);
 }
 
+// The id a keyframe's messages are sent to (sithMulti_FeedKeyframe):
+// DirectPlay_Send hands them to the room's feed, never to the network. The
+// relay numbers players from 1, so no player has it.
+#define WSRELAY_FEED_KEY_ID (0x7FFF4B46)
+static int wsrelay_bKeyframing = 0;
+// The level ("<episode>/<map>") of the last keyframe: a new level gets one at
+// once, since what came before is of no use to a viewer.
+static char wsrelay_feedKeyLevel[80];
+
+void stdComm_WSRelay_FeedFrame()
+{
+    if (stdComm_Imperial_bActive || !wsrelay_bHosting || !stdComm_bIsServer || !sithWorld_g_pCurrentWorld)
+        return;
+    char level[80];
+    snprintf(level, sizeof(level), "%s/%s", jkRes_episodeGobName, jkMain_aLevelJklFname);
+    if (!wsrelay_js_feed_key_wanted(strcmp(level, wsrelay_feedKeyLevel) != 0))
+        return;
+    stdString_SafeStrCopy(wsrelay_feedKeyLevel, level, sizeof(wsrelay_feedKeyLevel));
+    wsrelay_js_feed_key_begin(jkRes_episodeGobName, jkMain_aLevelJklFname, sithTime_g_msecGameTime,
+                              (int)sithNet_MultiModeFlags, (uint32_t)sithNet_checksum, Main_bMotsCompat);
+    wsrelay_bKeyframing = 1;
+    sithMulti_FeedKeyframe(WSRELAY_FEED_KEY_ID);
+    wsrelay_bKeyframing = 0;
+    wsrelay_js_feed_key_end();
+}
+
 BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)
 {
+    // Added: a keyframe's messages go to the room's feed, never to the
+    // network (stdComm_WSRelay_FeedFrame).
+    if (idTo == WSRELAY_FEED_KEY_ID)
+    {
+        if (wsrelay_bKeyframing)
+            wsrelay_js_feed_key_packet(lpData, (int)dwDataSize);
+        return 1;
+    }
+
     if (stdComm_Imperial_bActive) // Added: the Imperial Network Protocol connection
         return stdComm_Imperial_Send(idFrom, idTo, lpData, dwDataSize);
 

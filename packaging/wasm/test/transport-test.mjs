@@ -2111,6 +2111,112 @@ test('every minute the network log says how much the feed took', async () => {
     assert.ok(Number(m[2]) >= 239 && Number(m[2]) <= 240, m[2]);
 });
 
+// A keyframe, as stdComm_WSRelay_FeedFrame makes one: its start (the level),
+// each message, its end.
+function feedKey(game, packets, { episode = 'JK1MP.GOB', map = 'm2.jkl', t = 123456, mode = 4, sum = 0xdeadbeef, mots = 0 } = {}) {
+    const enc = new TextEncoder();
+    game.mem.set([...enc.encode(episode), 0], 1024);
+    game.mem.set([...enc.encode(map), 0], 1536);
+    game.js.wsrelay_js_feed_key_begin(1024, 1536, t, mode, sum | 0, mots);
+    for (const body of packets) {
+        game.mem.set(body, 8192);
+        game.js.wsrelay_js_feed_key_packet(8192, body.length);
+    }
+    game.js.wsrelay_js_feed_key_end();
+}
+// A keyframe chunk's first packet: JKF1 and the level, as JSON.
+function keyHead(packet) {
+    const text = new TextDecoder().decode(new Uint8Array(packet));
+    assert.equal(text.slice(0, 4), 'JKF1');
+    return JSON.parse(text.slice(4));
+}
+
+test('the host makes a keyframe once its feed is open, at a new level, every minute and when the feed asks; a joiner never', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host, joiner] = await room(world, [2]);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(1), 0, 'no feed yet');
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    joiner.net.ws.deliver('feed 1 ' + 'cd'.repeat(16));
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 0, 'not before it\'s open');
+    await world.run(5);
+    assert.equal(joiner.js.wsrelay_js_feed_key_wanted(1), 0, 'a joiner never');
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 1, 'once open');
+    feedKey(host, [[1]]);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 0);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(1), 1, 'a new level: at once');
+    feedKey(host, [[1]]);
+    await world.run(30000);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 0);
+    // The feed asks (a page is waiting): once, and not again within 5 s.
+    const feed = world.feeds.find(f => f.url.endsWith(TOKEN));
+    feed.onmessage({ data: 'key' });
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 1, 'asked');
+    feedKey(host, [[1]]);
+    feed.onmessage({ data: 'key' });
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 0, 'asked again too soon');
+    await world.run(60000);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 1, 'a minute on');
+    // While the feed is down, none; and one once it's back.
+    feedKey(host, [[1]]);
+    feed.end(1006);
+    await world.run(300);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 0);
+    await world.run(2500);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 1, 'back: what was missed takes a keyframe');
+});
+
+test('a keyframe goes in order between the packets, as kind 1 then 2, at most 4 chunks a tick, with the level first', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    const feed = world.feeds.at(-1);
+    feedCopy(host, [9, 9]);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 1);
+    const big = new Uint8Array(25000).fill(3);
+    feedKey(host, [[1, 2], big, big, big, big, big, big, [4]], { episode: 'JK1MP.GOB', map: 'm10.jkl', t: 98765, mots: 0 });
+    feedCopy(host, [8]);
+    await world.run(250);
+    assert.equal(feed.sent.length, 4, 'four a tick');
+    await world.run(500);
+    const chunks = feed.sent.map(chunkOf);
+    assert.deepEqual(chunks.map(c => c.kind), [0, 1, 2, 2, 0], 'packets before, the keyframe, packets after');
+    assert.deepEqual(chunks[0].packets, [[9, 9]]);
+    assert.deepEqual(chunks[4].packets, [[8]]);
+    assert.ok(feed.sent.every(c => c.byteLength <= 60001));
+    const key = chunks.slice(1, 4).flatMap(c => c.packets);
+    assert.equal(key.length, 9, 'the level and the eight messages');
+    assert.deepEqual(keyHead(key[0]), { v: 1, game: 'jk1', episode: 'JK1MP.GOB', map: 'm10.jkl', t: 98765, mode: 4, sum: 0xdeadbeef });
+    assert.deepEqual(key[1], [1, 2]);
+    assert.deepEqual(key[8], [4]);
+    assert.ok(host.net.log.some(l => /feed: keyframe, 9 packets in 3 chunks, [\d.]+ KiB/.test(l)), host.net.log.join('\n'));
+    // MotS says so.
+    await world.run(60000);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 1);
+    feedKey(host, [[1]], { mots: 1 });
+    await world.run(250);
+    assert.equal(keyHead(chunkOf(feed.sent.at(-1)).packets[0]).game, 'mots');
+    // The minute's line counts keyframes.
+    assert.ok(host.net.log.some(l => /feed: \d+ packets in \d+ chunks, .* KiB\/s\), \d+ keyframes?/.test(l)), host.net.log.join('\n'));
+});
+
+test('a keyframe over 4 MiB is not sent, and says so', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    const feed = world.feeds.at(-1);
+    assert.equal(host.js.wsrelay_js_feed_key_wanted(0), 1);
+    const big = new Uint8Array(50000).fill(5);
+    feedKey(host, Array.from({ length: 90 }, () => big));
+    await world.run(10000);
+    assert.equal(feed.sent.length, 0);
+    assert.ok(host.net.log.some(l => /feed: keyframe not sent, over 4 MiB/.test(l)));
+});
+
 let failed = 0;
 for (const t of tests) {
     try {

@@ -1333,6 +1333,11 @@ void sithMulti_Update(int msecDeltaTime)
     }
     else if ( sithNet_isServer )
     {
+#ifdef PLATFORM_WSRELAY
+        // Added: a keyframe for the room's feed (spectator mode) when it's
+        // due (stdComm_WSRelay_FeedFrame calls sithMulti_FeedKeyframe).
+        stdComm_WSRelay_FeedFrame();
+#endif
         if ( sithNet_bSyncScores )
         {
             sithNet_bSyncScores = 0;
@@ -1499,6 +1504,60 @@ void sithMulti_Update(int msecDeltaTime)
         }
     }
 }
+
+#ifdef PLATFORM_WSRELAY
+// Added: a keyframe for the room's feed (spectator mode): the world as the big
+// sync above sends it to a player joining now, all at once, to idTo (an id no
+// player has, which DirectPlay_Send hands to the feed instead of the network).
+// Same stages, in the same order: changed surfaces, sectors with sync or
+// adjoin flags, every thing that syncs (bar weapons and explosions), removed
+// static things, then the players. No welcome: a viewer takes no seat. Sent
+// reliable where the big sync is; with no player at idTo, nothing waits for
+// an ack (sithComm_SendMsgToPlayer).
+void sithMulti_FeedKeyframe(int idTo)
+{
+    SithWorld* pWorld = sithWorld_g_pCurrentWorld;
+    if (!pWorld)
+        return;
+
+    for (int i = 0; i < pWorld->numSurfaces; i++)
+    {
+        SithSurface* pSurf = &pWorld->surfaces[i];
+        if (pSurf->flags & SITH_SURFACE_CHANGED)
+            sithDSS_SurfaceStatus(pSurf, idTo, 1);
+    }
+
+    for (int i = 0; i < pWorld->numSectors; i++)
+    {
+        SithSector* pSector = &pWorld->aSectors[i];
+        if (pSector->flags & SITH_SECTOR_SYNC)
+            sithDSS_SectorStatus(pSector, idTo, 1);
+        else if (pSector->flags & SITH_SECTOR_ADJOINSOFF)
+            sithDSS_SectorFlags(pSector, idTo, 1);
+    }
+
+    // numThings is the highest thing index in use, as in stage 3.
+    for (int i = 0; i <= pWorld->numThings; i++)
+    {
+        SithThing* pThing = &pWorld->aThings[i];
+        if (!sithThing_CanSync(pThing) || pThing->type == SITH_THING_WEAPON || pThing->type == SITH_THING_EXPLOSION)
+            continue;
+        if ((pThing->guid & 0xFFFF0000) != 0)
+            sithDSSThing_FullDescription(pThing, idTo, 1);
+        else
+            sithDSSThing_UpdateState(pThing, idTo, 1);
+        sithDSSThing_Pos(pThing, idTo, 0);
+        if ((pThing->type == SITH_THING_CORPSE || ((pThing->type == SITH_THING_ACTOR || pThing->type == SITH_THING_PLAYER) && pThing->flags & SITH_TF_DEAD))
+            && pThing->renderData.puppet)
+            sithDSS_PuppetStatus(pThing, idTo, 255);
+    }
+
+    for (uint32_t i = 0; i < sithMulti_numRemovedStaticThings; i++)
+        sithDSSThing_DestroyThing(sithMulti_aRemovedStaticThings[i], idTo);
+
+    sithMulti_SyncPlayers(idTo, 1);
+}
+#endif
 
 uint32_t sithMulti_GetPlayerIndexByID(int playerID)
 {
