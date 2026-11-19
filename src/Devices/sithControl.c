@@ -13,6 +13,8 @@
 #include "World/sithWeapon.h"
 #include "World/sithActor.h"
 #include "Engine/sithCamera.h"
+#include "Engine/sithCollision.h"
+#include "General/stdPalEffects.h"
 #include "Gameplay/sithTime.h"
 #include "Dss/sithGamesave.h"
 #include "Gameplay/sithOverlayMap.h"
@@ -381,7 +383,10 @@ void sithControl_Update(flex_t secDeltaTime, int msecDeltaTime)
     if ( !sithPlayer_g_pLocalPlayerThing
       || (sithPlayer_g_pLocalPlayerThing->actorParams.flags & (Main_bMotsCompat ? (SITH_AF_NOIDLECAMERA|SITH_AF_SCOPEHUD|SITH_AF_ARACHNID) : SITH_AF_NOIDLECAMERA))
       || (sithPlayer_g_pLocalPlayerThing->flags & (SITH_TF_DEAD|SITH_TF_DESTROYED)) != 0
-      || (sithCamera_g_stateFlags & 1) != 0 )
+      || (sithCamera_g_stateFlags & 1) != 0
+      // Added: a spectator (the dedicated host, or a game watching the
+      // match) has no idle camera: its own body is nowhere to circle.
+      || sithMulti_IsSpectating() )
     {
         if ( sithCamera_g_pCurCamera == &sithCamera_g_aCameras[4] )
         {
@@ -1154,8 +1159,11 @@ int sithControl_HandlePlayer(SithThing *player, flex_t deltaSecs)
 
     // Added: dedicated, or a viewer watching a match (spectator mode)
     if (sithMulti_IsSpectating()) {
+        // Its body stays out of the world, whatever turned it on.
+        player->flags |= SITH_TF_DISABLED;
         sithControl_PlayerLook(player, deltaSecs);
-        sithControl_FreeCam(player);
+        if (sithControl_followingPlayer < 0)
+            sithControl_SpectatorFly(player, deltaSecs);
         sithControl_GetKey(INPUT_FUNC_MAP, &input_read);
         if ( (input_read & 1) != 0 )
             sithOverlayMap_ToggleMap();
@@ -1294,16 +1302,33 @@ debug_controls:
         sithControl_followingPlayer = -1;
         sithWorld_g_pCurrentWorld->pCameraFocusThing = player;
     }
+    SithThing* pFollowed = NULL;
     if (sithControl_followingPlayer >= 0) {
         SithThing* pThing = jkPlayer_playerInfos[sithControl_followingPlayer].pLocalPlayer;
-        if (pThing) {
+        if (pThing && pThing->sector) {
+            // The free camera starts from where they were.
             rdVector_Copy3(&player->position, &pThing->position);
             rdMatrix_Copy34(&player->orient, &pThing->orient);
+            rdVector_Zero3(&player->actorParams.headPYR);
             sithThing_SetSector(player, pThing->sector, 0);
             sithWorld_g_pCurrentWorld->pCameraFocusThing = pThing;
             sithWorld_g_pCurrentWorld->pLocalPlayer = player; // Fixed: this game's own, not slot 0's (a viewer's isn't)
-            stdPalEffects_FlushAllAdds();
+            pFollowed = pThing;
         }
+    }
+    if (sithMulti_IsSpectating()) {
+        // The view is the player followed's own (their eyes, or behind them
+        // with the camera key), else the free camera's.
+        SithThing* pFocus = pFollowed ? pFollowed : player;
+        for (int i = 0; i < 2; i++) {
+            if (sithCamera_g_aCameras[i].pPrimaryFocusThing != pFocus)
+                sithCamera_SetCameraFocus(&sithCamera_g_aCameras[i], pFocus, NULL);
+        }
+        if (sithCamera_g_pCurCamera != &sithCamera_g_aCameras[0] && sithCamera_g_pCurCamera != &sithCamera_g_aCameras[1])
+            sithCamera_SetCurrentToCycleCamera();
+        // A spectator's own flashes (its body takes no hits, picks nothing
+        // up) would never fade: none.
+        stdPalEffects_FlushAllAdds();
     }
 
     for (v3 = INPUT_FUNC_SELECT1; v3 <= INPUT_FUNC_SELECT0; v3++)
@@ -1440,6 +1465,67 @@ debug_controls:
             result = 0;
     }
     return result;
+}
+
+// Added: a spectator's free camera (sithMulti_IsSpectating) turns as a
+// player does and flies where it looks, through adjoins but not walls:
+// Forward/Back and Slide move it, Run (Fast) goes faster. Its body has no
+// physics (it's disabled), so this turns and moves it itself, keeping its
+// sector.
+#define SITHCONTROL_SPECTATOR_SPEED (2.0)
+void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
+{
+    if (!player || !player->sector || deltaSecs <= 0.0)
+        return;
+
+    // The turn: the mouse's this frame, the keys' at the player's rate.
+    flex_t yaw = sithControl_GetAxis(INPUT_FUNC_TURN)
+               + sithControl_GetMouseLook(INPUT_FUNC_TURN) * player->actorParams.maxRotVelocity * SITHCONTROL_MOUSE_AXIS_SECS
+               + sithControl_GetKeyAsAxis(INPUT_FUNC_TURN) * player->actorParams.maxRotVelocity * deltaSecs;
+    if (yaw != 0.0)
+    {
+        rdVector3 pyr = {0.0, yaw, 0.0};
+        rdMatrix34 turn;
+        rdMatrix_BuildRotate34(&turn, &pyr);
+        rdMatrix_PreMultiply34(&player->orient, &turn);
+        rdMatrix_Normalize34(&player->orient);
+    }
+
+    flex_t forward = sithControl_GetKeyAsAxisNormalized(INPUT_FUNC_FORWARD);
+    flex_t slide = sithControl_GetKeyAsAxisNormalized(INPUT_FUNC_SLIDE);
+    if (Main_bMotsCompat)
+        slide = -slide; // as sithControl_FreeCam's
+    if (forward == 0.0 && slide == 0.0)
+        return;
+    flex_t speed = SITHCONTROL_SPECTATOR_SPEED;
+    int fast = 0;
+    sithControl_GetKey(INPUT_FUNC_FAST, &fast);
+    if (fast || (sithWeapon_controlOptions & 2))
+        speed *= 2.0;
+
+    // Where it looks: its turn, then its head's pitch.
+    rdMatrix34 look;
+    rdMatrix_Copy34(&look, &player->orient);
+    rdMatrix_PreRotate34(&look, &player->actorParams.headPYR);
+    rdVector3 move;
+    rdVector_Zero3(&move);
+    rdVector_ScaleAdd3Acc(&move, &look.lvec, forward);
+    rdVector_ScaleAdd3Acc(&move, &look.rvec, slide);
+    flex_t len = rdVector_Normalize3Acc(&move);
+    flex_t dist = (len < 1.0 ? len : 1.0) * speed * deltaSecs;
+    if (dist <= 0.0)
+        return;
+
+    rdVector3 from = player->position;
+    rdVector3 to = from;
+    rdVector_ScaleAdd3Acc(&to, &move, dist);
+    // Through adjoins; at a wall it stops short of it.
+    SithSector* pSector = sithCollision_FindSectorInRadius(player->sector, &from, &to, 0.02);
+    if (!pSector)
+        return;
+    rdVector_Copy3(&player->position, &to);
+    if (pSector != player->sector)
+        sithThing_SetSector(player, pSector, 0);
 }
 
 // Added: a spectator's camera (sithMulti_IsSpectating) on to the next player

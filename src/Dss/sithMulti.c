@@ -24,6 +24,7 @@
 #include "Engine/sithInterp.h"
 #include "stdPlatform.h"
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#include "Dss/jkDSS.h" // Added: jkDSS_SendPlayerLooksTo (sithMulti_FeedKeyframe)
 
 #define sithMulti_infoPrintf(fmt, ...) stdPlatform_Printf(fmt, ##__VA_ARGS__)
 #define sithMulti_verbosePrintf(fmt, ...) if (Main_bVerboseNetworking) \
@@ -1571,6 +1572,14 @@ void sithMulti_FeedKeyframe(int idTo)
         sithDSSThing_DestroyThing(sithMulti_aRemovedStaticThings[i], idTo);
 
     sithMulti_SyncPlayers(idTo, 1);
+
+    // And how each player looks, which every game sends itself when someone
+    // joins (jkDSS_idk4); the host's game has them all.
+    for (uint32_t i = 0; i < jkPlayer_maxPlayers && i < JKPLAYER_NUM_INFOS; i++)
+    {
+        if ((jkPlayer_playerInfos[i].flags & 1) && jkPlayer_playerInfos[i].pLocalPlayer)
+            jkDSS_SendPlayerLooksTo(jkPlayer_playerInfos[i].pLocalPlayer, idTo);
+    }
 }
 #endif
 

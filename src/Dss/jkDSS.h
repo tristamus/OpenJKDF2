@@ -61,6 +61,9 @@ void jkDSS_SendJKEnableSaber(SithThing *pPlayerThing);
 int jkDSS_ProcessJKEnableSaber(SithMessage *msg);
 
 void jkDSS_SendSetSaberInfo2(SithThing *thing);
+#ifdef PLATFORM_WSRELAY
+void jkDSS_SendPlayerLooksTo(SithThing *pThing, int idTo); // Added
+#endif
 int jkDSS_ProcessSetSaberInfo2(SithMessage *msg);
 
 void jkDSS_SendJKSetWeaponMesh(SithThing *pPlayerThing);

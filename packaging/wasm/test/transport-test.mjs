@@ -2419,6 +2419,34 @@ test('a viewer more than 2 s behind waits for the feed again; what it played bef
     assert.deepEqual(viewRecv(game), [[2, 3]]);
 });
 
+test('after its feed drops, a viewer sets right what it missed from the next keyframe; otherwise it leaves keyframes out', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world);
+    feed.deliver(feedBatch(feedRecord(1000, 1, 1, [keyLevel(), keyEnd()])));
+    viewSync(game);
+    assert.deepEqual(viewRecv(game), ['welcome']);
+    // A keyframe while all is well: left out.
+    feed.deliver(feedBatch(feedRecord(1250, 0, 2, [dss(1, 1)]), feedRecord(1500, 1, 1, [keyLevel(), dss(12, 2), keyEnd()]),
+                           feedRecord(1750, 0, 2, [dss(1, 3)])));
+    await world.run(1500);
+    assert.deepEqual(viewRecv(game), [[2, 1], [2, 3]]);
+    // The feed restarts: nothing for 30 s, then its first keyframe (in two
+    // parts) and on.
+    feed.end(1006);
+    await world.run(1000);
+    const again = world.feeds.at(-1);
+    assert.notEqual(again, feed);
+    await world.run(29000);
+    again.deliver(feedBatch(feedRecord(31000, 1, 1, [keyLevel(), dss(12, 4)]), feedRecord(31000, 2, 1, [dss(13, 5), keyEnd()]),
+                            feedRecord(31250, 0, 2, [dss(1, 6)])));
+    await world.run(1000);
+    assert.deepEqual(viewRecv(game), [[1, 4], [1, 5], [2, 6]]);
+    // And the keyframe after that is left out again.
+    again.deliver(feedBatch(feedRecord(31500, 1, 1, [keyLevel(), dss(12, 7), keyEnd()]), feedRecord(31750, 0, 2, [dss(1, 8)])));
+    await world.run(5);
+    assert.deepEqual(viewRecv(game), [[2, 8]]);
+});
+
 test('a viewer\'s feed that ends, or drops more than 3 times, ends watching once what it has played', async () => {
     const world = makeWorld();
     const { game, feed } = await viewer(world);

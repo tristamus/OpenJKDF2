@@ -38,6 +38,7 @@
 #include "General/stdJSON.h"
 #include "Platform/std3D.h"
 #include "Main/sithCvar.h"
+#include "Dss/sithMulti.h" // Added: sithMulti_IsSpectating
 
 // DSi has *plenty* of time to read the text.
 #ifdef TARGET_RETRO_HOMEBREW
@@ -975,6 +976,11 @@ void jkPlayer_DrawPov()
     rdMatrix34 orient;
 
     if (!playerThings[playerThingIdx].povModel.model3)
+        return;
+
+    // Added: a spectator (the dedicated host, or a game watching the match)
+    // holds nothing, whoever's eyes it sees through.
+    if (sithMulti_IsSpectating())
         return;
 
     if ( playerThings[playerThingIdx].povModel.puppet )

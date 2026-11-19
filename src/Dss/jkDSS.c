@@ -87,6 +87,15 @@ static const char* jkDSS_GetMotsTeamModel(int personality, int teamNum)
 // MOTS added
 int jkDSS_005aec8c = 0;
 
+#ifdef PLATFORM_WSRELAY
+// Added: who the player-looks messages below go to: everyone (-1), or one id
+// (jkDSS_SendPlayerLooksTo).
+static int jkDSS_looksSendTo = -1;
+#define JKDSS_LOOKS_SENDTO (jkDSS_looksSendTo)
+#else
+#define JKDSS_LOOKS_SENDTO (-1)
+#endif
+
 int jkDSS_Startup()
 {
     stdPlatform_Printf("OpenJKDF2: %s\n", __func__);
@@ -338,7 +347,7 @@ void jkDSS_SendSetSaberInfoMots(SithThing *thing, int personality)
 
     NETMSG_END(DSS_SABERINFO2);
     
-    sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, -1, 255, 1);
+    sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, JKDSS_LOOKS_SENDTO, 255, 1);
 }
 
 // MOTS altered
@@ -437,7 +446,7 @@ void jkDSS_SendSetSaberInfo(SithThing *thing)
 
     NETMSG_END(DSS_SABERINFO2);
     
-    sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, -1, 255, 1);
+    sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, JKDSS_LOOKS_SENDTO, 255, 1);
 }
 
 // MOTS altered
@@ -650,8 +659,32 @@ void jkDSS_SendSetSaberInfo2(SithThing *thing)
     
     NETMSG_END(DSS_SABERINFO3);
     
-    sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, -1, 255, 1);
+    sithComm_SendMsgToPlayer(&sithComm_netMsgTmp, JKDSS_LOOKS_SENDTO, 255, 1);
 }
+
+#ifdef PLATFORM_WSRELAY
+// Added: a player's looks (model, saber, its sparks), as that player's game
+// sends them to everyone when someone joins (jkDSS_idk4), to idTo only: for
+// the room's feed keyframe (sithMulti_FeedKeyframe), as a game watching the
+// match joins no one.
+void jkDSS_SendPlayerLooksTo(SithThing *pThing, int idTo)
+{
+    if ( !pThing || !pThing->playerInfo || !pThing->renderData.model3 )
+        return;
+    jkDSS_looksSendTo = idTo;
+    jkDSS_SendSetSaberInfo2(pThing);
+    if ( pThing->playerInfo->polyline.face.material && pThing->playerInfo->polyline.tipFace.material )
+    {
+#ifdef JKM_PARAMS
+        if (Main_bMotsCompat)
+            jkDSS_SendSetSaberInfoMots(pThing, 0);
+        else
+#endif
+            jkDSS_SendSetSaberInfo(pThing);
+    }
+    jkDSS_looksSendTo = -1;
+}
+#endif
 
 // MOTS altered
 int jkDSS_ProcessSetSaberInfo2(SithMessage *msg)

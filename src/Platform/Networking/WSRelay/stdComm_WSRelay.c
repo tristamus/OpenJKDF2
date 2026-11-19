@@ -1905,7 +1905,8 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
        packet pi next. lastMs: the time of the last record played. */
     var view = { url: (cut >= 0 ? base.substring(0, cut) : base) + '/feed/' + room, room: room, ws: null, tries: 0,
                  delay: -1, recs: [], ri: 0, pi: 0, phase: 'wait', since: performance.now(), level: null, want: null,
-                 found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, ended: '', closed: false, waitMs: WAIT_MS };
+                 found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, ended: '', closed: false, waitMs: WAIT_MS,
+                 resync: false, rekey: false };
     Module.jkView = view;
     view.say = function(text) {
         console.log('OpenJKDF2: watching room ' + room + ': ' + text);
@@ -1964,6 +1965,8 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
             if (view.ws !== ws) return;
             view.ws = null;
             if (view.ended) return;
+            /* What came meanwhile is lost: the next keyframe sets it right. */
+            if (view.phase === 'live') view.resync = true;
             if (view.tries >= RETRIES) {
                 view.end('lost', 'Lost the match.');
                 return;
@@ -2097,9 +2100,17 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         if (view.phase !== 'live') return view.ended ? -2 : 0;
         while (view.ri < view.recs.length) {
             r = view.recs[view.ri];
-            /* Keyframes are for starting; what's older than what played came
-               again after the feed was opened again. */
-            if (r.kind !== 0 || r.ms < view.lastMs || !r.packets.length) {
+            /* Keyframes are for starting, and for after the feed dropped
+               (resync): the first one newer than what played sets right what
+               was missed (rekey, to its end). What's older than what played
+               came again after the feed was opened again. */
+            if (r.kind === 0) view.rekey = false;
+            else if (view.pi === 0 && view.resync && view.isKey(r) && view.same(r.head, view.want) && r.ms >= view.lastMs) {
+                view.resync = false;
+                view.rekey = true;
+            }
+            if ((r.kind !== 0 && !view.rekey) || r.ms < view.lastMs || !r.packets.length) {
+                if (r.keyEnd) view.rekey = false;
                 view.ri++;
                 view.pi = 0;
                 continue;
@@ -2114,6 +2125,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
             view.lastMs = r.ms;
             var out = [r.packets[view.pi++], r.seat];
             if (view.pi >= r.packets.length) {
+                if (r.keyEnd) view.rekey = false;
                 view.ri++;
                 view.pi = 0;
             }
@@ -3777,6 +3789,15 @@ static int wsrelay_ViewerReceive(int* pIdOut, int* pMsgIdOut, int* pLenOut, int 
     if (bSync && !wsrelay_bViewSyncing)
         wsrelay_js_view_sync(jkRes_episodeGobName, jkMain_aLevelJklFname);
     wsrelay_bViewSyncing = bSync;
+
+    // The match is on for as long as its feed is: a gap in it (the feed
+    // restarting, and waiting for a keyframe of age) is no host gone quiet.
+    // Once it has ended, the host is gone (below).
+    if (!wsrelay_bViewEnded)
+    {
+        for (uint32_t i = 0; i < jkPlayer_maxPlayers && i < JKPLAYER_NUM_INFOS; i++)
+            jkPlayer_playerInfos[i].msecLastCommTime = sithTime_g_msecGameTime;
+    }
 
     while (1)
     {
