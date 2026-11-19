@@ -64,6 +64,15 @@
 // checks room passwords). The JS below handles signal, ice and lobby itself;
 // the engine never sees them.
 //
+// Watching a match: a lobby that says feed (jkdf2mp-bb-server's src/feed.js)
+// takes a feed for each watched room's match. A game in a room says feed;
+// while the room's match is watched the lobby answers feed <room> <token>,
+// and the game sends a copy of every message it sends everyone
+// (stdComm_SendToPlayer) to /feed/<room>?up=<token>, batched every
+// FEED_BATCH_MS, until the lobby says feed off or the game leaves. The JS
+// handles feed itself. No keyframes yet: this is the first step, to measure
+// what a match sends.
+//
 // Room passwords: this game tells the lobby it can send them (/relay?pw=1).
 // A lobby that says pw then lists no passwords and checks the one the player
 // typed, which goes with join as the hex of its UTF-16LE units, for a game
@@ -1368,8 +1377,16 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 var seat = text.split(' ');
                 net.seat = { room: parseInt(seat[1], 10), id: parseInt(seat[2], 10), key: seat[3] || "" };
                 if (net.seat.id > 1) net.askIce();
+                net.askFeed();
                 return true;
             }
+            /* The room's feed for pages watching its match: where to send,
+               or to stop. */
+            if (op === 'feed') {
+                net.onFeed(text.split(' '));
+                return true;
+            }
+            if (op === 'rejoined' || op === 'rehosted') net.askFeed();
             /* A player whose data channel is still up is still playing: the
                engine decides when they're gone (DirectPlay_Receive). */
             var gone = op === 'peer-left' ? net.peers[parseInt(text.substring(sp + 1), 10)] : net.peers[1];
@@ -1401,6 +1418,116 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (line === net.helloSent) return;
             net.helloSent = line;
             net.ws.send(line);
+        };
+
+        /* Watching a match: this game's copy of what it sends everyone, to
+           its room's feed while the lobby says (feed <room> <token>), one
+           binary chunk every FEED_BATCH_MS: a 0 (packets), then each packet
+           as u16 length (LE) and its bytes from cogMsgId on. A lobby's feed
+           takes at most 64 KiB a chunk and 20 chunks a second. Every minute
+           the network log says how much went, to measure a match's feed. */
+        var FEED_BATCH_MS = 250, FEED_MAX_CHUNK = 60000, FEED_LOG_MS = 60000, FEED_RETRIES = 3;
+        net.feed = null;
+        net.askFeed = function() {
+            if (Module['jkNetOld'] || net.state !== 1 || net.lobbyCan.indexOf('feed') < 0) return;
+            net.ws.send('feed');
+        };
+        net.onFeed = function(parts) {
+            if (parts[1] === 'off') {
+                net.feedStop('the lobby stopped it');
+                return;
+            }
+            var room = parseInt(parts[1], 10), token = parts[2] || '';
+            if (!(room > 0) || !/^[0-9a-f]{32}$/.test(token)) return;
+            /* The feed is beside the lobby: wss://<host>/feed/<room>. */
+            var base = (net.ws && net.ws.url) || Module['jkRelayUrl'] || '';
+            var cut = base.lastIndexOf('/relay');
+            var url = (cut >= 0 ? base.substring(0, cut) : base) + '/feed/' + room + '?up=' + token;
+            if (net.feed && net.feed.url === url) return;
+            net.feedStop();
+            net.feed = { url: url, ws: null, parts: [], size: 0, chunks: 0, bytes: 0, packets: 0,
+                         since: performance.now(), timer: setInterval(function() { net.feedFlush(); }, FEED_BATCH_MS), tries: 0 };
+            net.feedOpen(net.feed);
+        };
+        net.feedOpen = function(feed) {
+            var ws;
+            try {
+                ws = new WebSocket(feed.url);
+            } catch (e) {
+                net.note('feed: ' + e);
+                return;
+            }
+            ws.binaryType = 'arraybuffer';
+            feed.ws = ws;
+            ws.onopen = function() {
+                feed.tries = 0;
+                net.note('feed: sending to ' + feed.url.split('?')[0]);
+            };
+            ws.onmessage = function() {};
+            ws.onclose = function(ev) {
+                if (net.feed !== feed || feed.ws !== ws) return;
+                feed.ws = null;
+                var code = ev && ev.code;
+                /* The feed ended it, or another socket of this game took its
+                   place: no more. Otherwise (a network blip, the feed
+                   restarting) try again a few times. */
+                if (code === 1000 || code === 1003 || code === 1008 || code === 4001 || code === 4002 || feed.tries >= FEED_RETRIES) {
+                    net.feedStop('closed (' + code + ')');
+                    return;
+                }
+                feed.tries++;
+                setTimeout(function() { if (net.feed === feed && !feed.ws) net.feedOpen(feed); }, 2000 * feed.tries);
+            };
+        };
+        net.feedCopy = function(bytes) {
+            var feed = net.feed;
+            if (!feed || !feed.ws || feed.ws.readyState !== 1 || bytes.length > 0xffff) return;
+            if (feed.size + 2 + bytes.length > FEED_MAX_CHUNK) net.feedFlush();
+            var rec = new Uint8Array(2 + bytes.length);
+            rec[0] = bytes.length & 255;
+            rec[1] = bytes.length >> 8;
+            rec.set(bytes, 2);
+            feed.parts.push(rec);
+            feed.size += rec.length;
+            feed.packets++;
+        };
+        net.feedFlush = function() {
+            var feed = net.feed;
+            if (!feed) return;
+            var now = performance.now();
+            if (feed.size && feed.ws && feed.ws.readyState === 1) {
+                var out = new Uint8Array(1 + feed.size), at = 1;
+                for (var i = 0; i < feed.parts.length; i++) {
+                    out.set(feed.parts[i], at);
+                    at += feed.parts[i].length;
+                }
+                try {
+                    feed.ws.send(out.buffer);
+                    feed.chunks++;
+                    feed.bytes += out.length;
+                } catch (e) {}
+            }
+            feed.parts = [];
+            feed.size = 0;
+            if (now - feed.since >= FEED_LOG_MS) {
+                var secs = (now - feed.since) / 1000;
+                net.note('feed: ' + feed.packets + ' packets in ' + feed.chunks + ' chunks, ' + (feed.bytes / 1024).toFixed(1) + ' KiB in ' +
+                         Math.round(secs) + ' s (' + (feed.bytes / 1024 / secs).toFixed(2) + ' KiB/s)');
+                feed.packets = 0;
+                feed.chunks = 0;
+                feed.bytes = 0;
+                feed.since = now;
+            }
+        };
+        net.feedStop = function(why) {
+            var feed = net.feed;
+            if (!feed) return;
+            net.feed = null;
+            clearInterval(feed.timer);
+            if (feed.ws) {
+                try { feed.ws.close(1000, 'bye'); } catch (e) {}
+            }
+            if (why) net.note('feed: stopped, ' + why);
         };
 
         /* Outside a game, reconnects a lost socket after a while (the lobby
@@ -1542,7 +1669,10 @@ EM_JS(int, wsrelay_js_send_text, (const char* pText), {
     // A host's entry goes with rehost; hosting, joining or leaving ends the
     // seat this game had.
     if ((op === 'host' || op === 'update') && sp > 0) net.entry = text.substring(sp + 1);
-    if (op === 'host' || op === 'join' || op === 'leave') net.seat = null;
+    if (op === 'host' || op === 'join' || op === 'leave') {
+        net.seat = null;
+        if (net.feedStop) net.feedStop('left the room');
+    }
     if (net.state !== 1) return 0;
     net.ws.send(text);
     return 1;
@@ -1589,6 +1719,13 @@ EM_JS(int, wsrelay_js_send_packet, (const void* pData, int len, int idTo, int ow
     // The host's game sends to the players in it (net.mapInMatch).
     if (net.isHost && idTo > 1) net.sentPlayAt[idTo] = performance.now();
     return net.sendPacket(HEAPU8.slice(pData, pData + len), net.route(idTo), ownPos ? net.nextSeq(idTo) : undefined);
+});
+
+// A message this game sends everyone, for its room's feed (net.feedCopy),
+// while it has one.
+EM_JS(void, wsrelay_js_feed_copy, (const void* pData, int len), {
+    var net = Module.jkNet;
+    if (net && net.feed) net.feedCopy(HEAPU8.subarray(pData, pData + len));
 });
 
 // Starts a session's WebRTC side: a client offers a data channel to the host,
@@ -3057,6 +3194,16 @@ static int wsrelay_IsOwnPosition(const void* pData, uint32_t size)
     if (*(const uint16_t*)&p[0] != DSS_THINGPOS || *(const uint16_t*)&p[2] != 0)
         return 0;
     return sithPlayer_g_pLocalPlayerThing && *(const int32_t*)&p[4] == sithPlayer_g_pLocalPlayerThing->guid;
+}
+
+// Called by stdComm_SendToPlayer with each message sent to everyone, once,
+// before it goes to each player: a copy for the room's feed, when the lobby
+// asked for one (see the top of this file). The bytes are from cogMsgId on.
+void stdComm_WSRelay_FeedCopy(const void* pData, uint32_t size)
+{
+    if (stdComm_Imperial_bActive || (!wsrelay_bHosting && !wsrelay_bJoined))
+        return;
+    wsrelay_js_feed_copy(pData, (int)size);
 }
 
 BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)

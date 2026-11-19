@@ -99,6 +99,7 @@ function makeLobby(world) {
         turnMs: 100,           // how long getting them takes
         turnTtl: 86400,        // how many seconds they last, 0 for none (only STUN)
         pw: false,             // says "pw": it checks room passwords, so its list carries none
+        feed: false,           // says "feed": it takes a feed of a watched room's match
         listed: '3 1 ' + '00'.repeat(240), // what it answers list with: <room> <players> <entry>
         delay: 20,             // how long the lobby takes to pass something on
         said: [],              // the control lines games sent it, but signal and ping
@@ -112,7 +113,8 @@ function makeLobby(world) {
         },
         opened(ws) {
             lobby.send(ws, 'ice ' + btoa(JSON.stringify(STUN)));
-            const can = (lobby.links ? ['links'] : []).concat(lobby.turn ? ['turn'] : [], lobby.pw ? ['pw'] : []);
+            const can = (lobby.links ? ['links'] : []).concat(lobby.turn ? ['turn'] : [], lobby.pw ? ['pw'] : [],
+                                                                lobby.feed ? ['feed'] : []);
             if (can.length) lobby.send(ws, 'lobby ' + can.join(' '));
         },
         send(ws, data) {
@@ -192,6 +194,19 @@ function makeWebSocket(world) {
             this.url = url;
             this.readyState = 0;
             this.binaryType = 'blob';
+            // A room's feed (jkdf2mp-bb-server's src/feed.js): it keeps what
+            // it's sent, in world.feeds.
+            if (url.indexOf('/feed/') >= 0) {
+                this.feed = true;
+                this.sent = [];
+                (world.feeds = world.feeds || []).push(this);
+                world.later(() => {
+                    if (this.readyState !== 0) return;
+                    this.readyState = 1;
+                    if (this.onopen) this.onopen();
+                }, 1);
+                return;
+            }
             world.lobby.accept(this);
             world.later(() => {
                 this.readyState = 1;
@@ -201,10 +216,21 @@ function makeWebSocket(world) {
         }
         send(data) {
             if (this.readyState !== 1) throw new Error('InvalidStateError');
+            if (this.feed) {
+                this.sent.push(typeof data === 'string' ? data : copy(data));
+                return;
+            }
             world.lobby.receive(this, typeof data === 'string' ? data : copy(data));
         }
-        close() {
+        close(code) {
             this.readyState = 3;
+            this.closedWith = code || 1005;
+        }
+        // The feed closes it, with this code.
+        end(code) {
+            if (this.readyState === 3) return;
+            this.readyState = 3;
+            if (this.onclose) this.onclose({ code, reason: '' });
         }
         // The lobby goes away.
         drop() {
@@ -376,10 +402,16 @@ function makeGame(world, { id, old = false, netsim, relayUrl = 'ws://lobby/relay
     clock.later = (fn, ms) => world.later(fn, ms);
     clock.random = seeded(id * 7919);
     const mem = new ArrayBuffer(1 << 16);
+    const heap = new Uint8Array(mem);
     const env = {
         Module,
-        HEAPU8: new Uint8Array(mem), HEAPU16: new Uint16Array(mem), HEAP32: new Int32Array(mem),
-        UTF8ToString: () => '', stringToUTF8: () => 0, lengthBytesUTF8: () => 0,
+        HEAPU8: heap, HEAPU16: new Uint16Array(mem), HEAP32: new Int32Array(mem),
+        UTF8ToString: p => {
+            let end = p;
+            while (p && heap[end]) end++;
+            return new TextDecoder().decode(heap.slice(p, end));
+        },
+        stringToUTF8: () => 0, lengthBytesUTF8: () => 0,
         performance: { now: () => world.now() },
         setTimeout: (fn, ms) => world.later(fn, ms), clearTimeout: t => world.cancel(t),
         setInterval: (fn, ms) => world.every(fn, ms), clearInterval: t => world.cancel(t),
@@ -1953,6 +1985,130 @@ test('a player who left, or whose number someone new has, has nothing waiting fo
     pumps = 0;
     host.js.wsrelay_js_map_pump();
     assert.equal(pumps, 1);
+});
+
+// ---- A watched room's feed.
+
+// The engine copies a message sent to everyone (stdComm_WSRelay_FeedCopy):
+// its bytes from cogMsgId on.
+function feedCopy(game, body) {
+    game.mem.set(body, 4096);
+    game.js.wsrelay_js_feed_copy(4096, body.length);
+}
+// The packets in a chunk the feed got: its kind, and each packet's bytes.
+function chunkOf(data) {
+    const b = new Uint8Array(data), out = [];
+    for (let at = 1; at < b.length;) {
+        const len = b[at] | (b[at + 1] << 8);
+        out.push([...b.subarray(at + 2, at + 2 + len)]);
+        at += 2 + len;
+    }
+    return { kind: b[0], packets: out };
+}
+const TOKEN = 'ab'.repeat(16);
+
+test('a game in a room asks a lobby that takes feeds for one; other lobbies, and ?netold, are never asked', async () => {
+    let world = makeWorld();
+    world.lobby.feed = true;
+    let [host, joiner] = await room(world, [2]);
+    assert.deepEqual(world.lobby.said.filter(l => l === 'feed').length, 2, 'the host and its joiner each ask once seated');
+    world = makeWorld();
+    [host, joiner] = await room(world, [2]);
+    assert.deepEqual(world.lobby.said.filter(l => l === 'feed'), []);
+    world = makeWorld();
+    world.lobby.feed = true;
+    await room(world, [{ id: 2, old: true }], { hostOld: true });
+    assert.deepEqual(world.lobby.said.filter(l => l === 'feed'), []);
+});
+
+test('with a feed, what the game sends everyone goes there in a chunk every 250 ms, and nothing without', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    feedCopy(host, [1, 2, 3]);       // no feed yet: dropped
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    assert.ok(host.net.ws.onmessage, 'the line is the JavaScript\'s, not the engine\'s');
+    assert.ok(!host.net.queue.some(d => typeof d === 'string' && d.startsWith('feed')));
+    await world.run(5);
+    const feed = world.feeds.at(-1);
+    assert.equal(feed.url.split('?')[0], 'ws://lobby/feed/1', 'beside the lobby');
+    assert.equal(feed.url.split('?')[1], 'up=' + TOKEN);
+    feedCopy(host, [4, 5]);
+    feedCopy(host, [6]);
+    await world.run(300);
+    assert.equal(feed.sent.length, 1);
+    assert.deepEqual(chunkOf(feed.sent[0]), { kind: 0, packets: [[4, 5], [6]] });
+    await world.run(1000);
+    assert.equal(feed.sent.length, 1, 'nothing to send: nothing sent');
+    // A big burst goes in more than one chunk, none over 60,000 bytes.
+    const big = new Uint8Array(20000).fill(7);
+    for (let i = 0; i < 5; i++) feedCopy(host, big);
+    await world.run(300);
+    assert.equal(feed.sent.length, 4, 'two, two and one');
+    assert.ok(feed.sent.every(c => c.byteLength <= 60001));
+    assert.equal(feed.sent.slice(1).reduce((n, c) => n + chunkOf(c).packets.length, 0), 5);
+    // The same line again changes nothing.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    assert.equal(world.feeds.length, 1);
+});
+
+test('feed off, leaving the room, or the feed closing it stop the copies; a dropped feed is tried again', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    let feed = world.feeds.at(-1);
+    host.net.ws.deliver('feed off');
+    assert.equal(feed.closedWith, 1000);
+    feedCopy(host, [1]);
+    await world.run(300);
+    assert.deepEqual(feed.sent, []);
+    assert.equal(host.net.feed, null);
+    assert.ok(host.net.log.some(l => /feed: stopped, the lobby stopped it/.test(l)));
+    // Bad lines are ignored.
+    host.net.ws.deliver('feed 1 nope');
+    host.net.ws.deliver('feed x ' + TOKEN);
+    assert.equal(host.net.feed, null);
+    // Leaving.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    feed = world.feeds.at(-1);
+    const text = new TextEncoder().encode('leave\0');
+    host.mem.set(text, 2048);
+    host.js.wsrelay_js_send_text(2048);
+    assert.equal(feed.closedWith, 1000);
+    assert.equal(host.net.feed, null);
+    // A blip: tried again, with the same address; the feed's own close: not.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    feed = world.feeds.at(-1);
+    feed.end(1006);
+    await world.run(2500);
+    const again = world.feeds.at(-1);
+    assert.notEqual(again, feed);
+    assert.equal(again.url, feed.url);
+    again.end(4001);
+    await world.run(10000);
+    assert.equal(world.feeds.at(-1), again);
+    assert.equal(host.net.feed, null);
+});
+
+test('every minute the network log says how much the feed took', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    const stop = world.every(() => feedCopy(host, new Uint8Array(68)), 20);   // 50 positions a second
+    await world.run(60000);
+    world.cancel(stop);
+    const line = host.net.log.find(l => /feed: \d+ packets/.test(l));
+    assert.ok(line, 'a line');
+    const m = /feed: (\d+) packets in (\d+) chunks, ([\d.]+) KiB in (\d+) s/.exec(line);
+    assert.ok(Number(m[1]) >= 2990 && Number(m[1]) <= 3000, m[1]);
+    assert.ok(Number(m[2]) >= 239 && Number(m[2]) <= 240, m[2]);
 });
 
 let failed = 0;

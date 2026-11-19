@@ -41,6 +41,11 @@ extern "C" {
 void stdComm_WSRelay_Startup();
 void stdComm_WSRelay_Shutdown();
 
+// A message sent to everyone (stdComm_SendToPlayer, before its loop), copied
+// to the room's feed for pages watching the match while the lobby asks for
+// one. pData is the message from cogMsgId on.
+void stdComm_WSRelay_FeedCopy(const void* pData, uint32_t size);
+
 // Called each frame of the join screen: 1 once the games stdComm_EnumSessions
 // asked for are in jkGuiMultiplayer_aEntries, for the screen to put up as it
 // does after stdComm_EnumSessions returns 0.

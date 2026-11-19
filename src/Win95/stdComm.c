@@ -5,6 +5,7 @@
 #include "jk.h"
 #ifdef PLATFORM_WSRELAY
 #include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h" // Added
 #endif
 
 
@@ -194,7 +195,12 @@ int stdComm_SendToPlayer(SithMessage *msg, int sendto_id)
     if ( !jkPlayer_maxPlayers )
         return 1;
 
-    
+#ifdef PLATFORM_WSRELAY
+    // Added: one copy of each message to everyone, for the room's feed
+    // (pages watching the match), while the lobby asks for one.
+    stdComm_WSRelay_FeedCopy(&msg->netMsg.cogMsgId, v2);
+#endif
+
     for (int i = 0; i < jkPlayer_maxPlayers; i++)
     {
         SithPlayer* v5 = &jkPlayer_playerInfos[i];
