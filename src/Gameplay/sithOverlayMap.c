@@ -83,6 +83,9 @@ int sithOverlayMap_Draw(rdCanvas *pCanvas)
     result = sithOverlayMap_bMapVisible;
     if (!sithOverlayMap_bMapVisible)
         return 0;
+    // Added: nothing to draw around yet (a spectator's map before it's in the level)
+    if (!sithWorld_g_pCurrentWorld || !sithWorld_g_pCurrentWorld->pLocalPlayer || !sithWorld_g_pCurrentWorld->pLocalPlayer->sector)
+        return 0;
 
 #ifdef SDL2_RENDER
     // Added: the map is drawn into the overlay buffer, so it must be cleared and shown

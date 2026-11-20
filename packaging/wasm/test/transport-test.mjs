@@ -2654,6 +2654,47 @@ test('a viewer more than 2 s behind waits for the feed again; what it played bef
     assert.deepEqual(viewRecv(game), [[2, 3]]);
 });
 
+test('after the feed held up, a viewer plays 10% faster until it\'s near the feed again, rather than staying behind', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world);
+    feed.deliver(feedBatch(feedRecord(1000, 1, 1, [keyLevel(), keyEnd()])));
+    viewSync(game);
+    assert.deepEqual(viewRecv(game), ['welcome']);
+    const view = game.Module.jkView;
+    const played = [];
+    let ms = 1000, n = 0;
+    // Every 250 ms the host's game sends a record; the engine asks every 50 ms.
+    const step = async (deliver = true, held = null) => {
+        ms += 250;
+        const rec = feedRecord(ms, 0, 2, [dss(1, ++n)]);
+        if (held) held.push(rec);
+        else if (deliver) feed.deliver(feedBatch(rec));
+        for (let f = 0; f < 5; f++) {
+            for (const p of viewRecv(game)) played.push(p[1]);
+            await world.run(50);
+        }
+    };
+    for (let i = 0; i < 40; i++) await step();
+    assert.equal(view.late, 0);
+    assert.equal(view.caught, 0, 'on time: nothing to catch up');
+    const offset = view.offset;
+    // Nothing for 3.5 s, then all of it at once.
+    const held = [];
+    for (let i = 0; i < 14; i++) await step(true, held);
+    feed.deliver(feedBatch(...held));
+    for (const p of viewRecv(game)) played.push(p[1]);
+    assert.equal(view.late, 1, 'it waited for the feed');
+    assert.equal(Math.round(view.offset - offset), 3250, '3.25 s further behind');
+    for (let i = 0; i < 40; i++) await step();
+    assert.ok(Math.abs(view.caught - 1000) < 30, 'over the next 10 s, 1 s of it back: ' + view.caught);
+    for (let i = 0; i < 200; i++) await step();
+    const left = view.offset - offset;
+    assert.ok(left > 600 && left < 1050, 'back to about 1.5 s past the newest, less than 1 s more behind than before: ' + left);
+    assert.equal(view.late, 1, 'it never got late from it');
+    assert.deepEqual(played, Array.from({ length: played.length }, (_, i) => i + 1), 'each record once, in order');
+    assert.ok(played.length > n - 8, 'all of them but the last second\'s: ' + played.length + ' of ' + n);
+});
+
 test('after its feed drops, a viewer sets right what it missed from the next keyframe; otherwise it leaves keyframes out', async () => {
     const world = makeWorld();
     const { game, feed } = await viewer(world);

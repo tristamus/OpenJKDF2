@@ -1923,8 +1923,12 @@ EM_JS(int, wsrelay_js_take_watch_room, (), {
 EM_JS(int, wsrelay_js_view_open, (int room), {
     /* LATE_MS: further behind than this, and it waits for the feed again;
        WAIT_MS: how long it waits for a keyframe to start from; RETRIES: how
-       many times it opens the feed again after it drops. */
-    var JITTER_MS = 500, SPREAD_MS = 250, LATE_MS = 2000, WAIT_MS = 90000, RETRIES = 3;
+       many times it opens the feed again after it drops. CATCH_MS: the
+       newest record due more than this past JITTER_MS from now (it waited
+       for the feed, LATE_MS, and the rest came at once), and it plays
+       CATCH_RATE faster until it isn't, so each hold-up doesn't add to how
+       far behind the match it is for the rest of it. */
+    var JITTER_MS = 500, SPREAD_MS = 250, LATE_MS = 2000, WAIT_MS = 90000, RETRIES = 3, CATCH_MS = 1000, CATCH_RATE = 0.1;
     var old = Module.jkView;
     if (old) old.close();
     var base = Module['jkRelayUrl'];
@@ -1940,7 +1944,8 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
        packet pi next. lastMs: the time of the last record played. */
     var view = { url: (cut >= 0 ? base.substring(0, cut) : base) + '/feed/' + room, room: room, ws: null, tries: 0,
                  delay: -1, recs: [], ri: 0, pi: 0, phase: 'wait', since: performance.now(), level: null, want: null,
-                 found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, ended: '', closed: false, waitMs: WAIT_MS,
+                 found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, caught: 0, recvAt: 0, ended: '',
+                 closed: false, waitMs: WAIT_MS,
                  resync: false, rekey: false, box: !!Module['jkWatchBox'] };
     Module.jkView = view;
     view.say = function(text) {
@@ -2136,6 +2141,19 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
             return 0;
         }
         if (view.phase !== 'live') return view.ended ? -2 : 0;
+        /* Catching up (CATCH_MS): the time since it was last asked, at most
+           100 ms of it, CATCH_RATE of that off the offset. caught: how much
+           in all. */
+        if (view.recs.length) {
+            var ahead = view.recs[view.recs.length - 1].ms + view.offset - now - JITTER_MS - CATCH_MS;
+            var step = view.recvAt ? Math.min(now - view.recvAt, 100) * CATCH_RATE : 0;
+            if (ahead > 0 && step > 0) {
+                step = Math.min(step, ahead);
+                view.offset -= step;
+                view.caught += step;
+            }
+        }
+        view.recvAt = now;
         while (view.ri < view.recs.length) {
             r = view.recs[view.ri];
             /* Keyframes are for starting, and for after the feed dropped
@@ -2262,7 +2280,9 @@ EM_JS(int, wsrelay_js_view_say, (const char16_t* pName, const char* pText), {
         if (!ch) break;
         chars.push(ch);
     }
-    var name = String.fromCharCode.apply(null, chars).replace(/[^\x20-\x7e]/g, '?').replace(/\s+/g, ' ').trim().substring(0, 16).trim();
+    // No \s here: the C compiler reads an EM_JS body as a string and makes
+    // \s an s. Past the first replace, a space is the only white space left.
+    var name = String.fromCharCode.apply(null, chars).replace(/[^\x20-\x7e]/g, '?').replace(/ +/g, ' ').trim().substring(0, 16).trim();
     try {
         view.ws.send('say ' + (name || 'Someone') + '\t' + UTF8ToString(pText));
     } catch (e) {

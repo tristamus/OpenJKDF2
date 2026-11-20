@@ -10920,7 +10920,8 @@
         NEXT: 'Page Down', HOME: 'Home', END: 'End', INSERT: 'Insert', DELETE: 'Delete', CAPITAL: 'Caps Lock', GRAVE: '`',
         MINUS: '-', EQUALS: '=', LBRACKET: '[', RBRACKET: ']', SEMICOLON: ';', APOSTROPHE: "'", BACKSLASH: '\\',
         COMMA: ',', PERIOD: '.', SLASH: '/', MOUSE_B1: 'Left mouse', MOUSE_B2: 'Right mouse', MOUSE_B3: 'Middle mouse',
-        MOUSE_B4: 'Mouse 4', MOUSE_B5: 'Mouse 5', MOUSE_WHEELUP: 'Wheel up', MOUSE_WHEELDOWN: 'Wheel down'
+        MOUSE_B4: 'Mouse 4', MOUSE_B5: 'Mouse 5', MOUSE_WHEELUP: 'Wheel up', MOUSE_WHEELDOWN: 'Wheel down',
+        ADD: 'Numpad +', SUBTRACT: 'Numpad -', MULTIPLY: 'Numpad *', DIVIDE: 'Numpad /', DECIMAL: 'Numpad .'
       };
       function keyLabel(raw) {
         var k = String(raw || '').replace(/^(DIK|KEY)_/, '');
@@ -10955,9 +10956,20 @@
           });
           return out;
         }
-        function keys(name, command) {
+        // The first max of them (2): a letter or digit, then the mouse,
+        // then other keys, the numpad, and a pad's buttons last, so the
+        // panel stays small over the box.
+        function rank(n) {
+          return n.length === 1 ? 0 : / mouse$|^Mouse |^Wheel /.test(n) ? 1 : /^Numpad /.test(n) ? 3 : /^Pad /.test(n) ? 4 : 2;
+        }
+        function first(list, max) {
+          return list.map(function(n, i) { return [rank(n), i, n]; })
+                     .sort(function(a, b) { return a[0] - b[0] || a[1] - b[1]; })
+                     .slice(0, max || 2).map(function(x) { return x[2]; });
+        }
+        function keys(name, command, max) {
           if (!k) return command;
-          var got = names(k[name]);
+          var got = first(names(k[name]), max);
           return got.length ? got.join(', ') : command + ' (not bound)';
         }
         // Move: one key each way, forward, left, back, right (W, A, S, D),
@@ -10990,7 +11002,7 @@
          ['First / third person', keys('camera', 'Camera view')],
          ['Look around', 'Mouse'],
          ['Move', move],
-         ['Up / down', keys('jump', 'Jump') + ' / ' + keys('duck', 'Crouch')],
+         ['Up / down', keys('jump', 'Jump', 1) + ' / ' + keys('duck', 'Crouch', 1)],
          ['Faster', keys('fast', 'Run')],
          ['Map', keys('map', 'Map')],
          ['Message the players', keys('talk', 'Talk')],

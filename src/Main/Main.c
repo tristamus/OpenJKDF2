@@ -281,6 +281,32 @@ int Main_StartupDedicated(int bFullyDedicated)
 // into its host's (jkGuiMultiplayer_Show), as a player with no body who
 // sends nothing (stdComm_WSRelay.c). 0 if it can't be watched: the page has
 // said why, and the game starts as it always does.
+// Added: the first player of the game files (player/<name>/<name>.plr), for a
+// viewer whose browser never picked one: jkGui_Startup writes "" for the
+// registry's playerShortName then. "" if there's none.
+static void Main_ViewerFirstPlayer(char* pOut, int outSize)
+{
+    stdFileSearchResult searchRes;
+    char fname[128];
+    pOut[0] = 0;
+    stdFileSearch* pFind = stdFileUtil_NewFind("player", 2, 0);
+    if (!pFind)
+        return;
+    while (stdFileUtil_FindNext(pFind, &searchRes))
+    {
+        if (!searchRes.is_subdirectory || searchRes.fpath[0] == '.' || strlen(searchRes.fpath) > 31)
+            continue;
+        stdString_snprintf(fname, sizeof(fname), "player%c%s%c%s.plr", LEC_PATH_SEPARATOR_CHR, searchRes.fpath,
+                           LEC_PATH_SEPARATOR_CHR, searchRes.fpath);
+        if (util_FileExistsLowLevel(fname))
+        {
+            stdString_SafeStrCopy(pOut, searchRes.fpath, outSize);
+            break;
+        }
+    }
+    stdFileUtil_DisposeFind(pFind);
+}
+
 static int Main_StartupViewer()
 {
     char aTmpPlayerShortName[32];
@@ -292,8 +318,11 @@ static int Main_StartupViewer()
     jkSmack_nextGuiState = JK_GAMEMODE_TITLE;
     Window_SetDrawHandlers(stdDisplay_DrawAndFlipGdi, stdDisplay_SetCooperativeLevel);
 
-    // The player last played as, as Main_StartupDedicated takes it.
+    // The player last played as, as Main_StartupDedicated takes it: the name
+    // a spectator's messages go to the players under.
     wuRegistry_GetStr("playerShortName", aTmpPlayerShortName, 32, "Viewer");
+    if (!aTmpPlayerShortName[0])
+        Main_ViewerFirstPlayer(aTmpPlayerShortName, sizeof(aTmpPlayerShortName));
     stdString_CharToWchar(jkPlayer_playerShortName, aTmpPlayerShortName, 31);
     jkPlayer_playerShortName[31] = 0;
     jkPlayer_CreateConf(jkPlayer_playerShortName);

@@ -425,6 +425,13 @@ EM_JS(int, Window_wasmIsPointerLocked, (), {
   return document.pointerLockElement === Module.canvas ? 1 : 0;
 });
 
+// Added: the game in the lobby page's viewing box (index.html's
+// startWatchEmbed) only watches. Esc there gives the mouse and the keys back
+// to the lobby page, and the game has no menu to open for it.
+EM_JS(int, Window_wasmIsWatchBox, (), {
+  return Module.jkWatchBox ? 1 : 0;
+});
+
 // SDL waits for the next click or key before asking for the mouse lock. While
 // the page is fullscreen, Firefox allows the lock straight away, and so does
 // Chrome when the page let go of it itself (for a menu), so ask right away
@@ -981,6 +988,13 @@ static void Window_WasmKeepPointerLock()
             stdPlatform_Printf("Browser released the mouse; the scripted player plays on\n");
         else
 #endif
+        // Added: nor in the viewing box, where Esc hands the mouse back to
+        // the lobby page: the game's menu (Return to Game, Setup...) is of
+        // no use to a box that only watches. Esc still closes a message
+        // being typed there.
+        if (Window_wasmIsWatchBox() && !jkHud_bChatOpen && !jkQuakeConsole_bOpen)
+            stdPlatform_Printf("Browser released the mouse; the viewing box gives it back to the lobby page\n");
+        else
         {
             stdPlatform_Printf("Browser released the mouse, sending Esc\n");
             Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, 0);

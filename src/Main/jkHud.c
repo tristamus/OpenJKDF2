@@ -1012,7 +1012,10 @@ void jkHud_DrawGPU()
     if (!jkHud_bOpened)
         return;
 
-    if (!(Video_modeStruct.viewSizeIdx < 0xAu  && !sithMulti_IsSpectating()))
+    // Added: a spectator has no HUD of its own, but its map (Tab) shows,
+    // around the player it follows or the free camera.
+    int bSpectating = sithMulti_IsSpectating();
+    if (!(Video_modeStruct.viewSizeIdx < 0xAu) || (bSpectating && !sithOverlayMap_bMapVisible))
     {
         return;
     }
@@ -1049,6 +1052,15 @@ void jkHud_DrawGPU()
 #ifdef SDL2_RENDER
     stdDisplay_VBufferLock(Video_pCanvas->pVBuffer);
 #endif
+
+    if (bSpectating)
+    {
+#ifdef SDL2_RENDER
+        stdDisplay_VBufferUnlock(Video_pCanvasOverlayMap->pVBuffer);
+        stdDisplay_VBufferUnlock(Video_pCanvas->pVBuffer);
+#endif
+        return;
+    }
 
     // The rendering for GPU is kind of inverted from how the original does it.
     // The original blits onto the left/right statuses, then blits those to the screen.

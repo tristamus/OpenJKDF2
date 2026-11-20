@@ -237,8 +237,10 @@ test('Controls: the keys for watching as the player bound them, once the box\'s 
     assert.match(text, /Give back the mouse\|Esc/);
     f.contentWindow.jkWatchKeys = () => ({
         forward: [['DIK_W', false], ['DIK_S', true], ['DIK_UP', false]], slide: [['DIK_D', false], ['DIK_A', true]],
-        jump: [['DIK_SPACE', false]], duck: [['DIK_C', false], ['KEY_JOY1_B2', false]], fast: [['DIK_LSHIFT', false]],
-        fire1: [['KEY_MOUSE_B1', false], ['DIK_LCONTROL', false]], fire2: [['KEY_MOUSE_B2', false]], map: [['DIK_TAB', false]],
+        jump: [['DIK_ADD', false], ['DIK_X', false], ['KEY_MOUSE_B2', false], ['KEY_JOY1_B4', false]],
+        duck: [['DIK_C', false], ['KEY_JOY1_B2', false]], fast: [['DIK_LSHIFT', false]],
+        fire1: [['DIK_RCONTROL', false], ['DIK_LCONTROL', false], ['KEY_MOUSE_B1', false], ['KEY_JOY1_B17', false]],
+        fire2: [['DIK_Z', false], ['DIK_NUMPAD0', false], ['KEY_MOUSE_B3', false]], map: [['DIK_TAB', false]],
         camera: [['DIK_F1', false]], talk: [],
     });
     p.env.window.jkWatchBoxSays({}, 'live', '');
@@ -246,11 +248,11 @@ test('Controls: the keys for watching as the player bound them, once the box\'s 
     p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
     assert.equal(p.env.renders, 1, 'drawn again with them');
     text = textOf(p.watchKeysPanel());
-    assert.match(text, /Next player\|Left mouse, Left Ctrl/);
-    assert.match(text, /Player before\|Right mouse/);
+    assert.match(text, /Next player\|Left mouse, Right Ctrl\|/, 'two at most: the mouse before other keys, a pad\'s last');
+    assert.match(text, /Player before\|Z, Middle mouse\|/, 'a letter first');
     assert.match(text, /First \/ third person\|F1/);
     assert.match(text, /Move\|W, A, S, D\|/, 'forward, left, back, right: a letter each');
-    assert.match(text, /Up \/ down\|Space \/ C, Pad button 2/);
+    assert.match(text, /Up \/ down\|X \/ C\|/, 'one each way');
     assert.match(text, /Faster\|Left Shift/);
     assert.match(text, /Map\|Tab/);
     assert.match(text, /Message the players\|Talk \(not bound\)/);
@@ -278,6 +280,7 @@ test('the game\'s names for keys, as players know them', () => {
     assert.equal(k('DIK_7'), '7');
     assert.equal(k('DIK_F12'), 'F12');
     assert.equal(k('DIK_NUMPAD5'), 'Numpad 5');
+    assert.equal(k('DIK_ADD'), 'Numpad +');
     assert.equal(k('KEY_MOUSE_B3'), 'Middle mouse');
     assert.equal(k('KEY_JOY2_B11'), 'Pad 2 button 11');
     assert.equal(k('DIK_BACKSLASH'), '\\');
