@@ -120,7 +120,7 @@ test('openjkdf2.js that doesn\'t download, or comes cut off, stops with Reload',
         const Module = { jkEngine: ENGINE };
         const engineLog = [];
         const engine = new Function('document', 'engineStopped', 'Module', 'console', 'ENGINE', 'engineLog',
-                                    'var leaveGuard;\n' + loadCode + '\nloadEngine(false);\nreturn () => ENGINE;')(
+                                    'var leaveGuard, watchEmbed = false, embedStarted = false;\n' + loadCode + '\nloadEngine(false);\nreturn () => ENGINE;')(
             document, why => env.stopped.push(why), Module, { log: line => env.logged.push(line) }, ENGINE, engineLog);
         if (ENGINE === 'jspi') {
             assert.deepEqual(env.scripts.map(s => s.src), ['jspi/openjkdf2.js']);
@@ -334,7 +334,7 @@ function box({ locked = true, fullscreen = true } = {}) {
     const env = {
         document, picker, navigator: {},
         pickerTitle: element(), modChoice: element(), problemReload: element(),
-        showPickerResult: () => {}, fullscreenOption: { checked: true },
+        showPickerResult: () => {}, fullscreenOption: { checked: true }, watchEmbed: false,
     };
     const names = Object.keys(env);
     const api = new Function(...names, boxCode + '\n' + fullscreenCode +

@@ -922,7 +922,7 @@ test('the page has what the sharing fills in, and the box is in the prompt a gam
     // Nothing a lobby or a player typed goes into the page as markup.
     assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(cut('      var SHOT_GAMES', '      showShots();\n    </script>')));
     // Told only by a game started from a prompt that showed the box, or by changing it.
-    assert.match(html, /hideZone = function\(\) \{\s+matchesGameStart\(\);[^}]*?shotGameStart\(\);/);
+    assert.match(html, /hideZone = function\(\) \{[^}]*?if \(!watchEmbed\) \{\s+matchesGameStart\(\);[^}]*?shotGameStart\(\);/);
     assert.match(glue, /function shotShareAllowed\(\) \{\s+return shotSharing\.on && shotSharing\.told && !Module\.jkLadderAnon &&/);
 });
 

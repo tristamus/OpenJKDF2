@@ -133,6 +133,10 @@ jobs:
       # so the lobby doesn't count it as watching or playing.
       - name: Test leaving for another page
         run: node packaging/wasm/test/pagehide-test.mjs
+      # The viewing page's box showing the match itself: one frame of the page
+      # per match, kept while the page is drawn again, and counted once.
+      - name: Test the match in the viewing page's box
+        run: node packaging/wasm/test/watch-box-test.mjs
       # The files the page loads or opens by name beside itself: all in the
       # web folder collected below and in build_run_openjkdf2_wasm.sh's.
       - name: Test the web folder's files

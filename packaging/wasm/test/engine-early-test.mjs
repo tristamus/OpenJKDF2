@@ -69,7 +69,7 @@ function page({ ENGINE = 'jspi', answers = [], scriptAnswers = [], WebAssembly: 
     const console = { log: l => env.logged.push(l), warn: l => env.warned.push(l), error: l => env.logged.push(l) };
     const api = new Function('document', 'engineStopped', 'Module', 'console', 'ENGINE', 'engineLog', 'fetch',
                              'WebAssembly', 'performance', 'setTimeout',
-                             'var leaveGuard;\n' + loadCode +
+                             'var leaveGuard, watchEmbed = false, embedStarted = false;\n' + loadCode +
                              '\nreturn { loadEngine, prefetchEngine, engine: () => ENGINE, early: () => earlyEngine };')(
         document, why => env.stopped.push(why), Module, console, ENGINE, env.engineLog, fetch, wa, performance, setTimeout);
     // Starts the engine as openjkdf2.js does, with this engine's imports.

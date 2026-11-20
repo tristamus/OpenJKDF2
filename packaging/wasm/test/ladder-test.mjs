@@ -858,7 +858,7 @@ test('the key is asked for when a game starts, not by a page that only shows', (
     const code = cut('      var MATCH_KEY_SETTING', '      var hideZoneBeforeLobby = hideZone;');
     assert.equal(code.split('askPlayerKey()').length - 1, 2, 'its definition, and one call');
     assert.match(code, /function matchesGameStart\(\) \{\s+if \(!matchesWanted\(\)\) return;\s+askPlayerKey\(\);/);
-    assert.match(html, /hideZone = function\(\) \{\s+matchesGameStart\(\);/);
+    assert.match(html, /hideZone = function\(\) \{[^}]*?if \(!watchEmbed\) \{\s+matchesGameStart\(\);/);
 });
 
 test("a player who presses Play before the lobby's first status gets a key too", () => {

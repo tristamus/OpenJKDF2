@@ -38,6 +38,12 @@
 // Added: the slot of the player a spectator's camera follows
 // (sithMulti_IsSpectating), -1 for none: the free camera.
 static int sithControl_followingPlayer = -1;
+// Added: a viewer watching a match (stdComm_WSRelay_bViewer) has followed
+// its host, as it starts, or picked another view itself.
+static int sithControl_bViewerPicked = 0;
+#ifdef PLATFORM_WSRELAY
+static int sithControl_SpectatorHost();
+#endif
 static int sithControl_curDebugCam = 0;
 static char16_t sithControl_debugWStrTmp[256];
 
@@ -257,6 +263,7 @@ int sithControl_Shutdown()
 #ifdef QOL_IMPROVEMENTS
     // Added
     sithControl_followingPlayer = -1;
+    sithControl_bViewerPicked = 0;
     sithControl_curDebugCam = 0;
     memset(sithControl_debugWStrTmp, 0, sizeof(sithControl_debugWStrTmp));
 
@@ -1298,6 +1305,20 @@ debug_controls:
     if ( player->moveType == SITH_MT_PHYSICS )
         sithPhysics_ResetThingMovement(player);
 
+#ifdef PLATFORM_WSRELAY
+    // Added: a viewer starts on the host's view, as the lobby page's viewing
+    // box shows the match, once its host is in this game's player list. Jump,
+    // Fire and Alt Fire go on to the others and the free camera from there.
+    if (stdComm_WSRelay_bViewer && !sithControl_bViewerPicked && sithControl_followingPlayer < 0) {
+        int host = sithControl_SpectatorHost();
+        if (host >= 0) {
+            sithControl_bViewerPicked = 1;
+            sithControl_followingPlayer = host;
+            jk_snwprintf(sithControl_debugWStrTmp, 256, u"Following %s", jkPlayer_playerInfos[host].player_name);
+            sithConsole_PrintWString(sithControl_debugWStrTmp);
+        }
+    }
+#endif
     // Added. The player followed left: the free camera, from where they were.
     if (sithControl_followingPlayer >= 0 && !(jkPlayer_playerInfos[sithControl_followingPlayer].flags & 1)) {
         sithControl_followingPlayer = -1;
@@ -1588,11 +1609,44 @@ static void sithControl_SpectatorMoveTo(SithThing *player, const rdVector3 *dir,
         sithThing_SetSector(player, pSector, 0);
 }
 
+#ifdef PLATFORM_WSRELAY
+// Added: the host's slot in the match, -1 while it isn't in this game's
+// player list (or has no body in a level yet). A dedicated host has no body
+// to follow (its own is out of the world): the first player who has, then.
+static int sithControl_SpectatorHost()
+{
+    int n = (int)jkPlayer_maxPlayers;
+    if (n > JKPLAYER_NUM_INFOS)
+        n = JKPLAYER_NUM_INFOS;
+    uint32_t hostId = sithNet_serverNetId ? (uint32_t)sithNet_serverNetId : 1;
+    int host = -1, first = -1;
+    for (int i = 0; i < n; i++)
+    {
+        if (i == (int)playerThingIdx || !(jkPlayer_playerInfos[i].flags & 1))
+            continue;
+        SithThing* pThing = jkPlayer_playerInfos[i].pLocalPlayer;
+        int bBody = pThing && pThing->sector && !(pThing->flags & SITH_TF_DISABLED);
+        if ((uint32_t)jkPlayer_playerInfos[i].playerNetId == hostId)
+        {
+            if (bBody)
+                return i;
+            host = i;
+        }
+        else if (bBody && first < 0)
+        {
+            first = i;
+        }
+    }
+    return host >= 0 ? first : -1;
+}
+#endif
+
 // Added: a spectator's camera (sithMulti_IsSpectating) on to the next player
 // in the match (dir 1) or the one before (-1). Past the last, the free
 // camera, from where the last one was.
 void sithControl_SpectatorNext(int dir)
 {
+    sithControl_bViewerPicked = 1;
     int n = (int)jkPlayer_maxPlayers;
     if (n > JKPLAYER_NUM_INFOS)
         n = JKPLAYER_NUM_INFOS;
