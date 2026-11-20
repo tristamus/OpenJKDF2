@@ -44,6 +44,12 @@ static int sithControl_bViewerPicked = 0;
 #ifdef PLATFORM_WSRELAY
 static int sithControl_SpectatorHost();
 #endif
+#ifdef ARCH_WASM
+// Added: who a spectator's view follows, as last told to the page
+// (sithControl_ViewSays), -2 for not yet.
+static int sithControl_followSaid = -2;
+static void sithControl_ViewSays();
+#endif
 static int sithControl_curDebugCam = 0;
 static char16_t sithControl_debugWStrTmp[256];
 
@@ -264,6 +270,9 @@ int sithControl_Shutdown()
     // Added
     sithControl_followingPlayer = -1;
     sithControl_bViewerPicked = 0;
+#ifdef ARCH_WASM
+    sithControl_followSaid = -2;
+#endif
     sithControl_curDebugCam = 0;
     memset(sithControl_debugWStrTmp, 0, sizeof(sithControl_debugWStrTmp));
 
@@ -1357,6 +1366,9 @@ debug_controls:
         // A spectator's own flashes (its body takes no hits, picks nothing
         // up) would never fade: none.
         stdPalEffects_FlushAllAdds();
+#ifdef ARCH_WASM
+        sithControl_ViewSays();
+#endif
     }
 
     for (v3 = INPUT_FUNC_SELECT1; v3 <= INPUT_FUNC_SELECT0; v3++)
@@ -3062,6 +3074,37 @@ EMSCRIPTEN_KEEPALIVE int sithControl_WebFunctionDown(int funcIdx)
         return 0;
     return !!sithControl_GetKey(funcIdx, NULL);
 }
+
+#ifdef ARCH_WASM
+// Added: the viewing page's box shows who the view follows over its game, in
+// the page's own letters (index.html's Module.jkWatchFollow): the game's own
+// "Following" line is small there, the game being drawn screen-sized and
+// scaled down to the box. The player's name and 1, or "" and 0 for the free
+// camera.
+EM_JS(void, sithControl_js_view_follow, (int following, const char16_t* pName), {
+    if (typeof Module.jkWatchFollow !== 'function') return;
+    var chars = [];
+    for (var i = 0; pName && i < 31; i++) {
+        var ch = HEAPU16[(pName >> 1) + i];
+        if (!ch) break;
+        chars.push(ch);
+    }
+    try {
+        Module.jkWatchFollow(String.fromCharCode.apply(null, chars), !!following);
+    } catch (e) {}
+});
+
+// Tells the page when the view follows another player or the free camera,
+// checked each frame while spectating.
+static void sithControl_ViewSays()
+{
+    int i = sithControl_followingPlayer;
+    if (i == sithControl_followSaid)
+        return;
+    sithControl_followSaid = i;
+    sithControl_js_view_follow(i >= 0, i >= 0 ? jkPlayer_playerInfos[i].player_name : NULL);
+}
+#endif
 
 // Added: for the viewing page's box (index.html's jkWatchKeys), which shows
 // a spectator's keys as the player bound them. The nth key (not an axis)

@@ -1698,6 +1698,39 @@
       }
       .watch-screen:not(.box-live) .watch-keys, .watch-screen.box-panel .watch-keys,
       .watch-screen:not(.box-live) .hud-controls { display: none; }
+      /* Who the box's game follows (watchFollowLabel), in the page's own
+         letters: the game's own line is small in the box. On the whole
+         screen, in the bar along the top. */
+      #watch .watch-follow {
+        position: absolute;
+        left: 50%;
+        top: 6px;
+        z-index: 3;
+        max-width: max(40%, calc(100% - 300px));
+        transform: translateX(-50%);
+        padding: 2px 8px;
+        background-color: rgba(0, 0, 0, 0.72);
+        color: var(--gold);
+        font: bold 12px Verdana, sans-serif;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        pointer-events: none;
+      }
+      .hud-follow {
+        flex: none;
+        max-width: 16em;
+        padding: 0.3em 0.7em;
+        background-color: rgba(0, 0, 0, 0.6);
+        color: var(--gold);
+        font-weight: bold;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #watch .watch-follow:empty, .hud-follow:empty, #watch .watch-screen.full .watch-follow,
+      .watch-screen:not(.box-live) .watch-follow, .watch-screen:not(.box-live) .hud-follow,
+      .watch-screen.box-panel .watch-follow { display: none; }
       #watch .watch-keys .keys-head { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; color: #fff; font-weight: bold; }
       #watch .watch-keys .keys-head span { flex: 1; }
       #watch .watch-keys .keys-hide {
@@ -9826,7 +9859,7 @@
       // and room it watches; ended, when the match left the lobby while the box still plays its
       // last seconds; left, what each game's box said when it stopped (by
       // uid), until Watch again.
-      var watchBox = { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, ended: 0, left: {} };
+      var watchBox = { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, follow: '', followEls: {}, ended: 0, left: {} };
       // uid -> the game, as the viewing page last drew it (tickLive).
       var watchGames = {};
 
@@ -10213,9 +10246,10 @@
           count.append(w.g.watching + ' watching');
           top.append(count);
         }
-        // The keys for watching, shown or hidden here too while the box's
-        // game plays the match.
+        // Who the box's game follows, and the keys for watching, shown or
+        // hidden here too while the box's game plays the match.
         if (w && watchBox.frame && watchBox.id === w.g.id) {
+          top.append(watchFollowLabel('hud-follow'));
           var keysB = el('button', 'hud-exit hud-controls', watchKeysOn ? 'Hide controls' : 'Controls');
           keysB.type = 'button';
           keysB.dataset.wact = 'keys';
@@ -10491,7 +10525,8 @@
           if (watchCanFull) view.title = 'Double-click for full screen';
           var frame = boxShow(w);
           if (!frame && watchBox.left[w.g.uid] !== undefined) view.append(boxNote(w));
-          boxScreen(frame, view, watchHud(w, v, list), frame ? watchKeysPanel() : null);
+          boxScreen(frame, view, watchHud(w, v, list), frame ? watchKeysPanel() : null,
+                    frame ? watchFollowLabel('watch-follow') : null);
           watchScreen.hidden = false;
           if (v) {
             stage.dataset.live = details.dataset.live = w.g.uid;
@@ -10821,6 +10856,8 @@
         watchBox.id = 0;
         watchBox.ended = 0;
         watchBox.keys = null;
+        watchBox.follow = '';
+        watchBox.followEls = {};
         watchScreen.classList.remove('box-panel', 'box-live');
         f.remove();
         return null;
@@ -10895,6 +10932,16 @@
         if (m) return 'Pad ' + (m[1] === '1' ? '' : m[1] + ' ') + 'button ' + m[2];
         if (/^([A-Z0-9]|F[0-9]{1,2})$/.test(k)) return k;
         return k.charAt(0) + k.slice(1).toLowerCase().replace(/_/g, ' ');
+      }
+      // Who the box's game follows ("Following Kyle", "Free camera", its
+      // page's Module.jkWatchFollow), over it in the page's own letters:
+      // the game's own line is small in the box. One over the box, one in
+      // the bar on the whole screen; kept up to date in place.
+      function watchFollowLabel(cls) {
+        if (!watchBox.frame) return null;
+        var label = el('div', cls, watchBox.follow || '');
+        watchBox.followEls[cls] = label;
+        return label;
       }
       function watchKeysPanel() {
         if (!watchKeysOn || !watchBox.frame) return null;
@@ -10973,6 +11020,12 @@
           watchScreen.classList.add('box-live');
           watchBox.keys = boxKeys(f);
           if (watchDlg.open) renderWatch();
+        } else if (state === 'follow') {
+          // Who its game follows now: in place, the page as it is.
+          watchBox.follow = String(text || '').substring(0, 48);
+          Object.keys(watchBox.followEls).forEach(function(k) {
+            watchBox.followEls[k].textContent = watchBox.follow;
+          });
         } else if (state === 'letgo') {
           // Esc in the box: the keys come back to the viewing page.
           try {
@@ -11014,6 +11067,12 @@
         // The feed leaves this game out of the room's watching (?box=1): this
         // page is counted for it (sayWatching)
         Module.jkWatchBox = true;
+        // Who the game follows, for the lobby page to show over it
+        // (watchFollowLabel): the game's own line is small in the box.
+        Module.jkWatchFollow = function(name, following) {
+          name = String(name || '').replace(/[^\x20-\x7e]/g, '?').replace(/\s+/g, ' ').trim().substring(0, 31).trim();
+          embedSays('follow', !following ? 'Free camera' : 'Following ' + (name || 'a player'));
+        };
         if (want.demo) startDemo(want);
         else openPicker(want);
       }

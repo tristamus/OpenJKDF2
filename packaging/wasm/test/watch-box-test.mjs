@@ -63,7 +63,7 @@ function page({ phone = '', mock = false, why = '', screen = { width: 1920, heig
     const env = {
         said: [], renders: 0,
         watchLive: { id: 5, sent: 5 },
-        watchBox: { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, ended: 0, left: {} },
+        watchBox: { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, follow: '', followEls: {}, ended: 0, left: {} },
         watchScreen: Object.assign(elem('div', 'watch-screen'), { clientWidth: 684, clientHeight: 386 }),
         full: false,
         watchDlg: { open: true },
@@ -75,7 +75,7 @@ function page({ phone = '', mock = false, why = '', screen = { width: 1920, heig
     const names = ['watchLive', 'watchBox', 'watchScreen', 'watchDlg', 'location', 'window', 'document', 'ROOMS', 'PACK_ONLY',
                    'watchInGame', 'phoneNote', 'watchedGame', 'el', 'renderWatch', 'lobbySay', 'screen', 'watchFullOn'];
     const api = new Function(...names, endCode + boxCode + sayCode + '\nreturn { boxCan, boxShow, boxStop, boxScreen, boxNote, boxAgain, ' +
-                             'boxSize, boxFit, watchKeysPanel, watchKeysToggle, keyLabel, startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
+                             'boxSize, boxFit, watchKeysPanel, watchKeysToggle, watchFollowLabel, keyLabel, startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
         env.watchLive, env.watchBox, env.watchScreen, env.watchDlg, env.location, env.window, env.document, ROOMS,
         env.PACK_ONLY,
         w => (w ? { why } : null), () => phone,
@@ -294,6 +294,29 @@ test('Esc in the box: the keys come back to the viewing page', () => {
     p.env.window.jkWatchBoxSays(f.contentWindow, 'letgo', '');
     assert.equal(p.env.watchScreen.focused, 1);
     assert.equal(p.env.watchScreen.tabIndex, -1);
+});
+
+test('who the box\'s game follows shows over it, kept up to date in place', () => {
+    const p = page();
+    assert.equal(p.watchFollowLabel('watch-follow'), null, 'no box, no label');
+    const f = p.boxShow(p.games[5]);
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'follow', 'Following Kyle');
+    const small = p.watchFollowLabel('watch-follow'), bar = p.watchFollowLabel('hud-follow');
+    assert.equal(small.className, 'watch-follow');
+    assert.equal(small.textContent, 'Following Kyle', 'what it said before the page was drawn');
+    assert.equal(bar.textContent, 'Following Kyle');
+    p.env.window.jkWatchBoxSays({}, 'follow', 'Free camera');
+    assert.equal(small.textContent, 'Following Kyle', 'not another window');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'follow', 'Free camera');
+    assert.equal(small.textContent, 'Free camera', 'in place');
+    assert.equal(bar.textContent, 'Free camera');
+    assert.equal(p.env.renders, 0, 'the page not drawn again for it');
+    const again = p.watchFollowLabel('watch-follow');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'follow', 'Following ' + 'x'.repeat(80));
+    assert.equal(again.textContent.length, 48, 'no longer than 48');
+    p.boxStop();
+    assert.equal(p.env.watchBox.follow, '');
+    assert.deepEqual(p.env.watchBox.followEls, {});
 });
 
 test('the box\'s own panel goes over the badges, and comes off with the frame', () => {
