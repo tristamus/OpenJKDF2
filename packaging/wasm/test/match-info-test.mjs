@@ -52,7 +52,7 @@ check("the page keeps a game's live part as it shows it, whatever arrives", () =
     assert.equal(s.now, NOW);
     assert.equal(s.games[0].rank, 8);
     assert.deepEqual(s.games[0].live, { mode: 0x18, sl: 20, tl: 15, at: FFA.at, over: 0, nocount: '', count: 120, pl: null,
-                                        sb: FFA.sb, teams: null, last: FFA.last, kills: null, streak: FFA.streak });
+                                        sb: FFA.sb, teams: null, last: FFA.last, kills: null, streak: FFA.streak, nk: -1 });
     // Nothing live, or nothing it can use.
     for (const v of [undefined, null, 5, 'x', [], {}, { at: -1 }, { at: 'now' }])
         assert.equal(status([game(v)]).games[0].live, null, JSON.stringify(v));
@@ -74,6 +74,104 @@ check("the page keeps a game's live part as it shows it, whatever arrives", () =
     assert.deepEqual(status([game({ ...FFA, kills: many })]).games[0].live.kills, many.slice(-8));
     for (const bad of [[], 'x', [['A', 'B', 1, 0]]])
         assert.equal(status([game({ ...FFA, kills: bad })]).games[0].live.kills, null, JSON.stringify(bad));
+    // How many count in all: -1 from a lobby that doesn't say.
+    assert.deepEqual([12, 0, -2, 1.5, 'x'].map(nk => status([game({ ...FFA, nk })]).games[0].live.nk), [12, 0, 0, 1, -1]);
+});
+
+// The viewing page's history of the watched match's kills (killHist), with
+// the page around it stood in for.
+const histCode = cut("      // ---- All of the watched match's kills", '      // Its latest kills, the newest first: n of them');
+function histPage() {
+    const said = [], timers = [];
+    const page = { watchLive: { id: 3 }, games: [], dlg: { open: true }, drawn: 0, said, timers, now: NOW };
+    const fns = new Function('watchLive', 'watchedGame', 'gameLive', 'lobbySay', 'watchDlg', 'renderWatch', 'setTimeout',
+                             'clearTimeout', 'Date', histCode +
+        'return { killHistTake, killsTake, killHistOf, killsShown, hist: () => killHist };')(
+        page.watchLive, () => page.games.find(x => x.g.id === page.watchLive.id) || null, lib.gameLive,
+        line => { said.push(line); return true; }, page.dlg, () => page.drawn++,
+        (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, () => {}, { now: () => page.now });
+    page.show = live => {
+        page.games = [{ g: status([game(live)]).games[0] }];
+        fns.killHistTake();
+    };
+    return Object.assign(page, fns);
+}
+const kill = (i, ago = 0) => ['Kyle_K', 'Maw', 1, NOW - 100 * SEC + i * SEC - ago];
+
+check("the viewing page has all of the watched match's kills: the lobby's answer, then each status's latest", () => {
+    const p = histPage();
+    const shown = () => p.killsShown(p.games[0].g.live).map(k => k[3]);
+    const at = (...i) => i.map(n => kill(n)[3]);
+    // Seven so far: the status has the latest five; the page asks for the rest.
+    p.show({ ...FFA, kills: [3, 4, 5, 6, 7].map(i => kill(i)), nk: 7 });
+    assert.deepEqual(p.said, ['kills 3']);
+    assert.deepEqual(shown(), at(3, 4, 5, 6, 7), 'the five meanwhile');
+    p.killsTake(3, { n: 7, kills: [1, 2, 3, 4, 5, 6, 7].map(i => kill(i)) });
+    assert.equal(p.drawn, 1, 'drawn again');
+    assert.deepEqual(shown(), at(1, 2, 3, 4, 5, 6, 7));
+    // Two more: shown from the status straight away; asked for at most once
+    // every 2 s (and again once that's up, if it still doesn't add up).
+    p.show({ ...FFA, kills: [5, 6, 7, 8, 9].map(i => kill(i)), nk: 9 });
+    assert.deepEqual(shown(), at(1, 2, 3, 4, 5, 6, 7, 8, 9));
+    assert.deepEqual(p.said, ['kills 3'], 'not within 2 s of the last');
+    assert.deepEqual(p.timers.map(t => t.ms), [2000]);
+    p.now += 2000;
+    p.timers[0].fn();
+    assert.deepEqual(p.said, ['kills 3', 'kills 3']);
+    // The victim's game said when it was and what did it: the status's, as it is now.
+    const moved = [5, 6, 7, 8].map(i => kill(i)).concat([['Kyle_K', 'Maw', 4, kill(9)[3] - 300]]);
+    p.games[0].g.live.kills = moved;
+    assert.deepEqual(p.killsShown(p.games[0].g.live), [1, 2, 3, 4].map(i => kill(i)).concat(moved), 'each once');
+    p.killsTake(3, { n: 9, kills: [1, 2, 3, 4].map(i => kill(i)).concat(moved) });
+    assert.deepEqual(p.killsShown(p.games[0].g.live), [1, 2, 3, 4].map(i => kill(i)).concat(moved));
+    // Six came at once (the lobby's connection was away): a gap until it answers.
+    p.show({ ...FFA, kills: [11, 12, 13, 14, 15].map(i => kill(i)), nk: 15 });
+    assert.equal(shown().length, 14, 'nine and the latest five');
+    p.now += 2000;
+    p.killHistTake();
+    p.killsTake(3, { n: 15, kills: Array.from({ length: 15 }, (_, i) => kill(i + 1)) });
+    assert.deepEqual(shown(), at(...Array.from({ length: 15 }, (_, i) => i + 1)));
+    // More than it keeps: the latest 500, then the status's.
+    p.killsTake(3, { n: 600, kills: Array.from({ length: 600 }, (_, i) => kill(i - 590)) });
+    p.games[0].g.live = { ...p.games[0].g.live, kills: [9, 10, 11, 12].map(i => kill(i)), nk: 602 };
+    const big = p.killsShown(p.games[0].g.live);
+    assert.deepEqual([big.length, big[0][3], big.at(-1)[3]], [502, kill(-490)[3], kill(12)[3]]);
+    // Its next level: from the start.
+    p.games[0].g.map = 'm2.jkl';
+    p.games[0].g.live = { ...p.games[0].g.live, kills: [kill(1)], nk: 1 };
+    p.killHistTake();
+    assert.deepEqual([p.hist().map, p.hist().n, shown()], ['m2.jkl', 0, at(1)]);
+});
+
+check("the viewing page's kills: none asked for with a password, a lobby that doesn't say how many, or its page shut", () => {
+    let p = histPage();
+    p.show({ ...FFA, kills: [1, 2].map(i => kill(i)) });
+    assert.deepEqual([p.said, p.hist().id], [[], 0], 'an older lobby: no "kills", which it would close the page for');
+    p.show({ ...FFA, kills: [1, 2].map(i => kill(i)), nk: 4, nocount: 'password' });
+    assert.deepEqual([p.said, p.hist().id], [[], 0]);
+    p = histPage();
+    p.dlg.open = false;
+    p.show({ ...FFA, kills: [1, 2].map(i => kill(i)), nk: 4 });
+    assert.deepEqual(p.said, [], 'only while the viewing page is open');
+    p = histPage();
+    p.show({ ...FFA, kills: [3, 4].map(i => kill(i)), nk: 4 });
+    p.killsTake(9, { n: 4, kills: [1, 2, 3, 4].map(i => kill(i)) });
+    assert.equal(p.hist().list.length, 0, "another room's answer is left out");
+    p.killsTake(3, { n: 4, kills: [kill(1), 'x', ['A\u0007', 5, 9, NOW], kill(2), kill(3), kill(4)] });
+    assert.deepEqual(p.hist().list, [kill(1), ['A', '', 5, NOW], kill(2), kill(3), kill(4)], 'cleaned as the status is');
+    // The lobby's connection came back: it asks again.
+    p.now += 5000;
+    p.hist().stale = true;
+    p.show({ ...FFA, kills: [3, 4].map(i => kill(i)), nk: 4 });
+    assert.deepEqual(p.said, ['kills 3', 'kills 3']);
+});
+
+check('the viewing page draws all of them, to scroll through, and takes the lobby\'s answer', () => {
+    assert.match(html, /var kl = watchKills\(v, 5, v\.nk >= 0\);/);
+    assert.match(html, /\.stage \.watch-kills\.all \{ flex: none; max-height: 12em; overflow-y: auto;/);
+    assert.match(html, /function renderWatch\(\) \{\n\s+killHistTake\(\);/);
+    assert.match(html, /killsTake\(Number\(k\[1\]\), JSON\.parse/);
+    assert.match(html, /sayWatching\(\);\n\s+killHist\.stale = true;/);
 });
 
 check('the page keeps whether a game can be watched, and how many are watching it', () => {

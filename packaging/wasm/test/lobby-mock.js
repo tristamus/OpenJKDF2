@@ -59,7 +59,10 @@ window.jkLobbyMock = (function() {
                               sb: [['Kyle_K', 12, 12, 7, 0], ['MaraJade', 7, 7, 12, 0]],
                               last: ['Kyle_K', 'MaraJade', 1, 14], streak: ['Kyle_K', 4],
                               kills: [['MaraJade', 'Kyle_K', 2, 96], ['Kyle_K', 'MaraJade', 4, 71], ['Kyle_K', 'MaraJade', 1, 48],
-                                      ['Kyle_K', 'MaraJade', 1, 30], ['Kyle_K', 'MaraJade', 1, 14]] } },
+                                      ['Kyle_K', 'MaraJade', 1, 30], ['Kyle_K', 'MaraJade', 1, 14]],
+                              // All 19 (12 by Kyle, 7 by Mara): the rest come
+                              // when the page asks (say, "kills").
+                              nk: 19 } },
                     { id: 44, name: 'SBX 3.1 sabers', game: 'jk1', map: 'jhs.jkl', title: "Jedi's High School", episode: 'jhs.gob',
                       mod: 'Saber Battle X', locked: true, players: 4, max: 4, names: ['Jerec', 'Sariss', 'Yun', 'Gorc'],
                       rank: 4, live: { mode: 0x8, sl: 0, tl: 20, ago: 300, nocount: 'password' } },
@@ -221,6 +224,7 @@ window.jkLobbyMock = (function() {
     };
     var live = null;      // the status as players come and go
     var spectating = 0;   // the game this page says it watches (say)
+    var showKills = null; // the page's, for its "kills" (say)
     var moving = null;    // the timer making them
     var nextId = 60;
     var controls = [];
@@ -376,8 +380,9 @@ window.jkLobbyMock = (function() {
     }
 
     return {
-        attach: function(showStatus, showRelay) {
+        attach: function(showStatus, showRelay, killsShow) {
             show = showStatus;
+            showKills = killsShow || null;
             showImperial = showRelay || null;
             addStyles();
             var bar = document.createElement('div');
@@ -417,6 +422,20 @@ window.jkLobbyMock = (function() {
         },
         // A line the page sends the lobby: which game it watches.
         say: function(line) {
+            var k = /^kills ([0-9]+)$/.exec(line);
+            if (k && showKills && live) {
+                // All of a game's kills, as the lobby answers: the status's
+                // latest, and made-up ones before them, a kill every 20 s.
+                var st = toStatus(live), g = st.games.filter(function(x) { return x.id === Number(k[1]); })[0];
+                var v = g && g.live, all = [];
+                if (v && v.kills && v.nk > v.kills.length) {
+                    var first = v.kills[0][3], names = g.names.length > 1 ? g.names : ['Kyle_K', 'MaraJade'];
+                    for (var i = v.nk - v.kills.length; i > 0; i--)
+                        all.push([names[i % 2], names[(i + 1) % 2], i % 3 ? 1 : 2, first - i * 20000]);
+                }
+                setTimeout(function() { showKills(Number(k[1]), { n: v ? v.nk || 0 : 0, kills: v ? all.concat(v.kills || []) : [] }); }, 50);
+                return;
+            }
             var m = /^spectate ([0-9]+)$/.exec(line);
             if (!m) return;
             spectating = Number(m[1]);

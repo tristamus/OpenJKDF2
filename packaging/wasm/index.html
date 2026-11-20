@@ -1551,6 +1551,10 @@
       .stage .watch-clock b { font-size: 26px; }
       .stage .watch-badge { font-size: 12px; }
       .stage .watch-kills { font-size: 12px; }
+      /* All of the match's kills (killHist), about eight lines of them, the
+         rest a scroll away. */
+      .stage .watch-kills.all { flex: none; max-height: 12em; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px;
+                                scrollbar-width: thin; scrollbar-color: var(--win-dark) transparent; }
       .stage .empty { margin: auto; max-width: 420px; color: var(--muted); text-align: center; }
       .details { flex: none; width: 280px; overflow-y: auto; color: #e0e0e0; font: 12px Verdana, sans-serif; }
       .details section { padding: 6px 8px 8px; }
@@ -8807,7 +8811,10 @@
           if (!obj(v) || !num(v.at)) return null;
           var out = { mode: num(v.mode), sl: num(v.sl), tl: num(v.tl), at: num(v.at), over: num(v.over),
                       nocount: v.nocount === 'password' || v.nocount === 'coop' ? v.nocount : '', count: num(v.count),
-                      pl: null, sb: [], teams: null, last: null, kills: null, streak: null };
+                      pl: null, sb: [], teams: null, last: null, kills: null, streak: null,
+                      // How many kills count in all; -1 from a lobby that
+                      // doesn't say (and takes no "kills": killHistTake).
+                      nk: typeof v.nk === 'number' ? num(v.nk) : -1 };
           if (obj(v.pl) && num(v.pl.n) > 0 && num(v.pl.i) < num(v.pl.n))
             out.pl = { i: num(v.pl.i), n: num(v.pl.n), loop: !!v.pl.loop, next: str(v.pl.next, 48) };
           if (Array.isArray(v.sb)) {
@@ -10106,23 +10113,96 @@
         box.append(table);
       }
 
-      // Its latest kills, the newest first.
-      function watchKills(v, n) {
-        var ul = el('ul', 'watch-kills');
+      // ---- All of the watched match's kills, for the viewing page to look
+      // back through: the lobby's answer to "kills <room>" (its src/
+      // ladder.js, liveKills) up to where the status's latest begin, then
+      // those, as they are now (a kill's time and weapon can change as the
+      // victim's game reports it). killHist: the room and level they're of,
+      // how many kills counted in all as the lobby answered (n), the latest
+      // KILL_HIST of them (list, the oldest first), when it last asked, and
+      // stale: to ask again (the lobby's connection came back). It asks
+      // while the viewing page is open, whenever the status's count (nk)
+      // isn't the answer's, at most once every KILLS_ASK_MS.
+      var KILL_HIST = 500, KILLS_ASK_MS = 2000;
+      var killHist = { id: 0, map: '', n: 0, list: [], asked: 0, stale: false, timer: 0, top: null };
+      function killHistOf(g, v) {
+        return !!g && !!v && v.nk >= 0 && v.nocount !== 'password' && killHist.id === g.id && killHist.map === g.map;
+      }
+      function killHistTake() {
+        var w = watchLive.id ? watchedGame() : null;
+        var v = w ? gameLive(w.g) : null;
+        if (!w || !v || v.nk < 0 || v.nocount === 'password') return;
+        // Another match, or its next level: from the start.
+        if (killHist.id !== w.g.id || killHist.map !== w.g.map) {
+          clearTimeout(killHist.timer);
+          killHist = { id: w.g.id, map: w.g.map, n: 0, list: [], asked: 0, stale: false, timer: 0, top: null };
+        }
+        if ((killHist.n !== v.nk || killHist.stale) && watchDlg.open) killsAsk();
+      }
+      function killsAsk() {
+        var wait = killHist.asked + KILLS_ASK_MS - Date.now();
+        if (wait > 0) {
+          if (!killHist.timer) killHist.timer = setTimeout(function() {
+            killHist.timer = 0;
+            killHistTake();
+          }, wait);
+          return;
+        }
+        if (lobbySay('kills ' + killHist.id)) killHist.asked = Date.now();
+      }
+      // The lobby's answer: {n, kills}, for room id.
+      function killsTake(id, a) {
+        if (id !== killHist.id || !a || typeof a !== 'object' || !Array.isArray(a.kills)) return;
+        function str(x) { return typeof x === 'string' ? x.replace(/[\u0000-\u001f\u007f]/g, '').substring(0, 32) : ''; }
+        function num(x) { return typeof x === 'number' && isFinite(x) && x >= 0 ? Math.floor(x) : 0; }
+        killHist.list = a.kills.slice(-KILL_HIST).filter(function(k) { return Array.isArray(k) && num(k[3]); })
+          .map(function(k) { return [str(k[0]), str(k[1]), Math.min(num(k[2]), 5), num(k[3])]; });
+        killHist.n = Math.max(num(a.n), killHist.list.length);
+        killHist.stale = false;
+        if (watchDlg.open) renderWatch();
+      }
+      // All the kills it has of v's match, the oldest first.
+      function killsShown(v) {
+        var latest = v.kills || (v.last ? [v.last] : []);
+        var keep = Math.max(0, v.nk - latest.length - (killHist.n - killHist.list.length));
+        return killHist.list.slice(0, keep).concat(latest);
+      }
+
+      // Its latest kills, the newest first: n of them, or with all every one
+      // the page has (killHist, the viewing page's), to scroll through.
+      function watchKills(v, n, all) {
+        var ul = el('ul', 'watch-kills' + (all ? ' all' : ''));
         ul.dataset.tick = 'kills';
         ul.dataset.n = n;
+        if (all) {
+          ul.dataset.all = '1';
+          ul.tabIndex = 0;
+          ul.setAttribute('aria-label', 'Kills, the newest first');
+          // Where it was scrolled to, from its end, as it's drawn again;
+          // at the top it stays there, with the newest.
+          ul.addEventListener('scroll', function() {
+            killHist.top = ul.scrollTop > 0 ? ul.scrollHeight - ul.scrollTop : null;
+          });
+        }
         fillKills(ul, v, n);
         return ul;
       }
       function fillKills(ul, v, n) {
+        var all = !!ul.dataset.all, w = all ? watchedGame() : null;
+        var kills = all && w && killHistOf(w.g, v) ? killsShown(v) : (v.kills || (v.last ? [v.last] : [])).slice(-n);
+        kills.reverse();
         ul.replaceChildren();
-        var kills = (v.kills || (v.last ? [v.last] : [])).slice(-n).reverse();
         kills.forEach(function(k) {
           var li = el('li');
           killLine(li, k, true);
           ul.append(li);
         });
         if (!kills.length) ul.append(el('li', null, 'No kills yet.'));
+        if (all) killScroll(ul);
+      }
+      // Puts a list of all the kills back where it was scrolled to.
+      function killScroll(ul) {
+        if (killHist.top !== null && ul.isConnected) ul.scrollTop = Math.max(0, ul.scrollHeight - killHist.top);
       }
 
       // How it's played, in a line: mode, Force rank, mod, level, standings.
@@ -10455,6 +10535,7 @@
 
       // ---- The viewing page.
       function renderWatch() {
+        killHistTake();
         var list = watchList();
         var w = watchLive.id ? watchedGame() : null;
         if (w) watchLive.last = w;
@@ -10598,7 +10679,11 @@
                 });
                 info.append(line);
               }
-              info.append(el('div', 'watch-h', 'Last kills'), watchKills(v, 5));
+              // All of them, to scroll through (killHist), with a lobby that
+              // says how many; the latest five with one that doesn't.
+              var kl = watchKills(v, 5, v.nk >= 0);
+              info.append(el('div', 'watch-h', v.nk > 0 ? 'Kills (' + v.nk + ')' : 'Last kills'), kl);
+              killScroll(kl);
               if (v.streak) info.append(el('p', 'watch-note', v.streak[0] + ': ' + v.streak[1] + ' kills in a row.'));
             }
           } else {
@@ -11396,15 +11481,25 @@
           }
           ws.onopen = function() {
             ws.send('watch');
-            // The match this page watches, if any, to a lobby that's new to it.
+            // The match this page watches, if any, to a lobby that's new to it;
+            // and its kills again, for what came while it was away.
             watchLive.sent = 0;
             sayWatching();
+            killHist.stale = true;
             w.keepalive = setInterval(function() { if (ws.readyState === 1) ws.send('ping'); }, 25000);
           };
           ws.onmessage = function(ev) {
             if (typeof ev.data !== 'string') return;
             var m = /^status ([A-Za-z0-9+\/]+={0,2})$/.exec(ev.data);
-            if (m) {
+            var k = !m && /^kills (\d{1,9}) ([A-Za-z0-9+\/]+={0,2})$/.exec(ev.data);
+            if (k) {
+              try {
+                var kb = Uint8Array.from(atob(k[2]), function(c) { return c.charCodeAt(0); });
+                killsTake(Number(k[1]), JSON.parse(new TextDecoder().decode(kb)));
+              } catch (e) {
+                console.warn('OpenJKDF2: could not read the match\'s kills: ' + e);
+              }
+            } else if (m) {
               try {
                 var bytes = Uint8Array.from(atob(m[1]), function(c) { return c.charCodeAt(0); });
                 lobbyShow(JSON.parse(new TextDecoder().decode(bytes)));
@@ -12177,7 +12272,7 @@
       if (document.documentElement.classList.contains('zone-open')) {
         renderRoomCount();
         if (window.jkLobbyMock) {
-          window.jkLobbyMock.attach(lobbyShow, imperialShow);
+          window.jkLobbyMock.attach(lobbyShow, imperialShow, killsTake);
         } else {
           startLobbyWatch();
           startImperialWatch();
