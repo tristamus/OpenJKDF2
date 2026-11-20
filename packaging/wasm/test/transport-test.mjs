@@ -2612,6 +2612,27 @@ test('synchronizing, a viewer gets the keyframe and all after it at once, then t
     assert.deepEqual(viewRecv(game), [[1, 11]], 'a keyframe in the level is for starting, and skipped');
 });
 
+test('with two players, a viewer plays their records side by side, each player\'s own in order, not one after the other', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world);
+    feed.deliver(feedBatch(feedRecord(1000, 1, 1, [keyLevel(), keyEnd()])));
+    viewSync(game);
+    assert.deepEqual(viewRecv(game), ['welcome']);
+    // Due 500 ms after the newest when it caught up: 1250 at +750, its four
+    // packets over the 250 ms before (+562.5 to +750); the other player's
+    // 1350 at +850 (+662.5 to +850), and their 1400 (+775, +900) after it.
+    feed.deliver(feedBatch(feedRecord(1250, 0, 1, [dss(1, 1), dss(1, 2), dss(1, 3), dss(1, 4)]),
+                           feedRecord(1350, 0, 2, [dss(1, 11), dss(1, 12), dss(1, 13), dss(1, 14)]),
+                           feedRecord(1400, 0, 2, [dss(1, 15), dss(1, 16)])));
+    const played = [];
+    for (let t = 0; t <= 1000; t += 25) {
+        for (const p of viewRecv(game)) played.push([t, p[0], p[1]]);
+        await world.run(25);
+    }
+    assert.deepEqual(played, [[575, 1, 1], [625, 1, 2], [675, 2, 11], [700, 1, 3], [725, 2, 12], [750, 1, 4],
+                              [800, 2, 13], [850, 2, 14], [850, 2, 15], [900, 2, 16]]);
+});
+
 test('a viewer waits for the whole keyframe, and for the keyframe of the level it\'s in', async () => {
     const world = makeWorld();
     const { game, feed } = await viewer(world);
@@ -2721,6 +2742,24 @@ test('after its feed drops, a viewer sets right what it missed from the next key
     again.deliver(feedBatch(feedRecord(31500, 1, 1, [keyLevel(), dss(12, 7), keyEnd()]), feedRecord(31750, 0, 2, [dss(1, 8)])));
     await world.run(5);
     assert.deepEqual(viewRecv(game), [[2, 8]]);
+});
+
+test('after its feed drops, with two players, the keyframe setting things right plays whole, the other player\'s record in between', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world);
+    feed.deliver(feedBatch(feedRecord(1000, 1, 1, [keyLevel(), keyEnd()])));
+    viewSync(game);
+    assert.deepEqual(viewRecv(game), ['welcome']);
+    feed.end(1006);
+    await world.run(1000);
+    const again = world.feeds.at(-1);
+    assert.notEqual(again, feed);
+    await world.run(29000);
+    again.deliver(feedBatch(feedRecord(31000, 1, 1, [keyLevel(), dss(12, 1)]), feedRecord(31100, 0, 2, [dss(1, 2)]),
+                            feedRecord(31250, 2, 1, [dss(13, 3), keyEnd()]), feedRecord(31300, 0, 1, [dss(1, 4)]),
+                            feedRecord(31500, 2, 1, [dss(13, 5)])));
+    await world.run(2000);
+    assert.deepEqual(viewRecv(game), [[1, 1], [2, 2], [1, 3], [1, 4]], 'to its end; a keyframe part after it is left out');
 });
 
 test('a viewer\'s feed that ends, or drops more than 3 times, ends watching once what it has played', async () => {

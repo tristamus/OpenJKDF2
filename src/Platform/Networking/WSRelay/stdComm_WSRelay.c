@@ -1918,8 +1918,11 @@ EM_JS(void, wsrelay_js_feed_key_end, (), {
 // that level, hands it all over at once while the engine synchronizes (as a
 // joiner takes its host's big sync), then the rest at the pace it came,
 // JITTER_MS behind the newest. A record's packets were sent over the batch
-// before it (net.feedFlush), so they play spread over SPREAD_MS. What it
-// tells the player goes to the page's Module.jkViewNotice, and the console.
+// before it (net.feedFlush), so they play spread over SPREAD_MS, and each
+// player's records play beside the others' (a second player's batch came
+// while the first's was still playing; one after the other, each would play
+// in bursts). What it tells the player goes to the page's
+// Module.jkViewNotice, and the console.
 
 // The room the page's "Watch in the game" picked, once.
 EM_JS(int, wsrelay_js_take_watch_room, (), {
@@ -1951,12 +1954,15 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
     /* phase: wait (no keyframe yet), level (one held, from recs[0]), sync
        (the engine is synchronizing in the level want: found once it has
        that level's keyframe), live (in the level), with recs[ri] and its
-       packet pi next. lastMs: the time of the last record played. */
+       packet pi next (live: each record's own pi, as records of other seats
+       play beside it). lastMs: the time of the newest record played;
+       seatMs: of each seat's. rekeySeat: the seat of the keyframe that's
+       setting right what was missed. */
     var view = { url: (cut >= 0 ? base.substring(0, cut) : base) + '/feed/' + room, room: room, ws: null, tries: 0,
                  delay: -1, recs: [], ri: 0, pi: 0, phase: 'wait', since: performance.now(), level: null, want: null,
                  found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, caught: 0, recvAt: 0, ended: '',
                  closed: false, waitMs: WAIT_MS,
-                 resync: false, rekey: false, box: !!Module['jkWatchBox'] };
+                 resync: false, rekey: false, rekeySeat: -1, seatMs: {}, box: !!Module['jkWatchBox'] };
     Module.jkView = view;
     view.say = function(text) {
         console.log('OpenJKDF2: watching room ' + room + ': ' + text);
@@ -2046,7 +2052,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         while (at + 10 <= bytes.length) {
             var len = dv.getUint32(at, true), end = at + 4 + len;
             if (len < 6 || end > bytes.length) break;
-            var rec = { ms: dv.getUint32(at + 4, true), kind: bytes[at + 8], seat: bytes[at + 9], packets: [], head: null, keyEnd: false };
+            var rec = { ms: dv.getUint32(at + 4, true), kind: bytes[at + 8], seat: bytes[at + 9], packets: [], pi: 0, head: null, keyEnd: false };
             for (var p = at + 10; p + 2 <= end; ) {
                 var n = bytes[p] | (bytes[p + 1] << 8);
                 if (p + 2 + n > end) break;
@@ -2100,6 +2106,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         view.phase = 'sync';
         view.found = false;
         view.keyDone = false;
+        view.seatMs = {};
         view.syncAt = performance.now();
         for (var i = view.recs.length - 1; i >= 0; i--) {
             if (view.isKey(view.recs[i]) && view.same(view.recs[i].head, want)) {
@@ -2129,6 +2136,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                 while (view.ri < view.recs.length) {
                     r = view.recs[view.ri];
                     view.lastMs = r.ms;
+                    view.seatMs[r.seat] = r.ms;
                     if (view.pi < r.packets.length) return [r.packets[view.pi++], r.seat];
                     /* Whole: its end, or the host's game going on after it
                        (it sends its keyframe's chunks before anything else). */
@@ -2164,41 +2172,69 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
             }
         }
         view.recvAt = now;
+        /* recs[ri], the oldest record not played whole: keyframes are for
+           starting, and for after the feed dropped (resync): the first one
+           newer than what played sets right what was missed (rekey, to its
+           end, or its seat's game going on after it). What's older than its
+           seat's last played came again after the feed was opened again. */
         while (view.ri < view.recs.length) {
             r = view.recs[view.ri];
-            /* Keyframes are for starting, and for after the feed dropped
-               (resync): the first one newer than what played sets right what
-               was missed (rekey, to its end). What's older than what played
-               came again after the feed was opened again. */
-            if (r.kind === 0) view.rekey = false;
-            else if (view.pi === 0 && view.resync && view.isKey(r) && view.same(r.head, view.want) && r.ms >= view.lastMs) {
+            if (r.kind === 0 && r.seat === view.rekeySeat) view.rekey = false;
+            else if (!r.pi && view.resync && view.isKey(r) && view.same(r.head, view.want) && r.ms >= view.lastMs) {
                 view.resync = false;
                 view.rekey = true;
+                view.rekeySeat = r.seat;
             }
-            if ((r.kind !== 0 && !view.rekey) || r.ms < view.lastMs || !r.packets.length) {
+            if (r.pi >= r.packets.length || (!r.pi && view.stale(r))) {
                 if (r.keyEnd) view.rekey = false;
                 view.ri++;
-                view.pi = 0;
                 continue;
             }
-            var due = r.ms + view.offset;
-            if (view.pi === 0 && now - due > LATE_MS) {
+            if (!r.pi && now - (r.ms + view.offset) > LATE_MS) {
                 view.offset = now - r.ms + JITTER_MS;
-                due = r.ms + view.offset;
                 view.late++;
             }
-            if (now < due - SPREAD_MS + SPREAD_MS * (view.pi + 1) / r.packets.length) return 0;
-            view.lastMs = r.ms;
-            var out = [r.packets[view.pi++], r.seat];
-            if (view.pi >= r.packets.length) {
-                if (r.keyEnd) view.rekey = false;
-                view.ri++;
-                view.pi = 0;
-            }
-            view.trim();
-            return out;
+            break;
         }
-        return view.ended ? -2 : 0;
+        if (view.ri >= view.recs.length) return view.ended ? -2 : 0;
+        /* Its packet next due, or one of the records after it whose spread
+           has begun: the oldest record not played whole of each seat (a
+           player's own in their order), up to a keyframe while it may set
+           things right (one of those plays on its own). */
+        var best = r, bestDue = view.due(r), seats = {}, c, cDue;
+        seats[r.seat] = 1;
+        for (var i = view.ri + 1; r.kind === 0 && i < view.recs.length && i < view.ri + 64; i++) {
+            c = view.recs[i];
+            if (c.kind !== 0 && (view.resync || view.rekey)) break;
+            if (c.pi >= c.packets.length || (!c.pi && view.stale(c)) || seats[c.seat]) continue;
+            if (!c.pi && c.ms + view.offset - SPREAD_MS > now) break;
+            seats[c.seat] = 1;
+            cDue = view.due(c);
+            if (cDue < bestDue) {
+                best = c;
+                bestDue = cDue;
+            }
+        }
+        if (now < bestDue) return 0;
+        if (best.ms > view.lastMs) view.lastMs = best.ms;
+        view.seatMs[best.seat] = best.ms;
+        var out = [best.packets[best.pi++], best.seat];
+        if (best === r && r.pi >= r.packets.length) {
+            if (r.keyEnd) view.rekey = false;
+            view.ri++;
+        }
+        view.trim();
+        return out;
+    };
+    /* Left out, live, before it starts: a keyframe that isn't setting things
+       right, what came again, nothing in it. */
+    view.stale = function(rec) {
+        var last = view.seatMs[rec.seat];
+        return (rec.kind !== 0 && !view.rekey) || (last !== undefined && rec.ms < last) || !rec.packets.length;
+    };
+    /* When its next packet is due: spread over the SPREAD_MS before its time. */
+    view.due = function(rec) {
+        return rec.ms + view.offset - SPREAD_MS + SPREAD_MS * (rec.pi + 1) / rec.packets.length;
     };
     view.open();
     return 1;
