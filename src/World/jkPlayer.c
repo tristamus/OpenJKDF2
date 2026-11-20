@@ -39,6 +39,7 @@
 #include "Platform/std3D.h"
 #include "Main/sithCvar.h"
 #include "Dss/sithMulti.h" // Added: sithMulti_IsSpectating
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h" // Added: stdComm_WSRelay_PovWaggle
 
 // DSi has *plenty* of time to read the text.
 #ifdef TARGET_RETRO_HOMEBREW
@@ -975,29 +976,53 @@ void jkPlayer_DrawPov()
     rdVector3 trans;
     rdMatrix34 orient;
 
-    if (!playerThings[playerThingIdx].povModel.model3)
-        return;
-
     // Added: a spectator (the dedicated host, or a game watching the match)
-    // holds nothing, whoever's eyes it sees through.
+    // holds nothing of its own. Following a player in first person, a game
+    // watching the match shows what that player holds, as their game tells
+    // the room's feed (stdComm_WSRelay_ProcessPov), and how it sways.
+    jkPlayerInfo* pInfo = &playerThings[playerThingIdx];
+    rdVector3 waggleVec = jkPlayer_waggleVec;
+    flex_t waggleMag = jkPlayer_waggleMag;
     if (sithMulti_IsSpectating())
+    {
+#ifdef PLATFORM_WSRELAY
+        int idx = sithControl_SpectatorFollowing();
+        if (!stdComm_WSRelay_bViewer || idx < 0 || idx >= JKPLAYER_NUM_INFOS || idx >= (int)jkPlayer_numThings)
+            return;
+        pInfo = &playerThings[idx];
+        if (!pInfo->actorThing || (pInfo->actorThing->flags & SITH_TF_DEAD))
+            return;
+        rdVector_Zero3(&waggleVec);
+        waggleMag = 0.0;
+        stdComm_WSRelay_PovWaggle(idx, &waggleVec, &waggleMag);
+#else
+        return;
+#endif
+    }
+
+    if (!pInfo->povModel.model3)
         return;
 
-    if ( playerThings[playerThingIdx].povModel.puppet )
+    if ( pInfo->povModel.puppet )
     {
-        rdPuppet_UpdateTracks(playerThings[playerThingIdx].povModel.puppet, sithTime_g_frameTimeFlex);
+        rdPuppet_UpdateTracks(pInfo->povModel.puppet, sithTime_g_frameTimeFlex);
     }
 
     if ( !(sithCamera_g_pCurCamera->type & 0xFC) && sithCamera_g_pCurCamera->pPrimaryFocusThing == sithWorld_g_pCurrentWorld->pCameraFocusThing )
     {
-        SithThing* player = playerThings[playerThingIdx].actorThing;
+        SithThing* player = pInfo->actorThing;
+        // Added: how far the body went this frame (sithCollision_MoveThing
+        // works it out for this game's own player only).
+        flex_t waggle = player->waggle;
+        if (pInfo != &playerThings[playerThingIdx])
+            waggle = rdVector_Len3(&player->physicsParams.vel) * sithTime_g_frameTimeFlex;
 
         // TODO: I think this explains some weird duplication
 #ifndef QOL_IMPROVEMENTS
-        flex_t waggleAmt = (stdMath_Fabs(player->waggle) > 0.02 ? 0.02 : stdMath_Fabs(player->waggle)) * jkPlayer_waggleMag;
+        flex_t waggleAmt = (stdMath_Fabs(waggle) > 0.02 ? 0.02 : stdMath_Fabs(waggle)) * waggleMag;
 #else
         // scale animation to be in line w/ 25fps (presumed 'mastering' FPS of whoever was coding the waggle)
-        flex_t waggleAmt = (stdMath_Fabs(player->waggle) > 0.02 * (sithTime_g_frameTimeFlex / (1.0/25)) ? 0.02 * (sithTime_g_frameTimeFlex / (1.0/25)) : stdMath_Fabs(player->waggle)) * jkPlayer_waggleMag;
+        flex_t waggleAmt = (stdMath_Fabs(waggle) > 0.02 * (sithTime_g_frameTimeFlex / (1.0/25)) ? 0.02 * (sithTime_g_frameTimeFlex / (1.0/25)) : stdMath_Fabs(waggle)) * waggleMag;
 
         if (jkPlayer_bDisableWeaponWaggle) {
             waggleAmt = 0.0;
@@ -1019,9 +1044,9 @@ void jkPlayer_DrawPov()
             velNorm *= 0.5;
         }
 #endif
-        jkSaber_rotateVec.x = angleCos * jkPlayer_waggleVec.x * velNorm;
-        jkSaber_rotateVec.y = angleSin * jkPlayer_waggleVec.y * velNorm;
-        jkSaber_rotateVec.z = angleSin * jkPlayer_waggleVec.z * velNorm;
+        jkSaber_rotateVec.x = angleCos * waggleVec.x * velNorm;
+        jkSaber_rotateVec.y = angleSin * waggleVec.y * velNorm;
+        jkSaber_rotateVec.z = angleSin * waggleVec.z * velNorm;
         rdMatrix_BuildRotate34(&jkSaber_rotateMat, &jkSaber_rotateVec);
 
 #if defined(SDL2_RENDER) || defined(TARGET_RETRO_HOMEBREW)
@@ -1048,7 +1073,7 @@ void jkPlayer_DrawPov()
 #endif
 
         rdMatrix_Copy34(&orient, sithCamera_g_renderView.sector ? &sithCamera_g_renderView.orient : &sithCamera_g_pCurCamera->orient);
-        rdVector_Copy3(&trans, &playerThings[playerThingIdx].actorThing->actorParams.eyeOffset);
+        rdVector_Copy3(&trans, &pInfo->actorThing->actorParams.eyeOffset);
         //printf("%f %f %f\n", (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.x, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.y, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.z);
 #ifdef QOL_IMPROVEMENTS
         // Shift gun down slightly at higher aspect ratios
@@ -1073,15 +1098,15 @@ void jkPlayer_DrawPov()
         // Moved: see below.
 #if !(defined(SDL2_RENDER) || defined(TARGET_RETRO_HOMEBREW))
         // Render saber if applicable
-        if (playerThings[playerThingIdx].actorThing->jkFlags & JKFLAG_SABERON)
+        if (pInfo->actorThing->jkFlags & JKFLAG_SABERON)
         {
-            jkSaber_Draw(&orient);
+            jkSaber_DrawFor(pInfo, &orient);
         }
 #endif
         
         //printf("pov in\n");
         //jkPlayer_checkPov = 1;
-        rdThing_Draw(&playerThings[playerThingIdx].povModel, &orient);
+        rdThing_Draw(&pInfo->povModel, &orient);
         //jkPlayer_checkPov = 0;
         //printf("pov done\n");
 
@@ -1093,10 +1118,10 @@ void jkPlayer_DrawPov()
         // Added: we want the polyline to render in draw order so the spheres don't clip, 
         // but we want the POV model to be aware of the depths still.
 #if defined(SDL2_RENDER) || defined(TARGET_RETRO_HOMEBREW)
-        if (playerThings[playerThingIdx].actorThing->jkFlags & JKFLAG_SABERON)
+        if (pInfo->actorThing->jkFlags & JKFLAG_SABERON)
         {
             rdSetZBufferMethod(RD_ZBUFFER_READ_NOWRITE);
-            jkSaber_Draw(&orient);
+            jkSaber_DrawFor(pInfo, &orient);
         }
 
 

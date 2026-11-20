@@ -26,6 +26,27 @@
 BOOL jkHud_shouldCrosshairBeShownForWeapon(SithThing *player);
 #endif // DEBUG
 
+// Added: what the status bars show (jkHud_DrawGPU): this game's player's,
+// or, for a game watching the match that follows a player in first person,
+// that player's, as their game tells the room's feed (stdComm_WSRelay.c).
+typedef struct jkHudValues
+{
+    int health;
+    int maxHealth;
+    int shields;
+    int force;
+    int battery;
+    int ammo; // -999: the weapon takes none
+    int flags; // JKHUD_VALUES_*
+} jkHudValues;
+#define JKHUD_VALUES_FIELDLIGHT (0x1)
+#define JKHUD_VALUES_FORCESURGE (0x2)
+#define JKHUD_VALUES_SUPERSHIELDS (0x4)
+#define JKHUD_VALUES_SUPERWEAPON (0x8)
+#define JKHUD_VALUES_CROSSHAIR (0x10) // the crosshair shows, as the player set it and for their weapon
+#define JKHUD_VALUES_DEAD (0x20)
+void jkHud_LocalValues(SithThing* v4, jkHudValues* pOut);
+
 int jkHud_Startup();
 void jkHud_Shutdown();
 MATH_FUNC int jkHud_Open();

@@ -1347,6 +1347,12 @@ void sithMulti_Update(int msecDeltaTime)
     if (!sithNet_isMulti)
         return;
 
+#ifdef PLATFORM_WSRELAY
+    // Added: what this game's player holds and sees, for those watching the
+    // match from the room's feed (spectator mode).
+    stdComm_WSRelay_FeedPovFrame();
+#endif
+
     sithThing_SyncThings();
     sithSurface_SyncSurfaces();
     sithSector_SyncSectors();

@@ -161,6 +161,16 @@
 #include "Main/jkStrings.h"
 #include "Main/jkRes.h"
 #include "Main/jkPlaylist.h"
+#include "World/jkPlayer.h" // Added: what a player holds and sees (spectator mode)
+#include "World/sithModel.h"
+#include "Engine/sithKeyFrame.h"
+#include "Engine/sithPuppet.h"
+#include "Engine/sithCamera.h"
+#include "Gameplay/sithPlayer.h"
+#include "Gameplay/sithTime.h"
+#include "General/stdPalEffects.h"
+#include "General/stdMath.h"
+#include "Main/jkHud.h"
 
 #include <emscripten.h>
 #include <math.h>
@@ -3772,6 +3782,8 @@ void stdComm_WSRelay_NoteMotion(int otherId, double bufferMs, uint32_t steps, ui
     wsrelay_js_net_motion(otherId, bufferMs, (int)steps, (int)carried, (int)held, (int)jumps, (int)warps, (int)restarts);
 }
 
+static void wsrelay_PovReset(); // what each player holds and sees, below
+
 // ---- Watching a match in the game (spectator mode), the engine's side. A
 // viewer is a joiner whose host is the room's feed (Module.jkView, above):
 // Main_StartupViewer waits for the feed's level (stdComm_WSRelay_ViewerOpen)
@@ -4012,6 +4024,7 @@ void stdComm_WSRelay_ViewerJoined(int slot)
         pInfo->pLocalPlayer->attach_flags = 0;
     }
     stdPlatform_Printf("OpenJKDF2: Watching room %d from slot %d.\n", wsrelay_viewRoom, slot);
+    wsrelay_PovReset();
     sithControl_SpectatorNext(1);
 }
 
@@ -4372,6 +4385,381 @@ void stdComm_WSRelay_FeedFrame()
     sithMulti_FeedKeyframe(WSRELAY_FEED_KEY_ID);
     wsrelay_bKeyframing = 0;
     wsrelay_js_feed_key_end();
+}
+
+// ---- What a player holds and sees (spectator mode). A viewer that follows a
+// player in first person shows what that player's own screen does: their
+// first-person model (the weapon held, which no other game knows: weapon
+// COGs set it only on the player's own game, jkCog_SetPovModel), its
+// animations, how it sways, the status bars and crosshair, and the screen's
+// flashes and tints. Each player's own game tells the room's feed, and no
+// one else (wsrelay_js_feed_copy only), in its own engine message
+// (STDCOMM_WSRELAY_POV_MSG, past DSS_MAX, so engines without this ignore it):
+//   STATE  1, player u8, status flags u16 (JKHUD_VALUES_*), model s32 (its
+//          id, -1 for none), sway vec3 f32 and magnitude f32, health,
+//          max health, shields, force, battery, ammo s16: when any of it
+//          changes (at most every 100 ms; the model at once) and every 2 s
+//   PLAY   2, player u8, its track s8, 0 u8, model s32, keyframe s32, low
+//          priority s32, flags s32: as jkPlayPOVKey plays it
+//   STOP   3, player u8, its track s8, 0 u8, fade f32: as jkStopPOVKey
+//   PAL    4, player u8, 0 u16, then the flashes (sithPlayer's
+//          palEffectsIdx1) and the tint (palEffectsIdx2): tint vec3 f32, add
+//          u8 x3, 0 u8, fade f32, filter u8 x3, 0 u8 each: at once for a new
+//          flash, else at most every 100 ms when they change, and every 2 s
+// A viewer plays an animation only on the model it was played on there, and
+// fades the flashes as sithPlayer_Tick does.
+
+#define WSRELAY_POV_EVERY_MS (2000)
+#define WSRELAY_POV_MIN_MS (100)
+#define WSRELAY_POV_STATE_LEN (36)
+#define WSRELAY_POV_PAL_LEN (52)
+
+static uint8_t wsrelay_aPovSent[WSRELAY_POV_STATE_LEN];
+static int wsrelay_bPovSent = 0;
+static uint32_t wsrelay_povSentMs = 0;
+static uint8_t wsrelay_aPalSent[WSRELAY_POV_PAL_LEN];
+static int wsrelay_bPalSent = 0;
+static uint32_t wsrelay_palSentMs = 0;
+static stdPalEffect wsrelay_palLast; // the flashes as they were last frame
+
+// Whether this game's feed is open (net.feed), so what's sent reaches it.
+EM_JS(int, wsrelay_js_feed_on, (), {
+    var net = Module.jkNet;
+    return net && net.feed && net.feed.ws && net.feed.ws.readyState === 1 ? 1 : 0;
+});
+
+static int16_t wsrelay_PovS16(int v)
+{
+    return (int16_t)(v < -32768 ? -32768 : (v > 32767 ? 32767 : v));
+}
+
+// Whether this game says what its player holds and sees: a player's game in
+// a room whose feed is open.
+static int wsrelay_PovSending()
+{
+    if (stdComm_Imperial_bActive || stdComm_WSRelay_bViewer || (!wsrelay_bHosting && !wsrelay_bJoined) || sithMulti_IsSpectating())
+        return 0;
+    if (!sithPlayer_g_pLocalPlayerThing || !sithPlayer_g_pLocalPlayer || playerThingIdx >= JKPLAYER_NUM_INFOS || playerThingIdx > 255)
+        return 0;
+    if (!wsrelay_js_feed_on())
+    {
+        wsrelay_bPovSent = 0;
+        wsrelay_bPalSent = 0;
+        return 0;
+    }
+    return 1;
+}
+
+static void wsrelay_PovSend(const uint8_t* pBody, int len)
+{
+    uint8_t buf[4 + 64];
+    uint16_t msgId = STDCOMM_WSRELAY_POV_MSG;
+    uint16_t resendId = 0;
+    if (len <= 0 || len > 64)
+        return;
+    memcpy(buf, &msgId, 2);
+    memcpy(buf + 2, &resendId, 2);
+    memcpy(buf + 4, pBody, len);
+    wsrelay_js_feed_copy(buf, len + 4);
+}
+
+static void wsrelay_PovPutEffect(uint8_t* p, const stdPalEffect* pEffect)
+{
+    float f[3] = { (float)pEffect->tint.x, (float)pEffect->tint.y, (float)pEffect->tint.z };
+    float fade = (float)pEffect->fade;
+    memcpy(p, f, 12);
+    p[12] = (uint8_t)stdMath_ClampInt(pEffect->add.x, 0, 255);
+    p[13] = (uint8_t)stdMath_ClampInt(pEffect->add.y, 0, 255);
+    p[14] = (uint8_t)stdMath_ClampInt(pEffect->add.z, 0, 255);
+    p[15] = 0;
+    memcpy(p + 16, &fade, 4);
+    p[20] = pEffect->filter.x ? 1 : 0;
+    p[21] = pEffect->filter.y ? 1 : 0;
+    p[22] = pEffect->filter.z ? 1 : 0;
+    p[23] = 0;
+}
+
+static void wsrelay_PovGetEffect(const uint8_t* p, stdPalEffect* pEffect)
+{
+    float f[3], fade;
+    memcpy(f, p, 12);
+    memcpy(&fade, p + 16, 4);
+    stdPalEffects_ResetEffect(pEffect);
+    pEffect->tint.x = stdMath_Clamp(f[0], 0.0, 1.0);
+    pEffect->tint.y = stdMath_Clamp(f[1], 0.0, 1.0);
+    pEffect->tint.z = stdMath_Clamp(f[2], 0.0, 1.0);
+    pEffect->add.x = p[12];
+    pEffect->add.y = p[13];
+    pEffect->add.z = p[14];
+    pEffect->fade = stdMath_Clamp(fade, 0.0, 1.0);
+    pEffect->filter.x = p[20] ? 1 : 0;
+    pEffect->filter.y = p[21] ? 1 : 0;
+    pEffect->filter.z = p[22] ? 1 : 0;
+}
+
+// STATE when it's due: a new model at once.
+static void wsrelay_PovState()
+{
+    SithThing* pThing = sithPlayer_g_pLocalPlayerThing;
+    jkPlayerInfo* pInfo = &playerThings[playerThingIdx];
+    uint8_t body[WSRELAY_POV_STATE_LEN];
+    jkHudValues hud;
+    memset(body, 0, sizeof(body));
+    jkHud_LocalValues(pThing, &hud);
+    int32_t modelId = pInfo->povModel.model3 ? (int32_t)pInfo->povModel.model3->id : -1;
+    uint16_t flags16 = (uint16_t)hud.flags;
+    float waggle[4] = { (float)jkPlayer_waggleVec.x, (float)jkPlayer_waggleVec.y, (float)jkPlayer_waggleVec.z, (float)jkPlayer_waggleMag };
+    int16_t values[6] = { wsrelay_PovS16(hud.health), wsrelay_PovS16(hud.maxHealth), wsrelay_PovS16(hud.shields),
+                          wsrelay_PovS16(hud.force), wsrelay_PovS16(hud.battery), wsrelay_PovS16(hud.ammo) };
+    body[0] = 1;
+    body[1] = (uint8_t)playerThingIdx;
+    memcpy(body + 2, &flags16, 2);
+    memcpy(body + 4, &modelId, 4);
+    memcpy(body + 8, waggle, 16);
+    memcpy(body + 24, values, 12);
+
+    uint32_t now = stdPlatform_GetTimeMsec();
+    int bChanged = !wsrelay_bPovSent || memcmp(body, wsrelay_aPovSent, sizeof(body)) != 0;
+    int bModelNow = !wsrelay_bPovSent || memcmp(body + 4, wsrelay_aPovSent + 4, 4) != 0;
+    if (!bModelNow && !(bChanged && now - wsrelay_povSentMs >= WSRELAY_POV_MIN_MS) && now - wsrelay_povSentMs < WSRELAY_POV_EVERY_MS)
+        return;
+    wsrelay_PovSend(body, sizeof(body));
+    memcpy(wsrelay_aPovSent, body, sizeof(body));
+    wsrelay_bPovSent = 1;
+    wsrelay_povSentMs = now;
+}
+
+static void wsrelay_PovPal()
+{
+    stdPalEffect* p1 = stdPalEffects_GetEffectPointer(sithPlayer_g_pLocalPlayer->palEffectsIdx1);
+    stdPalEffect* p2 = stdPalEffects_GetEffectPointer(sithPlayer_g_pLocalPlayer->palEffectsIdx2);
+    // A new flash: any of it brighter than a frame ago (it only ever fades).
+    int bFlash = p1->tint.x > wsrelay_palLast.tint.x + 0.001 || p1->tint.y > wsrelay_palLast.tint.y + 0.001
+              || p1->tint.z > wsrelay_palLast.tint.z + 0.001 || p1->add.x > wsrelay_palLast.add.x
+              || p1->add.y > wsrelay_palLast.add.y || p1->add.z > wsrelay_palLast.add.z;
+    wsrelay_palLast = *p1;
+
+    uint8_t body[WSRELAY_POV_PAL_LEN];
+    memset(body, 0, sizeof(body));
+    body[0] = 4;
+    body[1] = (uint8_t)playerThingIdx;
+    wsrelay_PovPutEffect(body + 4, p1);
+    wsrelay_PovPutEffect(body + 28, p2);
+
+    uint32_t now = stdPlatform_GetTimeMsec();
+    // What doesn't fade on its own: the tint, the fade, the filters.
+    int bChanged = !wsrelay_bPalSent || memcmp(body + 28, wsrelay_aPalSent + 28, 24) != 0
+                || memcmp(body + 4 + 16, wsrelay_aPalSent + 4 + 16, 8) != 0;
+    if (!bFlash && !(bChanged && now - wsrelay_palSentMs >= WSRELAY_POV_MIN_MS) && now - wsrelay_palSentMs < WSRELAY_POV_EVERY_MS)
+        return;
+    wsrelay_PovSend(body, sizeof(body));
+    memcpy(wsrelay_aPalSent, body, sizeof(body));
+    wsrelay_bPalSent = 1;
+    wsrelay_palSentMs = now;
+}
+
+void stdComm_WSRelay_FeedPovFrame()
+{
+    if (!wsrelay_PovSending())
+        return;
+    wsrelay_PovState();
+    wsrelay_PovPal();
+}
+
+void stdComm_WSRelay_FeedPovKey(int track, rdKeyframe* pKeyframe, int lowPri, int flags)
+{
+    if (!pKeyframe || track < 0 || track > 3 || !wsrelay_PovSending())
+        return;
+    rdModel3* pModel = playerThings[playerThingIdx].povModel.model3;
+    if (!pModel)
+        return;
+    // The model it plays on first, when that's new (a weapon's raise plays
+    // as it's picked).
+    wsrelay_PovState();
+    uint8_t body[20];
+    int32_t vals[4] = { (int32_t)pModel->id, (int32_t)pKeyframe->id, (int32_t)lowPri, (int32_t)flags };
+    body[0] = 2;
+    body[1] = (uint8_t)playerThingIdx;
+    body[2] = (uint8_t)(int8_t)track;
+    body[3] = 0;
+    memcpy(body + 4, vals, 16);
+    wsrelay_PovSend(body, sizeof(body));
+}
+
+void stdComm_WSRelay_FeedPovStop(int track, flex_t fadeSecs)
+{
+    if (track < 0 || track > 3 || !wsrelay_PovSending())
+        return;
+    uint8_t body[8];
+    float fade = (float)fadeSecs;
+    body[0] = 3;
+    body[1] = (uint8_t)playerThingIdx;
+    body[2] = (uint8_t)(int8_t)track;
+    body[3] = 0;
+    memcpy(body + 4, &fade, 4);
+    wsrelay_PovSend(body, sizeof(body));
+}
+
+// A viewer's copy of what each player's game said.
+typedef struct wsrelay_PovOf
+{
+    int bState;
+    rdVector3 waggleVec;
+    flex_t waggleMag;
+    jkHudValues hud;
+    int8_t aTrack[4]; // their track: ours
+    int bPal;
+    stdPalEffect flashes;
+    stdPalEffect tint;
+    flex_t palAt; // sithTime_g_secGameTime when the flashes were said
+} wsrelay_PovOf;
+static wsrelay_PovOf wsrelay_aPovOf[JKPLAYER_NUM_INFOS];
+
+static void wsrelay_PovReset()
+{
+    memset(wsrelay_aPovOf, 0, sizeof(wsrelay_aPovOf));
+    for (int i = 0; i < JKPLAYER_NUM_INFOS; i++)
+        memset(wsrelay_aPovOf[i].aTrack, 0xFF, sizeof(wsrelay_aPovOf[i].aTrack));
+}
+
+void stdComm_WSRelay_ProcessPov(SithMessage* pMsg)
+{
+    if (!stdComm_WSRelay_bViewer || !sithWorld_g_pCurrentWorld)
+        return;
+    const uint8_t* p = (const uint8_t*)pMsg->pktData;
+    int len = (int)pMsg->netMsg.msg_size;
+    if (len < 4)
+        return;
+    int type = p[0];
+    int idx = p[1];
+    if (idx >= JKPLAYER_NUM_INFOS || idx >= (int)jkPlayer_maxPlayers || idx == (int)playerThingIdx)
+        return;
+    jkPlayerInfo* pInfo = &playerThings[idx];
+    wsrelay_PovOf* pOf = &wsrelay_aPovOf[idx];
+    if (!pInfo->actorThing)
+        return;
+    // Animations are over by the time a viewer's in the level, as for
+    // sithPuppet's (wsrelay_ViewerSkipsWhileSyncing).
+    int bSync = (g_submodeFlags & 8) != 0;
+
+    if (type == 1 && len >= WSRELAY_POV_STATE_LEN)
+    {
+        uint16_t flags16;
+        int32_t modelId;
+        float waggle[4];
+        int16_t values[6];
+        memcpy(&flags16, p + 2, 2);
+        memcpy(&modelId, p + 4, 4);
+        memcpy(waggle, p + 8, 16);
+        memcpy(values, p + 24, 12);
+        rdModel3* pModel = modelId >= 0 ? sithModel_GetModelByIndex(modelId) : NULL;
+        if (pModel && (int32_t)pModel->id != modelId)
+            pModel = NULL;
+        if (pModel != pInfo->povModel.model3 || !pModel)
+        {
+            if (pModel != pInfo->povModel.model3)
+                jkPlayer_SetPovModel(pInfo, pModel);
+            memset(pOf->aTrack, 0xFF, sizeof(pOf->aTrack));
+        }
+        pOf->waggleVec.x = waggle[0];
+        pOf->waggleVec.y = waggle[1];
+        pOf->waggleVec.z = waggle[2];
+        pOf->waggleMag = waggle[3];
+        pOf->hud.flags = flags16;
+        pOf->hud.health = values[0];
+        pOf->hud.maxHealth = values[1];
+        pOf->hud.shields = values[2];
+        pOf->hud.force = values[3];
+        pOf->hud.battery = values[4];
+        pOf->hud.ammo = values[5];
+        pOf->bState = 1;
+    }
+    else if (type == 2 && len >= 20 && !bSync)
+    {
+        int track = (int8_t)p[2];
+        int32_t vals[4];
+        memcpy(vals, p + 4, 16);
+        rdModel3* pModel = pInfo->povModel.model3;
+        rdPuppet* pPuppet = pInfo->povModel.puppet;
+        if (!pModel || !pPuppet || (int32_t)pModel->id != vals[0])
+            return;
+        rdKeyframe* pKeyframe = sithKeyFrame_GetByIdx(vals[1]);
+        if (!pKeyframe)
+            return;
+        int ours = sithPuppet_PlayKey(pPuppet, pKeyframe, vals[2], vals[2] + 2, vals[3], 0);
+        if (track >= 0 && track < 4)
+            pOf->aTrack[track] = (int8_t)ours;
+    }
+    else if (type == 3 && len >= 8 && !bSync)
+    {
+        int track = (int8_t)p[2];
+        float fade;
+        memcpy(&fade, p + 4, 4);
+        if (track < 0 || track > 3)
+            return;
+        int ours = pOf->aTrack[track];
+        pOf->aTrack[track] = -1;
+        if (ours >= 0 && ours < 4 && pInfo->povModel.puppet)
+            sithPuppet_StopKey(pInfo->povModel.puppet, ours, fade);
+    }
+    else if (type == 4 && len >= WSRELAY_POV_PAL_LEN)
+    {
+        wsrelay_PovGetEffect(p + 4, &pOf->flashes);
+        wsrelay_PovGetEffect(p + 28, &pOf->tint);
+        pOf->palAt = sithTime_g_secGameTime;
+        pOf->bPal = 1;
+    }
+}
+
+int stdComm_WSRelay_PovWaggle(int idx, rdVector3* pVec, flex_t* pMag)
+{
+    if (!stdComm_WSRelay_bViewer || idx < 0 || idx >= JKPLAYER_NUM_INFOS || !wsrelay_aPovOf[idx].bState)
+        return 0;
+    *pVec = wsrelay_aPovOf[idx].waggleVec;
+    *pMag = wsrelay_aPovOf[idx].waggleMag;
+    return 1;
+}
+
+int stdComm_WSRelay_PovHud(int idx, struct jkHudValues* pOut)
+{
+    if (!stdComm_WSRelay_bViewer || idx < 0 || idx >= JKPLAYER_NUM_INFOS || !wsrelay_aPovOf[idx].bState)
+        return 0;
+    *pOut = wsrelay_aPovOf[idx].hud;
+    return 1;
+}
+
+void stdComm_WSRelay_ViewerPovFrame(int followIdx)
+{
+    // A spectator's own flashes (its body takes no hits, picks nothing up)
+    // would never fade: none.
+    stdPalEffects_FlushAllAdds();
+    if (!stdComm_WSRelay_bViewer || !sithPlayer_g_pLocalPlayer)
+        return;
+    stdPalEffect* p1 = stdPalEffects_GetEffectPointer(sithPlayer_g_pLocalPlayer->palEffectsIdx1);
+    stdPalEffect* p2 = stdPalEffects_GetEffectPointer(sithPlayer_g_pLocalPlayer->palEffectsIdx2);
+    wsrelay_PovOf* pOf = NULL;
+    if (followIdx >= 0 && followIdx < JKPLAYER_NUM_INFOS && sithCamera_g_pCurCamera == &sithCamera_g_aCameras[0] && wsrelay_aPovOf[followIdx].bPal)
+        pOf = &wsrelay_aPovOf[followIdx];
+    if (!pOf)
+    {
+        stdPalEffects_ResetEffect(p1);
+        stdPalEffects_ResetEffect(p2);
+        return;
+    }
+    // Faded since it was said, as sithPlayer_Tick fades a player's own.
+    flex_t secs = sithTime_g_secGameTime - pOf->palAt;
+    if (secs < 0.0)
+        secs = 0.0;
+    flex_t tintDown = secs * 0.4;
+    int addDown = (int)(secs * 256.0 + 0.5);
+    *p1 = pOf->flashes;
+    p1->tint.x = stdMath_Clamp(p1->tint.x - tintDown, 0.0, 1.0);
+    p1->tint.y = stdMath_Clamp(p1->tint.y - tintDown, 0.0, 1.0);
+    p1->tint.z = stdMath_Clamp(p1->tint.z - tintDown, 0.0, 1.0);
+    p1->add.x = stdMath_ClampInt(p1->add.x - addDown, 0, 255);
+    p1->add.y = stdMath_ClampInt(p1->add.y - addDown, 0, 255);
+    p1->add.z = stdMath_ClampInt(p1->add.z - addDown, 0, 255);
+    *p2 = pOf->tint;
 }
 
 BOOL DirectPlay_Send(DPID idFrom, DPID idTo, void *lpData, DWORD dwDataSize)

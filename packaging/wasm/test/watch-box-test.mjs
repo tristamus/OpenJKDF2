@@ -24,6 +24,9 @@ const endCode = cut('      var BOX_END_MS = ', '      function boxCan(w) {');
 const modsCode = cut('      function watchStartMods(folderMods, game) {', '      // The name of several mods together');
 
 // A stand-in element: children, classes and the few calls the code makes.
+// One made while canMove is on can move another in as it is (moveBefore:
+// Chrome, Edge), which a frame takes without loading again (moved).
+let canMove = false;
 function elem(tag, cls, text) {
     const e = {
         tagName: tag.toUpperCase(), className: cls || '', textContent: text || '', dataset: {}, children: [], style: {},
@@ -36,6 +39,9 @@ function elem(tag, cls, text) {
         },
         append(...xs) { for (const x of xs) { if (x.parentNode) x.remove(); x.parentNode = e; e.children.push(x); } },
         prepend(x) { if (x.parentNode) x.remove(); x.parentNode = e; e.children.unshift(x); },
+        get firstChild() { return e.children[0] || null; },
+        // In the page: in one that's in it (connected).
+        get isConnected() { let x = e; while (x.parentNode) x = x.parentNode; return !!x.connected; },
         remove() {
             const p = e.parentNode;
             if (!p) return;
@@ -44,6 +50,16 @@ function elem(tag, cls, text) {
             e.removed++;
         },
     };
+    if (canMove) {
+        e.moveBefore = (x, ref) => {
+            const p = x.parentNode;
+            if (p) p.children.splice(p.children.indexOf(x), 1);
+            x.parentNode = e;
+            const at = ref ? e.children.indexOf(ref) : -1;
+            e.children.splice(at < 0 ? e.children.length : at, 0, x);
+            x.moved = (x.moved || 0) + 1;
+        };
+    }
     if (tag === 'iframe') e.contentWindow = { name: 'frame' };
     e.hasAttribute = a => a in e;
     e.focus = () => { e.focused = (e.focused || 0) + 1; };
@@ -52,7 +68,9 @@ function elem(tag, cls, text) {
 // All the text in a stand-in element and those in it.
 const textOf = e => (e.textContent || '') + e.children.map(textOf).join('|');
 
-function page({ phone = '', mock = false, why = '', screen = { width: 1920, height: 1080 } } = {}) {
+// store: what this browser keeps (localStorage), null for none it can keep.
+function page({ phone = '', mock = false, why = '', screen = { width: 1920, height: 1080 }, move = false, store = {} } = {}) {
+    canMove = move;
     const ROOMS = { narshaddaa: { game: 'jk1', name: 'Nar Shaddaa' }, asteroid: { game: 'mots', name: 'Sith: Asteroid' },
                     'bespin-demo': { game: 'jk1', name: 'Bespin Mining Station', demo: true } };
     const games = {
@@ -63,8 +81,10 @@ function page({ phone = '', mock = false, why = '', screen = { width: 1920, heig
     const env = {
         said: [], renders: 0,
         watchLive: { id: 5, sent: 5 },
-        watchBox: { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, follow: '', followEls: {}, ended: 0, left: {} },
-        watchScreen: Object.assign(elem('div', 'watch-screen'), { clientWidth: 684, clientHeight: 386 }),
+        watchBox: { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, follow: '', followEls: {}, ended: 0, left: {},
+                    live: false, panel: false },
+        // The viewing page's box, in the page (its dialog is, open or not).
+        watchScreen: Object.assign(elem('div', 'watch-screen'), { clientWidth: 684, clientHeight: 386, connected: true }),
         full: false,
         watchDlg: { open: true },
         location: { pathname: '/', search: '?x=1', protocol: 'https:' },
@@ -73,9 +93,13 @@ function page({ phone = '', mock = false, why = '', screen = { width: 1920, heig
         ROOMS, PACK_ONLY: 'Remastered pack',
     };
     const names = ['watchLive', 'watchBox', 'watchScreen', 'watchDlg', 'location', 'window', 'document', 'ROOMS', 'PACK_ONLY',
-                   'watchInGame', 'phoneNote', 'watchedGame', 'el', 'renderWatch', 'lobbySay', 'screen', 'watchFullOn'];
+                   'watchInGame', 'phoneNote', 'watchedGame', 'el', 'renderWatch', 'lobbySay', 'screen', 'watchFullOn', 'localStorage'];
+    const storage = store === null
+        ? { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } }
+        : { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
     const api = new Function(...names, endCode + boxCode + sayCode + '\nreturn { boxCan, boxShow, boxStop, boxScreen, boxNote, boxAgain, ' +
-                             'boxSize, boxFit, watchKeysPanel, watchKeysToggle, watchFollowLabel, keyLabel, startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
+                             'boxSize, boxFit, boxPlace, pvScreen, watchKeysPanel, watchKeysToggle, watchFollowLabel, keyLabel, ' +
+                             'startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
         env.watchLive, env.watchBox, env.watchScreen, env.watchDlg, env.location, env.window, env.document, ROOMS,
         env.PACK_ONLY,
         w => (w ? { why } : null), () => phone,
@@ -83,8 +107,9 @@ function page({ phone = '', mock = false, why = '', screen = { width: 1920, heig
         (tag, cls, text) => elem(tag, cls, text),
         () => { env.renders++; },
         line => { env.said.push(line); return true; },
-        screen, () => env.full);
-    return { ...api, env, games };
+        screen, () => env.full, storage);
+    canMove = false;
+    return { ...api, env, games, store };
 }
 
 let failed = 0, ran = 0;
@@ -218,6 +243,7 @@ test('the page counts itself the whole time its box\'s game watches (the feed le
 test('black around the box\'s game once it plays the match, not the picture; off with the frame', () => {
     const p = page();
     const f = p.boxShow(p.games[5]);
+    p.boxScreen(f, elem('div'));
     assert.ok(!p.env.watchScreen.classList.contains('box-live'));
     p.env.window.jkWatchBoxSays({}, 'live', '');
     assert.ok(!p.env.watchScreen.classList.contains('box-live'), 'not another window');
@@ -240,7 +266,7 @@ test('Controls: the keys for watching as the player bound them, once the box\'s 
         jump: [['DIK_ADD', false], ['DIK_X', false], ['KEY_MOUSE_B2', false], ['KEY_JOY1_B4', false]],
         duck: [['DIK_C', false], ['KEY_JOY1_B2', false]], fast: [['DIK_LSHIFT', false]],
         fire1: [['DIK_RCONTROL', false], ['DIK_LCONTROL', false], ['KEY_MOUSE_B1', false], ['KEY_JOY1_B17', false]],
-        fire2: [['DIK_Z', false], ['DIK_NUMPAD0', false], ['KEY_MOUSE_B3', false]], map: [['DIK_TAB', false]],
+        fire2: [['DIK_Z', false], ['DIK_NUMPAD0', false], ['KEY_MOUSE_B3', false]], map: [['DIK_H', false], ['DIK_TAB', false]],
         camera: [['DIK_F1', false]], talk: [],
     });
     p.env.window.jkWatchBoxSays({}, 'live', '');
@@ -254,8 +280,10 @@ test('Controls: the keys for watching as the player bound them, once the box\'s 
     assert.match(text, /Move\|W, A, S, D\|/, 'forward, left, back, right: a letter each');
     assert.match(text, /Up \/ down\|X \/ C\|/, 'one each way');
     assert.match(text, /Faster\|Left Shift/);
-    assert.match(text, /Map\|Tab/);
+    assert.match(text, /Map\|Tab\|/, 'not H: H shows or hides these');
     assert.match(text, /Message the players\|Talk \(not bound\)/);
+    assert.match(text, /Show \/ hide controls\|H\|Give back the mouse\|Esc/);
+    assert.equal(p.watchKeysPanel().children[0].children[1].textContent, 'Hide (H)');
     // Hidden, then shown again; none without a frame.
     p.watchKeysToggle();
     assert.equal(p.watchKeysPanel(), null);
@@ -325,6 +353,7 @@ test('who the box\'s game follows shows over it, kept up to date in place', () =
 test('the box\'s own panel goes over the badges, and comes off with the frame', () => {
     const p = page();
     const f = p.boxShow(p.games[5]);
+    p.boxScreen(f, elem('div'));
     p.env.window.jkWatchBoxSays(f.contentWindow, 'panel', '');
     assert.ok(p.env.watchScreen.classList.contains('box-panel'));
     p.env.window.jkWatchBoxSays(f.contentWindow, 'busy', '');
@@ -332,6 +361,144 @@ test('the box\'s own panel goes over the badges, and comes off with the frame', 
     p.env.window.jkWatchBoxSays(f.contentWindow, 'panel', '');
     p.boxStop();
     assert.ok(!p.env.watchScreen.classList.contains('box-panel'));
+});
+
+// The room window's preview, in the page (its pane in the room window).
+function inPreview(p) {
+    const body = Object.assign(elem('div', 'pv-body'), { connected: true });
+    body.append(p.pvScreen);
+    Object.assign(p.pvScreen, { clientWidth: 320, clientHeight: 180 });
+    return body;
+}
+
+test('the room window\'s preview plays the match; Watch full size takes its frame along as it is (moveBefore)', () => {
+    const p = page({ move: true });
+    p.env.watchDlg.open = false;
+    inPreview(p);
+    const f = p.boxShow(p.games[5]);
+    p.boxPlace(p.pvScreen);
+    assert.equal(f.parentNode, p.pvScreen);
+    assert.equal(f.moved, undefined, 'put there the first time, as a new frame is');
+    assert.equal(f.style.transform, 'translate(0.00px, 0.00px) scale(' + 320 / 1920 + ')', 'scaled to the preview');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
+    assert.ok(p.pvScreen.classList.contains('box-live'));
+    assert.ok(!p.env.watchScreen.classList.contains('box-live'), 'where the frame is, only');
+    assert.equal(p.env.renders, 0, 'the viewing page is closed');
+    assert.deepEqual(p.store, {}, 'the Controls haven\'t shown yet');
+    p.boxPlace(p.pvScreen);
+    assert.equal(f.moved, undefined, 'already there');
+    // Watch full size (a click on the preview: openWatch): the viewing
+    // page's box gets the same frame, its game still watching.
+    p.env.watchDlg.open = true;
+    const view = elem('div', 'watch-view');
+    p.boxScreen(p.boxShow(p.games[5]), view);
+    assert.deepEqual(p.env.watchScreen.children, [f, view]);
+    assert.equal(f.moved, 1);
+    assert.equal(f.removed, 0, 'never taken out (it would load again)');
+    assert.equal(p.env.watchBox.live, true, 'still playing the match');
+    assert.ok(p.env.watchScreen.classList.contains('box-live'));
+    assert.ok(!p.pvScreen.classList.contains('box-live'));
+    assert.equal(f.style.transform, 'translate(0.00px, ' + ((386 - 1080 * (684 / 1920)) / 2).toFixed(2) + 'px) scale(' + 684 / 1920 + ')',
+                 'scaled to the box');
+    assert.equal(p.store['jkdf2mp-watch-keys-seen'], '1', 'the Controls show over the match now');
+    // Back in the room window (the viewing page closed): to the preview.
+    p.env.watchDlg.open = false;
+    p.boxPlace(p.pvScreen);
+    assert.equal(f.parentNode, p.pvScreen);
+    assert.equal(f.moved, 2);
+    assert.ok(p.pvScreen.classList.contains('box-live'));
+});
+
+test('where a frame can\'t move as it is, it loads again on the viewing page, and its game starts again', () => {
+    const p = page();
+    p.env.watchDlg.open = false;
+    inPreview(p);
+    const f = p.boxShow(p.games[5]);
+    p.boxPlace(p.pvScreen);
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'panel', '');
+    assert.ok(p.pvScreen.classList.contains('box-panel'), 'its folder panel: the badge saying to watch full size');
+    p.env.watchDlg.open = true;
+    p.boxScreen(p.boxShow(p.games[5]), elem('div'));
+    assert.equal(f.parentNode, p.env.watchScreen);
+    assert.equal(p.env.watchBox.frame, f, 'the same frame, loading again');
+    assert.deepEqual([p.env.watchBox.live, p.env.watchBox.panel, p.env.watchBox.keys], [false, false, null]);
+    assert.ok(!p.pvScreen.classList.contains('box-live') && !p.pvScreen.classList.contains('box-panel'));
+    assert.ok(!p.env.watchScreen.classList.contains('box-live'), 'not until its game plays the match again');
+    assert.deepEqual(p.store, {});
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
+    assert.ok(p.env.watchScreen.classList.contains('box-live'));
+    assert.equal(p.store['jkdf2mp-watch-keys-seen'], '1');
+    // A preview not in the page yet (a room window drawn for the first
+    // time): the frame goes in as a new one does.
+    const q = page({ move: true });
+    q.env.watchDlg.open = false;
+    const g = q.boxShow(q.games[5]);
+    q.boxPlace(q.pvScreen);
+    assert.equal(g.parentNode, q.pvScreen);
+    assert.equal(g.moved, undefined);
+});
+
+test('H in the box shows or hides the Controls, on the viewing page only', () => {
+    const p = page();
+    const f = p.boxShow(p.games[5]);
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'keys', '');
+    assert.ok(p.watchKeysPanel(), 'not in the viewing page\'s box yet: nothing');
+    p.boxScreen(f, elem('div'));
+    p.env.window.jkWatchBoxSays({}, 'keys', '');
+    assert.ok(p.watchKeysPanel(), 'not another window');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'keys', '');
+    assert.equal(p.watchKeysPanel(), null, 'hidden');
+    assert.equal(p.env.renders, 1, 'drawn again');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'keys', '');
+    assert.ok(p.watchKeysPanel(), 'shown again');
+    p.env.watchDlg.open = false;
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'keys', '');
+    assert.ok(p.watchKeysPanel(), 'the viewing page closed: nothing');
+    assert.equal(p.env.renders, 2);
+    // The box's page: H there goes to the lobby page, unless the player is
+    // typing a message or in the console (sithControl_WebTyping).
+    assert.match(html, /if \(ev\.code !== 'KeyH' \|\| ev\.altKey \|\| ev\.ctrlKey \|\| ev\.metaKey\) return;\s*if \(typeof Module\._sithControl_WebTyping === 'function' && Module\._sithControl_WebTyping\(\)\) return;\s*ev\.preventDefault\(\);\s*ev\.stopImmediatePropagation\(\);\s*if \(!ev\.repeat\) embedSays\('keys'\);/);
+    // The viewing page's own keys: H there too.
+    assert.match(html, /\} else if \(ev\.code === 'KeyH'\) \{/);
+});
+
+test('the Controls show by themselves the first time this browser watches in the box, not after', () => {
+    const store = {};
+    const p = page({ store });
+    const f = p.boxShow(p.games[5]);
+    p.boxScreen(f, elem('div'));
+    assert.ok(p.watchKeysPanel(), 'the first time');
+    assert.deepEqual(store, {}, 'not seen until the box plays the match');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
+    assert.equal(store['jkdf2mp-watch-keys-seen'], '1');
+    p.watchKeysToggle();
+    assert.equal(p.watchKeysPanel(), null);
+    // Next time: hidden, until H or Controls.
+    const q = page({ store });
+    const g = q.boxShow(q.games[5]);
+    q.boxScreen(g, elem('div'));
+    q.env.window.jkWatchBoxSays(g.contentWindow, 'live', '');
+    assert.equal(q.watchKeysPanel(), null, 'hidden the next time');
+    q.watchKeysToggle();
+    assert.ok(q.watchKeysPanel());
+    assert.equal(store['jkdf2mp-watch-keys-seen'], '1');
+    // Hidden before they showed over a match: still shown the next time.
+    const fresh = {};
+    const r = page({ store: fresh });
+    r.watchKeysToggle();
+    const h = r.boxShow(r.games[5]);
+    r.boxScreen(h, elem('div'));
+    r.env.window.jkWatchBoxSays(h.contentWindow, 'live', '');
+    assert.deepEqual(fresh, {});
+    // A browser that can't keep it: shown each time.
+    const t = page({ store: null });
+    const k = t.boxShow(t.games[5]);
+    t.boxScreen(k, elem('div'));
+    t.env.window.jkWatchBoxSays(k.contentWindow, 'live', '');
+    assert.ok(t.watchKeysPanel());
+    // Opening the viewing page again starts from what the browser kept.
+    assert.match(html, /watchKeysOn = !watchKeysSeen\(\);/);
 });
 
 test('a box that stopped says why, with Watch again, until it is clicked', () => {

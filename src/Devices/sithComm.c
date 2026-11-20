@@ -325,6 +325,14 @@ LABEL_22:
                         stdComm_WSRelay_ProcessHits(&sithComm_netMsgTmp);
                         sithComm_msgInProgress = 0;
                     }
+                    // Added: what a player holds and sees, from the room's
+                    // feed, for a game watching the match.
+                    else if ( v2 == STDCOMM_WSRELAY_POV_MSG )
+                    {
+                        sithComm_msgInProgress = v2;
+                        stdComm_WSRelay_ProcessPov(&sithComm_netMsgTmp);
+                        sithComm_msgInProgress = 0;
+                    }
 #endif
                 }
                 goto LABEL_25;

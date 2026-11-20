@@ -169,6 +169,11 @@ static void stdString_CharToWchar(char16_t* pOut, const char* pIn, int n)
 #define STDCOMM_WSRELAY_HITS_MSG (0x434A)
 static int stdComm_WSRelay_HoldForTimeline(SithMessage* pMsg) { (void)pMsg; return 0; }
 static void stdComm_WSRelay_ProcessHits(SithMessage* pMsg) { (void)pMsg; }
+// What a player holds and sees, for pages watching the match: feed only.
+#define STDCOMM_WSRELAY_POV_MSG (0x504A)
+static void stdComm_WSRelay_ProcessPov(SithMessage* pMsg) { (void)pMsg; }
+// The room's feed: none here.
+static void stdComm_WSRelay_FeedCopy(const void* pData, uint32_t size) { (void)pData; (void)size; }
 #endif
 
 // The network: every packet any game sends, in order.

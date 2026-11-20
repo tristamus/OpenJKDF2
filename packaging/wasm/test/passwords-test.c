@@ -156,6 +156,10 @@ static void wsrelay_js_mod_unhost(void) {}
 static int wsrelay_js_direct_open(int id) { return 0; }
 static void wsrelay_js_mod_restart(char* pOut, int maxLen) { pOut[0] = 0; }
 static int wsrelay_js_take_join_room(void) { return 0; }
+// Watching a match in the game (Main_StartupViewer): not here.
+static int wsrelay_js_take_watch_room(void) { return 0; }
+static int stdComm_WSRelay_bViewer = 0;
+static int wsrelay_viewRoom = 0;
 static void wsrelay_js_presence(char16_t* pName, int* pMots) {}
 
 static int wsrelay_js_send_text(const char* pText)

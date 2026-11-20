@@ -49,6 +49,8 @@ static int sithNet_scorelimit = 20;
 static int sithNet_multiplayer_timelimit = 0;
 static int sithNet_teamScore[5];
 static int stdComm_Imperial_bActive = 0;
+// A game watching the match keeps no match record of its own: not here.
+static int stdComm_WSRelay_bViewer = 0;
 static int jkGuiNetHost_bIsDedicated = 0;
 static const char* openjkdf2_aReleaseCommitShort = "abc1234";
 static sithWorld world = { "thief.jkl" };

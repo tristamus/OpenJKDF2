@@ -1674,6 +1674,13 @@
         color-scheme: normal;
       }
       .watch-screen:has(.watch-frame) .watch-view::after { display: none; }
+      /* In the room window's preview, the match plays but takes no clicks:
+         a click is Watch full size. Its folder prompt shows there only. */
+      .pv-screen { position: relative; overflow: hidden; cursor: pointer; }
+      .pv-screen .watch-frame { pointer-events: none; }
+      .pv-screen.box-panel .watch-frame { visibility: hidden; }
+      .pv-screen .pv-files { left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 3; }
+      .pv-screen:not(.box-panel) .pv-files { display: none; }
       .watch-screen.box-panel .watch-frame { z-index: 2; }
       /* Once its game plays the match, black around it, not the picture. */
       .watch-screen.box-live .watch-view { background: #000 !important; }
@@ -5865,6 +5872,16 @@
         document.addEventListener('pointerlockchange', function() {
           if (!document.pointerLockElement && embedLive && document.hasFocus()) embedSays('letgo');
         });
+        // H shows or hides the lobby page's Controls over the box
+        // (watchKeysPanel), and the game doesn't hear it, unless the player
+        // is typing a message (or in the console).
+        window.addEventListener('keydown', function(ev) {
+          if (ev.code !== 'KeyH' || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+          if (typeof Module._sithControl_WebTyping === 'function' && Module._sithControl_WebTyping()) return;
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          if (!ev.repeat) embedSays('keys');
+        }, true);
         // The keys for watching as the player bound them in the game, for
         // the lobby page's Controls (watchKeysPanel): {fire1: [[the game's
         // name for a key (DIK_SPACE), the other way (Back, the other
@@ -9739,6 +9756,7 @@
           if (!watched || watched.key !== key) {
             watchLive.id = 0;
             watchLive.last = null;
+            boxStop();
             sayWatching();
           }
         }
@@ -9859,7 +9877,11 @@
       // and room it watches; ended, when the match left the lobby while the box still plays its
       // last seconds; left, what each game's box said when it stopped (by
       // uid), until Watch again.
-      var watchBox = { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, follow: '', followEls: {}, ended: 0, left: {} };
+      // live and panel: what its page last said (jkWatchBoxSays), for the
+      // classes of where it is: the viewing page's box, or the room window's
+      // preview (pvScreen) before that.
+      var watchBox = { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, follow: '', followEls: {}, ended: 0, left: {},
+                       live: false, panel: false };
       // uid -> the game, as the viewing page last drew it (tickLive).
       var watchGames = {};
 
@@ -9919,6 +9941,7 @@
       function watchGame(id) {
         if ((id || 0) !== watchLive.id) watchLive.note = '';
         watchLive.id = id || 0;
+        if (!watchLive.id) boxStop();
         var w = watchLive.id ? watchedGame() : null;
         watchLive.last = w;
         sayWatching();
@@ -10134,7 +10157,10 @@
       }
 
       // The preview beside the tables, in place of who's on, while a game in
-      // this room window's room is watched.
+      // this room window's room is watched. Its view is the match itself
+      // where the box can show it (boxShow; Antonio, 2026-11-20): the frame
+      // stays in pvScreen while the rest is drawn again around it, and a
+      // click on it is Watch full size, which takes the frame along.
       function renderWatchPane() {
         var old = room.querySelector('.pv');
         if (!watchLive.id) {
@@ -10145,7 +10171,7 @@
         var w = watchedGame();
         if (w) watchLive.last = w;
         var shown = w || watchLive.last;
-        var pane = el('aside', 'pv');
+        var pane = old || el('aside', 'pv');
         pane.setAttribute('aria-label', 'Watching ' + (shown ? shown.no : 'a game'));
         var head = el('div', 'pv-head');
         head.append(el('b', null, shown ? shown.no : 'Watching'),
@@ -10157,14 +10183,38 @@
         close.setAttribute('aria-label', 'Stop watching, show who\'s on');
         close.title = 'Stop watching';
         head.append(close);
-        pane.append(head);
-        var body = el('div', 'pv-body');
-        pane.append(body);
+        var body = pane.querySelector('.pv-body') || el('div', 'pv-body');
+        // All but the preview's view, which holds the box's frame.
+        Array.prototype.slice.call(pane.children).forEach(function(c) {
+          if (c !== body) c.remove();
+        });
+        Array.prototype.slice.call(body.children).forEach(function(c) {
+          if (c !== pvScreen) c.remove();
+        });
+        pane.prepend(head);
+        if (body.parentNode !== pane) pane.append(body);
+        delete body.dataset.live;
         if (!w) {
+          // On the viewing page the box plays a match's last seconds; here
+          // it ends with the match.
+          if (watchBox.frame && watchBox.frame.parentNode === pvScreen) boxStop();
+          pvScreen.remove();
           body.append(el('p', 'watch-note', (shown ? shown.no + ' has' : 'This game has') + ' ended.'));
         } else {
           var v = gameLive(w.g);
-          body.append(watchView(w, v));
+          // The viewing page has the frame while it's open.
+          var frame = watchDlg.open ? null : boxShow(w);
+          Array.prototype.slice.call(pvScreen.children).forEach(function(c) {
+            if (c !== watchBox.frame) c.remove();
+          });
+          pvScreen.dataset.watchFull = w.g.id;
+          pvScreen.dataset.key = 'watch-screen';
+          pvScreen.append(watchView(w, v));
+          // Without saved game files, the box asks for the folder: there.
+          if (frame) pvScreen.append(el('span', 'watch-badge pv-files', 'Watch full size to pick your game folder'));
+          if (pvScreen.parentNode !== body) body.prepend(pvScreen);
+          if (frame) boxPlace(pvScreen);
+          else boxClasses();
           if (v) {
             body.dataset.live = w.g.uid;
             liveGames[w.g.uid] = w.g;
@@ -10191,8 +10241,7 @@
           acts.append(watchJoinButton(w), full);
           body.append(acts);
         }
-        if (old) old.replaceWith(pane);
-        else roster.after(pane);
+        if (!old) roster.after(pane);
         roster.hidden = true;
       }
 
@@ -10338,6 +10387,10 @@
           if (!watchCanFull || (!watchFullOn() && watchScreen.hidden)) return;
           ev.preventDefault();
           watchFull(!watchFullOn());
+        } else if (ev.code === 'KeyH') {
+          if (!watchBox.frame || watchBox.frame.parentNode !== watchScreen) return;
+          ev.preventDefault();
+          watchKeysToggle();
         } else if (watchFullOn() && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
           ev.preventDefault();
           watchStep(ev.key === 'ArrowLeft' ? -1 : 1);
@@ -10629,7 +10682,10 @@
           watchLive.last = watchedGame();
           sayWatching();
         }
-        if (!watchDlg.open) watchDlg.showModal();
+        if (!watchDlg.open) {
+          watchKeysOn = !watchKeysSeen();
+          watchDlg.showModal();
+        }
         watchAddress();
         renderWatch();
         if (room.open) renderRoom();
@@ -10648,10 +10704,10 @@
       // watched, with it beside the tables (or the window it came from).
       watchDlg.addEventListener('close', function() {
         watchFull(false);
-        boxStop();
         watchLive.note = '';
         // Not for Join, or a game starting: the close event comes after.
         if (watchLive.joining) {
+          boxStop();
           watchLive.joining = false;
           if (!watchWindow && location.hash.indexOf('#watch-') === 0)
             history.replaceState(history.state, '', location.pathname + location.search);
@@ -10660,6 +10716,7 @@
         // A window of its own closes with it; if the browser keeps it (it
         // wasn't opened by Pop out), it's the lobby page from then on.
         if (watchWindow) {
+          boxStop();
           watchGame(0);
           try { window.close(); } catch (e) {}
           leaveWatchWindow();
@@ -10669,6 +10726,9 @@
         var key = w ? w.key : room.open ? lobbyLive.room : null;
         if (key) openRoom(key);
         else watchGame(0);
+        // The room window's preview took the box's frame back
+        // (renderWatchPane) if it shows the same match.
+        if (watchBox.frame && watchBox.frame.parentNode !== pvScreen) boxStop();
         if (location.hash.indexOf('#watch-') === 0) history.replaceState(history.state, '', location.pathname + location.search);
       });
       watchDlg.querySelector('.close').addEventListener('click', function() { watchDlg.close(); });
@@ -10833,8 +10893,9 @@
       // page is told how much (jkWatchBoxZoom).
       function boxFit() {
         var f = watchBox.frame;
-        if (!f || f.parentNode !== watchScreen) return;
-        var cw = watchScreen.clientWidth, ch = watchScreen.clientHeight;
+        var host = f && f.parentNode;
+        if (!host || (host !== watchScreen && host !== pvScreen)) return;
+        var cw = host.clientWidth, ch = host.clientHeight;
         var w = watchBox.w, h = watchBox.h;
         if (!cw || !ch || !w || !h) return;
         var s = Math.min(cw / w, ch / h);
@@ -10842,7 +10903,46 @@
         f.style.transform = 'translate(' + px((cw - w * s) / 2) + ', ' + px((ch - h * s) / 2) + ') scale(' + s + ')';
         watchBox.zoom = 1 / s;
       }
-      if (typeof ResizeObserver === 'function') new ResizeObserver(boxFit).observe(watchScreen);
+      // The room window's preview of the match watched (renderWatchPane): the
+      // box's frame shows there first, and goes on to the viewing page.
+      var pvScreen = el('div', 'watch-screen pv-screen');
+      pvScreen.title = 'Watch full size';
+      var boxResize = typeof ResizeObserver === 'function' ? new ResizeObserver(boxFit) : null;
+      if (boxResize) {
+        boxResize.observe(watchScreen);
+        boxResize.observe(pvScreen);
+      }
+      // The classes for what the box's page said, where it is now.
+      function boxClasses() {
+        var host = watchBox.frame && watchBox.frame.parentNode;
+        [watchScreen, pvScreen].forEach(function(e) {
+          e.classList.toggle('box-live', e === host && watchBox.live);
+          e.classList.toggle('box-panel', e === host && watchBox.panel);
+        });
+      }
+      // Puts the box's frame in host (the viewing page's box, or the
+      // preview). Where the browser can move a frame as it is
+      // (Element.moveBefore: Chrome, Edge), its game goes on watching;
+      // elsewhere the frame loads again there, and its game starts again.
+      function boxPlace(host) {
+        var f = watchBox.frame;
+        if (!f || f.parentNode === host) return;
+        var moved = false;
+        if (f.isConnected && host.isConnected && typeof host.moveBefore === 'function') {
+          try {
+            host.moveBefore(f, host.firstChild);
+            moved = true;
+          } catch (e) {}
+        }
+        if (!moved) {
+          host.prepend(f);
+          watchBox.live = false;
+          watchBox.panel = false;
+          watchBox.keys = null;
+        }
+        boxClasses();
+        boxFit();
+      }
       window.jkWatchBoxZoom = function(win) {
         var f = watchBox.frame;
         return f && f.contentWindow === win ? watchBox.zoom || 1 : 1;
@@ -10858,7 +10958,9 @@
         watchBox.keys = null;
         watchBox.follow = '';
         watchBox.followEls = {};
-        watchScreen.classList.remove('box-panel', 'box-live');
+        watchBox.live = false;
+        watchBox.panel = false;
+        boxClasses();
         f.remove();
         return null;
       }
@@ -10868,10 +10970,8 @@
         Array.prototype.slice.call(watchScreen.children).forEach(function(c) {
           if (c !== frame) c.remove();
         });
-        if (frame && frame.parentNode !== watchScreen) {
-          watchScreen.prepend(frame);
-          boxFit();
-        }
+        if (frame) boxPlace(watchScreen);
+        if (frame && watchBox.live) watchKeysShown();
         watchScreen.append.apply(watchScreen, rest);
       }
       // Why the box's game stopped, and Watch again.
@@ -10891,17 +10991,29 @@
       }
       // The keys for watching (Controls): over the box's game once it
       // plays the match, as the player bound them in the game (its page's
-      // jkWatchKeys), until hidden. Remembered in this browser.
-      var watchKeysOn = true;
-      try {
-        watchKeysOn = localStorage.getItem('jkdf2mp-watch-keys') !== 'off';
-      } catch (e) {}
+      // jkWatchKeys). They show by themselves the first time this browser
+      // watches a match in the box, not after (Antonio, 2026-11-20); H, the
+      // Hide button or the toolbar's Controls shows or hides them, until the
+      // viewing page closes.
+      var WATCH_KEYS_SEEN = 'jkdf2mp-watch-keys-seen';
+      function watchKeysSeen() {
+        try {
+          return localStorage.getItem(WATCH_KEYS_SEEN) === '1';
+        } catch (e) {
+          return false;
+        }
+      }
+      var watchKeysOn = !watchKeysSeen();
       function watchKeysToggle() {
         watchKeysOn = !watchKeysOn;
-        try {
-          localStorage.setItem('jkdf2mp-watch-keys', watchKeysOn ? 'on' : 'off');
-        } catch (e) {}
         renderWatch();
+      }
+      // Once they've shown over a match being played.
+      function watchKeysShown() {
+        if (!watchKeysOn) return;
+        try {
+          localStorage.setItem(WATCH_KEYS_SEEN, '1');
+        } catch (e) {}
       }
       function boxKeys(f) {
         try {
@@ -10948,11 +11060,12 @@
         if (!watchKeysOn || !watchBox.frame) return null;
         var k = watchBox.keys;
         // The keys bound to one command (both ways, or one), each once.
+        // H shows or hides these instead (startWatchEmbed).
         function names(list, rev, out) {
           out = out || [];
           (list || []).forEach(function(e) {
             var n = keyLabel(e[0]);
-            if (n && (rev === undefined || !!e[1] === rev) && out.indexOf(n) < 0) out.push(n);
+            if (n && n !== 'H' && (rev === undefined || !!e[1] === rev) && out.indexOf(n) < 0) out.push(n);
           });
           return out;
         }
@@ -10992,7 +11105,7 @@
         }
         var panel = el('div', 'watch-keys');
         var head = el('div', 'keys-head');
-        var hide = el('button', 'keys-hide', 'Hide');
+        var hide = el('button', 'keys-hide', 'Hide (H)');
         hide.type = 'button';
         hide.dataset.wact = 'keys';
         head.append(el('span', null, 'Controls'), hide);
@@ -11006,6 +11119,7 @@
          ['Faster', keys('fast', 'Run')],
          ['Map', keys('map', 'Map')],
          ['Message the players', keys('talk', 'Talk')],
+         ['Show / hide controls', 'H'],
          ['Give back the mouse', 'Esc']].forEach(function(row) {
           var tr = el('tr');
           tr.append(el('th', null, row[0]), el('td', null, row[1]));
@@ -11029,9 +11143,16 @@
         var f = watchBox.frame;
         if (!f || f.contentWindow !== win) return;
         if (state === 'live') {
-          watchScreen.classList.add('box-live');
+          watchBox.live = true;
+          boxClasses();
           watchBox.keys = boxKeys(f);
-          if (watchDlg.open) renderWatch();
+          if (watchDlg.open) {
+            if (f.parentNode === watchScreen) watchKeysShown();
+            renderWatch();
+          }
+        } else if (state === 'keys') {
+          // H in the box (its page's own keydown).
+          if (watchDlg.open && f.parentNode === watchScreen) watchKeysToggle();
         } else if (state === 'follow') {
           // Who its game follows now: in place, the page as it is.
           watchBox.follow = String(text || '').substring(0, 48);
@@ -11048,7 +11169,8 @@
             watchScreen.focus({ preventScroll: true });
           } catch (e) {}
         } else if (state === 'panel' || state === 'busy') {
-          watchScreen.classList.toggle('box-panel', state === 'panel');
+          watchBox.panel = state === 'panel';
+          boxClasses();
         } else if (state === 'left') {
           text = String(text || '').substring(0, 200);
           // A match that's over: what it said stays on the page, which says

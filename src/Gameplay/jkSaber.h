@@ -26,6 +26,7 @@ void jkSaber_Shutdown();
 void jkSaber_InitializeSaberInfo(SithThing *thing, char *material_side_fname, char *material_tip_fname, flex_t base_rad, flex_t tip_rad, flex_t len, SithThing *wall_sparks, SithThing *blood_sparks, SithThing *saber_sparks);
 MATH_FUNC void jkSaber_PolylineRand(rdThing *thing);
 MATH_FUNC void jkSaber_Draw(rdMatrix34 *posRotMat);
+MATH_FUNC void jkSaber_DrawFor(jkPlayerInfo *pInfo, rdMatrix34 *posRotMat); // Added
 MATH_FUNC void jkSaber_UpdateLength(SithThing *thing);
 MATH_FUNC void jkSaber_UpdateCollision(SithThing *player, int joint, int bSecondary);
 MATH_FUNC void jkSaber_SpawnSparks(jkPlayerInfo *pPlayerInfo, rdVector3 *pPos, SithSector *psector, int sparkType);

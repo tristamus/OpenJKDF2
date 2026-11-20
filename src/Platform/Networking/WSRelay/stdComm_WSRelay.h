@@ -77,6 +77,29 @@ void stdComm_WSRelay_ViewerInLevel();
 void stdComm_WSRelay_ViewerSay(const char* pStr);
 int stdComm_WSRelay_ViewerOwnEcho(const char* pLine);
 
+// What a player holds in first person, for a viewer following them (see
+// "What a player holds" in stdComm_WSRelay.c). Each player's own game tells
+// the room's feed, and nobody else: its first-person model (each frame,
+// sithMulti_Update, it sends it when it changes and every 2 s) and the
+// animations its weapon plays on it (jkCog's jkPlayPOVKey, jkStopPOVKey).
+void stdComm_WSRelay_FeedPovFrame();
+void stdComm_WSRelay_FeedPovKey(int track, rdKeyframe* pKeyframe, int lowPri, int flags);
+void stdComm_WSRelay_FeedPovStop(int track, flex_t fadeSecs);
+// A viewer: one of those messages (sithMessage_ProcessMessages).
+void stdComm_WSRelay_ProcessPov(SithMessage* pMsg);
+// A viewer: how player idx's weapon sways, as their game said; 0 when it
+// hasn't.
+int stdComm_WSRelay_PovWaggle(int idx, rdVector3* pVec, flex_t* pMag);
+// A viewer: player idx's status bars and crosshair (jkHud_DrawGPU), as their
+// game said; 0 when it hasn't.
+struct jkHudValues;
+int stdComm_WSRelay_PovHud(int idx, struct jkHudValues* pOut);
+// A viewer, each frame it spectates (sithControl, for stdPalEffects_FlushAllAdds
+// before): the screen's flashes and tints are those of the player it follows
+// in first person (followIdx, -1 for none), as their game said, faded here
+// as theirs fade; none otherwise.
+void stdComm_WSRelay_ViewerPovFrame(int followIdx);
+
 // Called each frame of the join screen: 1 once the games stdComm_EnumSessions
 // asked for are in jkGuiMultiplayer_aEntries, for the screen to put up as it
 // does after stdComm_EnumSessions returns 0.
@@ -194,6 +217,10 @@ void stdComm_WSRelay_NoteTargeted(int otherId, int outcome, int reason, float di
 
 // The engine message the rules' messages go in, past DSS_MAX: 'J' 'C'.
 #define STDCOMM_WSRELAY_HITS_MSG (0x434A)
+
+// What a player holds in first person (stdComm_WSRelay_FeedPovFrame), past
+// DSS_MAX: 'J' 'P'. Only ever in the room's feed.
+#define STDCOMM_WSRELAY_POV_MSG (0x504A)
 
 // Why a claim was turned down, past stdComm_WSRelayHitCheck.h's reasons:
 // this game doesn't play by claims with the sender.

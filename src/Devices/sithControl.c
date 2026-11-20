@@ -32,6 +32,7 @@
 #endif
 #ifdef PLATFORM_WSRELAY
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
+#include "Main/jkQuakeConsole.h" // Added: sithControl_WebTyping
 #endif
 
 // Added
@@ -1363,9 +1364,16 @@ debug_controls:
         }
         if (sithCamera_g_pCurCamera != &sithCamera_g_aCameras[0] && sithCamera_g_pCurCamera != &sithCamera_g_aCameras[1])
             sithCamera_SetCurrentToCycleCamera();
+#ifdef PLATFORM_WSRELAY
+        // A spectator's own flashes (its body takes no hits, picks nothing
+        // up) would never fade: none. A viewer following a player in first
+        // person shows theirs, as their game tells the room's feed.
+        stdComm_WSRelay_ViewerPovFrame(pFollowed ? sithControl_followingPlayer : -1);
+#else
         // A spectator's own flashes (its body takes no hits, picks nothing
         // up) would never fade: none.
         stdPalEffects_FlushAllAdds();
+#endif
 #ifdef ARCH_WASM
         sithControl_ViewSays();
 #endif
@@ -1697,6 +1705,14 @@ static int sithControl_SpectatorHost()
     return host >= 0 ? first : -1;
 }
 #endif
+
+// Added: the player a spectator's camera follows, -1 for the free camera.
+int sithControl_SpectatorFollowing()
+{
+    if (!sithMulti_IsSpectating())
+        return -1;
+    return sithControl_followingPlayer;
+}
 
 // Added: a spectator's camera (sithMulti_IsSpectating) on to the next player
 // in the match (dir 1) or the one before (-1). Past the last, the free
@@ -3147,5 +3163,13 @@ EMSCRIPTEN_KEEPALIVE const char* sithControl_WebFunctionName(int funcIdx)
     if (funcIdx < 0 || funcIdx >= INPUT_FUNC_MAX)
         return "";
     return sithControl_aFunctionStrs[funcIdx];
+}
+
+// Added: for the viewing page's box (index.html): whether the player is
+// typing (a message to the players, or the console), when every key is
+// theirs. Otherwise H shows or hides the box's Controls.
+EMSCRIPTEN_KEEPALIVE int sithControl_WebTyping()
+{
+    return (jkHud_bChatOpen || jkQuakeConsole_bOpen) ? 1 : 0;
 }
 #endif // ARCH_WASM

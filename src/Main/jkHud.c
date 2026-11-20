@@ -29,6 +29,9 @@
 #include "types.h"
 #include "types_enums.h"
 #include "Engine/sithInterp.h"
+#include "Engine/sithCamera.h"
+#include "Devices/sithControl.h" // Added: sithControl_SpectatorFollowing
+#include "Platform/Networking/WSRelay/stdComm_WSRelay.h" // Added: stdComm_WSRelay_PovHud
 
 // Added: the force power target circle goes on the target where it's drawn
 // (render interpolation), not where its last physics step left it.
@@ -937,6 +940,52 @@ LABEL_116:
     jkHud_DrawGPU();
 }
 
+// Added: what the status bars show for this game's player (thing v4, the
+// world's local player), as jkHud_DrawGPU read it; also what its game tells
+// the room's feed for spectators following its player (stdComm_WSRelay.c).
+void jkHud_LocalValues(SithThing* v4, jkHudValues* pOut)
+{
+    memset(pOut, 0, sizeof(*pOut));
+    pOut->battery = (int32_t)sithInventory_GetInventory(v4, SITHBIN_BATTERY);
+    if (sithInventory_IsInventoryActivated(v4, SITHBIN_FIELDLIGHT))
+        pOut->flags |= JKHUD_VALUES_FIELDLIGHT;
+    pOut->force = (int32_t)sithInventory_GetInventory(v4, SITHBIN_FORCEMANA);
+    if (playerThings[playerThingIdx].bHasForceSurge)
+        pOut->flags |= JKHUD_VALUES_FORCESURGE;
+    pOut->shields = (int32_t)sithInventory_GetInventory(v4, SITHBIN_SHIELDS);
+    if (playerThings[playerThingIdx].bHasSuperShields)
+        pOut->flags |= JKHUD_VALUES_SUPERSHIELDS;
+    pOut->health = (int32_t)v4->actorParams.health;
+    pOut->maxHealth = (int32_t)v4->actorParams.maxHealth;
+    pOut->ammo = jkHud_GetWeaponAmmo(v4);
+    if (playerThings[playerThingIdx].bHasSuperWeapon)
+        pOut->flags |= JKHUD_VALUES_SUPERWEAPON;
+    if (v4->flags & SITH_TF_DEAD)
+        pOut->flags |= JKHUD_VALUES_DEAD;
+    if ( jkPlayer_setCrosshair
+        && !(sithPlayer_g_pLocalPlayerThing->flags & SITH_TF_DEAD)
+        && MOTS_ONLY_COND(!(sithPlayer_g_pLocalPlayerThing->actorParams.flags & SITH_AF_SCOPEHUD))
+#ifdef QOL_IMPROVEMENTS
+        && jkHud_shouldCrosshairBeShownForWeapon(sithPlayer_g_pLocalPlayerThing)
+#endif
+       )
+        pOut->flags |= JKHUD_VALUES_CROSSHAIR;
+}
+
+// Added: a spectator following a player in first person, with that player's
+// values from the room's feed: 1.
+static int jkHud_SpectatorValues(jkHudValues* pOut)
+{
+#ifdef PLATFORM_WSRELAY
+    int idx = sithControl_SpectatorFollowing();
+    if (idx < 0 || sithCamera_g_pCurCamera != &sithCamera_g_aCameras[0])
+        return 0;
+    return stdComm_WSRelay_PovHud(idx, pOut);
+#else
+    return 0;
+#endif
+}
+
 // MOTS altered
 void jkHud_DrawGPU()
 {
@@ -1013,9 +1062,14 @@ void jkHud_DrawGPU()
         return;
 
     // Added: a spectator has no HUD of its own, but its map (Tab) shows,
-    // around the player it follows or the free camera.
+    // around the player it follows or the free camera. A game watching the
+    // match that follows a player in first person shows that player's status
+    // bars and crosshair, as their game tells the room's feed.
     int bSpectating = sithMulti_IsSpectating();
-    if (!(Video_modeStruct.viewSizeIdx < 0xAu) || (bSpectating && !sithOverlayMap_bMapVisible))
+    jkHudValues hud;
+    memset(&hud, 0, sizeof(hud));
+    int bSpectatorHud = bSpectating && jkHud_SpectatorValues(&hud);
+    if (!(Video_modeStruct.viewSizeIdx < 0xAu) || (bSpectating && !bSpectatorHud && !sithOverlayMap_bMapVisible))
     {
         return;
     }
@@ -1053,7 +1107,7 @@ void jkHud_DrawGPU()
     stdDisplay_VBufferLock(Video_pCanvas->pVBuffer);
 #endif
 
-    if (bSpectating)
+    if (bSpectating && !bSpectatorHud)
     {
 #ifdef SDL2_RENDER
         stdDisplay_VBufferUnlock(Video_pCanvasOverlayMap->pVBuffer);
@@ -1068,9 +1122,17 @@ void jkHud_DrawGPU()
     std3D_DrawUIBitmap(jkHud_pStatusLeftBm, 0, jkHud_leftBlitX, jkHud_leftBlitY, NULL, jkPlayer_hudScale, 1);
     std3D_DrawUIBitmap(jkHud_pStatusRightBm, 0, jkHud_rightBlitX, jkHud_rightBlitY, NULL, jkPlayer_hudScale, 1);
 
-    if ( v4->type == SITH_THING_PLAYER && !sithMulti_IsSpectating() )
+    // Added: the values come from jkHud_LocalValues (as read here before),
+    // or the player a spectator follows (above).
+    int bValues = bSpectatorHud;
+    if ( v4->type == SITH_THING_PLAYER && !bSpectating )
     {
-        v5 = (int32_t)sithInventory_GetInventory(v4, SITHBIN_BATTERY);
+        jkHud_LocalValues(v4, &hud);
+        bValues = 1;
+    }
+    if ( bValues )
+    {
+        v5 = hud.battery;
         if ( v5 < 0 )
         {
             v5 = 0;
@@ -1092,7 +1154,7 @@ void jkHud_DrawGPU()
             //std3D_DrawUIBitmap(jkHud_pStatusRightBm,0, 0,0,64,64,0,0,4.0);
             std3D_DrawUIBitmap(jkHud_pStBatBm, v5 * (jkHud_pStBatBm->numMips - 1) / 200, jkHud_rightBlitX + HUD_SCALED(jkHud_pStBatBm->xPos), jkHud_rightBlitY + HUD_SCALED(jkHud_pStBatBm->yPos), NULL, jkPlayer_hudScale, 1);
         }
-        v6 = sithInventory_IsInventoryActivated(v4, SITHBIN_FIELDLIGHT);
+        v6 = (hud.flags & JKHUD_VALUES_FIELDLIGHT) ? 1 : 0;
         //if ( jkHud_blittedFieldlightAmt != v6 )
         {
             jkHud_blittedFieldlightAmt = v6;
@@ -1105,7 +1167,7 @@ void jkHud_DrawGPU()
                 1);*/
             std3D_DrawUIBitmap(jkHud_pFieldlightBm, v6, jkHud_rightBlitX + (int)((flex_t)jkHud_pFieldlightBm->xPos * jkPlayer_hudScale), jkHud_rightBlitY + (int)((flex_t)jkHud_pFieldlightBm->yPos * jkPlayer_hudScale), NULL, jkPlayer_hudScale, 1);
         }
-        v7 = (int32_t)sithInventory_GetInventory(v4, SITHBIN_FORCEMANA);
+        v7 = hud.force;
         if ( v7 < 0 )
         {
             v7 = 0;
@@ -1117,7 +1179,7 @@ void jkHud_DrawGPU()
         v8 = (jkHud_pStFrcBm->numMips - 1) * (400 - v7);
         //if ( jkHud_blittedForceIdx != v8 / 400 || jkHud_idk15 != playerThings[playerThingIdx].bHasForceSurge )
         {
-            jkHud_idk15 = playerThings[playerThingIdx].bHasForceSurge;
+            jkHud_idk15 = (hud.flags & JKHUD_VALUES_FORCESURGE) ? 1 : 0;
             if ( jkHud_idk15 )
             {
                 /*stdDisplay_VBufferCopy(
@@ -1143,7 +1205,7 @@ void jkHud_DrawGPU()
                 jkHud_blittedForceIdx = v8 / 400;
             }
         }
-        v9 = (int32_t)sithInventory_GetInventory(v4, SITHBIN_SHIELDS);
+        v9 = hud.shields;
         v10 = v9;
         if ( (int)v9 < 0 )
         {
@@ -1158,7 +1220,7 @@ void jkHud_DrawGPU()
         {
             jkHud_blittedShieldIdx = v10;
             v12 = jkHud_pArmorNumsSuperSft;
-            if ( !playerThings[playerThingIdx].bHasSuperShields )
+            if ( !(hud.flags & JKHUD_VALUES_SUPERSHIELDS) )
                 v12 = jkHud_pArmorNumSft;
             stdString_snprintf(tmp, 32, "%03d", v10); // v10
             stdFont_DrawAsciiGPU(v12, jkHud_leftBlitX + HUD_SCALED(23u), jkHud_leftBlitY + HUD_SCALED(43), 999, tmp, 0, jkPlayer_hudScale);
@@ -1172,8 +1234,8 @@ void jkHud_DrawGPU()
             std3D_DrawUIBitmap(jkHud_pStShieldBm, (jkHud_pStShieldBm->numMips - 1) * (SITHBIN_NUMBINS - v10) / SITHBIN_NUMBINS, jkHud_leftBlitX + HUD_SCALED(jkHud_pStShieldBm->xPos), jkHud_leftBlitY + HUD_SCALED(jkHud_pStShieldBm->yPos), NULL, jkPlayer_hudScale, 1);
             v11 = playerThingIdx;
         }
-        v13 = (int32_t)v4->actorParams.health;
-        v14 = (int32_t)v4->actorParams.maxHealth;
+        v13 = hud.health;
+        v14 = hud.maxHealth > 0 ? hud.maxHealth : 100;
         v15 = v14;
         if ( v13 < 0 )
         {
@@ -1188,7 +1250,7 @@ void jkHud_DrawGPU()
             jkHud_blittedHealthIdx = v13;
             v16 = v11;
             healthFont = jkHud_pArmorNumsSuperSft;
-            jkHud_isSuper = playerThings[v16].bHasSuperShields;
+            jkHud_isSuper = (hud.flags & JKHUD_VALUES_SUPERSHIELDS) ? 1 : 0;
             if ( !jkHud_isSuper )
                 healthFont = jkHud_pHelthNumSft;
             stdString_snprintf(tmp, 32, "%03d", v13);
@@ -1202,12 +1264,12 @@ void jkHud_DrawGPU()
                 1);*/
             std3D_DrawUIBitmap(jkHud_pStHealthBm, (jkHud_pStHealthBm->numMips - 1) * (v15 - v13) / v15, jkHud_leftBlitX + HUD_SCALED(jkHud_pStHealthBm->xPos), jkHud_leftBlitY + HUD_SCALED(jkHud_pStHealthBm->yPos), NULL, jkPlayer_hudScale, 1);
         }
-        v18 = jkHud_GetWeaponAmmo(v4);
+        v18 = hud.ammo;
         //if ( jkHud_blittedAmmoAmt != v18 || jkHud_idk14 != playerThings[playerThingIdx].bHasSuperWeapon )
         {
             ammoFont = jkHud_pAmoNumsSuperSft;
             jkHud_blittedAmmoAmt = v18;
-            jkHud_idk14 = playerThings[playerThingIdx].bHasSuperWeapon;
+            jkHud_idk14 = (hud.flags & JKHUD_VALUES_SUPERWEAPON) ? 1 : 0;
             if ( !jkHud_idk14 )
                 ammoFont = jkHud_pAmoNumsSft;
             if ( v18 == -999 )
@@ -1224,7 +1286,8 @@ void jkHud_DrawGPU()
     }
 
     // MoTS altered: Scope hud
-    if (
+    // Added: a spectator's is the player it follows', as they set it.
+    if ( bSpectatorHud ? ((hud.flags & JKHUD_VALUES_CROSSHAIR) && sithCamera_g_pCurCamera->type == 1) : (
         jkPlayer_setCrosshair
         && sithCamera_g_pCurCamera->type == 1 
         && !(sithPlayer_g_pLocalPlayerThing->flags & SITH_TF_DEAD) 
@@ -1232,7 +1295,7 @@ void jkHud_DrawGPU()
 #ifdef QOL_IMPROVEMENTS
         && jkHud_shouldCrosshairBeShownForWeapon(sithPlayer_g_pLocalPlayerThing)
 #endif /* ifdef QOL_IMPROVEMENTS */
-  )
+  ))
     {
         uint32_t tmpInt;
 #ifdef QOL_IMPROVEMENTS
@@ -1274,6 +1337,16 @@ void jkHud_DrawGPU()
 
         //rdRect rect1a = {(flex_d_t)Video_format.width/2, (flex_d_t)Video_format.height/2, 20, 20};
         //std3D_DrawUIClearedRect(tmpInt, &rect1a);
+    }
+
+    // Added: nothing else for a spectator (as before it showed the bars).
+    if (bSpectating)
+    {
+#ifdef SDL2_RENDER
+        stdDisplay_VBufferUnlock(Video_pCanvasOverlayMap->pVBuffer);
+        stdDisplay_VBufferUnlock(Video_pCanvas->pVBuffer);
+#endif
+        return;
     }
 
     rdScreenPoint tmpScreenPt;

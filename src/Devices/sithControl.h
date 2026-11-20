@@ -54,6 +54,7 @@ MATH_FUNC void sithControl_PlayerMovement(SithThing *player);
 MATH_FUNC void sithControl_PlayerMovementMots(SithThing *player);
 MATH_FUNC void sithControl_FreeCam(SithThing *player);
 void sithControl_SpectatorNext(int dir); // Added: a spectator's camera on to the next player
+int sithControl_SpectatorFollowing(); // Added: the player a spectator follows, -1 for none
 void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs); // Added: a spectator's free camera moves
 
 stdControlKeyInfoEntry* sithControl_BindControl(int functionId, int controlId, int flags);

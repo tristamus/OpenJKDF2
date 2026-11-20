@@ -273,21 +273,28 @@ void jkSaber_PolylineRand(rdThing *thing)
 
 void jkSaber_Draw(rdMatrix34 *posRotMat)
 {
-    if ( playerThings[playerThingIdx].actorThing->jkFlags & JKFLAG_SABERON
-      && playerThings[playerThingIdx].povModel.model3
-      && playerThings[playerThingIdx].polylineThing.model3 )
+    jkSaber_DrawFor(&playerThings[playerThingIdx], posRotMat);
+}
+
+// Added: jkSaber_Draw for any player's first-person model (a spectator shows
+// the player it follows, jkPlayer_DrawPov).
+void jkSaber_DrawFor(jkPlayerInfo *pInfo, rdMatrix34 *posRotMat)
+{
+    if ( pInfo->actorThing->jkFlags & JKFLAG_SABERON
+      && pInfo->povModel.model3
+      && pInfo->polylineThing.model3 )
     {
-        if ( playerThings[playerThingIdx].povModel.rdFrameNum != rdroid_frameTrue )
+        if ( pInfo->povModel.rdFrameNum != rdroid_frameTrue )
         {
-            rdPuppet_BuildJointMatrices(&playerThings[playerThingIdx].povModel, posRotMat);
+            rdPuppet_BuildJointMatrices(&pInfo->povModel, posRotMat);
         }
 
-        jkSaber_PolylineRand(&playerThings[playerThingIdx].polylineThing);
-        rdThing_Draw(&playerThings[playerThingIdx].polylineThing, &playerThings[playerThingIdx].povModel.paJointMatrices[5]); // aaaaa hardcoded K_Rhand
+        jkSaber_PolylineRand(&pInfo->polylineThing);
+        rdThing_Draw(&pInfo->polylineThing, &pInfo->povModel.paJointMatrices[5]); // aaaaa hardcoded K_Rhand
         
         // Added: Dual sabers
-        if (playerThings[playerThingIdx].actorThing->jkFlags & JKFLAG_DUALSABERS)
-            rdThing_Draw(&playerThings[playerThingIdx].polylineThing, &playerThings[playerThingIdx].povModel.paJointMatrices[2]); // K_Lhand
+        if (pInfo->actorThing->jkFlags & JKFLAG_DUALSABERS)
+            rdThing_Draw(&pInfo->polylineThing, &pInfo->povModel.paJointMatrices[2]); // K_Lhand
     }
 }
 

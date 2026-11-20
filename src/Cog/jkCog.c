@@ -302,6 +302,11 @@ void jkCog_PlayPovKey(sithCog *ctx)
       && (v6 = actorThing->playerInfo->povModel.puppet) != 0 )
     {
         v7 = sithPuppet_PlayKey(v6, keyframe, v2, v2 + 2, v1, 0);
+#ifdef PLATFORM_WSRELAY
+        // Added: for those watching the match who follow this player.
+        if (actorThing == sithPlayer_g_pLocalPlayerThing)
+            stdComm_WSRelay_FeedPovKey(v7, keyframe, v2, v1);
+#endif
         sithCogExec_PushInt(ctx, v7);
     }
     else
@@ -327,7 +332,14 @@ void jkCog_StopPovKey(sithCog *ctx)
         {
             v5 = actorThing->playerInfo->povModel.puppet;
             if ( v5 && v2 >= 0 && v2 < 4 )
+            {
                 sithPuppet_StopKey(v5, v2, a1a);
+#ifdef PLATFORM_WSRELAY
+                // Added: for those watching the match who follow this player.
+                if (actorThing == sithPlayer_g_pLocalPlayerThing)
+                    stdComm_WSRelay_FeedPovStop(v2, a1a);
+#endif
+            }
         }
     }
 }
