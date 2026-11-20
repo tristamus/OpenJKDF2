@@ -1533,6 +1533,12 @@ static void sithControl_SpectatorMoveTo(SithThing *player, const rdVector3 *dir,
 // turns and moves it itself, keeping its sector.
 #define SITHCONTROL_SPECTATOR_SPEED (2.0)
 #define SITHCONTROL_SPECTATOR_PITCH_MAX (85.0)
+// Down, in the camera behind (sithCamera_g_aCameras[1]): it sits 0.2 behind
+// and 0.06 above the eyes and looks at a point 0.3 ahead (sithCamera_trans),
+// so it looks straight down at about 83 degrees, and past that rdMatrix_LookAt
+// turns it over (kit 171: looking down far enough flipped the view). A little
+// short of that.
+#define SITHCONTROL_SPECTATOR_PITCH_DOWN_BEHIND (80.0)
 void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
 {
     if (!player || !player->sector || deltaSecs <= 0.0)
@@ -1547,10 +1553,14 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
 #endif
                  + sithControl_GetKeyAsAxis(INPUT_FUNC_PITCH) * 90.0 * deltaSecs;
     rdVector3* pHead = &player->actorParams.headPYR;
+    // Every frame, so going to the camera behind looking far down comes up
+    // to its limit at once.
+    flex_t pitchDown = sithCamera_g_pCurCamera == &sithCamera_g_aCameras[1] ? SITHCONTROL_SPECTATOR_PITCH_DOWN_BEHIND
+                                                                           : SITHCONTROL_SPECTATOR_PITCH_MAX;
     if (sithControl_GetKey(INPUT_FUNC_CENTER, 0))
         pHead->x = 0.0;
-    else if (pitch != 0.0)
-        pHead->x = stdMath_Clamp(pHead->x + pitch, -SITHCONTROL_SPECTATOR_PITCH_MAX, SITHCONTROL_SPECTATOR_PITCH_MAX);
+    else
+        pHead->x = stdMath_Clamp(pHead->x + pitch, -pitchDown, SITHCONTROL_SPECTATOR_PITCH_MAX);
     pHead->y = 0.0;
     pHead->z = 0.0;
 

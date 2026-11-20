@@ -4406,13 +4406,25 @@ void stdComm_WSRelay_FeedFrame()
 //          palEffectsIdx1) and the tint (palEffectsIdx2): tint vec3 f32, add
 //          u8 x3, 0 u8, fade f32, filter u8 x3, 0 u8 each: at once for a new
 //          flash, else at most every 100 ms when they change, and every 2 s
+//   TRACKS 5, player u8, count u8, 0 u8, model s32, then for each animation
+//          playing on the model (not one fading out): its track u8, 0 u8,
+//          low and high priority s16, 0 s16, keyframe s32, status s32, frame,
+//          upper frame and speed f32: every second
 // A viewer plays an animation only on the model it was played on there, and
-// fades the flashes as sithPlayer_Tick does.
+// fades the flashes as sithPlayer_Tick does. TRACKS puts back an animation a
+// viewer missed the start of: one held at its end, as a weapon's raise is,
+// gives the weapon where it's held. In kit 171 a viewer that came after a
+// player picked their Bryar saw it only while they fired (its fire animation),
+// gone again after (the model as it is without one), and other weapons
+// picked while it watched.
 
 #define WSRELAY_POV_EVERY_MS (2000)
 #define WSRELAY_POV_MIN_MS (100)
 #define WSRELAY_POV_STATE_LEN (36)
 #define WSRELAY_POV_PAL_LEN (52)
+#define WSRELAY_POV_TRACKS_MS (1000)
+#define WSRELAY_POV_TRACK_LEN (28)
+#define WSRELAY_POV_TRACKS_LEN (8 + 4 * WSRELAY_POV_TRACK_LEN)
 
 static uint8_t wsrelay_aPovSent[WSRELAY_POV_STATE_LEN];
 static int wsrelay_bPovSent = 0;
@@ -4421,6 +4433,8 @@ static uint8_t wsrelay_aPalSent[WSRELAY_POV_PAL_LEN];
 static int wsrelay_bPalSent = 0;
 static uint32_t wsrelay_palSentMs = 0;
 static stdPalEffect wsrelay_palLast; // the flashes as they were last frame
+static int wsrelay_bTracksSent = 0;
+static uint32_t wsrelay_tracksSentMs = 0;
 
 // Whether this game's feed is open (net.feed), so what's sent reaches it.
 EM_JS(int, wsrelay_js_feed_on, (), {
@@ -4445,6 +4459,7 @@ static int wsrelay_PovSending()
     {
         wsrelay_bPovSent = 0;
         wsrelay_bPalSent = 0;
+        wsrelay_bTracksSent = 0;
         return 0;
     }
     return 1;
@@ -4452,10 +4467,10 @@ static int wsrelay_PovSending()
 
 static void wsrelay_PovSend(const uint8_t* pBody, int len)
 {
-    uint8_t buf[4 + 64];
+    uint8_t buf[4 + 128];
     uint16_t msgId = STDCOMM_WSRELAY_POV_MSG;
     uint16_t resendId = 0;
-    if (len <= 0 || len > 64)
+    if (len <= 0 || len > 128)
         return;
     memcpy(buf, &msgId, 2);
     memcpy(buf + 2, &resendId, 2);
@@ -4558,12 +4573,50 @@ static void wsrelay_PovPal()
     wsrelay_palSentMs = now;
 }
 
+// TRACKS when it's due.
+static void wsrelay_PovTracks()
+{
+    jkPlayerInfo* pInfo = &playerThings[playerThingIdx];
+    rdModel3* pModel = pInfo->povModel.model3;
+    rdPuppet* pPuppet = pInfo->povModel.puppet;
+    uint32_t now = stdPlatform_GetTimeMsec();
+    if (!pModel || !pPuppet || (wsrelay_bTracksSent && now - wsrelay_tracksSentMs < WSRELAY_POV_TRACKS_MS))
+        return;
+    uint8_t body[WSRELAY_POV_TRACKS_LEN];
+    memset(body, 0, sizeof(body));
+    int n = 0;
+    for (int i = 0; i < RDPUPPET_MAX_TRACKS && i < 4; i++)
+    {
+        rdPuppetTrack* pTrack = &pPuppet->aTracks[i];
+        if (!pTrack->status || !pTrack->keyframe || (pTrack->status & 8))
+            continue;
+        uint8_t* p = body + 8 + n * WSRELAY_POV_TRACK_LEN;
+        int16_t pri[2] = { wsrelay_PovS16(pTrack->lowPri), wsrelay_PovS16(pTrack->highPri) };
+        int32_t vals[2] = { (int32_t)pTrack->keyframe->id, (int32_t)pTrack->status };
+        float f[3] = { (float)pTrack->field_120, (float)pTrack->upperFrame, (float)pTrack->speed };
+        p[0] = (uint8_t)i;
+        memcpy(p + 2, pri, 4);
+        memcpy(p + 8, vals, 8);
+        memcpy(p + 16, f, 12);
+        n++;
+    }
+    int32_t modelId = (int32_t)pModel->id;
+    body[0] = 5;
+    body[1] = (uint8_t)playerThingIdx;
+    body[2] = (uint8_t)n;
+    memcpy(body + 4, &modelId, 4);
+    wsrelay_PovSend(body, 8 + n * WSRELAY_POV_TRACK_LEN);
+    wsrelay_bTracksSent = 1;
+    wsrelay_tracksSentMs = now;
+}
+
 void stdComm_WSRelay_FeedPovFrame()
 {
     if (!wsrelay_PovSending())
         return;
     wsrelay_PovState();
     wsrelay_PovPal();
+    wsrelay_PovTracks();
 }
 
 void stdComm_WSRelay_FeedPovKey(int track, rdKeyframe* pKeyframe, int lowPri, int flags)
@@ -4708,6 +4761,73 @@ void stdComm_WSRelay_ProcessPov(SithMessage* pMsg)
         wsrelay_PovGetEffect(p + 28, &pOf->tint);
         pOf->palAt = sithTime_g_secGameTime;
         pOf->bPal = 1;
+    }
+    else if (type == 5 && len >= 8 && !bSync)
+    {
+        int n = p[2];
+        int32_t modelId;
+        memcpy(&modelId, p + 4, 4);
+        rdModel3* pModel = pInfo->povModel.model3;
+        rdPuppet* pPuppet = pInfo->povModel.puppet;
+        if (n > 4 || len < 8 + n * WSRELAY_POV_TRACK_LEN || !pModel || !pPuppet || (int32_t)pModel->id != modelId)
+            return;
+        rdKeyframe* aThere[4] = { NULL, NULL, NULL, NULL };
+        for (int k = 0; k < n; k++)
+        {
+            const uint8_t* q = p + 8 + k * WSRELAY_POV_TRACK_LEN;
+            int track = q[0];
+            int16_t pri[2];
+            int32_t vals[2];
+            float f[3];
+            memcpy(pri, q + 2, 4);
+            memcpy(vals, q + 8, 8);
+            memcpy(f, q + 16, 12);
+            rdKeyframe* pKeyframe = sithKeyFrame_GetByIdx(vals[0]);
+            if (!pKeyframe || track > 3)
+                continue;
+            aThere[k] = pKeyframe;
+            int ours = -1;
+            for (int j = 0; j < 4; j++)
+            {
+                if (pPuppet->aTracks[j].status && pPuppet->aTracks[j].keyframe == pKeyframe)
+                {
+                    ours = j;
+                    break;
+                }
+            }
+            if (ours < 0)
+            {
+                // Missed: as it plays there now, faded in.
+                ours = sithPuppet_PlayKey(pPuppet, pKeyframe, pri[0], pri[1], 0x10, 0);
+                if (ours < 0 || ours > 3)
+                    continue;
+                rdPuppetTrack* pTrack = &pPuppet->aTracks[ours];
+                flex_t frames = (flex_t)pKeyframe->numFrames;
+                flex_t at = (f[0] == f[0]) ? stdMath_Clamp(f[0], 0.0, frames) : 0.0;
+                flex_t upperAt = (f[1] == f[1] && f[1] >= 0.0) ? f[1] : 0.0;
+                pTrack->status = (vals[1] & ~(0x4 | 0x8)) | 0x1;
+                pTrack->playSpeed = 1.0;
+                pTrack->field_120 = at;
+                pTrack->field_124 = at;
+                pTrack->upperFrame = upperAt;
+                if (f[2] == f[2] && f[2] >= 0.0 && f[2] < 1000.0)
+                    pTrack->speed = f[2];
+            }
+            pOf->aTrack[track] = (int8_t)ours;
+        }
+        // Held here and gone there (it stopped there, and this game missed
+        // that): it goes here too.
+        for (int j = 0; j < 4; j++)
+        {
+            rdPuppetTrack* pTrack = &pPuppet->aTracks[j];
+            if (!pTrack->status || !pTrack->keyframe || (pTrack->status & 8) || !(pTrack->status & (0x10 | 0x20 | 0x100)))
+                continue;
+            int bThere = 0;
+            for (int k = 0; k < n; k++)
+                bThere |= aThere[k] == pTrack->keyframe;
+            if (!bThere)
+                sithPuppet_StopKey(pPuppet, j, 0.1);
+        }
     }
 }
 
