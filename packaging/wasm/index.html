@@ -5717,7 +5717,7 @@
       // lobby page (its jkWatchBoxSays) live once its game plays the match,
       // and left, with why, once it has stopped (or never could start), so
       // the box shows the match's picture again with Watch again.
-      var embedStarted = false, embedLive = false, embedPanel = false;
+      var embedStarted = false, embedLive = false, embedPanel = false, embedCounted = false;
       function embedSays(state, text) {
         try {
           if (window.parent !== window && typeof window.parent.jkWatchBoxSays === 'function')
@@ -5735,11 +5735,19 @@
             if (!embedStarted && !picker.open) embedSays('left', document.getElementById('picker-result').textContent);
           });
         });
-        // The click that puts the keys in the box does only that: the game
-        // would take it as Fire (the next player) and lock the mouse.
-        var embedSwallow = false;
+        // The first press on the game, and the first after the lobby page had
+        // the keys, only puts the keys in the box: the game would take it as
+        // Fire (the next player) and lock the mouse. The box can have the
+        // keys before anyone clicks it (its folder prompt takes them), so
+        // that's not what tells.
+        var embedArmed = true, embedSwallow = false;
+        window.addEventListener('blur', function() { embedArmed = true; });
         var swallow = function(ev) {
-          if (ev.type === 'pointerdown') embedSwallow = !document.hasFocus();
+          if (ev.type === 'pointerdown') {
+            var onGame = !!ev.target && ev.target.id === 'canvas';
+            embedSwallow = embedArmed && onGame;
+            if (onGame) embedArmed = false;
+          }
           if (!embedSwallow) return;
           ev.stopImmediatePropagation();
           if (ev.type === 'mouseup') embedSwallow = false;
@@ -5748,8 +5756,10 @@
           window.addEventListener(type, swallow, true);
         });
         // The game shows once it plays the match (until then the lobby
-        // page's picture shows through), and getting it going shows only
-        // what it's doing, along the bottom.
+        // page's picture shows through). Whether the feed counts its game
+        // (its socket to the feed is open, also while it gets the match's
+        // mod or restarts into it) goes to the lobby page, which counts
+        // itself only while it doesn't (sayWatching).
         setInterval(function() {
           var view = Module.jkView;
           if (!embedLive && view && view.phase === 'live') {
@@ -5757,19 +5767,30 @@
             document.documentElement.classList.add('embed-live');
             embedSays('live');
           }
-          var intro = picker.querySelector('.actions.picker-intro');
-          var busy = picker.open && (picker.classList.contains('checking') ||
-                                     (intro.hidden && modChoice.hidden && problemReload.hidden &&
-                                      document.getElementById('picker-result').className !== 'error'));
-          picker.classList.toggle('embed-busy', busy);
-          // A panel of its own (the folder prompt, or a problem) goes over
-          // the lobby page's badges.
-          var panel = picker.open && !busy;
-          if (panel !== embedPanel) {
-            embedPanel = panel;
-            embedSays(panel ? 'panel' : 'busy');
+          var counted = !!(view && !view.ended && view.ws && view.ws.readyState === 1);
+          if (counted !== embedCounted) {
+            embedCounted = counted;
+            embedSays(counted ? 'counted' : 'uncounted');
           }
+          embedLook();
         }, 250);
+      }
+      // Getting the game going shows only what it's doing, along the bottom
+      // of the box; the folder prompt, or a problem, is a panel of its own
+      // over the lobby page's badges. Also as each step says what it does
+      // (showPickerResult), so the panel doesn't flash between them.
+      function embedLook() {
+        if (!watchEmbed) return;
+        var intro = picker.querySelector('.actions.picker-intro');
+        var busy = picker.open && (picker.classList.contains('checking') ||
+                                   (intro.hidden && modChoice.hidden && problemReload.hidden &&
+                                    document.getElementById('picker-result').className !== 'error'));
+        picker.classList.toggle('embed-busy', busy);
+        var panel = picker.open && !busy;
+        if (panel !== embedPanel) {
+          embedPanel = panel;
+          embedSays(panel ? 'panel' : 'busy');
+        }
       }
 
       function hideZone() {
@@ -7771,6 +7792,7 @@
         var el = document.getElementById('picker-result');
         el.textContent = text;
         el.className = isError ? 'error' : '';
+        embedLook();
       }
 
       // fileList is the picked folder's files, or the ones saved in the
@@ -7881,7 +7903,8 @@
             await addLibraryMods(await libraryMods(game), folderMods, files, ext);
           }
           lap('finding mods');
-          if (folderMods.length > 1) {
+          // Only the start window shows clashes, and watching has none.
+          if (folderMods.length > 1 && !(pickerWant && pickerWant.watch)) {
             showPickerResult('Looking through your mods...');
             found = await findClashes(folderMods, files, ext);
             lap('comparing mods');
@@ -9710,9 +9733,11 @@
       var watchLive = { id: 0, sent: 0, last: null, fromLink: 0, joining: false, note: '' };
       // The match itself in the viewing page's box (boxShow, below): frame,
       // the frame of this page whose game watches it; uid and id, the game
-      // and room it watches; live, its game plays the match; left, what each
-      // game's box said when it stopped (by uid), until Watch again.
-      var watchBox = { frame: null, uid: '', id: 0, live: false, left: {} };
+      // and room it watches; counted, the match's feed counts its game;
+      // ended, when the match left the lobby while the box still plays its
+      // last seconds; left, what each game's box said when it stopped (by
+      // uid), until Watch again.
+      var watchBox = { frame: null, uid: '', id: 0, counted: false, ended: 0, left: {} };
       // uid -> the game, as the viewing page last drew it (tickLive).
       var watchGames = {};
 
@@ -9735,11 +9760,11 @@
 
       // Tells the lobby which match this page watches, if it doesn't know
       // yet; again once the connection comes back (startLobbyWatch).
-      // While the box's game plays the match, the match's feed counts it
-      // (as a game watching from inside the game), so this page says it
-      // watches none: one person, counted once.
+      // While the box's game is on the match's feed, the feed counts it (as
+      // a game watching from inside the game), so this page says it watches
+      // none: one person, counted once.
       function sayWatching() {
-        var id = watchBox.live && watchBox.id === watchLive.id ? 0 : watchLive.id;
+        var id = watchBox.counted && watchBox.id === watchLive.id ? 0 : watchLive.id;
         if (watchLive.sent === id) return;
         if (lobbySay('spectate ' + id)) watchLive.sent = id;
       }
@@ -9775,10 +9800,7 @@
         var w = watchLive.id ? watchedGame() : null;
         watchLive.last = w;
         sayWatching();
-        // A window of its own opens on this match again if reloaded.
-        if (watchWindow && watchLive.id) {
-          history.replaceState(history.state, '', location.pathname + location.search + '#watch-' + watchLive.id + '-window');
-        }
+        watchAddress();
         if (room.open) renderRoom();
         if (watchDlg.open) renderWatch();
       }
@@ -10334,11 +10356,24 @@
           !w ? (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ') has' : 'This game has') +
                ' ended. Pick another match on the left.' : '';
         if (watchLive.note) info.append(el('p', 'watch-said', watchLive.note));
-        // The box's game goes on through the lobby's connection dropping.
-        var keepBox = empty && !lobbyLive.status && watchBox.frame && watchBox.id === watchLive.id;
+        // The box's game goes on through the lobby's connection dropping, and
+        // through the match's end, which it shows its delay later: until it
+        // says it stopped (jkWatchBoxSays), or BOX_END_MS after the match
+        // left the lobby.
+        var keepBox = empty && !!watchBox.frame && watchBox.id === watchLive.id && (!lobbyLive.status || !w);
         if (empty && !keepBox) boxStop();
+        if (keepBox && lobbyLive.status && !watchBox.ended) {
+          watchBox.ended = Date.now();
+          setTimeout(function() {
+            if (!watchBox.ended || Date.now() - watchBox.ended < BOX_END_MS) return;
+            boxStop();
+            if (watchDlg.open) renderWatch();
+          }, BOX_END_MS);
+        }
         if (keepBox) {
-          info.append(el('p', 'empty', empty));
+          info.append(el('p', 'empty', !lobbyLive.status ? empty :
+            (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ')' : 'This game') +
+            ' has ended. Its last seconds still play above, as they were played.'));
         } else if (empty) {
           info.append(el('p', 'empty', empty));
           // On the whole screen, it says so there, until Esc.
@@ -10442,6 +10477,16 @@
           ' · ' + plural(watchable, 'match', 'matches') + ' to watch' : '';
       }
 
+      // The address says which match the viewing page shows (#watch-<room>,
+      // or #watch-<room>-window in a window of its own), so a reload, or Back
+      // to a page the browser had left (pagehide), opens it again
+      // (watchFromLink).
+      function watchAddress() {
+        if (!watchLive.id || !(watchWindow || watchDlg.open)) return;
+        var hash = '#watch-' + watchLive.id + (watchWindow ? '-window' : '');
+        if (location.hash !== hash) history.replaceState(history.state, '', location.pathname + location.search + hash);
+      }
+
       // Opens the viewing page, on a game (by room id) or the one watched.
       function openWatch(id) {
         if (id) {
@@ -10450,6 +10495,7 @@
           sayWatching();
         }
         if (!watchDlg.open) watchDlg.showModal();
+        watchAddress();
         renderWatch();
         if (room.open) renderRoom();
       }
@@ -10472,6 +10518,8 @@
         // Not for Join, or a game starting: the close event comes after.
         if (watchLive.joining) {
           watchLive.joining = false;
+          if (!watchWindow && location.hash.indexOf('#watch-') === 0)
+            history.replaceState(history.state, '', location.pathname + location.search);
           return;
         }
         // A window of its own closes with it; if the browser keeps it (it
@@ -10591,6 +10639,9 @@
       // 2026-11-19). It stays put while the page is drawn again around it (a
       // frame moved or put back loads again), over the level's picture and
       // under the badges. Not on a phone or tablet, nor in the mock-up.
+      // How long the box plays on once its match has left the lobby, at most:
+      // its delay (30 s by default) and then some.
+      var BOX_END_MS = 90000;
       function boxCan(w) {
         var can = watchInGame(w);
         return !!can && !can.why && !window.jkLobbyMock && !phoneNote() && /^https?:$/.test(location.protocol);
@@ -10615,11 +10666,12 @@
       function boxStop() {
         var f = watchBox.frame;
         if (!f) return null;
-        var was = watchBox.live;
+        var was = watchBox.counted;
         watchBox.frame = null;
         watchBox.uid = '';
         watchBox.id = 0;
-        watchBox.live = false;
+        watchBox.counted = false;
+        watchBox.ended = 0;
         watchScreen.classList.remove('box-panel');
         f.remove();
         if (was) sayWatching();
@@ -10662,13 +10714,17 @@
       window.jkWatchBoxSays = function(win, state, text) {
         var f = watchBox.frame;
         if (!f || f.contentWindow !== win) return;
-        if (state === 'live') {
-          watchBox.live = true;
+        if (state === 'counted' || state === 'uncounted') {
+          watchBox.counted = state === 'counted';
           sayWatching();
         } else if (state === 'panel' || state === 'busy') {
           watchScreen.classList.toggle('box-panel', state === 'panel');
         } else if (state === 'left') {
-          watchBox.left[watchBox.uid] = String(text || '').substring(0, 200);
+          text = String(text || '').substring(0, 200);
+          // A match that's over: what it said stays on the page, which says
+          // the match has ended.
+          if (!watchedGame(watchBox.id) && text) watchLive.note = text;
+          watchBox.left[watchBox.uid] = text;
           boxStop();
           if (watchDlg.open) renderWatch();
         }

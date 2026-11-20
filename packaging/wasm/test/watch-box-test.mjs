@@ -20,6 +20,7 @@ function cut(from, to) {
 }
 const boxCode = cut('      function boxCan(w) {', '      window.jkPlayWatched = function(id) {');
 const sayCode = cut('      function sayWatching() {', '      // Every game of the lobby');
+const endCode = cut('      var BOX_END_MS = ', '      function boxCan(w) {');
 const modsCode = cut('      function watchStartMods(folderMods, game) {', '      // The name of several mods together');
 
 // A stand-in element: children, classes and the few calls the code makes.
@@ -57,7 +58,7 @@ function page({ phone = '', mock = false, why = '' } = {}) {
     const env = {
         said: [], renders: 0,
         watchLive: { id: 5, sent: 5 },
-        watchBox: { frame: null, uid: '', id: 0, live: false, left: {} },
+        watchBox: { frame: null, uid: '', id: 0, counted: false, ended: 0, left: {} },
         watchScreen: elem('div', 'watch-screen'),
         watchDlg: { open: true },
         location: { pathname: '/', search: '?x=1', protocol: 'https:' },
@@ -67,7 +68,7 @@ function page({ phone = '', mock = false, why = '' } = {}) {
     };
     const names = ['watchLive', 'watchBox', 'watchScreen', 'watchDlg', 'location', 'window', 'document', 'ROOMS', 'PACK_ONLY',
                    'watchInGame', 'phoneNote', 'watchedGame', 'el', 'renderWatch', 'lobbySay'];
-    const api = new Function(...names, boxCode + sayCode + '\nreturn { boxCan, boxShow, boxStop, boxScreen, boxNote, boxAgain, ' +
+    const api = new Function(...names, endCode + boxCode + sayCode + '\nreturn { boxCan, boxShow, boxStop, boxScreen, boxNote, boxAgain, ' +
                              'startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
         env.watchLive, env.watchBox, env.watchScreen, env.watchDlg, env.location, env.window, env.document, ROOMS,
         env.PACK_ONLY,
@@ -145,18 +146,25 @@ test('the box\'s page is told its match, and only the box\'s', () => {
     assert.equal(p.env.window.jkWatchEmbedWant(7).demo, true);
 });
 
-test('while the box\'s game plays the match, the page says it watches none (the feed counts the game)', () => {
+test('while the box\'s game is on the match\'s feed, the page says it watches none (the feed counts the game)', () => {
     const p = page();
     const f = p.boxShow(p.games[5]);
-    p.env.window.jkWatchBoxSays({}, 'live', '');
+    p.env.window.jkWatchBoxSays({}, 'counted', '');
     assert.deepEqual(p.env.said, [], 'another window is ignored');
     p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
-    assert.equal(p.env.watchBox.live, true);
+    assert.deepEqual(p.env.said, [], 'showing the match says nothing about the count');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'counted', '');
+    assert.equal(p.env.watchBox.counted, true);
     assert.deepEqual(p.env.said, ['spectate 0']);
     p.sayWatching();
     assert.deepEqual(p.env.said, ['spectate 0'], 'once');
+    // Off the feed for a moment (restarting into the match's mod): the page counts.
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'uncounted', '');
+    assert.deepEqual(p.env.said, ['spectate 0', 'spectate 5']);
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'counted', '');
     p.boxStop();
-    assert.deepEqual(p.env.said, ['spectate 0', 'spectate 5'], 'counted by the page again once the box stops');
+    assert.deepEqual(p.env.said, ['spectate 0', 'spectate 5', 'spectate 0', 'spectate 5'],
+                     'counted by the page again once the box stops');
 });
 
 test('the box\'s own panel goes over the badges, and comes off with the frame', () => {
@@ -174,20 +182,30 @@ test('the box\'s own panel goes over the badges, and comes off with the frame', 
 test('a box that stopped says why, with Watch again, until it is clicked', () => {
     const p = page();
     const f = p.boxShow(p.games[5]);
-    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
-    p.env.window.jkWatchBoxSays(f.contentWindow, 'left', 'The match is over.');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'counted', '');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'left', 'Lost the match.');
     assert.equal(f.removed, 0, 'never put in the screen here');
     assert.equal(p.env.watchBox.frame, null);
     assert.equal(p.env.renders, 1);
     assert.deepEqual(p.env.said, ['spectate 0', 'spectate 5']);
     assert.equal(p.boxShow(p.games[5]), null, 'not again by itself');
     const note = p.boxNote(p.games[5]);
-    assert.equal(note.children[0].textContent, 'The match is over.');
+    assert.equal(note.children[0].textContent, 'Lost the match.');
+    assert.equal(p.env.watchLive.note, undefined, 'the match is still on: the box says it');
     assert.equal(note.children[1].dataset.wact, 'again');
     assert.equal(p.boxNote(p.games[5]).children[1].textContent, 'Watch again');
     p.boxAgain();
     assert.equal(p.env.renders, 2);
     assert.ok(p.boxShow(p.games[5]), 'a new frame after Watch again');
+});
+
+test('a match over: what the box said goes on the page, which says the match ended', () => {
+    const p = page();
+    const f = p.boxShow(p.games[5]);
+    delete p.games[5];
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'left', 'The match is over.');
+    assert.equal(p.env.watchLive.note, 'The match is over.');
+    assert.equal(p.env.watchBox.frame, null);
 });
 
 test('a box that stopped with nothing to say says the game stopped', () => {
@@ -212,7 +230,7 @@ test('Watch in the game starts with only the graphics packs kept on, with no sta
 });
 
 if (failed) {
-    console.log(failed + ' of 9 failed');
+    console.log(failed + ' of 10 failed');
     process.exit(1);
 }
-console.log('all 9 passed');
+console.log('all 10 passed');
