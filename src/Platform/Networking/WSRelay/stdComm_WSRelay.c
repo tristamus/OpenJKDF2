@@ -1924,7 +1924,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
     var view = { url: (cut >= 0 ? base.substring(0, cut) : base) + '/feed/' + room, room: room, ws: null, tries: 0,
                  delay: -1, recs: [], ri: 0, pi: 0, phase: 'wait', since: performance.now(), level: null, want: null,
                  found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, ended: '', closed: false, waitMs: WAIT_MS,
-                 resync: false, rekey: false };
+                 resync: false, rekey: false, box: !!Module['jkWatchBox'] };
     Module.jkView = view;
     view.say = function(text) {
         console.log('OpenJKDF2: watching room ' + room + ': ' + text);
@@ -1952,7 +1952,10 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
     view.open = function() {
         var ws;
         try {
-            ws = new WebSocket(view.url);
+            /* The game in a viewing page's box (index.html's #watch-<room>-embed):
+               its page is counted in the room's watching, so the feed leaves
+               this one out (?box=1). */
+            ws = new WebSocket(view.url + (view.box ? '?box=1' : ''));
         } catch (e) {
             view.end('error', 'The match could not be reached.');
             return;

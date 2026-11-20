@@ -2333,6 +2333,19 @@ function viewRecv(game) {
     }
 }
 
+test('the game in a viewing page\'s box (Module.jkWatchBox) opens the feed with ?box=1, so the feed leaves it out of the count', async () => {
+    const world = makeWorld();
+    const game = makeGame(world, { id: 9 });
+    await world.run(5);
+    game.Module.jkWatchBox = true;
+    const before = (world.feeds || []).length;
+    assert.equal(game.js.wsrelay_js_view_open(7), 1);
+    await world.run(5);
+    const feed = world.feeds[before];
+    assert.equal(feed.url, 'ws://lobby/feed/7?box=1');
+    assert.equal(game.Module.jkView.url, 'ws://lobby/feed/7', 'the mod\'s parts still come from beside it');
+});
+
 test('a viewer opens the room\'s feed beside the lobby, and has a level once a keyframe comes, from its JKF1 packet', async () => {
     const world = makeWorld();
     const { game, feed } = await viewer(world, 7);

@@ -1,8 +1,8 @@
 // Checks the viewing page's box showing the match itself (index.html, "The
 // match itself in the viewing page's box"): one frame of the page per match
 // watched, kept while the page is drawn again around it, what the box's page
-// asks and says, and the page counted once while the box's game watches
-// (sayWatching). Also what Watch in the game starts with (watchStartMods).
+// asks and says, and the page counting itself the whole time the box's game
+// watches (sayWatching; the feed leaves that game out). Also what Watch in the game starts with (watchStartMods).
 // Runs index.html's code for it on stand-ins for the page.
 //
 //   node test/watch-box-test.mjs
@@ -58,7 +58,7 @@ function page({ phone = '', mock = false, why = '' } = {}) {
     const env = {
         said: [], renders: 0,
         watchLive: { id: 5, sent: 5 },
-        watchBox: { frame: null, uid: '', id: 0, counted: false, ended: 0, left: {} },
+        watchBox: { frame: null, uid: '', id: 0, ended: 0, left: {} },
         watchScreen: elem('div', 'watch-screen'),
         watchDlg: { open: true },
         location: { pathname: '/', search: '?x=1', protocol: 'https:' },
@@ -146,25 +146,24 @@ test('the box\'s page is told its match, and only the box\'s', () => {
     assert.equal(p.env.window.jkWatchEmbedWant(7).demo, true);
 });
 
-test('while the box\'s game is on the match\'s feed, the page says it watches none (the feed counts the game)', () => {
+test('the page counts itself the whole time its box\'s game watches (the feed leaves that game out)', () => {
     const p = page();
-    const f = p.boxShow(p.games[5]);
-    p.env.window.jkWatchBoxSays({}, 'counted', '');
-    assert.deepEqual(p.env.said, [], 'another window is ignored');
-    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
-    assert.deepEqual(p.env.said, [], 'showing the match says nothing about the count');
-    p.env.window.jkWatchBoxSays(f.contentWindow, 'counted', '');
-    assert.equal(p.env.watchBox.counted, true);
-    assert.deepEqual(p.env.said, ['spectate 0']);
+    p.env.watchLive.sent = 0;
     p.sayWatching();
-    assert.deepEqual(p.env.said, ['spectate 0'], 'once');
-    // Off the feed for a moment (restarting into the match's mod): the page counts.
-    p.env.window.jkWatchBoxSays(f.contentWindow, 'uncounted', '');
-    assert.deepEqual(p.env.said, ['spectate 0', 'spectate 5']);
+    assert.deepEqual(p.env.said, ['spectate 5']);
+    const f = p.boxShow(p.games[5]);
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
+    // What a kit 163 box said: nothing moves now
     p.env.window.jkWatchBoxSays(f.contentWindow, 'counted', '');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'uncounted', '');
+    p.sayWatching();
+    assert.equal(p.env.watchBox.counted, undefined);
     p.boxStop();
-    assert.deepEqual(p.env.said, ['spectate 0', 'spectate 5', 'spectate 0', 'spectate 5'],
-                     'counted by the page again once the box stops');
+    p.sayWatching();
+    assert.deepEqual(p.env.said, ['spectate 5'], 'once, and still after the box stops');
+    p.env.watchLive.id = 0;
+    p.sayWatching();
+    assert.deepEqual(p.env.said, ['spectate 5', 'spectate 0'], 'none once the viewing page shows no match');
 });
 
 test('the box\'s own panel goes over the badges, and comes off with the frame', () => {
@@ -182,12 +181,10 @@ test('the box\'s own panel goes over the badges, and comes off with the frame', 
 test('a box that stopped says why, with Watch again, until it is clicked', () => {
     const p = page();
     const f = p.boxShow(p.games[5]);
-    p.env.window.jkWatchBoxSays(f.contentWindow, 'counted', '');
     p.env.window.jkWatchBoxSays(f.contentWindow, 'left', 'Lost the match.');
     assert.equal(f.removed, 0, 'never put in the screen here');
     assert.equal(p.env.watchBox.frame, null);
     assert.equal(p.env.renders, 1);
-    assert.deepEqual(p.env.said, ['spectate 0', 'spectate 5']);
     assert.equal(p.boxShow(p.games[5]), null, 'not again by itself');
     const note = p.boxNote(p.games[5]);
     assert.equal(note.children[0].textContent, 'Lost the match.');

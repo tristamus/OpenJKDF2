@@ -5717,7 +5717,7 @@
       // lobby page (its jkWatchBoxSays) live once its game plays the match,
       // and left, with why, once it has stopped (or never could start), so
       // the box shows the match's picture again with Watch again.
-      var embedStarted = false, embedLive = false, embedPanel = false, embedCounted = false;
+      var embedStarted = false, embedLive = false, embedPanel = false;
       function embedSays(state, text) {
         try {
           if (window.parent !== window && typeof window.parent.jkWatchBoxSays === 'function')
@@ -5756,21 +5756,14 @@
           window.addEventListener(type, swallow, true);
         });
         // The game shows once it plays the match (until then the lobby
-        // page's picture shows through). Whether the feed counts its game
-        // (its socket to the feed is open, also while it gets the match's
-        // mod or restarts into it) goes to the lobby page, which counts
-        // itself only while it doesn't (sayWatching).
+        // page's picture shows through). The feed doesn't count its game
+        // (Module.jkWatchBox): the lobby page counts itself the whole time.
         setInterval(function() {
           var view = Module.jkView;
           if (!embedLive && view && view.phase === 'live') {
             embedLive = true;
             document.documentElement.classList.add('embed-live');
             embedSays('live');
-          }
-          var counted = !!(view && !view.ended && view.ws && view.ws.readyState === 1);
-          if (counted !== embedCounted) {
-            embedCounted = counted;
-            embedSays(counted ? 'counted' : 'uncounted');
           }
           embedLook();
         }, 250);
@@ -9733,11 +9726,10 @@
       var watchLive = { id: 0, sent: 0, last: null, fromLink: 0, joining: false, note: '' };
       // The match itself in the viewing page's box (boxShow, below): frame,
       // the frame of this page whose game watches it; uid and id, the game
-      // and room it watches; counted, the match's feed counts its game;
-      // ended, when the match left the lobby while the box still plays its
+      // and room it watches; ended, when the match left the lobby while the box still plays its
       // last seconds; left, what each game's box said when it stopped (by
       // uid), until Watch again.
-      var watchBox = { frame: null, uid: '', id: 0, counted: false, ended: 0, left: {} };
+      var watchBox = { frame: null, uid: '', id: 0, ended: 0, left: {} };
       // uid -> the game, as the viewing page last drew it (tickLive).
       var watchGames = {};
 
@@ -9760,11 +9752,11 @@
 
       // Tells the lobby which match this page watches, if it doesn't know
       // yet; again once the connection comes back (startLobbyWatch).
-      // While the box's game is on the match's feed, the feed counts it (as
-      // a game watching from inside the game), so this page says it watches
-      // none: one person, counted once.
+      // Also while the box's game watches the match: its feed leaves that
+      // game out (?box=1), so one person is counted once, and the count
+      // doesn't move while the box's game starts again (into the host's mod).
       function sayWatching() {
-        var id = watchBox.counted && watchBox.id === watchLive.id ? 0 : watchLive.id;
+        var id = watchLive.id;
         if (watchLive.sent === id) return;
         if (lobbySay('spectate ' + id)) watchLive.sent = id;
       }
@@ -10666,15 +10658,12 @@
       function boxStop() {
         var f = watchBox.frame;
         if (!f) return null;
-        var was = watchBox.counted;
         watchBox.frame = null;
         watchBox.uid = '';
         watchBox.id = 0;
-        watchBox.counted = false;
         watchBox.ended = 0;
         watchScreen.classList.remove('box-panel');
         f.remove();
-        if (was) sayWatching();
         return null;
       }
       // The box: its frame, where it is, then the rest (redrawn each time).
@@ -10714,10 +10703,7 @@
       window.jkWatchBoxSays = function(win, state, text) {
         var f = watchBox.frame;
         if (!f || f.contentWindow !== win) return;
-        if (state === 'counted' || state === 'uncounted') {
-          watchBox.counted = state === 'counted';
-          sayWatching();
-        } else if (state === 'panel' || state === 'busy') {
+        if (state === 'panel' || state === 'busy') {
           watchScreen.classList.toggle('box-panel', state === 'panel');
         } else if (state === 'left') {
           text = String(text || '').substring(0, 200);
@@ -10746,6 +10732,9 @@
         delete Module.jkJoinImperial;
         Module.jkWatchRoom = id;
         Module.jkWatchPack = !!got.pack;
+        // The feed leaves this game out of the room's watching (?box=1): this
+        // page is counted for it (sayWatching)
+        Module.jkWatchBox = true;
         if (want.demo) startDemo(want);
         else openPicker(want);
       }
