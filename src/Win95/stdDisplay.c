@@ -36,6 +36,9 @@ static SDL_Palette* stdDisplay_GetOrCreateSurfacePalette(SDL_Surface* surface)
 
 uint32_t Video_menuTexId = 0;
 uint32_t Video_overlayTexId = 0;
+// Added: the size each was last made at; std3D makes one again at its buffer's size when they differ
+int Video_menuTexW = 0, Video_menuTexH = 0;
+int Video_overlayTexW = 0, Video_overlayTexH = 0;
 
 // Added: whether anything was drawn into the overlay buffer (automap, force-power
 // target circles) this frame and last frame. It is empty on most frames, so
@@ -186,6 +189,8 @@ int stdDisplay_SetMode(unsigned int modeIdx, const void *palette, int paged)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, newW, newH, 0, GL_RED, GL_UNSIGNED_BYTE, Video_menuBuffer.sdlSurface->pixels);
+    Video_menuTexW = newW;
+    Video_menuTexH = newH;
     
     glGenTextures(1, &Video_overlayTexId);
     glBindTexture(GL_TEXTURE_2D, Video_overlayTexId);
@@ -193,6 +198,8 @@ int stdDisplay_SetMode(unsigned int modeIdx, const void *palette, int paged)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, newW, newH, 0, GL_RED, GL_UNSIGNED_BYTE, Video_overlayMapBuffer.sdlSurface->pixels);
+    Video_overlayTexW = newW;
+    Video_overlayTexH = newH;
     
 
     Video_bModeSet = 1;
@@ -217,6 +224,8 @@ void stdDisplay_RecreateGLTextures(void)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, Video_menuBuffer.sdlSurface->pixels);
+    Video_menuTexW = w;
+    Video_menuTexH = h;
 
     glGenTextures(1, &Video_overlayTexId);
     glBindTexture(GL_TEXTURE_2D, Video_overlayTexId);
@@ -224,6 +233,8 @@ void stdDisplay_RecreateGLTextures(void)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, Video_overlayMapBuffer.sdlSurface->pixels);
+    Video_overlayTexW = w;
+    Video_overlayTexH = h;
 }
 #endif
 

@@ -1279,6 +1279,104 @@ void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo
 void std3D_DrawMapOverlay();
 void std3D_DrawUIRenderList();
 
+#ifdef ARCH_WASM
+// Added: for 4 s after the window changes size (as the box on a viewing page goes full screen),
+// what GL says before and after the menu and overlay uploads and at the end of the frame, and
+// once, 2 s in, what the middle of the frame holds. Kit 163's box watching an SBX-MotS v3 match
+// drew white from going full screen on, with an upload failing every frame ("offset overflows
+// texture dimensions"); this says where if it happens again. Only then: asking GL for its error
+// waits on the GPU process.
+static int std3D_wasmSizeFrames = 0, std3D_wasmSizeW = 0, std3D_wasmSizeH = 0, std3D_wasmSizeSaid = 0;
+
+static void std3D_WasmSizeCheck(const char* pWhere, int w, int h, int texW, int texH)
+{
+    if (!std3D_wasmSizeFrames) return;
+    GLenum e = glGetError();
+    if (e != GL_NO_ERROR && std3D_wasmSizeSaid < 12)
+    {
+        std3D_wasmSizeSaid++;
+        stdPlatform_Printf("std3D: GL error 0x%x %s (%dx%d, texture %dx%d)\n", (int)e, pWhere, w, h, texW, texH);
+    }
+}
+
+static void std3D_WasmSizeWatch(void)
+{
+    if (Window_xSize == std3D_wasmSizeW && Window_ySize == std3D_wasmSizeH) return;
+    int bFirst = !std3D_wasmSizeW;
+    std3D_wasmSizeW = Window_xSize;
+    std3D_wasmSizeH = Window_ySize;
+    if (bFirst) return;
+    std3D_wasmSizeFrames = 240;
+    std3D_wasmSizeSaid = 0;
+    stdPlatform_Printf("std3D: the window is %dx%d now; menu buffer %dx%d (texture %dx%d), overlay buffer %dx%d (texture %dx%d), overlay drawn %d/%d\n",
+                       Window_xSize, Window_ySize, Video_menuBuffer.format.width, Video_menuBuffer.format.height, Video_menuTexW, Video_menuTexH,
+                       Video_overlayMapBuffer.format.width, Video_overlayMapBuffer.format.height, Video_overlayTexW, Video_overlayTexH,
+                       Video_bOverlayDrawn, Video_bOverlayDrawnLast);
+}
+
+static void std3D_WasmSizeFrameDone(void)
+{
+    if (!std3D_wasmSizeFrames) return;
+    std3D_WasmSizeCheck("at the end of the frame", Window_xSize, Window_ySize, 0, 0);
+    if (--std3D_wasmSizeFrames == 120)
+    {
+        unsigned char px[4] = {0, 0, 0, 0};
+        glBindFramebuffer(GL_FRAMEBUFFER, std3D_windowFbo);
+        glReadPixels(Window_xSize / 2, Window_ySize / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        GLenum e = glGetError();
+        stdPlatform_Printf("std3D: 2 s after the window changed size, the middle of the frame is %d,%d,%d,%d (GL 0x%x)\n",
+                           px[0], px[1], px[2], px[3], (int)e);
+    }
+}
+#else
+#define std3D_WasmSizeCheck(pWhere, w, h, texW, texH)
+#endif
+
+// Added: puts a window-sized 8-bit buffer (the menu's or the overlay's) into its texture. A texture
+// that isn't the buffer's size is made again at it first: a bigger buffer into a smaller texture is
+// GL_INVALID_VALUE ("offset overflows texture dimensions"), and nothing goes up. What goes up is the
+// buffer's size, no more than its surface holds, each row as the engine draws it (its rowSize; the
+// surface's pitch should that not fit in the surface).
+static void std3D_UploadBuffer(const char* pName, uint32_t* pTexId, int* pTexW, int* pTexH, tVBuffer* pBuf)
+{
+    SDL_Surface* pSurf = pBuf->sdlSurface;
+    if (!pSurf || !pSurf->pixels) return;
+    int w = pBuf->format.width, h = pBuf->format.height;
+    if (w > pSurf->w) w = pSurf->w;
+    if (h > pSurf->h) h = pSurf->h;
+    if (w <= 0 || h <= 0) return;
+
+    std3D_WasmSizeCheck(pName[0] == 'm' ? "before the menu upload" : "before the overlay upload", w, h, *pTexW, *pTexH);
+    if (!*pTexId || *pTexW != w || *pTexH != h)
+    {
+        stdPlatform_Printf("std3D: the %s texture is %dx%d, its buffer %dx%d (surface %dx%d, pitch %d): making it again\n",
+                           pName, *pTexW, *pTexH, pBuf->format.width, pBuf->format.height, pSurf->w, pSurf->h, pSurf->pitch);
+        if (*pTexId)
+            glDeleteTextures(1, pTexId);
+        glGenTextures(1, pTexId);
+        glBindTexture(GL_TEXTURE_2D, *pTexId);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+        *pTexW = w;
+        *pTexH = h;
+    }
+    glBindTexture(GL_TEXTURE_2D, *pTexId);
+    int rowLen = (int)pBuf->format.rowSize;
+    if (rowLen < w || (long long)rowLen * (h - 1) + w > (long long)pSurf->pitch * pSurf->h)
+        rowLen = pSurf->pitch;
+    int bOddRow = (rowLen & 3) != 0;
+    if (bOddRow)
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLen);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, pSurf->pixels);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    if (bOddRow)
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    std3D_WasmSizeCheck(pName[0] == 'm' ? "after the menu upload" : "after the overlay upload", w, h, *pTexW, *pTexH);
+}
+
 #ifdef RDRASTER_SOFTWARE_RENDERER
 static GLuint std3D_swWorldTexId = 0;
 static int    std3D_swWorldTexW = 0;
@@ -1408,6 +1506,9 @@ void std3D_DrawMenu()
 #endif
 
     std3D_UpdateWindowViewport(); // Added
+#ifdef ARCH_WASM
+    std3D_WasmSizeWatch(); // Added
+#endif
 
     //printf("Draw menu\n");
     std3D_DrawSceneFbo();
@@ -1666,8 +1767,7 @@ void std3D_DrawMenu()
     glBindTexture(GL_TEXTURE_2D, blank_tex);
     
     glActiveTexture(GL_TEXTURE0 + 0);
-    glBindTexture(GL_TEXTURE_2D, Video_menuTexId);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, Video_menuBuffer.format.width, Video_menuBuffer.format.height, GL_RED, GL_UNSIGNED_BYTE, Video_menuBuffer.sdlSurface->pixels);
+    std3D_UploadBuffer("menu", &Video_menuTexId, &Video_menuTexW, &Video_menuTexH, &Video_menuBuffer); // Added: was glTexSubImage2D at the buffer's size
 
     //GLushort data_elements[32 * 3];
     glActiveTexture(GL_TEXTURE0 + 1);
@@ -1772,6 +1872,7 @@ void std3D_DrawMenu()
 
     last_flags = 0;
 #ifdef ARCH_WASM
+    std3D_WasmSizeFrameDone(); // Added
     std3D_WasmGlDrew(); // Added
 #endif
 }
@@ -1826,8 +1927,7 @@ void std3D_DrawMapOverlay()
     glBindTexture(GL_TEXTURE_2D, blank_tex);
     
     glActiveTexture(GL_TEXTURE0 + 0);
-    glBindTexture(GL_TEXTURE_2D, Video_overlayTexId);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, Video_overlayMapBuffer.format.width, Video_overlayMapBuffer.format.height, GL_RED, GL_UNSIGNED_BYTE, Video_overlayMapBuffer.sdlSurface->pixels);
+    std3D_UploadBuffer("overlay", &Video_overlayTexId, &Video_overlayTexW, &Video_overlayTexH, &Video_overlayMapBuffer); // Added: was glTexSubImage2D at the buffer's size
 
     glActiveTexture(GL_TEXTURE0 + 1);
     glBindTexture(GL_TEXTURE_2D, displaypal_texture);

@@ -82,6 +82,7 @@ static tVBuffer* (*stdDisplay_VBufferConvertColorFormat)(void* a, tVBuffer* b) =
 static int (*stdDisplay_GammaCorrect3)(int a1) = (void*)stdDisplay_GammaCorrect3_ADDR;
 #else
 extern uint32_t Video_menuTexId;
+extern int Video_menuTexW, Video_menuTexH; // Added: the size it was made at
 
 int stdDisplay_Startup();
 int stdDisplay_VBufferFill(tVBuffer *a2, int fillColor, rdRect *a4);

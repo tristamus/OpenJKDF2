@@ -21,6 +21,7 @@ extern rdCanvas* Video_pCanvasOverlayMap;
 extern tVBuffer* Video_pOverlayMapBuffer;
 extern tVBuffer Video_overlayMapBuffer;
 extern uint32_t Video_overlayTexId;
+extern int Video_overlayTexW, Video_overlayTexH; // Added: the size it was made at
 extern int Video_bOverlayDrawn; // Added: see stdDisplay.c
 extern int Video_bOverlayDrawnLast;
 #endif
