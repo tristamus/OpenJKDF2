@@ -83,6 +83,10 @@ int jkControl_HandleHudKeys(SithThing *player, flex_t b)
         }
 
         sithControl_GetKey(INPUT_FUNC_CAMERAMODE, &v15);
+        // Added: a spectator's free camera is its own eye only; the camera
+        // key is for a player it follows (sithControl_HandlePlayer).
+        if (sithMulti_IsSpectating() && sithControl_SpectatorFollowing() < 0)
+            v15 = 0;
         for (int i = v15-- == 0; !i; --v15 )
         {
             if ( (player->flags & (SITH_TF_DEAD|SITH_TF_DESTROYED)) == 0 && sithThing_MotsTick(0xe,0,0.0)) // MOTS altered

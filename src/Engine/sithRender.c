@@ -34,6 +34,7 @@
 #include "Primitives/rdMath.h"
 #include "stdPlatform.h"
 #include "Engine/sithInterp.h"
+#include "Devices/sithControl.h"
 
 #if defined(TARGET_TWL)
 #include <nds.h>
@@ -488,6 +489,13 @@ void sithRender_Draw()
     // Added: noclip
     if (!(g_debugmodeFlags & DEBUGFLAG_NOCLIP)) {
         sithPlayer_bNoClippingRend = 0;
+#ifdef PLATFORM_WSRELAY
+        // Added: a game watching a match: its free camera flies through
+        // walls, and from outside the level's sectors draws every one in
+        // view, as noclip does.
+        if (sithControl_SpectatorDrawAll(&sithCamera_g_renderView.lookPos, sithCamera_g_renderView.sector))
+            sithPlayer_bNoClippingRend = 1;
+#endif
     }
 
 #ifdef TARGET_TWL
