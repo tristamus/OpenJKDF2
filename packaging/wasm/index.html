@@ -1668,12 +1668,16 @@
         z-index: 1;
         width: 100%;
         height: 100%;
+        transform-origin: 0 0;
         border: 0;
         background: transparent;
         color-scheme: normal;
       }
       .watch-screen:has(.watch-frame) .watch-view::after { display: none; }
       .watch-screen.box-panel .watch-frame { z-index: 2; }
+      /* Once its game plays the match, black around it, not the picture. */
+      .watch-screen.box-live .watch-view { background: #000 !important; }
+      .watch-screen.box-live .watch-view .no-pic { visibility: hidden; }
       /* Its game stopped watching: why, and the way back to it. */
       .watch-view .box-note {
         position: absolute;
@@ -1697,6 +1701,10 @@
       html.watch-embed body > :not(.emscripten_border):not(#view-note):not(#picker) { display: none !important; }
       html.watch-embed:not(.embed-live) #canvas { visibility: hidden; }
       html.watch-embed .view-note { bottom: 10px; padding: 5px 12px; font-size: 12px; }
+      /* The box's page is the screen's size, scaled down to the box (boxFit on
+         the lobby page): what it shows over the game is as big as it would be
+         in a page the box's size. */
+      html.watch-embed #picker, html.watch-embed .view-note { zoom: var(--box-zoom, 1); }
       html.watch-embed #picker {
         position: fixed;
         inset: 0;
@@ -5717,7 +5725,18 @@
       // lobby page (its jkWatchBoxSays) live once its game plays the match,
       // and left, with why, once it has stopped (or never could start), so
       // the box shows the match's picture again with Watch again.
-      var embedStarted = false, embedLive = false, embedPanel = false;
+      var embedStarted = false, embedLive = false, embedPanel = false, embedZoomNow = 1;
+      // How much the lobby page scales this page down (jkWatchBoxZoom), so
+      // the prompt and what the game says are drawn that much bigger.
+      function embedZoom() {
+        var z = 1;
+        try {
+          z = Number(window.parent.jkWatchBoxZoom(window)) || 1;
+        } catch (e) {}
+        if (z === embedZoomNow) return;
+        embedZoomNow = z;
+        document.documentElement.style.setProperty('--box-zoom', String(z));
+      }
       function embedSays(state, text) {
         try {
           if (window.parent !== window && typeof window.parent.jkWatchBoxSays === 'function')
@@ -5765,6 +5784,7 @@
             document.documentElement.classList.add('embed-live');
             embedSays('live');
           }
+          embedZoom();
           embedLook();
         }, 250);
       }
@@ -9729,7 +9749,7 @@
       // and room it watches; ended, when the match left the lobby while the box still plays its
       // last seconds; left, what each game's box said when it stopped (by
       // uid), until Watch again.
-      var watchBox = { frame: null, uid: '', id: 0, ended: 0, left: {} };
+      var watchBox = { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, ended: 0, left: {} };
       // uid -> the game, as the viewing page last drew it (tickLive).
       var watchGames = {};
 
@@ -10649,11 +10669,60 @@
         f.title = 'The match, as its players see it';
         f.allow = 'autoplay; fullscreen';
         f.src = location.pathname + location.search + '#watch-' + w.g.id + '-embed';
+        var size = boxSize();
+        f.style.width = size.w + 'px';
+        f.style.height = size.h + 'px';
         watchBox.frame = f;
         watchBox.uid = w.g.uid;
         watchBox.id = w.g.id;
+        watchBox.w = size.w;
+        watchBox.h = size.h;
+        watchBox.zoom = 1;
         return f;
       }
+      // The box's page is the screen's size the whole time (no more than
+      // BOX_MAX_PIXELS), scaled to the box (boxFit), so its game never sees
+      // its window change size. In kits 163 and 164 a box watching an
+      // SBX-MotS v3 match went white once it went full screen (the game
+      // changing size in the level), and once its game crashed.
+      var BOX_MAX_PIXELS = 2560 * 1440;
+      function boxSize() {
+        var w = 0, h = 0;
+        try {
+          w = Math.round(Number(screen.width) || 0);
+          h = Math.round(Number(screen.height) || 0);
+        } catch (e) {}
+        if (w < 320 || h < 240) {
+          w = 1280;
+          h = 720;
+        }
+        if (w * h > BOX_MAX_PIXELS) {
+          var k = Math.sqrt(BOX_MAX_PIXELS / (w * h));
+          w = Math.round(w * k);
+          h = Math.round(h * k);
+        }
+        return { w: w, h: h };
+      }
+      // Scales the box's page to fit the box (or the screen, in full
+      // screen), in the middle: all of it shows, the folder prompt too, with
+      // black above and below when the screen is wider than the box. The
+      // page is told how much (jkWatchBoxZoom).
+      function boxFit() {
+        var f = watchBox.frame;
+        if (!f || f.parentNode !== watchScreen) return;
+        var cw = watchScreen.clientWidth, ch = watchScreen.clientHeight;
+        var w = watchBox.w, h = watchBox.h;
+        if (!cw || !ch || !w || !h) return;
+        var s = Math.min(cw / w, ch / h);
+        function px(v) { return (Math.abs(v) < 0.005 ? 0 : v).toFixed(2) + 'px'; }
+        f.style.transform = 'translate(' + px((cw - w * s) / 2) + ', ' + px((ch - h * s) / 2) + ') scale(' + s + ')';
+        watchBox.zoom = 1 / s;
+      }
+      if (typeof ResizeObserver === 'function') new ResizeObserver(boxFit).observe(watchScreen);
+      window.jkWatchBoxZoom = function(win) {
+        var f = watchBox.frame;
+        return f && f.contentWindow === win ? watchBox.zoom || 1 : 1;
+      };
       // The box's game stops (the frame goes, and its game with it).
       function boxStop() {
         var f = watchBox.frame;
@@ -10662,7 +10731,7 @@
         watchBox.uid = '';
         watchBox.id = 0;
         watchBox.ended = 0;
-        watchScreen.classList.remove('box-panel');
+        watchScreen.classList.remove('box-panel', 'box-live');
         f.remove();
         return null;
       }
@@ -10672,7 +10741,10 @@
         Array.prototype.slice.call(watchScreen.children).forEach(function(c) {
           if (c !== frame) c.remove();
         });
-        if (frame && frame.parentNode !== watchScreen) watchScreen.prepend(frame);
+        if (frame && frame.parentNode !== watchScreen) {
+          watchScreen.prepend(frame);
+          boxFit();
+        }
         watchScreen.append.apply(watchScreen, rest);
       }
       // Why the box's game stopped, and Watch again.
@@ -10703,7 +10775,9 @@
       window.jkWatchBoxSays = function(win, state, text) {
         var f = watchBox.frame;
         if (!f || f.contentWindow !== win) return;
-        if (state === 'panel' || state === 'busy') {
+        if (state === 'live') {
+          watchScreen.classList.add('box-live');
+        } else if (state === 'panel' || state === 'busy') {
           watchScreen.classList.toggle('box-panel', state === 'panel');
         } else if (state === 'left') {
           text = String(text || '').substring(0, 200);

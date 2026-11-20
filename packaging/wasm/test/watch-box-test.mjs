@@ -26,11 +26,12 @@ const modsCode = cut('      function watchStartMods(folderMods, game) {', '     
 // A stand-in element: children, classes and the few calls the code makes.
 function elem(tag, cls, text) {
     const e = {
-        tagName: tag.toUpperCase(), className: cls || '', textContent: text || '', dataset: {}, children: [],
+        tagName: tag.toUpperCase(), className: cls || '', textContent: text || '', dataset: {}, children: [], style: {},
         parentNode: null, removed: 0, classes: new Set(),
         classList: {
             toggle(c, on) { on ? e.classes.add(c) : e.classes.delete(c); },
-            remove(c) { e.classes.delete(c); },
+            add(...cs) { for (const c of cs) e.classes.add(c); },
+            remove(...cs) { for (const c of cs) e.classes.delete(c); },
             contains(c) { return e.classes.has(c); },
         },
         append(...xs) { for (const x of xs) { if (x.parentNode) x.remove(); x.parentNode = e; e.children.push(x); } },
@@ -47,7 +48,7 @@ function elem(tag, cls, text) {
     return e;
 }
 
-function page({ phone = '', mock = false, why = '' } = {}) {
+function page({ phone = '', mock = false, why = '', screen = { width: 1920, height: 1080 } } = {}) {
     const ROOMS = { narshaddaa: { game: 'jk1', name: 'Nar Shaddaa' }, asteroid: { game: 'mots', name: 'Sith: Asteroid' },
                     'bespin-demo': { game: 'jk1', name: 'Bespin Mining Station', demo: true } };
     const games = {
@@ -59,7 +60,8 @@ function page({ phone = '', mock = false, why = '' } = {}) {
         said: [], renders: 0,
         watchLive: { id: 5, sent: 5 },
         watchBox: { frame: null, uid: '', id: 0, ended: 0, left: {} },
-        watchScreen: elem('div', 'watch-screen'),
+        watchScreen: Object.assign(elem('div', 'watch-screen'), { clientWidth: 684, clientHeight: 386 }),
+        full: false,
         watchDlg: { open: true },
         location: { pathname: '/', search: '?x=1', protocol: 'https:' },
         window: mock ? { jkLobbyMock: {} } : {},
@@ -67,21 +69,23 @@ function page({ phone = '', mock = false, why = '' } = {}) {
         ROOMS, PACK_ONLY: 'Remastered pack',
     };
     const names = ['watchLive', 'watchBox', 'watchScreen', 'watchDlg', 'location', 'window', 'document', 'ROOMS', 'PACK_ONLY',
-                   'watchInGame', 'phoneNote', 'watchedGame', 'el', 'renderWatch', 'lobbySay'];
+                   'watchInGame', 'phoneNote', 'watchedGame', 'el', 'renderWatch', 'lobbySay', 'screen', 'watchFullOn'];
     const api = new Function(...names, endCode + boxCode + sayCode + '\nreturn { boxCan, boxShow, boxStop, boxScreen, boxNote, boxAgain, ' +
-                             'startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
+                             'boxSize, boxFit, startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
         env.watchLive, env.watchBox, env.watchScreen, env.watchDlg, env.location, env.window, env.document, ROOMS,
         env.PACK_ONLY,
         w => (w ? { why } : null), () => phone,
         id => games[id === undefined ? env.watchLive.id : id] || null,
         (tag, cls, text) => elem(tag, cls, text),
         () => { env.renders++; },
-        line => { env.said.push(line); return true; });
+        line => { env.said.push(line); return true; },
+        screen, () => env.full);
     return { ...api, env, games };
 }
 
-let failed = 0;
+let failed = 0, ran = 0;
 function test(name, fn) {
+    ran++;
     try {
         fn();
         console.log('ok   ' + name);
@@ -108,6 +112,47 @@ test('a match watched gets one frame of the page, kept while the page is drawn a
     assert.deepEqual(p.env.watchScreen.children, [f, view2, hud2], 'the rest is new, the frame the same');
     assert.equal(f.removed, 0, 'never taken out (a frame put back loads again)');
     assert.equal(view1.removed, 1);
+});
+
+test('the box\'s page is the screen\'s size, no more than 2560x1440 in pixels, scaled to the box', () => {
+    const p = page();
+    assert.deepEqual(p.boxSize(), { w: 1920, h: 1080 });
+    const wide = page({ screen: { width: 3440, height: 1440 } }).boxSize();
+    assert.ok(wide.w * wide.h <= 2560 * 1440 + 3000, 'about 2560x1440 in pixels at most');
+    assert.ok(Math.abs(wide.w / wide.h - 3440 / 1440) < 0.005, 'the screen\'s shape');
+    assert.deepEqual(page({ screen: {} }).boxSize(), { w: 1280, h: 720 }, 'no screen size');
+    const f = p.boxShow(p.games[5]);
+    assert.deepEqual([f.style.width, f.style.height], ['1920px', '1080px']);
+    assert.equal(f.style.transform, undefined, 'not scaled until it is in the box');
+    p.boxScreen(f, elem('div'));
+    // A 684x386 box: all of it, fitted, a sliver of black above and below
+    // (a 16:9 screen is a hair wider)
+    const s = Math.min(684 / 1920, 386 / 1080);
+    assert.equal(f.style.transform, 'translate(0.00px, ' + ((386 - 1080 * s) / 2).toFixed(2) + 'px) scale(' + s + ')');
+    assert.equal(f.style.clipPath, undefined, 'nothing cut off');
+    assert.equal(p.env.window.jkWatchBoxZoom(f.contentWindow), 1 / s, 'its page draws its prompt that much bigger');
+    assert.equal(p.env.window.jkWatchBoxZoom({}), 1, 'another window');
+    // Full screen on a 1920x1080 screen: as it is
+    p.env.full = true;
+    Object.assign(p.env.watchScreen, { clientWidth: 1920, clientHeight: 1080 });
+    p.boxFit();
+    assert.equal(f.style.transform, 'translate(0.00px, 0.00px) scale(1)');
+    assert.equal(p.env.window.jkWatchBoxZoom(f.contentWindow), 1);
+    assert.deepEqual([f.style.width, f.style.height], ['1920px', '1080px'], 'its page never changes size');
+    // A box narrower than the screen's shape, in full screen: all of it, fitted
+    Object.assign(p.env.watchScreen, { clientWidth: 1000, clientHeight: 1000 });
+    p.boxFit();
+    assert.equal(f.style.transform, 'translate(0.00px, ' + ((1000 - 1080 * 1000 / 1920) / 2).toFixed(2) + 'px) scale(' + 1000 / 1920 + ')');
+    // A screen bigger than 2560x1440: scaled up in full screen
+    const q = page({ screen: { width: 3840, height: 2160 } });
+    const g = q.boxShow(q.games[5]);
+    assert.deepEqual([g.style.width, g.style.height], ['2560px', '1440px']);
+    Object.assign(q.env.watchScreen, { clientWidth: 3840, clientHeight: 2160 });
+    q.boxScreen(g, elem('div'));
+    assert.equal(g.style.transform, 'translate(0.00px, 0.00px) scale(1.5)');
+    // A frame not in the box isn't touched
+    p.boxStop();
+    p.boxFit();
 });
 
 test('another match gets a new frame, and the old one goes', () => {
@@ -164,6 +209,18 @@ test('the page counts itself the whole time its box\'s game watches (the feed le
     p.env.watchLive.id = 0;
     p.sayWatching();
     assert.deepEqual(p.env.said, ['spectate 5', 'spectate 0'], 'none once the viewing page shows no match');
+});
+
+test('black around the box\'s game once it plays the match, not the picture; off with the frame', () => {
+    const p = page();
+    const f = p.boxShow(p.games[5]);
+    assert.ok(!p.env.watchScreen.classList.contains('box-live'));
+    p.env.window.jkWatchBoxSays({}, 'live', '');
+    assert.ok(!p.env.watchScreen.classList.contains('box-live'), 'not another window');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
+    assert.ok(p.env.watchScreen.classList.contains('box-live'));
+    p.boxStop();
+    assert.ok(!p.env.watchScreen.classList.contains('box-live'));
 });
 
 test('the box\'s own panel goes over the badges, and comes off with the frame', () => {
@@ -227,7 +284,7 @@ test('Watch in the game starts with only the graphics packs kept on, with no sta
 });
 
 if (failed) {
-    console.log(failed + ' of 10 failed');
+    console.log(failed + ' of ' + ran + ' failed');
     process.exit(1);
 }
-console.log('all 10 passed');
+console.log('all ' + ran + ' passed');
