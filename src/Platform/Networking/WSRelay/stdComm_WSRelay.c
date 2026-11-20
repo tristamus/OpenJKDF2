@@ -147,6 +147,7 @@
 #include "Dss/sithMulti.h"
 #include "Devices/sithComm.h"
 #include "Devices/sithControl.h"
+#include "Devices/sithConsole.h"
 #include "World/sithThing.h"
 #include "Main/Main.h"
 #include "General/stdString.h"
@@ -1437,6 +1438,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
            network log says how much went, to measure a match's feed. */
         var FEED_BATCH_MS = 250, FEED_MAX_CHUNK = 60000, FEED_LOG_MS = 60000, FEED_RETRIES = 6, FEED_RETRY_MAX_MS = 8000;
         var FEED_KEY_MS = 60000, FEED_KEY_ASK_MS = 5000, FEED_KEY_MAX = 4 * 1024 * 1024, FEED_SENDS = 4, FEED_QUEUE_MAX = 400;
+        var FEED_SAID_MAX = 8;
         net.feed = null;
         net.askFeed = function() {
             if (Module['jkNetOld'] || net.state !== 1 || net.lobbyCan.indexOf('feed') < 0) return;
@@ -1456,7 +1458,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (net.feed && net.feed.url === url) return;
             net.feedStop();
             net.feed = { url: url, ws: null, parts: [], size: 0, out: [], chunks: 0, bytes: 0, packets: 0, keys: 0,
-                         key: null, keyWant: true, keyAt: 0, keyAskAt: 0,
+                         key: null, keyWant: true, keyAt: 0, keyAskAt: 0, said: [],
                          since: performance.now(), timer: setInterval(function() { net.feedFlush(); }, FEED_BATCH_MS), tries: 0 };
             net.feedOpen(net.feed);
         };
@@ -1486,6 +1488,11 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 var mod = ev && typeof ev.data === 'string' ? /^mod ([0-9a-f]{64})$/.exec(ev.data) : null;
                 if (mod && net.isHost && Module.jkMods && Module.jkMods.feedUp)
                     Module.jkMods.feedUp(feed.url.replace(/^ws/, 'http'), mod[1], function() { return net.feed === feed; });
+                /* A spectator's message, "<name> (watching): <text>" (the
+                   feed made it): the engine puts it in the match's chat on
+                   its next frame (wsrelay_js_feed_take_say). */
+                var said = ev && typeof ev.data === 'string' ? /^say ([\x20-\x7e]{1,126})$/.exec(ev.data) : null;
+                if (said && net.isHost && feed.said.length < FEED_SAID_MAX) feed.said.push(said[1]);
             };
             ws.onclose = function(ev) {
                 if (net.feed !== feed || feed.ws !== ws) return;
@@ -1840,6 +1847,16 @@ EM_JS(int, wsrelay_js_send_packet, (const void* pData, int len, int idTo, int ow
 EM_JS(void, wsrelay_js_feed_copy, (const void* pData, int len), {
     var net = Module.jkNet;
     if (net && net.feed) net.feedCopy(HEAPU8.subarray(pData, pData + len));
+});
+
+// The next spectator's message the feed brought the host's game (net.feed's
+// said), into pOut; 0 when there's none.
+EM_JS(int, wsrelay_js_feed_take_say, (char* pOut, int maxLen), {
+    var net = Module.jkNet;
+    var line = net && net.feed && net.feed.said.length ? net.feed.said.shift() : '';
+    if (!line) return 0;
+    stringToUTF8(line, pOut, maxLen);
+    return 1;
 });
 
 // Whether the host's game is to send its room's feed a keyframe now
@@ -2231,6 +2248,27 @@ EM_JS(int, wsrelay_js_view_recv, (void* pBuf, int maxLen, int* pFrom), {
 EM_JS(void, wsrelay_js_view_end, (const char* pWhy, const char* pText), {
     var view = Module.jkView;
     if (view) view.end(UTF8ToString(pWhy), UTF8ToString(pText));
+});
+
+// A viewer's message, on the feed's socket: "say <name>\t<text>", the name
+// as the feed shows it (printable ASCII, at most 16). 0 when the feed isn't
+// open.
+EM_JS(int, wsrelay_js_view_say, (const char16_t* pName, const char* pText), {
+    var view = Module.jkView;
+    if (!view || view.ended || !view.ws || view.ws.readyState !== 1) return 0;
+    var chars = [];
+    for (var i = 0; pName && i < 31; i++) {
+        var ch = HEAPU16[(pName >> 1) + i];
+        if (!ch) break;
+        chars.push(ch);
+    }
+    var name = String.fromCharCode.apply(null, chars).replace(/[^\x20-\x7e]/g, '?').replace(/\s+/g, ' ').trim().substring(0, 16).trim();
+    try {
+        view.ws.send('say ' + (name || 'Someone') + '\t' + UTF8ToString(pText));
+    } catch (e) {
+        return 0;
+    }
+    return 1;
 });
 
 // Starts getting this game onto the match's mod and Remastered pack, as the
@@ -4186,6 +4224,87 @@ static int wsrelay_IsOwnPosition(const void* pData, uint32_t size)
     return sithPlayer_g_pLocalPlayerThing && *(const int32_t*)&p[4] == sithPlayer_g_pLocalPlayerThing->guid;
 }
 
+// Spectators' messages (stdComm_WSRelay_ViewerSay and FeedFrame). At most
+// one every WSRELAY_SAY_MS from a viewer, as the feed takes them; what it
+// said in the last WSRELAY_SAID_KEEP_MS is kept to know it coming back.
+#define WSRELAY_SAY_MS (3000)
+#define WSRELAY_SAY_MAX (96)
+#define WSRELAY_SAID_MAX (4)
+#define WSRELAY_SAID_KEEP_MS (120000)
+static char16_t wsrelay_saidWStr[256];
+static char wsrelay_aSaid[WSRELAY_SAID_MAX][WSRELAY_SAY_MAX + 1];
+static uint32_t wsrelay_aSaidMs[WSRELAY_SAID_MAX];
+static int wsrelay_saidNext = 0;
+static uint32_t wsrelay_saidLastMs = 0;
+
+// As the feed cleans a message: printable ASCII ('?' for the rest), runs of
+// spaces as one, no space at either end, at most max characters.
+static void wsrelay_SayClean(char* pOut, const char* pIn, int max)
+{
+    int n = 0, space = 0;
+    for (const unsigned char* p = (const unsigned char*)pIn; *p && n < max; p++)
+    {
+        unsigned char c = *p;
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v')
+        {
+            space = n > 0;
+            continue;
+        }
+        if (space && n < max - 1)
+            pOut[n++] = ' ';
+        space = 0;
+        pOut[n++] = (c >= 0x20 && c <= 0x7e) ? (char)c : '?';
+    }
+    while (n > 0 && pOut[n - 1] == ' ')
+        n--;
+    pOut[n] = 0;
+}
+
+void stdComm_WSRelay_ViewerSay(const char* pStr)
+{
+    char text[WSRELAY_SAY_MAX + 1];
+    if (!stdComm_WSRelay_bViewer || !pStr)
+        return;
+    wsrelay_SayClean(text, pStr, WSRELAY_SAY_MAX);
+    if (!text[0])
+        return;
+    uint32_t now = stdPlatform_GetTimeMsec();
+    if (wsrelay_saidLastMs && now - wsrelay_saidLastMs < WSRELAY_SAY_MS)
+    {
+        sithConsole_PrintString("Not sent: one message every 3 seconds while watching.");
+        return;
+    }
+    if (!wsrelay_js_view_say(jkPlayer_playerShortName, text))
+    {
+        sithConsole_PrintString("Not sent: the match can't be reached right now.");
+        return;
+    }
+    wsrelay_saidLastMs = now;
+    stdString_SafeStrCopy(wsrelay_aSaid[wsrelay_saidNext], text, sizeof(wsrelay_aSaid[0]));
+    wsrelay_aSaidMs[wsrelay_saidNext] = now ? now : 1;
+    wsrelay_saidNext = (wsrelay_saidNext + 1) % WSRELAY_SAID_MAX;
+}
+
+int stdComm_WSRelay_ViewerOwnEcho(const char* pLine)
+{
+    if (!stdComm_WSRelay_bViewer || !pLine)
+        return 0;
+    const char* p = strstr(pLine, " (watching): ");
+    if (!p)
+        return 0;
+    p += strlen(" (watching): ");
+    uint32_t now = stdPlatform_GetTimeMsec();
+    for (int i = 0; i < WSRELAY_SAID_MAX; i++)
+    {
+        if (wsrelay_aSaidMs[i] && now - wsrelay_aSaidMs[i] < WSRELAY_SAID_KEEP_MS && !strcmp(p, wsrelay_aSaid[i]))
+        {
+            wsrelay_aSaidMs[i] = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Called by stdComm_SendToPlayer with each message sent to everyone, once,
 // before it goes to each player: a copy for the room's feed, when the lobby
 // asked for one (see the top of this file). The bytes are from cogMsgId on.
@@ -4209,6 +4328,19 @@ void stdComm_WSRelay_FeedFrame()
 {
     if (stdComm_Imperial_bActive || !wsrelay_bHosting || !stdComm_bIsServer || !sithWorld_g_pCurrentWorld)
         return;
+    // Spectators' messages (stdComm_WSRelay_ViewerSay), as the feed made
+    // them: in the chat, here and for everyone, and so through the feed for
+    // those watching.
+    char said[128];
+    while (wsrelay_js_feed_take_say(said, sizeof(said)))
+    {
+        if (!said[0])
+            continue;
+        jk_snwprintf(wsrelay_saidWStr, 256, u"%S", said);
+        sithConsole_AlertSound();
+        sithConsole_PrintWString(wsrelay_saidWStr);
+        sithMulti_SendChat(said, -1, -1);
+    }
     char level[80];
     snprintf(level, sizeof(level), "%s/%s", jkRes_episodeGobName, jkMain_aLevelJklFname);
     if (!wsrelay_js_feed_key_wanted(strcmp(level, wsrelay_feedKeyLevel) != 0))

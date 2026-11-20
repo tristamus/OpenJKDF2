@@ -45,8 +45,12 @@ function elem(tag, cls, text) {
         },
     };
     if (tag === 'iframe') e.contentWindow = { name: 'frame' };
+    e.hasAttribute = a => a in e;
+    e.focus = () => { e.focused = (e.focused || 0) + 1; };
     return e;
 }
+// All the text in a stand-in element and those in it.
+const textOf = e => (e.textContent || '') + e.children.map(textOf).join('|');
 
 function page({ phone = '', mock = false, why = '', screen = { width: 1920, height: 1080 } } = {}) {
     const ROOMS = { narshaddaa: { game: 'jk1', name: 'Nar Shaddaa' }, asteroid: { game: 'mots', name: 'Sith: Asteroid' },
@@ -59,7 +63,7 @@ function page({ phone = '', mock = false, why = '', screen = { width: 1920, heig
     const env = {
         said: [], renders: 0,
         watchLive: { id: 5, sent: 5 },
-        watchBox: { frame: null, uid: '', id: 0, ended: 0, left: {} },
+        watchBox: { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, ended: 0, left: {} },
         watchScreen: Object.assign(elem('div', 'watch-screen'), { clientWidth: 684, clientHeight: 386 }),
         full: false,
         watchDlg: { open: true },
@@ -71,7 +75,7 @@ function page({ phone = '', mock = false, why = '', screen = { width: 1920, heig
     const names = ['watchLive', 'watchBox', 'watchScreen', 'watchDlg', 'location', 'window', 'document', 'ROOMS', 'PACK_ONLY',
                    'watchInGame', 'phoneNote', 'watchedGame', 'el', 'renderWatch', 'lobbySay', 'screen', 'watchFullOn'];
     const api = new Function(...names, endCode + boxCode + sayCode + '\nreturn { boxCan, boxShow, boxStop, boxScreen, boxNote, boxAgain, ' +
-                             'boxSize, boxFit, startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
+                             'boxSize, boxFit, watchKeysPanel, watchKeysToggle, keyLabel, startWatchEmbed: typeof startWatchEmbed, sayWatching };')(
         env.watchLive, env.watchBox, env.watchScreen, env.watchDlg, env.location, env.window, env.document, ROOMS,
         env.PACK_ONLY,
         w => (w ? { why } : null), () => phone,
@@ -221,6 +225,75 @@ test('black around the box\'s game once it plays the match, not the picture; off
     assert.ok(p.env.watchScreen.classList.contains('box-live'));
     p.boxStop();
     assert.ok(!p.env.watchScreen.classList.contains('box-live'));
+});
+
+test('Controls: the keys for watching as the player bound them, once the box\'s game plays the match', () => {
+    const p = page();
+    const f = p.boxShow(p.games[5]);
+    // Before the game is there: what the game calls each command.
+    let text = textOf(p.watchKeysPanel());
+    assert.match(text, /Next player\|Fire\|/);
+    assert.match(text, /Up \/ down\|Jump \/ Crouch/);
+    assert.match(text, /Give back the mouse\|Esc/);
+    f.contentWindow.jkWatchKeys = () => ({
+        forward: [['DIK_W', false], ['DIK_S', true], ['DIK_UP', false]], slide: [['DIK_D', false], ['DIK_A', true]],
+        jump: [['DIK_SPACE', false]], duck: [['DIK_C', false], ['KEY_JOY1_B2', false]], fast: [['DIK_LSHIFT', false]],
+        fire1: [['KEY_MOUSE_B1', false], ['DIK_LCONTROL', false]], fire2: [['KEY_MOUSE_B2', false]], map: [['DIK_TAB', false]],
+        camera: [['DIK_F1', false]], talk: [],
+    });
+    p.env.window.jkWatchBoxSays({}, 'live', '');
+    assert.equal(p.env.watchBox.keys, null, 'not another window');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
+    assert.equal(p.env.renders, 1, 'drawn again with them');
+    text = textOf(p.watchKeysPanel());
+    assert.match(text, /Next player\|Left mouse, Left Ctrl/);
+    assert.match(text, /Player before\|Right mouse/);
+    assert.match(text, /First \/ third person\|F1/);
+    assert.match(text, /Move\|W, A, S, D\|/, 'forward, left, back, right: a letter each');
+    assert.match(text, /Up \/ down\|Space \/ C, Pad button 2/);
+    assert.match(text, /Faster\|Left Shift/);
+    assert.match(text, /Map\|Tab/);
+    assert.match(text, /Message the players\|Talk \(not bound\)/);
+    // Hidden, then shown again; none without a frame.
+    p.watchKeysToggle();
+    assert.equal(p.watchKeysPanel(), null);
+    p.watchKeysToggle();
+    assert.ok(p.watchKeysPanel());
+    assert.equal(p.watchKeysPanel().children[0].children[1].dataset.wact, 'keys', 'its Hide');
+    p.boxStop();
+    assert.equal(p.env.watchBox.keys, null);
+    assert.equal(p.watchKeysPanel(), null);
+    // A game whose page can't say: what the game calls them.
+    const q = page();
+    const g = q.boxShow(q.games[5]);
+    g.contentWindow.jkWatchKeys = () => { throw new Error('gone'); };
+    q.env.window.jkWatchBoxSays(g.contentWindow, 'live', '');
+    assert.match(textOf(q.watchKeysPanel()), /Next player\|Fire\|/);
+});
+
+test('the game\'s names for keys, as players know them', () => {
+    const k = page().keyLabel;
+    assert.equal(k('DIK_SPACE'), 'Space');
+    assert.equal(k('DIK_Q'), 'Q');
+    assert.equal(k('DIK_7'), '7');
+    assert.equal(k('DIK_F12'), 'F12');
+    assert.equal(k('DIK_NUMPAD5'), 'Numpad 5');
+    assert.equal(k('KEY_MOUSE_B3'), 'Middle mouse');
+    assert.equal(k('KEY_JOY2_B11'), 'Pad 2 button 11');
+    assert.equal(k('DIK_BACKSLASH'), '\\');
+    assert.equal(k('DIK_SYSRQ'), 'Sysrq');
+    assert.equal(k('KEY_UNKNOWN'), '');
+    assert.equal(k(''), '');
+});
+
+test('Esc in the box: the keys come back to the viewing page', () => {
+    const p = page();
+    const f = p.boxShow(p.games[5]);
+    p.env.window.jkWatchBoxSays({}, 'letgo', '');
+    assert.equal(p.env.watchScreen.focused, undefined, 'not another window');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'letgo', '');
+    assert.equal(p.env.watchScreen.focused, 1);
+    assert.equal(p.env.watchScreen.tabIndex, -1);
 });
 
 test('the box\'s own panel goes over the badges, and comes off with the frame', () => {

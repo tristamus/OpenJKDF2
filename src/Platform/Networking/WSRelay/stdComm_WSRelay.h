@@ -70,6 +70,13 @@ void stdComm_WSRelay_ViewerJoined(int slot);
 void stdComm_WSRelay_ViewerNoLevel(const char* pEpisode);
 void stdComm_WSRelay_ViewerInLevel();
 
+// A viewer's message (sithMulti_SendChat): to the match through its feed, for
+// the host's game to put in the chat as "<name> (watching): <text>"; and
+// whether a chat line is the viewer's own coming back that way (1: it was
+// shown when it was sent, so it isn't shown again).
+void stdComm_WSRelay_ViewerSay(const char* pStr);
+int stdComm_WSRelay_ViewerOwnEcho(const char* pLine);
+
 // Called each frame of the join screen: 1 once the games stdComm_EnumSessions
 // asked for are in jkGuiMultiplayer_aEntries, for the screen to put up as it
 // does after stdComm_EnumSessions returns 0.

@@ -1169,7 +1169,10 @@ int sithControl_HandlePlayer(SithThing *player, flex_t deltaSecs)
     if (sithMulti_IsSpectating()) {
         // Its body stays out of the world, whatever turned it on.
         player->flags |= SITH_TF_DISABLED;
-        sithControl_PlayerLook(player, deltaSecs);
+        // The free camera turns and looks up and down itself
+        // (sithControl_SpectatorFly). sithControl_PlayerLook looked nowhere
+        // for a spectator: its look speed (sithControl_008d7f44) is only set
+        // on a player's way through here.
         if (sithControl_followingPlayer < 0)
             sithControl_SpectatorFly(player, deltaSecs);
         sithControl_GetKey(INPUT_FUNC_MAP, &input_read);
@@ -1332,6 +1335,9 @@ debug_controls:
             rdVector_Copy3(&player->position, &pThing->position);
             rdMatrix_Copy34(&player->orient, &pThing->orient);
             rdVector_Zero3(&player->actorParams.headPYR);
+            // Looking up or down as they are.
+            if (pThing->type == SITH_THING_PLAYER || pThing->type == SITH_THING_ACTOR)
+                player->actorParams.headPYR.x = pThing->actorParams.headPYR.x;
             sithThing_SetSector(player, pThing->sector, 0);
             sithWorld_g_pCurrentWorld->pCameraFocusThing = pThing;
             sithWorld_g_pCurrentWorld->pLocalPlayer = player; // Fixed: this game's own, not slot 0's (a viewer's isn't)
@@ -1374,13 +1380,15 @@ debug_controls:
         }
     }
     sithControl_GetKey(INPUT_FUNC_JUMP, &input_read);
-    // Added: a spectator's next player is Jump or Fire, the one before Alt
-    // Fire.
+    // Added: a spectator's next player is Fire, or Jump while it follows
+    // one, the one before Alt Fire. In the free camera, Jump flies up
+    // (sithControl_SpectatorFly).
     int spectatorStep = 0;
     if (sithMulti_IsSpectating()) {
         int fireRead = 0;
-        if (input_read)
+        if (input_read && sithControl_followingPlayer >= 0)
             spectatorStep = 1;
+        input_read = 0;
         sithControl_GetKey(INPUT_FUNC_FIRE1, &fireRead);
         if (fireRead)
             spectatorStep = 1;
@@ -1498,16 +1506,33 @@ debug_controls:
 
 static void sithControl_SpectatorMoveTo(SithThing *player, const rdVector3 *dir, flex_t dist);
 
-// Added: a spectator's free camera (sithMulti_IsSpectating) turns as a
-// player does and flies where it looks, through adjoins but not walls:
-// Forward/Back and Slide move it, Run (Fast) goes faster. Its body has no
-// physics (it's disabled), so this turns and moves it itself, keeping its
-// sector.
+// Added: a spectator's free camera (sithMulti_IsSpectating) turns and looks
+// up and down as a player does and flies where it looks, through adjoins but
+// not walls: Forward/Back and Slide move it, Jump takes it up and Duck down,
+// Run (Fast) goes faster. Its body has no physics (it's disabled), so this
+// turns and moves it itself, keeping its sector.
 #define SITHCONTROL_SPECTATOR_SPEED (2.0)
+#define SITHCONTROL_SPECTATOR_PITCH_MAX (85.0)
 void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
 {
     if (!player || !player->sector || deltaSecs <= 0.0)
         return;
+
+    // Up and down: as a player looks (sithControl_PlayerLook), but whether
+    // or not Mouse look is on, and as far as straight up or down: a camera
+    // has nothing else to do with the mouse. Center view levels it.
+    flex_t pitch = sithControl_GetAxis(INPUT_FUNC_PITCH)
+#ifdef QOL_IMPROVEMENTS
+                 + sithControl_GetMouseLook(INPUT_FUNC_PITCH) * 90.0 * SITHCONTROL_MOUSE_AXIS_SECS
+#endif
+                 + sithControl_GetKeyAsAxis(INPUT_FUNC_PITCH) * 90.0 * deltaSecs;
+    rdVector3* pHead = &player->actorParams.headPYR;
+    if (sithControl_GetKey(INPUT_FUNC_CENTER, 0))
+        pHead->x = 0.0;
+    else if (pitch != 0.0)
+        pHead->x = stdMath_Clamp(pHead->x + pitch, -SITHCONTROL_SPECTATOR_PITCH_MAX, SITHCONTROL_SPECTATOR_PITCH_MAX);
+    pHead->y = 0.0;
+    pHead->z = 0.0;
 
     // The turn: the mouse's this frame, the keys' at the player's rate.
     flex_t yaw = sithControl_GetAxis(INPUT_FUNC_TURN)
@@ -1526,7 +1551,11 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
     flex_t slide = sithControl_GetKeyAsAxisNormalized(INPUT_FUNC_SLIDE);
     if (Main_bMotsCompat)
         slide = -slide; // as sithControl_FreeCam's
-    if (forward == 0.0 && slide == 0.0)
+    // Straight up or down, whichever way it looks. GetKey's return is
+    // whether it's held.
+    flex_t rise = (sithControl_GetKey(INPUT_FUNC_JUMP, 0) ? 1.0 : 0.0)
+                - (sithControl_GetKey(INPUT_FUNC_DUCK, 0) ? 1.0 : 0.0);
+    if (forward == 0.0 && slide == 0.0 && rise == 0.0)
         return;
     // As a player's walking (sithControl_PlayerMovement): Run or always run
     // twice as fast, Walk half. GetKey's return is whether it's held.
@@ -1544,6 +1573,7 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
     rdVector_Zero3(&move);
     rdVector_ScaleAdd3Acc(&move, &look.lvec, forward);
     rdVector_ScaleAdd3Acc(&move, &look.rvec, slide);
+    rdVector_ScaleAdd3Acc(&move, &rdroid_zVector3, rise);
     flex_t len = rdVector_Normalize3Acc(&move);
     flex_t dist = (len < 1.0 ? len : 1.0) * speed * deltaSecs;
     if (dist <= 0.0)
@@ -3031,6 +3061,27 @@ EMSCRIPTEN_KEEPALIVE int sithControl_WebFunctionDown(int funcIdx)
     if (funcIdx < 0 || funcIdx >= INPUT_FUNC_MAX)
         return 0;
     return !!sithControl_GetKey(funcIdx, NULL);
+}
+
+// Added: for the viewing page's box (index.html's jkWatchKeys), which shows
+// a spectator's keys as the player bound them. The nth key (not an axis)
+// funcIdx is bound to, as a game key (stdControl_WebKeyName names it), plus
+// 0x10000 when it's the other way (Back for Forward, the other side for
+// Slide); -1 past the last.
+EMSCRIPTEN_KEEPALIVE int sithControl_WebFunctionKey(int funcIdx, int n)
+{
+    if (funcIdx < 0 || funcIdx >= INPUT_FUNC_MAX || n < 0)
+        return -1;
+    stdControlKeyInfo* pInfo = &sithControl_aInputFuncToKeyinfo[funcIdx];
+    for (uint32_t j = 0; j < pInfo->numEntries; j++)
+    {
+        stdControlKeyInfoEntry* pEntry = &pInfo->aEntries[j];
+        if (!(pEntry->flags & INPUT_MAPPING_FLAG_DXKEY) || (pEntry->flags & INPUT_MAPPING_FLAG_AXIS))
+            continue;
+        if (n-- == 0)
+            return (int)(pEntry->dxKeyNum & 0xFFFF) | ((pEntry->flags & INPUT_MAPPING_FLAG_AXIS_REVERSED) ? 0x10000 : 0);
+    }
+    return -1;
 }
 
 EMSCRIPTEN_KEEPALIVE const char* sithControl_WebFunctionName(int funcIdx)

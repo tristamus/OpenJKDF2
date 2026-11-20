@@ -44,6 +44,16 @@ void sithMulti_SendChat(const char *pStr, int arg0, int arg1)
 {
     uint32_t pStr_len; // esi
 
+#ifdef PLATFORM_WSRELAY
+    // Added: a viewer (spectator mode) sends nothing to the match itself: its
+    // message goes through the feed, for the host's game to put in the chat.
+    if (stdComm_WSRelay_bViewer)
+    {
+        stdComm_WSRelay_ViewerSay(pStr);
+        return;
+    }
+#endif
+
     pStr_len = strlen(pStr) + 1;
     if ( pStr_len >= 0x80 )
         pStr_len = 128;
@@ -95,6 +105,13 @@ int sithMulti_ProcessChat(SithMessage *pMsg)
         arg2 = 128;
     NETMSG_POPSTR(v5, arg2);
     v5[arg2 + 1] = 0;
+
+#ifdef PLATFORM_WSRELAY
+    // Added: a viewer's own message, back from the host's game through the
+    // feed: it was shown when it was sent.
+    if ( arg1 < 0 && stdComm_WSRelay_ViewerOwnEcho(v5) )
+        return 1;
+#endif
 
     if ( arg1 < 0 )
         jk_snwprintf(sithMulti_chatWStrTmp, 256, u"%S", v5); // Added: char -> wchar

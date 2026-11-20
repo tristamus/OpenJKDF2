@@ -2520,6 +2520,47 @@ test('a game watching asks for the host\'s mod: the host\'s game has mods.js put
     assert.equal(ups[0][3](), false);
 });
 
+test('a spectator\'s message: the game watching sends it on its feed socket, the host\'s game takes what the feed made of it', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host, other] = await room(world, [2, 3]);
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    other.net.ws.deliver('feed 1 ' + 'cd'.repeat(16));
+    await world.run(5);
+    const [hf, of] = world.feeds.slice(-2);
+    const take = g => {
+        const lines = [];
+        while (g.js.wsrelay_js_feed_take_say(1000, 128))
+            lines.push(new TextDecoder().decode(g.mem.slice(1000, g.mem.indexOf(0, 1000))));
+        return lines;
+    };
+    hf.deliver('say Rogue (watching): hello there');
+    of.deliver('say Rogue (watching): not the host');
+    hf.deliver('say ');
+    hf.deliver('say bad\u00e9line');
+    assert.deepEqual(take(host), ['Rogue (watching): hello there'], "the host's game, a line the chat can show");
+    assert.deepEqual(take(other), []);
+    for (let i = 0; i < 12; i++)
+        hf.deliver('say n' + i);
+    assert.equal(take(host).length, 8, 'at most 8 waiting');
+    host.net.ws.deliver('feed off');
+    assert.deepEqual(take(host), []);
+
+    // The game watching: its name (as the engine has it, UTF-16) and the text.
+    const v = await viewer(makeWorld());
+    const name = 'Kyle  Katarn\u00e9 of the New Republic';
+    new Uint16Array(v.game.mem.buffer, 2000, 64).set([...name].map(c => c.charCodeAt(0)).concat(0));
+    v.game.mem.set([...new TextEncoder().encode('gg wp'), 0], 3000);
+    const before = v.feed.sent.length;
+    assert.equal(v.game.js.wsrelay_js_view_say(2000, 3000), 1);
+    assert.deepEqual(v.feed.sent.slice(before), ['say Kyle Katarn? of\tgg wp']);
+    new Uint16Array(v.game.mem.buffer, 2000, 4).set([32, 0]);
+    assert.equal(v.game.js.wsrelay_js_view_say(2000, 3000), 1);
+    assert.equal(v.feed.sent.at(-1), 'say Someone\tgg wp', 'no name');
+    v.game.Module.jkView.end('over', '');
+    assert.equal(v.game.js.wsrelay_js_view_say(2000, 3000), 0, 'once the feed is closed');
+});
+
 test('the host\'s keyframe names the Mod Library\'s id for its mod, when it has one', async () => {
     const world = makeWorld();
     world.lobby.feed = true;
