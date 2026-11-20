@@ -1546,6 +1546,21 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
     pHead->y = 0.0;
     pHead->z = 0.0;
 
+    // Upright: a followed player's body can lean (a slope, a jump), and the
+    // free camera starts from it (in kit 167, once tilted 11-16 degrees to
+    // the side: Center View didn't level it and turning drifted). It keeps
+    // only its heading; up and down is its head's.
+    if (player->orient.uvec.z < 0.99999)
+    {
+        rdVector3 pyr;
+        rdVector3 keep = player->orient.scale;
+        rdMatrix_ExtractAngles34(&player->orient, &pyr);
+        pyr.x = 0.0;
+        pyr.z = 0.0;
+        rdMatrix_BuildRotate34(&player->orient, &pyr);
+        player->orient.scale = keep;
+    }
+
     // The turn: the mouse's this frame, the keys' at the player's rate.
     flex_t yaw = sithControl_GetAxis(INPUT_FUNC_TURN)
                + sithControl_GetMouseLook(INPUT_FUNC_TURN) * player->actorParams.maxRotVelocity * SITHCONTROL_MOUSE_AXIS_SECS

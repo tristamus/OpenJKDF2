@@ -9,10 +9,12 @@
 //   node test/emjs-escapes-test.mjs
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
-const root = new URL('../../../src/', import.meta.url).pathname;
+// fileURLToPath, not .pathname: on Windows that's /C:/...
+const root = fileURLToPath(new URL('../../../src/', import.meta.url));
 function files(dir, out = []) {
     for (const name of readdirSync(dir)) {
         const p = join(dir, name);
@@ -81,7 +83,7 @@ for (const f of files(root)) {
     for (const b of bodies(text)) {
         n++;
         for (const p of bad(b.body))
-            problems.push(f.substring(root.length) + ':' + (text.substring(0, b.at).split('\n').length) + ': ' + JSON.stringify(p));
+            problems.push(f.substring(root.length).split(sep).join('/') + ':' + (text.substring(0, b.at).split('\n').length) + ': ' + JSON.stringify(p));
     }
 }
 assert.ok(n > 50, 'found the EM_JS bodies (' + n + ')');
