@@ -4398,7 +4398,8 @@ void stdComm_WSRelay_FeedFrame()
 //   STATE  1, player u8, status flags u16 (JKHUD_VALUES_*), model s32 (its
 //          id, -1 for none), sway vec3 f32 and magnitude f32, health,
 //          max health, shields, force, battery, ammo s16: when any of it
-//          changes (at most every 100 ms; the model at once) and every 2 s
+//          changes (at most every 100 ms; the model at once) and every
+//          half second
 //   PLAY   2, player u8, its track s8, 0 u8, model s32, keyframe s32, low
 //          priority s32, flags s32: as jkPlayPOVKey plays it
 //   STOP   3, player u8, its track s8, 0 u8, fade f32: as jkStopPOVKey
@@ -4409,20 +4410,24 @@ void stdComm_WSRelay_FeedFrame()
 //   TRACKS 5, player u8, count u8, 0 u8, model s32, then for each animation
 //          playing on the model (not one fading out): its track u8, 0 u8,
 //          low and high priority s16, 0 s16, keyframe s32, status s32, frame,
-//          upper frame and speed f32: every second
+//          upper frame and speed f32: every half second. A viewer takes
+//          the model from it too
 // A viewer plays an animation only on the model it was played on there, and
 // fades the flashes as sithPlayer_Tick does. TRACKS puts back an animation a
 // viewer missed the start of: one held at its end, as a weapon's raise is,
 // gives the weapon where it's held. In kit 171 a viewer that came after a
 // player picked their Bryar saw it only while they fired (its fire animation),
 // gone again after (the model as it is without one), and other weapons
-// picked while it watched.
+// picked while it watched. Both every half second: in kit 172 a viewer just
+// starting to watch saw no weapon for a moment (the model came with STATE,
+// then every 2 s, and TRACKS waited for it).
 
 #define WSRELAY_POV_EVERY_MS (2000)
+#define WSRELAY_POV_STATE_EVERY_MS (500)
 #define WSRELAY_POV_MIN_MS (100)
 #define WSRELAY_POV_STATE_LEN (36)
 #define WSRELAY_POV_PAL_LEN (52)
-#define WSRELAY_POV_TRACKS_MS (1000)
+#define WSRELAY_POV_TRACKS_MS (500)
 #define WSRELAY_POV_TRACK_LEN (28)
 #define WSRELAY_POV_TRACKS_LEN (8 + 4 * WSRELAY_POV_TRACK_LEN)
 
@@ -4536,7 +4541,7 @@ static void wsrelay_PovState()
     uint32_t now = stdPlatform_GetTimeMsec();
     int bChanged = !wsrelay_bPovSent || memcmp(body, wsrelay_aPovSent, sizeof(body)) != 0;
     int bModelNow = !wsrelay_bPovSent || memcmp(body + 4, wsrelay_aPovSent + 4, 4) != 0;
-    if (!bModelNow && !(bChanged && now - wsrelay_povSentMs >= WSRELAY_POV_MIN_MS) && now - wsrelay_povSentMs < WSRELAY_POV_EVERY_MS)
+    if (!bModelNow && !(bChanged && now - wsrelay_povSentMs >= WSRELAY_POV_MIN_MS) && now - wsrelay_povSentMs < WSRELAY_POV_STATE_EVERY_MS)
         return;
     wsrelay_PovSend(body, sizeof(body));
     memcpy(wsrelay_aPovSent, body, sizeof(body));
@@ -4675,6 +4680,22 @@ static void wsrelay_PovReset()
         memset(wsrelay_aPovOf[i].aTrack, 0xFF, sizeof(wsrelay_aPovOf[i].aTrack));
 }
 
+// The model a player's game says they hold (its id, -1 for none): theirs
+// here too. 0 when this game has no such model.
+static int wsrelay_PovModel(jkPlayerInfo* pInfo, wsrelay_PovOf* pOf, int32_t modelId)
+{
+    rdModel3* pModel = modelId >= 0 ? sithModel_GetModelByIndex(modelId) : NULL;
+    if (pModel && (int32_t)pModel->id != modelId)
+        pModel = NULL;
+    if (pModel != pInfo->povModel.model3 || !pModel)
+    {
+        if (pModel != pInfo->povModel.model3)
+            jkPlayer_SetPovModel(pInfo, pModel);
+        memset(pOf->aTrack, 0xFF, sizeof(pOf->aTrack));
+    }
+    return pModel != NULL;
+}
+
 void stdComm_WSRelay_ProcessPov(SithMessage* pMsg)
 {
     if (!stdComm_WSRelay_bViewer || !sithWorld_g_pCurrentWorld)
@@ -4705,15 +4726,7 @@ void stdComm_WSRelay_ProcessPov(SithMessage* pMsg)
         memcpy(&modelId, p + 4, 4);
         memcpy(waggle, p + 8, 16);
         memcpy(values, p + 24, 12);
-        rdModel3* pModel = modelId >= 0 ? sithModel_GetModelByIndex(modelId) : NULL;
-        if (pModel && (int32_t)pModel->id != modelId)
-            pModel = NULL;
-        if (pModel != pInfo->povModel.model3 || !pModel)
-        {
-            if (pModel != pInfo->povModel.model3)
-                jkPlayer_SetPovModel(pInfo, pModel);
-            memset(pOf->aTrack, 0xFF, sizeof(pOf->aTrack));
-        }
+        wsrelay_PovModel(pInfo, pOf, modelId);
         pOf->waggleVec.x = waggle[0];
         pOf->waggleVec.y = waggle[1];
         pOf->waggleVec.z = waggle[2];
@@ -4767,9 +4780,10 @@ void stdComm_WSRelay_ProcessPov(SithMessage* pMsg)
         int n = p[2];
         int32_t modelId;
         memcpy(&modelId, p + 4, 4);
-        rdModel3* pModel = pInfo->povModel.model3;
+        if (n > 4 || len < 8 + n * WSRELAY_POV_TRACK_LEN || modelId < 0 || !wsrelay_PovModel(pInfo, pOf, modelId))
+            return;
         rdPuppet* pPuppet = pInfo->povModel.puppet;
-        if (n > 4 || len < 8 + n * WSRELAY_POV_TRACK_LEN || !pModel || !pPuppet || (int32_t)pModel->id != modelId)
+        if (!pPuppet)
             return;
         rdKeyframe* aThere[4] = { NULL, NULL, NULL, NULL };
         for (int k = 0; k < n; k++)
