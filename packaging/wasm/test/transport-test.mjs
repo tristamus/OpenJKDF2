@@ -2129,6 +2129,76 @@ test('feed off, leaving the room, or the feed closing it stop the copies; a drop
     assert.ok(host.net.log.some(l => /feed: stopped, closed \(1006\)/.test(l)));
 });
 
+test('a game whose feed stopped asks the lobby for it again, 5 s on and twice as long each time; not after feed off, leaving, or being replaced', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    const asks = () => world.lobby.said.filter(l => l === 'feed').length;
+    await world.run(100);
+    const seated = asks();
+    assert.equal(seated, 2, 'the host and its joiner, once seated');
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    // The feed dropped this game (its token was gone a moment).
+    world.feeds.at(-1).end(4001);
+    await world.run(4900);
+    assert.equal(asks(), seated, 'not yet');
+    await world.run(200);
+    assert.equal(asks(), seated + 1, 'asked again 5 s on');
+    assert.ok(host.net.log.some(l => /feed: asking for it again in 5 s/.test(l)));
+    // The lobby tells it its token: it sends again.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    const back = world.feeds.at(-1);
+    assert.equal(back.url.split('?')[1], 'up=' + TOKEN);
+    feedCopy(host, [7]);
+    await world.run(300);
+    assert.deepEqual(chunkOf(back.sent.at(-1)).packets, [[7]]);
+    // The feed ended itself soon after: 10 s this time.
+    back.end(1000);
+    await world.run(9900);
+    assert.equal(asks(), seated + 1);
+    await world.run(200);
+    assert.equal(asks(), seated + 2, '10 s on');
+    // Out of reach: after its 6 tries (about 31 s), 20 s.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    world.feedDown = true;
+    world.feeds.at(-1).end(1006);
+    await world.run(31000 + 19900);
+    assert.equal(asks(), seated + 2);
+    await world.run(1000);
+    assert.equal(asks(), seated + 3, 'given up on, then 20 s');
+    world.feedDown = false;
+    // Up a minute or more, it starts over at 5 s.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(61000);
+    world.feeds.at(-1).end(1000);
+    await world.run(5100);
+    assert.equal(asks(), seated + 4, 'up a minute: 5 s again');
+    // Another socket of this game took its place: not asked.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    world.feeds.at(-1).end(4002);
+    await world.run(70000);
+    assert.equal(asks(), seated + 4, 'replaced');
+    // The lobby said off after the feed closed it: not asked.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    world.feeds.at(-1).end(1000);
+    host.net.ws.deliver('feed off');
+    await world.run(70000);
+    assert.equal(asks(), seated + 4, 'feed off');
+    // Leaving the room after the feed closed it: not asked.
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    world.feeds.at(-1).end(1000);
+    host.mem.set(new TextEncoder().encode('leave\0'), 2048);
+    host.js.wsrelay_js_send_text(2048);
+    await world.run(70000);
+    assert.equal(asks(), seated + 4, 'left the room');
+});
+
 test('every minute the network log says how much the feed took', async () => {
     const world = makeWorld();
     world.lobby.feed = true;

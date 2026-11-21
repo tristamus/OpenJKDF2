@@ -1449,13 +1449,39 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
         var FEED_BATCH_MS = 250, FEED_MAX_CHUNK = 60000, FEED_LOG_MS = 60000, FEED_RETRIES = 6, FEED_RETRY_MAX_MS = 8000;
         var FEED_KEY_MS = 60000, FEED_KEY_ASK_MS = 5000, FEED_KEY_MAX = 4 * 1024 * 1024, FEED_SENDS = 4, FEED_QUEUE_MAX = 400;
         var FEED_SAID_MAX = 8;
+        /* A feed that stops for any reason but the lobby's (feed off), this
+           game leaving the room, or another socket taking its place is asked
+           for again (askFeed) FEED_ASK_MS on, twice as long each time it
+           stops again, up to FEED_ASK_MAX_MS: the lobby tells it its token
+           again, and arms the feed again in case it ended itself. Otherwise
+           what this game sends would never reach a page watching again, its
+           player's deaths too. FEED_ASK_RESET_MS: a feed that was up that
+           long starts over at FEED_ASK_MS. */
+        var FEED_ASK_MS = 5000, FEED_ASK_MAX_MS = 60000, FEED_ASK_RESET_MS = 60000;
         net.feed = null;
+        net.feedAskMs = 0;
+        net.feedAskTimer = 0;
         net.askFeed = function() {
+            net.feedAskCancel();
             if (Module['jkNetOld'] || net.state !== 1 || net.lobbyCan.indexOf('feed') < 0) return;
             net.ws.send('feed');
         };
+        net.feedAskCancel = function() {
+            if (net.feedAskTimer) clearTimeout(net.feedAskTimer);
+            net.feedAskTimer = 0;
+        };
+        net.feedAskLater = function() {
+            if (net.feedAskTimer) return;
+            net.feedAskMs = Math.min(net.feedAskMs ? net.feedAskMs * 2 : FEED_ASK_MS, FEED_ASK_MAX_MS);
+            net.note('feed: asking for it again in ' + Math.round(net.feedAskMs / 1000) + ' s');
+            net.feedAskTimer = setTimeout(function() {
+                net.feedAskTimer = 0;
+                if (!net.feed && net.seat) net.askFeed();
+            }, net.feedAskMs);
+        };
         net.onFeed = function(parts) {
             if (parts[1] === 'off') {
+                net.feedAskCancel();
                 net.feedStop('the lobby stopped it');
                 return;
             }
@@ -1468,7 +1494,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             if (net.feed && net.feed.url === url) return;
             net.feedStop();
             net.feed = { url: url, ws: null, parts: [], size: 0, out: [], chunks: 0, bytes: 0, packets: 0, keys: 0,
-                         key: null, keyWant: true, keyAt: 0, keyAskAt: 0, said: [],
+                         key: null, keyWant: true, keyAt: 0, keyAskAt: 0, said: [], openAt: 0,
                          since: performance.now(), timer: setInterval(function() { net.feedFlush(); }, FEED_BATCH_MS), tries: 0 };
             net.feedOpen(net.feed);
         };
@@ -1478,6 +1504,10 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 ws = new WebSocket(feed.url);
             } catch (e) {
                 net.note('feed: ' + e);
+                if (net.feed === feed) {
+                    net.feedStop('not opened');
+                    net.feedAskLater();
+                }
                 return;
             }
             ws.binaryType = 'arraybuffer';
@@ -1485,6 +1515,7 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
             ws.onopen = function() {
                 feed.tries = 0;
                 feed.keyWant = true;
+                feed.openAt = performance.now();
                 net.note('feed: sending to ' + feed.url.split('?')[0]);
             };
             ws.onmessage = function(ev) {
@@ -1508,14 +1539,21 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 if (net.feed !== feed || feed.ws !== ws) return;
                 feed.ws = null;
                 var code = ev && ev.code;
-                /* The feed ended it, or another socket of this game took its
-                   place: no more. Otherwise (a network blip, the feed
-                   restarting) try again soon, then less often: 1, 2, 4, 8,
-                   8 and 8 s, for about half a minute. What's sent meanwhile
-                   is lost, and watchers set it right from the keyframe that
-                   follows (keyWant). */
-                if (code === 1000 || code === 1003 || code === 1008 || code === 4001 || code === 4002 || feed.tries >= FEED_RETRIES) {
+                /* Another socket of this game took its place: no more. The
+                   feed ended it, or it can't be reached: the lobby is asked
+                   for it again (feedAskLater). Otherwise (a network blip, the
+                   feed restarting) try again soon, then less often: 1, 2, 4,
+                   8, 8 and 8 s, for about half a minute. What's sent
+                   meanwhile is lost, and watchers set it right from the
+                   keyframe that follows (keyWant). */
+                if (code === 4002) {
                     net.feedStop('closed (' + code + ')');
+                    return;
+                }
+                if (code === 1000 || code === 1003 || code === 1008 || code === 4001 || feed.tries >= FEED_RETRIES) {
+                    if (feed.openAt && performance.now() - feed.openAt >= FEED_ASK_RESET_MS) net.feedAskMs = 0;
+                    net.feedStop('closed (' + code + ')');
+                    net.feedAskLater();
                     return;
                 }
                 feed.tries++;
@@ -1803,6 +1841,8 @@ EM_JS(int, wsrelay_js_send_text, (const char* pText), {
     if (op === 'host' || op === 'join' || op === 'leave') {
         net.seat = null;
         if (net.feedStop) net.feedStop('left the room');
+        if (net.feedAskCancel) net.feedAskCancel();
+        net.feedAskMs = 0;
     }
     if (net.state !== 1) return 0;
     net.ws.send(text);

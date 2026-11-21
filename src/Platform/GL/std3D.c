@@ -32,6 +32,23 @@ static void std3D_WasmGlDrew(void);
 static int std3D_bWasmFrameDrawn = 0; // the last std3D_DrawMenu drew a frame (std3D_WasmFrameDrawn)
 #endif
 
+// Added: SSAO only for a player's own game. While the game watches a match
+// (stdComm_WSRelay_bViewer: the viewing page, the room window's preview, Watch
+// in the game) it's left out, whatever the Display setting says (Antonio,
+// 2026-11-21: it doesn't look good there). The setting itself isn't changed,
+// so it's never saved off, and a game done watching draws it again.
+#ifdef PLATFORM_WSRELAY
+extern int stdComm_WSRelay_bViewer;
+#endif
+static int std3D_SSAOOn(void)
+{
+#ifdef PLATFORM_WSRELAY
+    if (stdComm_WSRelay_bViewer)
+        return 0;
+#endif
+    return jkPlayer_enableSSAO;
+}
+
 #ifdef WIN32
 // Force Optimus/AMD to use non-integrated GPUs by default.
 __declspec(dllexport) DWORD NvOptimusEnablement = 1;
@@ -250,7 +267,7 @@ void std3D_deleteIntermediateFbo(std3DIntermediateFbo* pFbo)
 static void std3D_SetSceneDrawBuffers()
 {
     static const GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
-    glDrawBuffers(jkPlayer_enableSSAO ? 4 : 2, bufs);
+    glDrawBuffers(std3D_SSAOOn() ? 4 : 2, bufs);
 }
 
 // Added: scales w x h down by one factor, set by the side that is furthest over,
@@ -438,7 +455,7 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
     // Changed: the position and normal targets (tex2, tex3) are read only by SSAO and drawn to
     // only while it is on (std3D_SetSceneDrawBuffers), so they're only made then. Turning SSAO
     // on makes the set again (enable_extra & 2, std3D_StartScene).
-    if (jkPlayer_enableSSAO)
+    if (std3D_SSAOOn())
     {
     // Set up our position fb texture
     glGenTextures(1, &pFb->tex2);
@@ -482,7 +499,7 @@ void std3D_generateFramebuffer(int32_t width, int32_t height, std3DFramebuffer* 
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    if (jkPlayer_enableSSAO)
+    if (std3D_SSAOOn())
     {
         std3D_generateIntermediateFbo(width, height, &pFb->ssaoBlur1, 0, 1);
         std3D_generateIntermediateFbo(pFb->ssaoBlur1.w/2, pFb->ssaoBlur1.h/2, &pFb->ssaoBlur2, 0, 1);
@@ -957,7 +974,7 @@ int std3D_StartScene()
 
     if (tex_w != std3D_pFb->w || tex_h != std3D_pFb->h 
         || (!(std3D_pFb->enable_extra & 1) && jkPlayer_enableBloom)
-        || (!(std3D_pFb->enable_extra & 2) && jkPlayer_enableSSAO))
+        || (!(std3D_pFb->enable_extra & 2) && std3D_SSAOOn()))
     {
         std3D_deleteFramebuffer(std3D_pFb);
         std3D_generateFramebuffer(tex_w, tex_h, std3D_pFb);
@@ -2687,7 +2704,7 @@ void std3D_DrawSceneFbo()
     static float frameNum = 1.0;
     //frameNum += (rand() % 16);
 
-    int draw_ssao = jkPlayer_enableSSAO;
+    int draw_ssao = std3D_SSAOOn();
     int draw_bloom = jkPlayer_enableBloom;
 
     float add_luma = (((float)rdroid_curColorEffects.add.x / 255.0f) * 0.2125)
