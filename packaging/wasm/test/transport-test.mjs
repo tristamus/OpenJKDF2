@@ -2944,6 +2944,78 @@ test('the host\'s keyframe says which version of its level it runs, and a viewer
     assert.equal(game.js.wsrelay_js_view_alive(), 0);
 });
 
+test('a viewer the Level Library can\'t give the level asks the host\'s game for it on the feed\'s socket, and says why when it can\'t', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world, 12);
+    const said = [], asked = [], SHA = 'ab'.repeat(32);
+    let error = '';
+    game.Module.jkViewNotice = t => said.push(t);
+    game.Module.jkMaps = {
+        viewFetch: (name, ext, sha, onProgress, src) => {
+            asked.push([name, ext, sha, src]);
+            onProgress(0, 0, 'host');
+            onProgress(0, 0, 'host');
+            onProgress(1, 4, 'host');
+            onProgress(4, 4, 'host');
+        },
+        viewError: () => error
+    };
+    feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('mymap', 'ctf.jkl', { sha: SHA }), keyEnd()])));
+    assert.equal(viewLevel(game).r, 1);
+    game.mem.set([...new TextEncoder().encode('gob'), 0], 900);
+    assert.equal(game.js.wsrelay_js_view_fetch_level(900), 1);
+    assert.deepEqual(asked.map(a => a.slice(0, 3)), [['mymap', 'gob', SHA]]);
+    assert.deepEqual(said, ["Asking the host's game for this match's level.", "Getting this match's level from its host: 100 percent"],
+                     'once each, at most once a second, and when it is all in');
+    // The feed, for the host's game: its https address, and asking it on
+    // the feed's socket as for a mod.
+    const src = asked[0][3];
+    assert.equal(src.url, feed.url.replace(/^ws/, 'http'));
+    assert.match(src.url, /^https?:[/][/][^/]+[/]feed[/]12$/);
+    const before = feed.sent.length;
+    src.ask(SHA);
+    assert.deepEqual(feed.sent.slice(before), ['mod ' + SHA]);
+    // Why it couldn't, for the engine to say.
+    const cstr = p => new TextDecoder().decode(game.mem.slice(p, game.mem.indexOf(0, p)));
+    game.js.wsrelay_js_view_level_error(1000, 400);
+    assert.equal(cstr(1000), '');
+    error = "The host's game stopped sending this match's level (mymap). Try again in a minute.";
+    game.js.wsrelay_js_view_level_error(1000, 400);
+    assert.equal(cstr(1000), error);
+    delete game.Module.jkMaps.viewError;
+    game.js.wsrelay_js_view_level_error(1000, 400);
+    assert.equal(cstr(1000), '', 'an older maps.js');
+});
+
+test('a game watching asks for the host\'s level: the host\'s game has maps.js put it on the feed, else mods.js if it is the mod', async () => {
+    const world = makeWorld();
+    world.lobby.feed = true;
+    const [host] = await room(world, [2]);
+    const maps = [], mods = [];
+    const LEVEL = 'ab'.repeat(32), MOD = 'cd'.repeat(32);
+    host.Module.jkMaps = { feedUp: (url, fp, alive) => { maps.push([url, fp, alive]); return fp === LEVEL; } };
+    host.Module.jkMods = { tail: () => '', feedUp: (url, fp, alive) => { mods.push([url, fp, alive]); return true; } };
+    host.net.ws.deliver('feed 1 ' + TOKEN);
+    await world.run(5);
+    const hf = world.feeds.at(-1);
+    hf.deliver('mod ' + LEVEL);
+    assert.equal(maps.length, 1);
+    assert.equal(mods.length, 0, "the level's: not mods.js");
+    assert.equal(maps[0][0], hf.url.replace(/^ws/, 'http'));
+    assert.equal(maps[0][1], LEVEL);
+    assert.equal(maps[0][2](), true);
+    hf.deliver('mod ' + MOD);
+    assert.deepEqual(maps.map(m => m[1]), [LEVEL, MOD]);
+    assert.deepEqual(mods.map(m => m[1]), [MOD], 'not the level: mods.js');
+    assert.equal(mods[0][0], hf.url.replace(/^ws/, 'http'));
+    // An older maps.js, without feedUp: mods.js, as before.
+    delete host.Module.jkMaps.feedUp;
+    hf.deliver('mod ' + LEVEL);
+    assert.deepEqual(mods.map(m => m[1]), [MOD, LEVEL]);
+    host.net.ws.deliver('feed off');
+    assert.equal(maps[0][2](), false);
+});
+
 let failed = 0;
 for (const t of tests) {
     try {

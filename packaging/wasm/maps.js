@@ -2226,13 +2226,57 @@
     // A game watching a match (stdComm_WSRelay.c's view) gets the level the
     // host runs, by its GOB's SHA-256 from the feed's keyframe: the player's
     // own copy if it's that one, else one saved from an earlier game, else
-    // the Level Library's. It asks the host nothing (no game in the match
-    // knows it's there), and shows no panel: onProgress(done, total) says how
-    // far along the download is. With another version of its own and none of
-    // the host's to be got, it watches with its own.
-    function viewFetch(name, ext, sha, onProgress) {
-        startJob(KIND_MAP, { name: name, ext: ext, sha: sha, label: name + '.' + ext, quiet: true,
-                             onProgress: onProgress || function() {} }, runViewJob);
+    // the Level Library's, else the host's game's by way of the match's feed
+    // (feed: its https address, and ask(fp) to ask it), as a mod comes
+    // (mods.js fromHost). It shows no panel: onProgress(done, total, from)
+    // says how far along the download is, from 'library' or 'host' (total 0
+    // while the host's game is asked), and viewError() why it couldn't. With
+    // another version of its own and none of the host's to be got, it
+    // watches with its own.
+    var viewJob = null;
+
+    function viewFetch(name, ext, sha, onProgress, feed) {
+        viewJob = startJob(KIND_MAP, {
+            name: name, ext: ext, sha: sha, label: name + '.' + ext, quiet: true,
+            feed: feed && typeof feed.url === 'string' && feed.url && typeof feed.ask === 'function' ? feed : null,
+            messageFor: function(reason) { return viewMessageFor(reason, name, ext); },
+            onProgress: onProgress || function() {}
+        }, runViewJob);
+    }
+
+    function viewError() {
+        return viewJob && viewJob.done && states[KIND_MAP] === STATE_FAILED && jobs[KIND_MAP] === viewJob ?
+               viewJob.errorText || '' : '';
+    }
+
+    function viewMessageFor(reason, name, ext) {
+        var level = 'this match\'s level (' + name + ')';
+        var how = ' To watch it, put the same level in your game folder, or join a match on it once.';
+        switch (reason) {
+        case 'not-in-library':
+            return "Your game files don't have " + level + ", and the Level Library doesn't have the host's version " +
+                   'of it.' + how;
+        case 'host-silent':
+            return "Your game files don't have " + level + ", the Level Library doesn't have the host's version of it, " +
+                   "and the host's game didn't send it. It may be on an older version of the page." + how;
+        case 'host-stalled':
+            return "The host's game stopped sending " + level + '. Try again in a minute.';
+        case 'other-map':
+            return 'The host is running a different level now.';
+        case 'other-game':
+            return 'The host sent a level for ' + (ext === 'goo' ? 'Jedi Knight' : 'Mysteries of the Sith') + '.';
+        case 'corrupt':
+        case 'mismatch':
+            return 'The host\'s version of ' + level + " didn't arrive intact. Try again in a minute.";
+        case 'missing-retail':
+            return 'The host\'s version of ' + level + ' uses original ' + (ext === 'goo' ? 'Mysteries of the Sith' :
+                   'Jedi Knight') + " files that your game files don't have.";
+        case 'retail-changed':
+            return 'Your game files have other versions of original files the host\'s version of ' + level + ' uses.';
+        case 'cancelled':
+            return '';
+        }
+        return undefined;
     }
 
     async function runViewJob(j) {
@@ -2260,12 +2304,26 @@
         var site = null;
         if (Module.jkLibrary && Module.jkLibrary.gobFromSite) {
             try {
-                site = await Module.jkLibrary.gobFromSite(game, j.sha, j.onProgress);
+                site = await Module.jkLibrary.gobFromSite(game, j.sha, function(done, total) {
+                    j.onProgress(done, total, 'library');
+                });
             } catch (e) {
                 console.log('OpenJKDF2: could not get ' + j.label + ' from the Level Library (' + (e && e.message || e) + ')');
             }
         }
         check(j);
+        var from = 'the Level Library (' + (site && site.lib) + ')', extra = site ? { lib: site.lib } : null;
+        if (!site && j.feed) {
+            try {
+                site = { bytes: await viewFromHost(j) };
+                from = "the host's game";
+            } catch (e) {
+                if (!e || !e.reason || e.reason === 'cancelled' || !local)
+                    throw e;
+                console.log("OpenJKDF2: the host's game didn't send " + j.label + ' (' + e.reason + ')');
+            }
+            check(j);
+        }
         if (!site) {
             if (local) {
                 console.log("OpenJKDF2: watching with this player's own " + j.label + ", another version than the host's");
@@ -2278,10 +2336,24 @@
         } catch (e) {
             throw fail('install');
         }
-        console.log('OpenJKDF2: installed map ' + j.label + ' from the Level Library (' + site.lib + '), to watch a match');
-        store.put(game, j.name, j.ext, j.sha, site.bytes, { lib: site.lib }).catch(function(e) {
+        console.log('OpenJKDF2: installed map ' + j.label + ' from ' + from + ', to watch a match');
+        store.put(game, j.name, j.ext, j.sha, site.bytes, extra).catch(function(e) {
             console.warn('OpenJKDF2: could not save map ' + j.label + ' for next time: ' + e);
         });
+    }
+
+    // The host's level from the host's game, by way of the match's feed
+    // (feedGet), checked against the keyframe's SHA-256 as it's put back
+    // together (fillRefs).
+    async function viewFromHost(j) {
+        var src = { base: j.feed.url + '/mod/' + j.sha + '/', ask: function() { j.feed.ask(j.sha); } };
+        return feedGet(j, src, function(info) {
+            if (info.ext !== j.ext)
+                throw fail('other-game');
+            checkInfo(info, MAX_MAP_BYTES);
+            if (info.sha256 !== j.sha || String(info.name).toLowerCase() !== j.name.toLowerCase())
+                throw fail('other-map');
+        }, function(done, total) { j.onProgress(done, total, 'host'); });
     }
 
     // The next level of the host's playlist: got as a map is, quietly (the
@@ -2934,6 +3006,18 @@
                    o.info.sha256 : '';
         },
         viewFetch: viewFetch,
+        viewError: viewError,
+        // The host's side of it: a game watching asked the feed for the
+        // level by its SHA-256 (fp), and the host's game puts it there
+        // (feedUp, once for a while). true when fp is the level it's on;
+        // false when it isn't, and it may be the host's mod (mods.js feedUp).
+        feedUp: function(feedUrl, fp, alive) {
+            var o = offers[KIND_MAP];
+            if (!(o && o.info && o.info.status === 'ok' && o.info.sha256 === fp))
+                return false;
+            feedUp(KIND_MAP, feedUrl, fp, alive);
+            return true;
+        },
         abort: function(reason) { abort(reason, KIND_MAP); },
         state: function() { return state(KIND_MAP); },
         // The next level of the host's playlist (src/Main/jkPlaylist.c).

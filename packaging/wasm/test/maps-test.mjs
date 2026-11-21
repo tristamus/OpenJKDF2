@@ -1385,10 +1385,10 @@ test('a watcher without the host\'s level gets it from the Level Library, and on
             return { bytes: new Uint8Array(customMap), lib: 7 };
         }
     };
-    g.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap), (done, total) => progress.push([done, total]));
+    g.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap), (done, total, from) => progress.push([done, total, from]));
     assert.equal(await waitState(g.join), 1);
     assert.deepEqual(asked, [['jk1', sha(customMap)]]);
-    assert.deepEqual(progress, [[1, 2]]);
+    assert.deepEqual(progress, [[1, 2, 'library']]);
     assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
     assert.equal(g.log.length, 0, 'nothing to or from the host');
     // Now it has it.
@@ -1415,6 +1415,151 @@ test('a watcher with another version keeps its own when the site hasn\'t the hos
         assert.equal(await waitState(none.join), 2);
         assert.equal(none.join.FS.files.get('/jk1/episode/ctf_test.gob'), undefined);
     }
+});
+
+// The match's feed (jkdf2mp-bb-server's src/feed.js) as the host's game
+// and a game watching reach it over https: parts kept by key, put with the
+// host's token, and a game watching asking the host's game for its level
+// ("mod <fp>" on the feed's socket, which the host's game hands to
+// jkMaps.feedUp first). parts: what the feed has already.
+function makeFeed(host, parts = new Map()) {
+    const feed = { parts, asks: [], puts: [], url: 'https://lobby.test/feed/7', token: 'ab'.repeat(16) };
+    feed.fetch = async (url, opts = {}) => {
+        const m = /^https:[/][/]lobby[.]test[/]feed[/]7[/]mod[/]([0-9a-f]{64})[/](info|[0-9]+)([?]up=([0-9a-f]+))?$/.exec(url);
+        if (!m)
+            return { ok: false, status: 404 };
+        const key = m[1] + '/' + m[2];
+        if ((opts.method || 'GET') === 'PUT') {
+            feed.puts.push(m[2]);
+            if (m[4] !== feed.token)
+                return { ok: false, status: 403 };
+            feed.parts.set(key, new Uint8Array(opts.body));
+            return { ok: true, status: 200 };
+        }
+        const b = feed.parts.get(key);
+        return b ? { ok: true, status: 200, arrayBuffer: async () => b.slice().buffer } : { ok: false, status: 404 };
+    };
+    feed.src = {
+        url: feed.url,
+        ask: fp => {
+            feed.asks.push(fp);
+            if (host)
+                feed.up = host.jkMaps.feedUp(feed.url + '?up=' + feed.token, fp, () => true);
+        }
+    };
+    return feed;
+}
+
+async function withFetch(fetch, fn) {
+    const real = globalThis.fetch, log = console.log;
+    globalThis.fetch = fetch;
+    console.log = (...a) => { if (process.env.VERBOSE) log(...a); };
+    try {
+        return await fn();
+    } finally {
+        globalThis.fetch = real;
+        console.log = log;
+    }
+}
+
+test('a watcher gets a level the Level Library hasn\'t got from the host\'s game, by way of the feed, without original game files', async () => {
+    for (const site of [async () => null, async () => { throw new Error('HTTP 500'); }]) {
+        const g = makeGame({ hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap }, joinFiles: { ...retailInstall } });
+        g.host.jkMaps.host('ctf_test', 'gob');
+        await hostReady(g.host);
+        g.join.jkLibrary = { gobFromSite: site };
+        const feed = makeFeed(g.host), progress = [];
+        await withFetch(feed.fetch, async () => {
+            g.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap), (d, t, from) => progress.push([d, t, from]), feed.src);
+            assert.equal(await waitState(g.join, 30000), 1);
+        });
+        assert.deepEqual(Buffer.from(g.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
+        assert.deepEqual(feed.asks, [sha(customMap)], 'asked once');
+        assert.equal(feed.up, true);
+        assert.equal(g.log.length, 0, 'nothing to or from the host but the feed');
+        const info = JSON.parse(new TextDecoder().decode(feed.parts.get(sha(customMap) + '/info')));
+        assert.equal(info.status, 'ok');
+        assert.equal(info.name, 'ctf_test');
+        assert.deepEqual(feed.puts, ['info', ...Array.from({ length: info.parts }, (_, i) => String(i))]);
+        for (const [key, b] of feed.parts)
+            assert.ok(!contains(b, retailA) && !contains(b, retailB), 'original game file bytes in ' + key);
+        assert.deepEqual(progress[0], [0, 0, 'host'], 'asking the host first');
+        assert.deepEqual(progress.at(-1), [info.streamSize, info.streamSize, 'host']);
+        assert.equal(g.join.jkMaps.viewError(), '');
+        // Another game watching finds it on the feed, and asks nobody.
+        const other = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall } });
+        other.join.jkLibrary = { gobFromSite: async () => null };
+        await withFetch(feed.fetch, async () => {
+            other.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap), () => {}, feed.src);
+            assert.equal(await waitState(other.join, 30000), 1);
+        });
+        assert.deepEqual(Buffer.from(other.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(customMap));
+        assert.deepEqual(feed.asks, [sha(customMap)]);
+        // The host's game sends its level, not another one (that may be its
+        // mod, mods.js), and once for the feed.
+        await withFetch(feed.fetch, async () => {
+            assert.equal(g.host.jkMaps.feedUp(feed.url + '?up=' + feed.token, 'cd'.repeat(32), () => true), false);
+            const puts = feed.puts.length;
+            assert.equal(g.host.jkMaps.feedUp(feed.url + '?up=' + feed.token, sha(customMap), () => true), true);
+            await new Promise(r => setTimeout(r, 50));
+            assert.equal(feed.puts.length, puts, 'sent again');
+        });
+    }
+});
+
+test('a host\'s game that isn\'t on the level asked for sends nothing; nor one hosting nothing, or an original level', async () => {
+    const g = makeGame({ hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap }, joinFiles: { ...retailInstall } });
+    const feed = makeFeed(null);
+    await withFetch(feed.fetch, async () => {
+        assert.equal(g.host.jkMaps.feedUp(feed.url + '?up=' + feed.token, sha(customMap), () => true), false, 'hosting nothing');
+        g.host.jkMaps.host('JK1MP', 'gob');
+        await hostReady(g.host);
+        assert.equal(g.host.jkMaps.feedUp(feed.url + '?up=' + feed.token, sha(retailEp), () => true), false, 'retail');
+        g.host.jkMaps.host('ctf_test', 'gob');
+        await hostReady(g.host);
+        assert.equal(g.host.jkMaps.feedUp(feed.url + '?up=' + feed.token, 'cd'.repeat(32), () => true), false, 'another one');
+        await new Promise(r => setTimeout(r, 50));
+    });
+    assert.deepEqual(feed.puts, []);
+});
+
+test('a watcher the host\'s game can\'t send the level to says why, or keeps its own version', async () => {
+    const fp = sha(customMap);
+    const said = new Map([[fp + '/info', new TextEncoder().encode(JSON.stringify({ status: 'too-big', name: 'ctf_test', ext: 'gob' }))]]);
+    const none = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall } });
+    none.join.jkLibrary = { gobFromSite: async () => null };
+    const feed = makeFeed(null, said);
+    await withFetch(feed.fetch, async () => {
+        none.join.jkMaps.viewFetch('ctf_test', 'gob', fp, () => {}, feed.src);
+        assert.equal(await waitState(none.join), 2);
+    });
+    assert.match(none.join.jkMaps.viewError(), /over 1 GB/);
+    assert.equal(none.join.FS.files.get('/jk1/episode/ctf_test.gob'), undefined);
+    // Another version of its own: it watches with that.
+    const mine = makeGob([{ name: 'jkl\\ctf_test.jkl', bytes: randomBytes(300) }]);
+    const own = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': mine } });
+    own.join.jkLibrary = { gobFromSite: async () => null };
+    await withFetch(feed.fetch, async () => {
+        own.join.jkMaps.viewFetch('ctf_test', 'gob', fp, () => {}, feed.src);
+        assert.equal(await waitState(own.join), 1);
+    });
+    assert.deepEqual(Buffer.from(own.join.FS.files.get('/jk1/episode/ctf_test.gob')), Buffer.from(mine));
+    // Without a feed (an older engine): the Level Library's message.
+    const old = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall } });
+    old.join.jkLibrary = { gobFromSite: async () => null };
+    old.join.jkMaps.viewFetch('ctf_test', 'gob', fp);
+    assert.equal(await waitState(old.join), 2);
+    assert.match(old.join.jkMaps.viewError(), /the Level Library doesn't have the host's version of it/);
+    // A version the host's game sent that isn't the one asked for.
+    const wrong = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall } });
+    wrong.join.jkLibrary = { gobFromSite: async () => null };
+    const other = new Map([[fp + '/info', new TextEncoder().encode(JSON.stringify({ status: 'ok', name: 'ctf_test', ext: 'gob',
+        size: 100, sha256: 'ee'.repeat(32), streamSize: 104, refsBytes: 4, z: 1024 * 1024, parts: 1 }))]]);
+    await withFetch(makeFeed(null, other).fetch, async () => {
+        wrong.join.jkMaps.viewFetch('ctf_test', 'gob', fp, () => {}, makeFeed(null, other).src);
+        assert.equal(await waitState(wrong.join), 2);
+    });
+    assert.match(wrong.join.jkMaps.viewError(), /a different level now/);
 });
 
 let failed = 0;

@@ -1524,11 +1524,16 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                     feed.keyAskAt = now;
                     feed.keyWant = true;
                 }
-                /* A game watching hasn't got this host's mod: mods.js puts
-                   it on the feed (feedUp), at its https address. */
+                /* A game watching hasn't got this host's level or mod (by
+                   its SHA-256, "mod <fp>" for either): maps.js or mods.js
+                   puts it on the feed (feedUp), at its https address. */
                 var mod = ev && typeof ev.data === 'string' ? /^mod ([0-9a-f]{64})$/.exec(ev.data) : null;
-                if (mod && net.isHost && Module.jkMods && Module.jkMods.feedUp)
-                    Module.jkMods.feedUp(feed.url.replace(/^ws/, 'http'), mod[1], function() { return net.feed === feed; });
+                if (mod && net.isHost) {
+                    var upUrl = feed.url.replace(/^ws/, 'http'), upAlive = function() { return net.feed === feed; };
+                    if (!(Module.jkMaps && Module.jkMaps.feedUp && Module.jkMaps.feedUp(upUrl, mod[1], upAlive)) &&
+                        Module.jkMods && Module.jkMods.feedUp)
+                        Module.jkMods.feedUp(upUrl, mod[1], upAlive);
+                }
                 /* A spectator's message, "<name> (watching): <text>" (the
                    feed made it): the engine puts it in the match's chat on
                    its next frame (wsrelay_js_feed_take_say). */
@@ -2421,26 +2426,44 @@ EM_JS(void, wsrelay_js_view_restart, (int room), {
 });
 
 // Starts getting the feed's level as the host runs it, when its keyframe
-// says which (sha) and this player may not have it (maps.js viewFetch): 1
-// started (wsrelay_js_map_state says when it's done), 0 nothing to get.
-// How far along it is shows over the game.
+// says which (sha) and this player may not have it (maps.js viewFetch, with
+// the feed to ask the host's game by when the Level Library doesn't have
+// it: "mod <sha>" on the feed's socket): 1 started (wsrelay_js_map_state
+// says when it's done), 0 nothing to get. How far along it is shows over
+// the game, at most once a second and when it's all in.
 EM_JS(int, wsrelay_js_view_fetch_level, (const char* pExt), {
     var view = Module.jkView, h = view && view.level;
     if (!h || !h.sha || !Module.jkMaps || !Module.jkMaps.viewFetch) return 0;
-    var name = h.episode, ext = UTF8ToString(pExt), shown = 0, said = -1;
+    var name = h.episode, ext = UTF8ToString(pExt), shown = '', last = 0;
     function say(text) {
         if (typeof Module['jkViewNotice'] === 'function') {
             try { Module['jkViewNotice'](text); } catch (e) {}
         }
     }
-    Module.jkMaps.viewFetch(name, ext, h.sha, function(done, total) {
+    var feed = { url: view.url.replace(/^ws/, 'http'), ask: function(fp) {
+        if (view.ws && view.ws.readyState === 1) {
+            try { view.ws.send('mod ' + fp); } catch (e) {}
+        }
+    } };
+    Module.jkMaps.viewFetch(name, ext, h.sha, function(done, total, from) {
         var now = performance.now(), all = total > 0 && done >= total;
-        if (!(total > 0) || (now - shown < 1000 && !all) || said === 100) return;
-        shown = now;
-        said = all ? 100 : Math.floor(100 * done / total);
-        say("Getting this match's level from the Level Library: " + said + ' percent');
-    });
+        var pct = total > 0 ? (all ? 100 : Math.floor(100 * done / total)) : 0;
+        if (!(total > 0) && from !== 'host') return;
+        var text = !(total > 0) ? "Asking the host's game for this match's level." :
+                   "Getting this match's level from " + (from === 'host' ? 'its host' : 'the Level Library') + ': ' + pct + ' percent';
+        if (text === shown || (now - last < 1000 && !all)) return;
+        shown = text;
+        last = now;
+        say(text);
+    }, feed);
     return 1;
+});
+
+// Why maps.js couldn't get the match's level (viewError), "" for nothing to
+// say.
+EM_JS(void, wsrelay_js_view_level_error, (char* pOut, int maxLen), {
+    var maps = Module.jkMaps;
+    stringToUTF8(maps && maps.viewError ? maps.viewError() : '', pOut, maxLen);
 });
 
 // The view is still on (the feed hasn't ended, nor the player left it).
@@ -3893,8 +3916,11 @@ static void wsrelay_ViewerOff()
     wsrelay_js_connect(STDCOMM_WSRELAY_NETCODE);
 }
 
-// The level of the match watched isn't in this game's files: a joiner gets
-// it from the host (packaging/wasm/maps.js), but the viewer asks it nothing.
+// The level of the match watched isn't in this game's files, and the host's
+// keyframe didn't say which version it runs (its GOB's SHA-256), so it
+// couldn't be got from the Level Library or the host's game
+// (stdComm_WSRelay_ViewerOpen): one that's part of the host's mod, too big
+// to send, or not hashed yet.
 void stdComm_WSRelay_ViewerNoLevel(const char* pEpisode)
 {
     char aText[160];
@@ -4050,11 +4076,13 @@ int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int m
         }
         if (got != WSRELAY_MAP_READY)
         {
-            char aText[200];
+            char aText[400];
             stdPlatform_Printf("OpenJKDF2: Watching room %d: couldn't get episode %s.\n", wsrelay_viewRoom, pEpisode);
             if (wsrelay_js_view_alive())
             {
-                snprintf(aText, sizeof(aText), "Your game files don't have this match's level (%s), and the Level Library doesn't have the host's version of it.", pEpisode);
+                wsrelay_js_view_level_error(aText, sizeof(aText));
+                if (!aText[0])
+                    snprintf(aText, sizeof(aText), "Your game files don't have this match's level (%s), and neither the Level Library nor the host's game could send the host's version of it.", pEpisode);
                 wsrelay_js_view_end("level", aText);
             }
             wsrelay_ViewerOff();
