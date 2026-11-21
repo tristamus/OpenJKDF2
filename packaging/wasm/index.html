@@ -3198,8 +3198,9 @@
             in fullscreen: Esc leaves fullscreen, and Ctrl+W closes the tab. If you fire with Ctrl, give Fire
             another key in the game's Setup &gt; Controls.</p>
           <label class="picker-option" id="raw-mouse-choice"><input type="checkbox" id="raw-mouse-option" checked>
-            <span>Raw mouse input <span class="fine raw-mouse-about">Ticked, mouse look ignores Windows' pointer speed and
-              Enhance pointer precision, so the view can't suddenly jolt. Unticked, it uses your Windows mouse settings,
+            <span>Raw mouse input <span class="fine raw-mouse-about">Ticked, mouse look in fullscreen ignores Windows'
+              pointer speed and Enhance pointer precision, so the view can't suddenly jolt. Unticked, and always in a
+              window (where the hidden cursor could slip off the page), it uses your Windows mouse settings,
               acceleration included. Untick it if mouse look doesn't turn, as over remote desktop or with a drawing
               tablet.</span></span></label>
           <label class="picker-option" data-matches hidden><input type="checkbox" data-match-name checked>
@@ -3650,6 +3651,18 @@
       // engine leaves out the jumps it can tell (Window_WasmIsMouseJump). macOS, Firefox and Safari don't move the
       // cursor this way. Module.jkRawMouse.warps says whether this browser
       // moves it, and .active whether the current lock is raw.
+      // Raw input never brings the hidden cursor back to the middle either: it
+      // goes where the hand takes it, and Windows' acceleration takes a quick
+      // flick much further than the slow move back. Chromium on Windows doesn't
+      // keep it on the page, so in a window it slipped off the bottom onto the
+      // taskbar (or past any edge onto another window), and Windows gave the
+      // mouse to whatever was under it: mouse look froze and Fire did nothing
+      // until the mouse came back, unless a button was held, as Windows keeps
+      // the mouse with the page then (Comet in a window, 21 Nov 2026; never in
+      // fullscreen, nor in a window with the box unticked). So there a lock is
+      // raw only while the page fills the screen and there's no other screen
+      // to slip onto (rawMouseFits); in a window it's the plain lock, which
+      // keeps the cursor in the middle.
       var RAW_MOUSE_SETTING = 'jkdf2mp-raw-mouse';
       // Firefox and Safari have no userAgentData, so they say their system in navigator.platform.
       var rawMousePlatform = navigator.userAgentData ? navigator.userAgentData.platform :
@@ -3659,7 +3672,25 @@
                            /Version\/(\d+)\.(\d+).*Safari\//.exec(navigator.userAgent);
       var rawMouseDefault = rawMousePlatform === 'Windows' && !rawMouseFirefox;
       var rawMouse = Module.jkRawMouse = { warps: !!navigator.userAgentData && rawMousePlatform !== 'macOS',
-                                           want: rawMouseDefault, supported: null, active: false };
+                                           want: rawMouseDefault, supported: null, active: false,
+                                           fullscreenAskedAt: 0 };
+      // Where the hidden cursor can slip off a page that doesn't fill the screen (above).
+      var rawMouseSlips = rawMouse.warps && rawMousePlatform === 'Windows';
+      // Whether a raw lock now keeps the hidden cursor on the page: always,
+      // except in Chromium on Windows, where the page must fill the only screen.
+      // Fullscreen counts from the click that asks for it (playFullscreen), as
+      // the game's lock is asked for in the same click, before fullscreen starts.
+      function rawMouseFits() {
+        if (!rawMouseSlips) return true;
+        if (typeof screen !== 'undefined' && screen.isExtended) return false;
+        if (document.fullscreenElement) return true;
+        if (rawMouse.fullscreenAskedAt && performance.now() - rawMouse.fullscreenAskedAt < 1000) return true;
+        try {
+          return window.matchMedia('(display-mode: fullscreen)').matches; // the browser's own fullscreen (F11)
+        } catch (e) {
+          return false;
+        }
+      }
       // Why this browser can't have raw input, or ''.
       var rawMouseNo = ['Windows', 'macOS', 'Chrome OS', 'Chromium OS'].indexOf(rawMousePlatform) < 0 ? 'system' :
                        rawMouseFirefox && +rawMouseFirefox[1] < 152 ? 'firefox' :
@@ -3732,6 +3763,13 @@
             (rawMouseZoomed ? ', and zooming the page in (Ctrl and +) makes it turn slower.' : '.');
           return;
         }
+        if (rawMouseSlips) {
+          rawMouseAbout.textContent = "Ticked, mouse look in fullscreen ignores Windows' pointer speed and Enhance " +
+            "pointer precision, so the view can't suddenly jolt. Unticked, and always in a window (where the hidden " +
+            'cursor could slip off the page), it uses your Windows mouse settings, acceleration included. Untick it ' +
+            "if mouse look doesn't turn, as over remote desktop or with a drawing tablet.";
+          return;
+        }
         rawMouseAbout.textContent = 'Ticked, mouse look ignores ' +
           (system === 'Windows' ? "Windows' pointer speed" + (rawMouseZoomed ? ', ' : ' and ') + 'Enhance pointer precision' :
            system === 'Mac' ? "macOS's tracking speed and acceleration" : "your system's pointer speed and acceleration") +
@@ -3749,7 +3787,7 @@
         var canvas = Module.canvas, lock = canvas.requestPointerLock;
         if (!lock || rawMouse.supported === false) return;
         canvas.requestPointerLock = function(options) {
-          if (!rawMouse.want || rawMouse.supported === false) return lock.call(canvas, options);
+          if (!rawMouse.want || rawMouse.supported === false || !rawMouseFits()) return lock.call(canvas, options);
           var request;
           try {
             request = lock.call(canvas, { unadjustedMovement: true });
@@ -3768,8 +3806,61 @@
           locked.catch(function() {});
           return locked;
         };
+        // The game can take the mouse before the click that starts
+        // fullscreen: it asks by itself as a level starts, and Chrome allows
+        // that for a few seconds after a click (the Free Demo, kit 179 on beta,
+        // 21 Nov 2026). That lock is plain, as the page was still in a window,
+        // and it stayed plain in fullscreen. So in fullscreen it's asked for
+        // again, raw: as fullscreen starts, and, if that's turned down (the
+        // fullscreen request may have used up the click), on the next click in
+        // the game. Chromium changes a held lock in place, without letting go
+        // of the mouse, and keeps the old one if it can't
+        // (web.dev/articles/disable-mouse-acceleration).
+        var rawAgain = { asking: false, tries: 0 };
+        function makeLockRaw() {
+          if (!document.fullscreenElement || rawMouse.active || document.pointerLockElement !== canvas) return;
+          if (!rawMouse.want || rawMouse.supported === false || !rawMouseFits()) return;
+          if (rawAgain.asking || rawAgain.tries >= 2) return;
+          var request;
+          try {
+            request = lock.call(canvas, { unadjustedMovement: true });
+          } catch (e) {
+            return;
+          }
+          if (!request || !request.then) return;
+          rawAgain.asking = true;
+          rawAgain.tries++;
+          request.then(function() {
+            rawAgain.asking = false;
+            if (document.pointerLockElement !== canvas) return;
+            rawMouse.supported = rawMouse.active = true;
+            Module.print('Mouse: fullscreen, so mouse look is raw now');
+          }, function(e) {
+            // The plain lock stays. A real lack of raw input shows on the next lock.
+            rawAgain.asking = false;
+            Module.print('Mouse: fullscreen, mouse look stays plain for now (' + (e && e.name || e) + ')');
+          });
+        }
+        canvas.addEventListener('pointerdown', makeLockRaw, true);
         document.addEventListener('pointerlockchange', function() {
-          if (document.pointerLockElement !== canvas) rawMouse.active = false;
+          if (document.pointerLockElement === canvas) return;
+          rawMouse.active = false;
+          rawAgain.tries = 0;
+        });
+        document.addEventListener('fullscreenchange', function() {
+          if (!document.fullscreenElement) return;
+          rawAgain.tries = 0;
+          makeLockRaw();
+        });
+        // A raw lock kept on leaving fullscreen would let the cursor slip off
+        // the window, so it's let go: the game takes that as Esc, and the next
+        // click locks again, plain in a window.
+        document.addEventListener('fullscreenchange', function() {
+          if (document.fullscreenElement || !rawMouse.active || document.pointerLockElement !== canvas) return;
+          rawMouse.fullscreenAskedAt = 0;
+          if (rawMouseFits()) return;
+          Module.print('Mouse: left fullscreen with raw mouse input, letting go of the mouse');
+          document.exitPointerLock();
         });
       })();
 
@@ -11576,7 +11667,10 @@
         try {
           request = document.documentElement.requestFullscreen({ keyboardLock: 'browser' });
         } catch (e) { return; }
-        if (request && request.catch) request.catch(function() {});
+        // The game asks for the mouse lock in this same click, before fullscreen
+        // starts: it's raw then, as for fullscreen (rawMouseFits).
+        Module.jkRawMouse.fullscreenAskedAt = performance.now();
+        if (request && request.catch) request.catch(function() { Module.jkRawMouse.fullscreenAskedAt = 0; });
       }
       window.addEventListener('pointerdown', function(ev) {
         if (ev.target === Module.canvas) playFullscreen();
