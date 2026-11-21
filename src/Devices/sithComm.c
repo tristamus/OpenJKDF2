@@ -1,4 +1,8 @@
 #include "sithComm.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuel.h"
+#include "Platform/Networking/Imperial/stdComm_Imperial.h"
+#endif
 
 #include "General/stdConffile.h"
 #include "Gameplay/sithPlayer.h"
@@ -301,6 +305,12 @@ LABEL_14:
                 {
 LABEL_22:
 #ifdef PLATFORM_WSRELAY
+                    /* These messages restore a save's local inventory and
+                       controls; no live peer sends them. Keep file replay
+                       (sithMessage_Process), Imperial and viewer feeds intact. */
+                    if (!stdComm_Imperial_bActive && !stdComm_WSRelay_bViewer &&
+                        (v2 == DSS_INVENTORY || v2 == DSS_ID_1F))
+                        goto LABEL_25;
                     // Added: Hit what you see: another player's swing,
                     // animation and sound messages wait until this game
                     // draws them at the moment they were sent.
@@ -319,6 +329,10 @@ LABEL_22:
 #ifdef PLATFORM_WSRELAY
                     // Added: Hit what you see's own messages, which older
                     // games ignore.
+                    else if ( v2 == SITHDUEL_MSG )
+                    {
+                        sithDuel_Process(&sithComm_netMsgTmp);
+                    }
                     else if ( v2 == STDCOMM_WSRELAY_HITS_MSG )
                     {
                         sithComm_msgInProgress = v2;

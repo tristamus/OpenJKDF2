@@ -1,4 +1,7 @@
 #include "sithInventory.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "jk.h"
 #include "Cog/sithCog.h"
@@ -351,6 +354,9 @@ void sithInventory_SetCurrentWeapon(SithThing *pThing, int weaponID)
 {
     if (!pThing || !pThing->actorParams.pPlayer) return; // Added: Prevent nullptr deref
 
+#ifdef PLATFORM_WSRELAY
+    if (!sithDuelCombat_AllowsWeapon(pThing, weaponID)) return;
+#endif
     pThing->actorParams.pPlayer->curWeaponID = weaponID;
 }
 
@@ -448,6 +454,9 @@ int sithInventory_ActivateBin(SithThing *player, sithCog *cog, flex_t delay, int
     if ( player->actorParams.pPlayer == (SithPlayer *)-136 || !(sithInventory_g_aTypes[binNum].flags & SITHINVENTORY_TYPE_REGISTERED) )
         return 0;
 
+#ifdef PLATFORM_WSRELAY
+    if (!sithDuelCombat_AllowsBin(player, binNum)) return 0;
+#endif
     info = &player->actorParams.pPlayer->aItems[binNum];
     info->activationDelaySecs = delay;
     info->activatedTimeSecs = sithTime_g_secGameTime;
@@ -483,6 +492,9 @@ flex_t sithInventory_DeactivateBin(SithThing *player, sithCog *unused, int binNu
 
 int sithInventory_BinSendActivate(SithThing *player, int binIdx)
 {
+#ifdef PLATFORM_WSRELAY
+    if (!sithDuelCombat_AllowsBin(player, binIdx)) return 0;
+#endif
     if ( sithTime_g_secGameTime < player->actorParams.pPlayer->aItems[binIdx].binWait )
         return 0;
 
@@ -1204,11 +1216,15 @@ int sithInventory_HandleInvSkillKeys(SithThing *player, flex_t deltaSecs)
     }
     else
     {
-        if ( sithControl_GetKey(INPUT_FUNC_USEINV, &keyRead) 
+        if ( (sithControl_GetKey(INPUT_FUNC_USEINV, &keyRead)
 #ifdef QOL_IMPROVEMENTS
             || sithControl_GetKey(INPUT_FUNC_USELASTSELECTED, &keyRead) && sithControl_GetLastSelected() == LAST_SELECTED_ITEM
 #endif // QOL_IMPROVEMENTS
             )
+#ifdef PLATFORM_WSRELAY
+            && sithDuelCombat_AllowsBin(player, player->actorParams.pPlayer->curItemID)
+#endif
+           )
         {
             if ( !sithInventory_g_bSendDeactivateMessage )
             {
@@ -1255,11 +1271,15 @@ int sithInventory_HandleInvSkillKeys(SithThing *player, flex_t deltaSecs)
             }
         }
 
-        if ( sithControl_GetKey(INPUT_FUNC_USESKILL, &keyRead) 
+        if ( (sithControl_GetKey(INPUT_FUNC_USESKILL, &keyRead)
 #ifdef QOL_IMPROVEMENTS
             || sithControl_GetKey(INPUT_FUNC_USELASTSELECTED, &keyRead) && sithControl_GetLastSelected() == LAST_SELECTED_SKILL
 #endif // QOL_IMPROVEMENTS
             )
+#ifdef PLATFORM_WSRELAY
+            && sithDuelCombat_AllowsBin(player, player->actorParams.pPlayer->curPower)
+#endif
+           )
         {
             if ( !sithInventory_bUnkPower )
             {
@@ -1313,6 +1333,10 @@ int sithInventory_HandleInvSkillKeys(SithThing *player, flex_t deltaSecs)
             if ( v20->enabled == 1 )
             {
                 int v21 = sithControl_GetKey(v40 + INPUT_FUNC_ACTIVATE0, &keyRead) == 0;
+#ifdef PLATFORM_WSRELAY
+                if (!sithDuelCombat_AllowsBin(player, v20->binding))
+                    v21 = 1; /* Release a held hotkey through the normal path. */
+#endif
                 v22 = v20->idk;
                 if ( v21 )
                 {
@@ -1518,7 +1542,11 @@ void sithInventory_SendFire(SithThing *player)
         
         if ( aItems->activationDelaySecs > 0.0 
              && sithTime_g_secGameTime >= aItems->binWait 
-             && desc->flags & SITHINVENTORY_TYPE_AUTOAIM )
+             && desc->flags & SITHINVENTORY_TYPE_AUTOAIM
+#ifdef PLATFORM_WSRELAY
+             && sithDuelCombat_AllowsBin(player, i)
+#endif
+           )
         {
             if ( desc->cog )
             {

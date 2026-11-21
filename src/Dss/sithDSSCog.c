@@ -1,4 +1,7 @@
 #include "sithDSSCog.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "Cog/sithCog.h"
 #include "Cog/sithCogExec.h"
@@ -114,6 +117,14 @@ int sithDSSCog_ProcessMessage(SithMessage *in_netMsg)
     param2 = NETMSG_POPF32();
     param3 = NETMSG_POPF32();
     //printf("%x %x %x %x %x %x %x, %f %f %f %f\n", linkId, cog->idx, senderType, sourceType, senderIdx, sourceIndex, msgid, param0, param1, param2, param3);
+#ifdef PLATFORM_WSRELAY
+    /* SkillTarget names the victim as sender and caster as source. Older
+       Classic packets carry no timing suffix and still need isolation. */
+    if (msgid == SITH_MESSAGE_SKILL && senderType == SENDERTYPE_THING &&
+        !sithDuelCombat_AllowsSkill(sithThing_GetThingByIndex(senderIdx),
+            sourceType == SENDERTYPE_THING ? sithThing_GetThingByIndex(sourceIndex) : NULL))
+        return 1;
+#endif
     if ( !cog )
     {
         sithCog_BroadcastMessageEx(msgid, senderType, senderIdx, sourceType, sourceIndex, param0, param1, param2, param3);

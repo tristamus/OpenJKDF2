@@ -1,4 +1,7 @@
 #include "sithPlayer.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuel.h"
+#endif
 
 #include "World/jkPlayer.h"
 #include "World/sithWorld.h"
@@ -33,6 +36,9 @@ void sithPlayer_Startup(int idx)
     SithThing *v2; // eax
 
     v1 = &jkPlayer_playerInfos[idx];
+#ifdef PLATFORM_WSRELAY
+    sithDuel_Forget(idx, v1->playerNetId);
+#endif
     v1->flags = jkPlayer_playerInfos[idx].flags & ~1u;
     sithComm_ForgetSender(v1->playerNetId); // Added: see sithComm_ForgetSender
     sithComm_ForgetRecipient(idx); // Added: see sithComm_ForgetRecipient
@@ -497,6 +503,9 @@ void sithPlayer_NewPlayer(SithThing *pPlayer)
 
     SITH_ASSERTREL(pPlayer); // Added: ported J3D assert
 
+#ifdef PLATFORM_WSRELAY
+    sithDuel_Respawn(pPlayer);
+#endif
     v1 = pPlayer->renderData.puppet;
     if ( v1 )
     {

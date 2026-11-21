@@ -96,6 +96,7 @@ void sithThing_SetSector(SithThing* pThing, SithSector *pSector, int bNotify);
 MATH_FUNC int sithThing_DetachThing(SithThing* pThing);
 void sithThing_DestroyThing(SithThing* pThing);
 flex_t sithThing_DamageThing(SithThing *pThing, SithThing *pDamageThing, flex_t damage, int hitType);
+flex_t sithThing_DamageSaber(SithThing *victim, SithThing *attacker, flex_t damage);
 MATH_FUNC void sithThing_DetachAttachedThings(SithThing* pThing);
 void sithThing_AttachThingToThing(SithThing *pThing, SithThing *pAttachThing);
 void sithThing_SyncThing(SithThing *pThing, int flags);

@@ -22,6 +22,7 @@
 #include "General/stdJSON.h"
 #include "jk.h"
 #ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuel.h"
 #include "Platform/Networking/Imperial/stdComm_Imperial.h" // Added: stdComm_Imperial_RegisterCommands
 #endif
 
@@ -58,6 +59,7 @@ void sithCommand_Startup()
     sithConsole_RegisterCommand(sithCommand_Tick, "tick", 0);
     sithConsole_RegisterCommand(sithCommand_Session, "session", 0);
 #ifdef PLATFORM_WSRELAY
+    sithConsole_RegisterCommand(sithDuel_Command, "duel", 0);
     stdComm_Imperial_RegisterCommands(); // Added: callvote, vote, servermaps, rcon
 #endif
 

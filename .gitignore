@@ -97,6 +97,7 @@ formatting_notes.txt
 DW_res/*
 Jones_res/*
 build_emcc/*
+build_emcc_jspi/*
 JK.h
 out/*
 build_linux64_/*

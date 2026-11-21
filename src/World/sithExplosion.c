@@ -1,4 +1,7 @@
 #include "sithExplosion.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "AI/sithAIAwareness.h"
 #include "World/sithThing.h"
@@ -98,6 +101,10 @@ void sithExplosion_MakeBlast(SithThing *pThing)
                 SITH_ASSERTREL((i->type & SITHCOLLISION_THING)); // Added: OpenJones3D sithExplosion_MakeBlast collision-type assert
 
                 SithThing* v4 = i->pThingCollided;
+#ifdef PLATFORM_WSRELAY
+                if (!sithDuelCombat_AllowsDamage(v4, pThing, 0))
+                    continue; /* The blast impulse is independent of its damage. */
+#endif
                 if ( ((pThing->explosionParams.flags & SITHEXPLOSION_FLAG_NO_DAMAGE_TO_SHOOTER) == 0
                    || v4 != pThing->pParent
                    || v4->signature != pThing->parentSignature)

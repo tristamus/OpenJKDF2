@@ -1,4 +1,7 @@
 #include "sithControl.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "General/sithStrTable.h"
 #include "Platform/stdControl.h"
@@ -1264,6 +1267,10 @@ LABEL_39:
                     sithControl_PlayerLook(player, deltaSecs);
                 }
 
+#ifdef PLATFORM_WSRELAY
+                if (sithDuelCombat_Phase(player) == 1)
+                    return 0; /* Keep looking around. Gravity and moving floors still apply. */
+#endif
                 if ( player->attach_flags )
                     sithControl_PlayerMovement(player);
                 else

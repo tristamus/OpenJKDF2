@@ -1,4 +1,7 @@
 #include "jkQuakeConsole.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuel.h"
+#endif
 
 #include "General/stdHashtbl.h"
 #include "General/stdBitmap.h"
@@ -520,6 +523,9 @@ int jkQuakeConsole_AutocompleteTemplates()
 
 void jkQuakeConsole_ExecuteCommand(const char* pCmd)
 {
+#ifdef PLATFORM_WSRELAY
+    if (sithDuel_Chat(pCmd)) return;
+#endif
     if ( jkHud_dword_552D10 == -1 && sithNet_isMulti )
     {
         _sprintf(std_g_genBuffer, "You say, '%s'", pCmd);

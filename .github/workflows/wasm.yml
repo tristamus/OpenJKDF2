@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - web-mp
+      - jkweb-duels
   pull_request:
     branches:
       - web-mp
+      - jkweb-duels
+  workflow_dispatch:
 
 jobs:
   build:
@@ -221,6 +224,14 @@ jobs:
       # index that changes hands, and how a receiver acks and drops repeats.
       - name: Test reliable messages
         run: sh packaging/wasm/test/sithcomm-test.sh
+      - name: Test private duel consent, lifecycle and wire validation
+        run: sh packaging/wasm/test/duel-state-test.sh
+      - name: Test private duel combat isolation and recovery
+        run: sh packaging/wasm/test/duelcombat-test.sh
+      - name: Test private duel body-update authority
+        run: sh packaging/wasm/test/duel-mutations-test.sh
+      - name: Test private duels across three independent peers
+        run: sh packaging/wasm/test/duel-integration-test.sh
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

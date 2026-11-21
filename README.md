@@ -1,3 +1,20 @@
+# JKWeb Duels development branch
+
+This branch adds JO/JA-inspired **Challenge to a duel** to the browser multiplayer
+engine: mutual acceptance, a short preparation period, private saber combat,
+and full health and shields for the surviving winner. Other players can watch
+and pass through the duelists without blocking them.
+
+The work lives on `jkweb-duels` in
+[CodaLilitari/OpenJKDF2-MotS-Fixes](https://github.com/CodaLilitari/OpenJKDF2-MotS-Fixes/tree/jkweb-duels).
+Its browser engine base is
+[Tristamus's web-mp branch](https://github.com/tristamus/OpenJKDF2/tree/web-mp),
+pinned at `9eb99b4aa2ca45892d61c96fe54e655d27fe0fae`.
+
+See [duel controls, rules and verification](docs/JKWEB_DUELS.md). The public
+JediKnight.zone site below is upstream; using this development feature requires
+a build of this branch.
+
 # jkdf2mp: Jedi Knight multiplayer in your browser
 
 **Play: https://jediknight.zone/** (desktop Chrome or Firefox, plus your own copy of the game)
@@ -91,7 +108,10 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ## Where the code is
 
-Everything above is merged into the `web-mp` branch, and the live site is built from it. Each change came in as its own pull request:
+The upstream browser engine is developed on Tristamus's `web-mp` branch, which
+the upstream site is built from. Private-duel development described at the top
+of this README lives on this fork's `jkweb-duels` branch. The upstream changes
+below came in as individual pull requests:
 
 - [#1](https://github.com/tristamus/OpenJKDF2/pull/1): browser build from a clean checkout, game folder picker, folder-spelling and file-search fixes
 - [#2](https://github.com/tristamus/OpenJKDF2/pull/2): lobby networking over WebSockets

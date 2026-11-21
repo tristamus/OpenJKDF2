@@ -1,4 +1,8 @@
 #include "sithMulti.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuel.h"
+#include "Platform/Networking/Imperial/stdComm_Imperial.h"
+#endif
 
 #include "Win95/stdComm.h"
 #include "Gameplay/sithEvent.h"
@@ -247,6 +251,9 @@ int sithMulti_Startup()
     SithThing **v5; // ebp
     int v7; // ecx
 
+#ifdef PLATFORM_WSRELAY
+    sithDuel_Reset();
+#endif
     g_submodeFlags |= 1u;
     sithMulti_quitGameState = 0;
     sithMulti_bTimelimitMet = 0;
@@ -282,6 +289,9 @@ void sithMulti_RemoveStaticThing(int guid)
 
 void sithMulti_Shutdown()
 {
+#ifdef PLATFORM_WSRELAY
+    sithDuel_Reset();
+#endif
     sithMessage_g_outputstream &= ~1u;
     sithNet_isMulti = 0;
     sithNet_isServer = 0;
@@ -299,6 +309,11 @@ int sithMulti_SendJoinRequest(int sendto_id)
     NETMSG_PUSHWSTR(jkPlayer_playerShortName, 0x10);
     NETMSG_PUSHWSTR(sithMulti_name, 0x20);
     NETMSG_PUSHU32(sithNet_checksum);
+#ifdef PLATFORM_WSRELAY
+    if (!stdComm_Imperial_bActive && !stdComm_WSRelay_bViewer) {
+        NETMSG_PUSHU32(SITHDUEL_JOIN_TAG);
+    }
+#endif
     // Added: logged once, as the join request is sent again every 2 s while joining.
     static uint32_t lastLoggedChecksum = 0;
     if ( sithNet_checksum != lastLoggedChecksum )
@@ -407,6 +422,7 @@ void sithMulti_ProcessKilledPlayer(SithPlayer *pPlayer, SithThing *pPlayerThing,
 
 #ifdef PLATFORM_WSRELAY
     // Added: the match record
+    sithDuel_PlayerDied(pPlayerThing);
     stdComm_WSRelay_MatchKill(pPlayer, pPlayerThing, pKiller);
 #endif
 
@@ -622,41 +638,49 @@ int sithMulti_LobbyMessage()
     return stdComm_DoReceive();
 }
 
+// Activate the slot once. On browser rooms the host does this from its own
+// completed join reservation; clients do it from the host's welcome.
+static void sithMulti_ActivateJoined(int playerNum, int id)
+{
+    SithPlayer *player = &jkPlayer_playerInfos[playerNum];
+    if ((player->flags & 1) || !sithPlayer_ShowPlayer(playerNum, id))
+        return;
+    char16_t line[128];
+    jk_snwprintf(line, 128, sithStrTable_GetUniStringWithFallback("%s_HAS_JOINED_THE_GAME"), player->player_name);
+    sithConsole_PrintWString(line);
+    player->msecLastCommTime = sithTime_g_msecGameTime;
+    if (sithNet_isServer)
+        sithCog_BroadcastMessage(SITH_MESSAGE_JOIN, 3, player->pLocalPlayer->idx, 0, playerNum);
+    if (sithMulti_pfNewPlayerJoinedCallback)
+        sithMulti_pfNewPlayerJoinedCallback();
+    sithDSSThing_UpdateState(sithPlayer_g_pLocalPlayerThing, -1, 255);
+    if (sithNet_isServer)
+        sithNet_bSyncScores = 1;
+}
+
 int sithMulti_ProcessWelcome(SithMessage *pMsg)
 {
-    int v1; // edi
-    int v2; // ebx
-    int v4; // ecx
-    int v5; // edx
-    SithPlayer* v6; // eax
-    char16_t *v8; // eax
-    char16_t a1a[128]; // [esp+10h] [ebp-100h] BYREF
-
+    int v4, v5;
+    SithPlayer *v6;
+#ifdef PLATFORM_WSRELAY
+    if (!stdComm_Imperial_bActive && (pMsg->netMsg.idx != 1 || pMsg->netMsg.msg_size != 40))
+        return 0;
+#endif
     NETMSG_IN_START(pMsg);
-
-    v1 = NETMSG_POPS32();
-    v2 = NETMSG_POPS32();
+    int v1 = NETMSG_POPS32();
+    int v2 = NETMSG_POPS32();
+#ifdef PLATFORM_WSRELAY
+    if (!stdComm_Imperial_bActive) {
+        int viewerSeat = stdComm_WSRelay_bViewer && v2 == stdComm_dplayIdSelf;
+        if (v1 < 0 || v1 >= JKPLAYER_NUM_INFOS || (!viewerSeat && (uint32_t)v1 >= jkPlayer_maxPlayers)
+            || (!viewerSeat && (v2 <= 0 || v2 > 64 || ((v1 == 0) != (v2 == 1)))))
+            return 0;
+    }
+#endif
     NETMSG_POPWSTR(jkPlayer_playerInfos[v1].player_name, 0x10);
-
     sithMulti_verbosePrintf("sithMulti_ProcessWelcome %x %x %x\n", v1, v2, stdComm_dplayIdSelf);
-
-    if ( v2 != stdComm_dplayIdSelf )
-    {
-        if ( (jkPlayer_playerInfos[v1].flags & 1) == 0 )
-        {
-            sithPlayer_ShowPlayer(v1, v2);
-            v8 = sithStrTable_GetUniStringWithFallback("%s_HAS_JOINED_THE_GAME");
-            jk_snwprintf(a1a, 0x80u, v8, jkPlayer_playerInfos[v1].player_name);
-            sithConsole_PrintWString(a1a);
-            jkPlayer_playerInfos[v1].msecLastCommTime = sithTime_g_msecGameTime;
-            if ( sithNet_isServer )
-                sithCog_BroadcastMessage(SITH_MESSAGE_JOIN, 3, jkPlayer_playerInfos[v1].pLocalPlayer->idx, 0, v1);
-            if ( sithMulti_pfNewPlayerJoinedCallback )
-                sithMulti_pfNewPlayerJoinedCallback();
-            sithDSSThing_UpdateState(sithPlayer_g_pLocalPlayerThing, -1, 255);
-            if ( sithNet_isServer )
-                sithNet_bSyncScores = 1;
-        }
+    if (v2 != stdComm_dplayIdSelf) {
+        sithMulti_ActivateJoined(v1, v2);
         return 1;
     }
     if ( (g_submodeFlags & 8) == 0 )
@@ -938,6 +962,43 @@ int sithMulti_ProcessSyncPlayers(SithMessage *pMsg)
     char16_t a1a[128]; // [esp+30h] [ebp-200h] BYREF
     char16_t v22[128]; // [esp+130h] [ebp-100h] BYREF
 
+#ifdef PLATFORM_WSRELAY
+    SithMessage rosterCopy;
+    if (!stdComm_Imperial_bActive) {
+        // LEAVEJOIN replaces the player identity table and the host ID.
+        // Check its variable records before applying any of them.
+        const uint8_t *p = (const uint8_t *)pMsg->pktData;
+        size_t len = pMsg->netMsg.msg_size;
+        if (pMsg->netMsg.idx != 1 || len < 10 || len > sizeof(pMsg->pktData))
+            return 0;
+        uint32_t mode, host;
+        uint16_t count;
+        memcpy(&mode, p, 4);
+        memcpy(&host, p + 4, 4);
+        memcpy(&count, p + 8, 2);
+        if (host != 1 || !count || count > JKPLAYER_NUM_INFOS)
+            return 0;
+        size_t offset = 10;
+        for (int slot = 0; slot < count; slot++) {
+            uint32_t flags;
+            if (len - offset < 4)
+                return 0;
+            memcpy(&flags, p + offset, 4);
+            offset += 4;
+            if (flags & 4) {
+                if (len - offset < 30)
+                    return 0;
+                offset += 30;
+            }
+        }
+        if (len - offset != ((mode & MULTIMODEFLAG_TEAMS) ? 10u : 0u))
+            return 0;
+        // Roster joins invoke world/COG callbacks which can send an update
+        // through sithComm_netMsgTmp, the buffer that delivered this roster.
+        memcpy(&rosterCopy, pMsg, sizeof(rosterCopy));
+        pMsg = &rosterCopy;
+    }
+#endif
     NETMSG_IN_START(pMsg);
 
     sithNet_MultiModeFlags = 0;
@@ -962,6 +1023,9 @@ int sithMulti_ProcessSyncPlayers(SithMessage *pMsg)
             v8 = NETMSG_POPS32();
             if ( v6->playerNetId != v8 )
             {
+#ifdef PLATFORM_WSRELAY
+                sithDuel_Forget(v3, v6->playerNetId);
+#endif
                 sithComm_ForgetSender(v6->playerNetId); // Added: the slot's last player left
                 sithComm_ForgetRecipient(v3); // Added: and gets no more resends
             }
@@ -993,6 +1057,12 @@ int sithMulti_ProcessSyncPlayers(SithMessage *pMsg)
             }
             else
             {
+#ifdef PLATFORM_WSRELAY
+                // An older browser host only sends WELCOME to the new player.
+                // Its roster is the authoritative join for existing peers.
+                if (!stdComm_Imperial_bActive)
+                    sithPlayer_ShowPlayer(v3, v8);
+#endif
                 v10 = sithStrTable_GetUniStringWithFallback("%s_HAS_JOINED_THE_GAME");
                 jk_snwprintf(a1a, 0x80u, v10, v6);
                 sithConsole_PrintWString(a1a);
@@ -1131,6 +1201,12 @@ int sithMulti_ProcessJoinRequest(SithMessage *pMsg)
     NETMSG_IN_START(pMsg);
 
     v1 = pMsg->netMsg.idx;
+#ifdef PLATFORM_WSRELAY
+    uint32_t duelTag = 0;
+    const size_t joinBytes = 32 + (16 + 32) * sizeof(char16_t) + sizeof(uint32_t);
+    if (pMsg->netMsg.msg_size == joinBytes + sizeof(duelTag))
+        memcpy(&duelTag, &pMsg->pktData[joinBytes], sizeof(duelTag));
+#endif
 
     if ( stdComm_bIsServer && v1 )
     {
@@ -1254,6 +1330,10 @@ int sithMulti_ProcessJoinRequest(SithMessage *pMsg)
 #endif
             }
 
+#ifdef PLATFORM_WSRELAY
+            sithDuel_Joining(sithMulti_curWelcomePlayerNum, v1, duelTag == SITHDUEL_JOIN_TAG);
+#endif
+
             sithMulti_verbosePrintf("Sending the final\n");
             NETMSG_START;
             NETMSG_PUSHS32(0);
@@ -1335,6 +1415,24 @@ LABEL_11:
 }
 
 // MOTS altered
+// Complete the reservation the host created in ProcessJoinRequest. Older
+// clients announce themselves after loading; the browser host's announcement
+// lets receivers trust a single source without depending on those echoes.
+static void sithMulti_CompleteJoin(int slot, int id)
+{
+    jkPlayer_playerInfos[slot].playerNetId = id;
+    sithMulti_SyncPlayers(id, 1);
+#ifdef PLATFORM_WSRELAY
+    if (!stdComm_Imperial_bActive && sithNet_isServer) {
+        sithMulti_ActivateJoined(slot, id);
+        sithMulti_SendWelcome(id, slot, -1);
+        sithDuel_Welcome(slot, id);
+        return;
+    }
+#endif
+    sithMulti_SendWelcome(id, slot, id);
+}
+
 void sithMulti_Update(int msecDeltaTime)
 {
     uint32_t v2; // esi
@@ -1351,6 +1449,7 @@ void sithMulti_Update(int msecDeltaTime)
     // Added: what this game's player holds and sees, for those watching the
     // match from the room's feed (spectator mode).
     stdComm_WSRelay_FeedPovFrame();
+    sithDuel_Frame();
 #endif
 
     sithThing_SyncThings();
@@ -1524,9 +1623,7 @@ void sithMulti_Update(int msecDeltaTime)
                             if ( (sithNet_MultiModeFlags & MULTIMODEFLAG_TEAMS) != 0 && (sithNet_MultiModeFlags & MULTIMODEFLAG_100) != 0 )
                                 jkPlayer_playerInfos[sithMulti_curWelcomePlayerNum].teamNum = (sithMulti_curWelcomePlayerNum & 1) + 1;
                             sithMulti_verbosePrintf("Last sync %x %x\n", sithMulti_newPlayerId, sithMulti_curWelcomePlayerNum);
-                            jkPlayer_playerInfos[sithMulti_curWelcomePlayerNum].playerNetId = sithMulti_newPlayerId;
-                            sithMulti_SyncPlayers(sithMulti_newPlayerId, 1);
-                            sithMulti_SendWelcome(sithMulti_newPlayerId, sithMulti_curWelcomePlayerNum, sithMulti_newPlayerId);
+                            sithMulti_CompleteJoin(sithMulti_curWelcomePlayerNum, sithMulti_newPlayerId);
 
                             sithNet_bNeedsFullThingSyncForLeaveJoin = 0;
                             sithMulti_newPlayerId = 0;
