@@ -45,27 +45,45 @@ function storage(items = {}, { blocked = false } = {}) {
 
 // The page's mouse-look code in a made-up browser. dbs: the IndexedDB
 // databases this site has (names), or null for a browser without
-// indexedDB.databases.
-async function open(browser, { local = storage(), dbs = [] } = {}) {
+// indexedDB.databases. view: how the page is shown (fullscreen: the page's own
+// fullscreen; browserFullscreen: the browser's, F11; extended: more than one
+// screen), which the test can change later through p.view.
+async function open(browser, { local = storage(), dbs = [], view = {} } = {}) {
     const navigator = { userAgent: browser.ua, platform: browser.platform };
     if (browser.uaPlatform) navigator.userAgentData = { platform: browser.uaPlatform };
     const option = { checked: true, disabled: false, listeners: {},
                      addEventListener(type, fn) { this.listeners[type] = fn; } };
     const about = { textContent: '' };
+    const v = { fullscreen: false, browserFullscreen: false, extended: undefined, ...view };
+    const listeners = {};
+    const canvas = { requestPointerLock(options) { locks.push(options || null); return Promise.resolve(); } };
     const document = {
         getElementById: id => (id === 'raw-mouse-option' ? option : null),
         querySelector: sel => (sel === '#raw-mouse-choice .raw-mouse-about' ? about : null),
-        addEventListener() {},
+        addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
         pointerLockElement: null,
+        get fullscreenElement() { return v.fullscreen ? {} : null; },
+        exited: 0,
+        exitPointerLock() { this.exited++; this.pointerLockElement = null; fire('pointerlockchange'); },
     };
+    const screen = { get isExtended() { return v.extended; } };
+    const window = { matchMedia: q => ({ matches: q === '(display-mode: fullscreen)' && (v.browserFullscreen || v.fullscreen) }) };
     const locks = [];
-    const canvas = { requestPointerLock(options) { locks.push(options || null); return Promise.resolve(); } };
-    const Module = { canvas };
+    const printed = [];
+    const Module = { canvas, print: t => printed.push(t) };
     const indexedDB = dbs === null ? {} : { databases: () => Promise.resolve(dbs.map(name => ({ name, version: 21 }))) };
-    new Function('Module', 'navigator', 'document', 'localStorage', 'indexedDB', code)(
-        Module, navigator, document, local, indexedDB);
+    new Function('Module', 'navigator', 'document', 'localStorage', 'indexedDB', 'screen', 'window', code)(
+        Module, navigator, document, local, indexedDB, screen, window);
     await new Promise(resolve => setTimeout(resolve, 0));
-    return { option, about, local, raw: Module.jkRawMouse, lock: () => canvas.requestPointerLock(), locks };
+    const fire = type => (listeners[type] || []).forEach(fn => fn());
+    // A lock as the page's code takes it: asked for, then granted.
+    async function lock() {
+        await canvas.requestPointerLock();
+        document.pointerLockElement = canvas;
+        fire('pointerlockchange');
+    }
+    function unlock() { document.pointerLockElement = null; fire('pointerlockchange'); }
+    return { option, about, local, raw: Module.jkRawMouse, lock, unlock, locks, view: v, document, fire, printed };
 }
 
 const tests = [];
@@ -160,13 +178,88 @@ test('the box says page zoom slows plain mouse look in Firefox, not elsewhere', 
     assert.match(p.about.textContent, /^Not available here: .*zooming the page in \(Ctrl and \+\) makes it turn slower\.$/);
     p = await open(EDGE_WIN);
     assert.equal(p.about.textContent,
-        "Ticked, mouse look ignores Windows' pointer speed and Enhance pointer precision, so the view can't suddenly " +
-        'jolt. Unticked, it uses your Windows mouse settings, acceleration included. Untick it if mouse look ' +
+        "Ticked, mouse look in fullscreen ignores Windows' pointer speed and Enhance pointer precision, so the view " +
+        "can't suddenly jolt. Unticked, and always in a window (where the hidden cursor could slip off the page), it " +
+        'uses your Windows mouse settings, acceleration included. Untick it if mouse look ' +
         "doesn't turn, as over remote desktop or with a drawing tablet.");
     p = await open(FIREFOX_MAC);
     assert.doesNotMatch(p.about.textContent, /zoom/);
     p = await open(CHROME_MAC);
     assert.doesNotMatch(p.about.textContent, /zoom/);
+});
+
+test('Chromium on Windows: raw only while the page fills the only screen', async () => {
+    // In a window the hidden cursor slipped off the page (Comet, 21 Nov 2026): the plain lock.
+    let p = await open(EDGE_WIN);
+    await p.lock();
+    assert.deepEqual(p.locks, [null], 'in a window');
+    assert.equal(p.raw.active, false);
+    p.unlock();
+    p.view.fullscreen = true;
+    await p.lock();
+    assert.deepEqual(p.locks, [null, { unadjustedMovement: true }], "the page's fullscreen");
+    assert.equal(p.raw.active, true);
+    p.unlock();
+    assert.equal(p.raw.active, false);
+    p.view.fullscreen = false;
+    p.view.browserFullscreen = true;
+    await p.lock();
+    assert.deepEqual(p.locks.at(-1), { unadjustedMovement: true }, "the browser's fullscreen (F11)");
+    p.unlock();
+    // More than one screen: the cursor could slip onto the other one.
+    p.view.extended = true;
+    p.view.fullscreen = true;
+    await p.lock();
+    assert.equal(p.locks.at(-1), null, 'fullscreen, two screens');
+    p.unlock();
+    // Box unticked: plain everywhere, as before.
+    p = await open(EDGE_WIN, { local: storage({ 'jkdf2mp-raw-mouse': 'off' }), view: { fullscreen: true } });
+    await p.lock();
+    assert.deepEqual(p.locks, [null]);
+});
+
+test('Chromium on Windows: the click that asks for fullscreen locks raw', async () => {
+    const p = await open(EDGE_WIN);
+    p.raw.fullscreenAskedAt = performance.now();  // playFullscreen, earlier in the same click
+    await p.lock();
+    assert.deepEqual(p.locks, [{ unadjustedMovement: true }]);
+    p.unlock();
+    p.raw.fullscreenAskedAt = performance.now() - 5000;  // long ago, and still in a window
+    await p.lock();
+    assert.deepEqual(p.locks.at(-1), null);
+});
+
+test('Chromium on Windows: leaving fullscreen with a raw lock lets go of the mouse', async () => {
+    const p = await open(EDGE_WIN, { view: { fullscreen: true } });
+    await p.lock();
+    assert.equal(p.raw.active, true);
+    p.view.fullscreen = false;
+    p.fire('fullscreenchange');
+    assert.equal(p.document.exited, 1);
+    assert.equal(p.raw.active, false);
+    // Not when the lock is plain, or there's none, or fullscreen just began.
+    const q = await open(EDGE_WIN);
+    await q.lock();
+    q.fire('fullscreenchange');
+    assert.equal(q.document.exited, 0, 'a plain lock in a window');
+    q.unlock();
+    q.view.fullscreen = true;
+    await q.lock();
+    q.fire('fullscreenchange');
+    assert.equal(q.document.exited, 0, 'still fullscreen');
+    // Left fullscreen into the browser's own (F11): still fills the screen.
+    q.view.fullscreen = false;
+    q.view.browserFullscreen = true;
+    q.fire('fullscreenchange');
+    assert.equal(q.document.exited, 0, "into the browser's fullscreen");
+});
+
+test('elsewhere a lock is raw in a window too, as before', async () => {
+    for (const browser of [FIREFOX_WIN, CHROME_MAC]) {
+        const p = await open(browser, { local: storage({ 'jkdf2mp-raw-mouse': 'on' }) });
+        await p.lock();
+        assert.deepEqual(p.locks, [{ unadjustedMovement: true }], browser.ua);
+    }
 });
 
 let failed = 0;

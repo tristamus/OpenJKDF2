@@ -335,11 +335,12 @@ function box({ locked = true, fullscreen = true } = {}) {
         document, picker, navigator: {},
         pickerTitle: element(), modChoice: element(), problemReload: element(),
         showPickerResult: () => {}, fullscreenOption: { checked: true }, watchEmbed: false,
+        Module: { jkRawMouse: { fullscreenAskedAt: 0 } },
     };
     const names = Object.keys(env);
     const api = new Function(...names, boxCode + '\n' + fullscreenCode +
         '\nreturn { showProblem, playFullscreen };')(...names.map(n => env[n]));
-    return { ...api, calls, document };
+    return { ...api, calls, document, rawMouse: env.Module.jkRawMouse };
 }
 
 test('the box with Reload gives back the mouse and leaves fullscreen first, so Reload can be clicked', () => {
@@ -359,6 +360,8 @@ test('before any box, a click on the game still goes fullscreen', () => {
     const b = box({ locked: false, fullscreen: false });
     b.playFullscreen();
     assert.deepEqual(b.calls, ['requestFullscreen']);
+    // The mouse lock asked for in the same click is raw, as for fullscreen.
+    assert.ok(b.rawMouse.fullscreenAskedAt > 0);
 });
 
 let failed = 0;
