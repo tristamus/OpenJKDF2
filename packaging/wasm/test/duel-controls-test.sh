@@ -27,9 +27,19 @@ cut_function() {
     cut_function 'stdControlKeyInfoEntry* sithControl_BindControl('
     cut_function 'void sithControl_UnbindControl('
     cut_function 'void sithControl_DefaultHelper('
+    cut_function 'int sithControl_IsKeyBound('
+    echo '#ifdef PLATFORM_WSRELAY'
+    echo 'typedef struct sithCommandBind sithCommandBind;'
+    cut_function 'typedef struct sithCommandBind' "$top/src/Main/sithCommand.c"
+    echo 'static sithCommandBind *sithCommand_pBinds;'
+    cut_function 'int sithCommand_IsKeyBound(' "$top/src/Main/sithCommand.c"
+    cut_function 'int sithDuel_Chat(' "$top/src/Gameplay/sithDuel.c"
+    cut_function 'void jkQuakeConsole_ExecuteCommand(' "$top/src/Main/jkQuakeConsole.c"
+    cut_function 'void sithCommand_HandleBinds(' "$top/src/Main/sithCommand.c"
+    cut_function 'static void sithControl_DefaultDuelBinding('
+    echo '#endif'
     cut_function 'void sithControl_RegisterKeyboardBindings('
     cut_function 'void sithControl_RegisterMouseBindings('
-    cut_function 'int sithControl_IsKeyBound('
     cut_function 'void sithControl_FixNumpadTurn('
     cut_function 'int sithControl_ReadConf('
     cut_function 'int sithControl_WriteConf('

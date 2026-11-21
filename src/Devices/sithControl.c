@@ -2,6 +2,7 @@
 #ifdef PLATFORM_WSRELAY
 #include "Gameplay/sithDuelCombat.h"
 #include "Gameplay/sithDuel.h"
+#include "Main/sithCommand.h"
 #endif
 
 #include "General/sithStrTable.h"
@@ -695,6 +696,18 @@ LABEL_7:
     }
 }
 
+#ifdef PLATFORM_WSRELAY
+// Adopt the browser's new default only when it does not replace the player's
+// existing controls, including a console shortcut such as `bind k duel`.
+static void sithControl_DefaultDuelBinding(void)
+{
+    if (!sithControl_aInputFuncToKeyinfo[INPUT_FUNC_DUEL].numEntries &&
+        !sithControl_IsKeyBound(DIK_K) &&
+        !sithCommand_IsKeyBound('k') && !sithCommand_IsKeyBound('K'))
+        sithControl_BindControl(INPUT_FUNC_DUEL, DIK_K, 0);
+}
+#endif
+
 int sithControl_ReadConf()
 {
     unsigned int v0; // eax
@@ -728,6 +741,18 @@ int sithControl_ReadConf()
     {
         return 0;
     }
+#ifdef PLATFORM_WSRELAY
+    // The marker belongs to this controls block, so .plr profiles and .ctl
+    // presets both remember an intentional unbind. Older readers ignore
+    // extra tokens on the flags header.
+    int hasDuelDefault = 0;
+    for (unsigned int i = 1; i < stdConffile_g_entry.numArgs; i++)
+    {
+        if (!_strcmp(stdConffile_g_entry.aArgs[i].key, "dueldefault") &&
+            _atoi(stdConffile_g_entry.aArgs[i].value) > 0)
+            hasDuelDefault = 1;
+    }
+#endif
     while ( stdConffile_ReadArgs() )
     {
         if ( !_strcmp(stdConffile_g_entry.aArgs[0].key, "end.") )
@@ -819,6 +844,10 @@ LABEL_30:
             }
         }
     }
+#ifdef PLATFORM_WSRELAY
+    if (!hasDuelDefault)
+        sithControl_DefaultDuelBinding();
+#endif
     sithControl_FixNumpadTurn(); // Added
     return 1;
 }
@@ -848,7 +877,11 @@ int sithControl_WriteConf()
     stdControlKeyInfo *v1; // edi
     stdControlKeyInfoEntry* v3; // esi
 
+#ifdef PLATFORM_WSRELAY
+    if (!stdConffile_Printf("flags=%x dueldefault=1\n", sithWeapon_controlOptions))
+#else
     if (!stdConffile_Printf("flags=%x\n", sithWeapon_controlOptions))
+#endif
         return 0;
 
     v1 = sithControl_aInputFuncToKeyinfo;
@@ -900,6 +933,13 @@ int sithControl_GetKey(int keyId, int *pState)
         do
         {
             v4 = v3->dxKeyNum;
+#ifdef PLATFORM_WSRELAY
+            // A console alias may be added after a profile acquired the K
+            // default. Let it own that key without also firing this action;
+            // any other duel button and the scripted-input path still work.
+            if (keyId != INPUT_FUNC_DUEL || v4 != DIK_K ||
+                (!sithCommand_IsKeyBound('k') && !sithCommand_IsKeyBound('K')))
+#endif
             if ( !(sithWeapon_controlOptions & 0x20) || v4 < JK_EXTENDED_KEY_START || KEY_IS_MOUSE(v4) )
                 v6 |= stdControl_ReadKey(v4, pState);
             ++v2;
@@ -2554,6 +2594,9 @@ void sithControl_RegisterKeyboardBindings()
     sithControl_BindControl(INPUT_FUNC_GAMMA, DIK_F11, 0);
     sithControl_BindControl(INPUT_FUNC_SCREENSHOT, DIK_F12, 0);
     sithControl_BindControl(INPUT_FUNC_TALLY, DIK_GRAVE, 0);
+#ifdef PLATFORM_WSRELAY
+    sithControl_DefaultDuelBinding();
+#endif
 }
 
 void sithControl_DefaultInit()

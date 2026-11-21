@@ -1,20 +1,3 @@
-# JKWeb Duels development branch
-
-This branch adds JO/JA-inspired **Challenge to a duel** to the browser multiplayer
-engine: mutual acceptance, a short preparation period, private saber combat,
-and full health and shields for the surviving winner. Other players can watch
-and pass through the duelists without blocking them.
-
-The work lives on `jkweb-duels` in
-[CodaLilitari/OpenJKDF2-MotS-Fixes](https://github.com/CodaLilitari/OpenJKDF2-MotS-Fixes/tree/jkweb-duels).
-Its browser engine base is
-[Tristamus's web-mp branch](https://github.com/tristamus/OpenJKDF2/tree/web-mp),
-pinned at `9eb99b4aa2ca45892d61c96fe54e655d27fe0fae`.
-
-See [duel controls, rules and verification](docs/JKWEB_DUELS.md). The public
-JediKnight.zone site below is upstream; using this development feature requires
-a build of this branch.
-
 # jkdf2mp: Jedi Knight multiplayer in your browser
 
 **Play: https://jediknight.zone/** (desktop Chrome or Firefox, plus your own copy of the game)
@@ -38,6 +21,12 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 - **Host or join in the browser.** The Join screen lists every game on the lobby, with its map, episode and player count.
 - **Direct connections, with a fallback.** Once you join, your browser links straight to the host's browser over WebRTC and game traffic goes over that link. If a direct link can't be made, traffic goes through the lobby server instead, so you can still play, with more lag.
 - **An always-on lobby.** The lobby runs on Cloudflare's free Workers plan, so it's up without anyone's PC being on. It lists games, helps browsers connect to each other, and relays traffic for players who can't connect directly. It never stores or serves game files. Its source is in [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), which also has `relay.py`, a one-file Python lobby for running your own on your PC or local network.
+
+### Private saber duels
+
+- In a free-for-all room, equip your saber, aim at another player and press **K**. They aim back and press K to accept, then both players prepare for two seconds before fighting. Remap **Challenge to a duel** in Setup > Controls; existing custom bindings are preserved.
+- Other players can watch and pass through both duelists. Their bodies, weapons and Force effects cannot interfere with the duel. The living winner recovers full health and shields; the defeated player uses the normal death and respawn flow.
+- Every active player needs a build supporting private duels. Chat commands remain available, and ordinary map geometry and environmental hazards still apply. See [duel controls, rules and verification](docs/JKWEB_DUELS.md), including the remaining live browser acceptance checks.
 
 ### Mysteries of the Sith
 
@@ -108,10 +97,7 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 
 ## Where the code is
 
-The upstream browser engine is developed on Tristamus's `web-mp` branch, which
-the upstream site is built from. Private-duel development described at the top
-of this README lives on this fork's `jkweb-duels` branch. The upstream changes
-below came in as individual pull requests:
+Everything above is merged into the `web-mp` branch, and the live site is built from it. Each change came in as its own pull request:
 
 - [#1](https://github.com/tristamus/OpenJKDF2/pull/1): browser build from a clean checkout, game folder picker, folder-spelling and file-search fixes
 - [#2](https://github.com/tristamus/OpenJKDF2/pull/2): lobby networking over WebSockets

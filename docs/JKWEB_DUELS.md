@@ -12,10 +12,12 @@ public upstream JediKnight.zone deployment is separate.
 
 1. Everyone in the room needs a build supporting private duels. Choose a
    free-for-all game. Finish any active Force powers and equip a usable saber.
-2. Open **Setup > Controls > Keyboard**, select **Challenge to a duel**, and
-   assign a key. The same action is available for mouse and joystick buttons
-   in their Controls screens. It starts unassigned and saves with your profile.
-3. Stand near another player, aim at them and press your duel button. They
+2. **K** is the default **Challenge to a duel** button. Remap it in
+   **Setup > Controls > Keyboard**, or assign a mouse or joystick button in
+   its Controls screen. Older profiles receive K only when it is free and
+   the duel action has no existing binding. Existing controls and console
+   shortcuts are preserved; a deliberate unbind stays unbound after saving.
+3. Stand near another player, aim at them and press **K** (or your chosen duel button). They
    receive a challenge that expires after five seconds.
 4. The other player aims back at you and presses their own duel button to
    accept. Both must still be nearby, visible, alive and holding their saber.
@@ -32,7 +34,9 @@ Chat remains an alternative: `/duel` challenges the player you aim at, and
 the slash. `players` lists player slots; `duel <slot>` challenges a particular
 player. The existing console shortcut `bind k duel` also works. If you already
 use that shortcut and want to assign K through the Controls menu instead,
-run `unbind k` first to remove the separate console binding.
+run `unbind k` first to remove the separate console binding. A console K
+shortcut takes precedence over the native duel action on that key, so the
+same press does not trigger both. Other assigned duel buttons remain usable.
 
 | Command | Action |
 | --- | --- |
@@ -114,7 +118,7 @@ engine and web page only. Players supply their own game files; never enable
 | Existing browser/native test groups plus all five new duel groups | 33/33 passed |
 | Reliable messages, roster authority and join compatibility | 140 desktop, 153 browser and 140 retro checks passed |
 | Three independent native peers running the production duel modules over TCP | 131/131 assertions passed; 300 game frames |
-| Controls enumeration, keyboard/mouse profile save/load and press handling | Passed in browser/native builds, with and without quality-of-life controls |
+| Default K, existing bindings, intentional unbinding, console shortcuts, Controls enumeration and keyboard/mouse profile save/load | Passed in browser/native builds, with and without quality-of-life controls |
 | Production saber-trace and body-update handlers | Passed, including door obstruction, outsider pass-through and owner death evidence |
 | Hit-claim validation and motion/playout | 430/430 and 80/80 checks passed |
 | Level Library and playlist menus | 1,879 and 2,250 checks passed |
@@ -132,7 +136,9 @@ winner roles, an observing host, consent, expiry, duplicate and forged packets,
 recovery, ambiguous death evidence, replacement lives, cancellation races and
 reciprocal aimed challenges. The controls fixture runs the production binding,
 profile and input code with simulated device state, verifying saved keyboard
-and mouse bindings and one command per press.
+and mouse bindings and one command per press. It also covers adoption of K
+by older profiles, preservation of custom controls, saved unbinding, and
+coexistence with the separate console shortcut system.
 The separate handler fixtures exercise the real saber trace and network body
 message receivers.
 
@@ -143,8 +149,9 @@ physics, rendering or execution of stock JK/MotS COG scripts.
 
 ### Multiplayer gameplay check
 
-The remaining acceptance check is a rendered match with three browser clients
-on a stock map. Confirm a mutually accepted duel starts after preparation,
+The remaining acceptance check is Trist's rendered match with three browser
+clients on a stock map. Aim at another player and press K, then aim back and
+press K on that player's client. Confirm the duel starts after preparation,
 the third player can watch and walk through both duelists, and outsider shots,
 explosions and Force effects do not interfere. Check both a closed movable
 door and an outsider standing between the fighters. Finish the duel and check

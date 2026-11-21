@@ -63,3 +63,8 @@ Node.js asset-free regressions.
   assertions (131 total). The new controls fixture verifies menu enumeration,
   persistent keyboard/mouse bindings, tap/hold behavior and native profile
   compatibility. All 33 browser/native groups passed after this addition.
+- Made K the default duel button for new controls and older profiles when
+  available. A controls-header marker preserves intentional unbinding; custom
+  K controls, other duel buttons and console shortcuts retain precedence.
+  Prepared the feature for an upstream `web-mp` pull request; Trist will perform
+  rendered browser acceptance testing.

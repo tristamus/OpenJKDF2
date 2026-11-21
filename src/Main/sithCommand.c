@@ -976,6 +976,17 @@ void sithCommand_HandleBinds(uint16_t key)
     }
 }
 
+// Added: inspect shortcuts without executing or changing the global binds.
+int sithCommand_IsKeyBound(uint16_t key)
+{
+    if (!key) return 0;
+    for (const sithCommandBind* bind = sithCommand_pBinds; bind; bind = bind->pNext)
+    {
+        if (bind->key == key) return 1;
+    }
+    return 0;
+}
+
 // Added
 void sithCommand_AddBind(uint16_t key, const char* pCmd)
 {

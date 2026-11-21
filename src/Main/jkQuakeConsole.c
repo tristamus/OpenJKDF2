@@ -525,6 +525,15 @@ void jkQuakeConsole_ExecuteCommand(const char* pCmd)
 {
 #ifdef PLATFORM_WSRELAY
     if (sithDuel_Chat(pCmd)) return;
+    // Console commands and legacy `bind k duel` remain local even after HUD
+    // chat has left its send-to-all flag set. Ordinary HUD chat uses its own
+    // slash-only handler and can still contain the word "duel".
+    if (!__strnicmp(pCmd, "duel", 4) &&
+        (!pCmd[4] || pCmd[4] == ' ' || pCmd[4] == '\t'))
+    {
+        sithDuel_Command(NULL, pCmd + 4);
+        return;
+    }
 #endif
     if ( jkHud_dword_552D10 == -1 && sithNet_isMulti )
     {
