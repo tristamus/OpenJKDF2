@@ -3806,8 +3806,51 @@
           locked.catch(function() {});
           return locked;
         };
+        // The game can take the mouse before the click that starts
+        // fullscreen: it asks by itself as a level starts, and Chrome allows
+        // that for a few seconds after a click (the Free Demo, kit 179 on beta,
+        // 21 Nov 2026). That lock is plain, as the page was still in a window,
+        // and it stayed plain in fullscreen. So in fullscreen it's asked for
+        // again, raw: as fullscreen starts, and, if that's turned down (the
+        // fullscreen request may have used up the click), on the next click in
+        // the game. Chromium changes a held lock in place, without letting go
+        // of the mouse, and keeps the old one if it can't
+        // (web.dev/articles/disable-mouse-acceleration).
+        var rawAgain = { asking: false, tries: 0 };
+        function makeLockRaw() {
+          if (!document.fullscreenElement || rawMouse.active || document.pointerLockElement !== canvas) return;
+          if (!rawMouse.want || rawMouse.supported === false || !rawMouseFits()) return;
+          if (rawAgain.asking || rawAgain.tries >= 2) return;
+          var request;
+          try {
+            request = lock.call(canvas, { unadjustedMovement: true });
+          } catch (e) {
+            return;
+          }
+          if (!request || !request.then) return;
+          rawAgain.asking = true;
+          rawAgain.tries++;
+          request.then(function() {
+            rawAgain.asking = false;
+            if (document.pointerLockElement !== canvas) return;
+            rawMouse.supported = rawMouse.active = true;
+            Module.print('Mouse: fullscreen, so mouse look is raw now');
+          }, function(e) {
+            // The plain lock stays. A real lack of raw input shows on the next lock.
+            rawAgain.asking = false;
+            Module.print('Mouse: fullscreen, mouse look stays plain for now (' + (e && e.name || e) + ')');
+          });
+        }
+        canvas.addEventListener('pointerdown', makeLockRaw, true);
         document.addEventListener('pointerlockchange', function() {
-          if (document.pointerLockElement !== canvas) rawMouse.active = false;
+          if (document.pointerLockElement === canvas) return;
+          rawMouse.active = false;
+          rawAgain.tries = 0;
+        });
+        document.addEventListener('fullscreenchange', function() {
+          if (!document.fullscreenElement) return;
+          rawAgain.tries = 0;
+          makeLockRaw();
         });
         // A raw lock kept on leaving fullscreen would let the cursor slip off
         // the window, so it's let go: the game takes that as Esc, and the next

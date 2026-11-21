@@ -56,7 +56,15 @@ async function open(browser, { local = storage(), dbs = [], view = {} } = {}) {
     const about = { textContent: '' };
     const v = { fullscreen: false, browserFullscreen: false, extended: undefined, ...view };
     const listeners = {};
-    const canvas = { requestPointerLock(options) { locks.push(options || null); return Promise.resolve(); } };
+    // refuse: the name of the error the next request is turned down with.
+    const canvasListeners = {};
+    const canvas = { refuse: null, addEventListener(type, fn) { (canvasListeners[type] = canvasListeners[type] || []).push(fn); },
+                     requestPointerLock(options) {
+        locks.push(options || null);
+        const name = this.refuse;
+        this.refuse = null;
+        return name ? Promise.reject(Object.assign(new Error(name), { name })) : Promise.resolve();
+    } };
     const document = {
         getElementById: id => (id === 'raw-mouse-option' ? option : null),
         querySelector: sel => (sel === '#raw-mouse-choice .raw-mouse-about' ? about : null),
@@ -83,8 +91,11 @@ async function open(browser, { local = storage(), dbs = [], view = {} } = {}) {
         fire('pointerlockchange');
     }
     function unlock() { document.pointerLockElement = null; fire('pointerlockchange'); }
-    return { option, about, local, raw: Module.jkRawMouse, lock, unlock, locks, view: v, document, fire, printed };
+    // A mouse button pressed on the game.
+    const press = () => (canvasListeners.pointerdown || []).forEach(fn => fn({ target: canvas }));
+    return { option, about, local, raw: Module.jkRawMouse, lock, unlock, locks, view: v, document, fire, printed, canvas, press };
 }
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -254,11 +265,100 @@ test('Chromium on Windows: leaving fullscreen with a raw lock lets go of the mou
     assert.equal(q.document.exited, 0, "into the browser's fullscreen");
 });
 
+test('Chromium on Windows: a plain lock taken in a window turns raw when fullscreen starts', async () => {
+    // The game takes the mouse by itself as the level starts, before the
+    // first click (the Free Demo, kit 179 on beta): plain, in a window.
+    const p = await open(EDGE_WIN);
+    await p.lock();
+    assert.deepEqual(p.locks, [null]);
+    p.view.fullscreen = true;  // the next click starts fullscreen
+    p.fire('fullscreenchange');
+    await settle();
+    assert.deepEqual(p.locks, [null, { unadjustedMovement: true }], 'asked again, raw');
+    assert.equal(p.raw.active, true);
+    assert.equal(p.document.exited, 0, 'without letting go of the mouse');
+    assert.match(p.printed.at(-1), /raw now/);
+    // Leaving fullscreen lets go, as for any raw lock.
+    p.view.fullscreen = false;
+    p.fire('fullscreenchange');
+    assert.equal(p.document.exited, 1);
+    // Turned down: the plain lock stays, and so does the box.
+    const q = await open(EDGE_WIN);
+    await q.lock();
+    q.view.fullscreen = true;
+    q.canvas.refuse = 'NotAllowedError';
+    q.fire('fullscreenchange');
+    await settle();
+    assert.equal(q.locks.length, 2);
+    assert.equal(q.raw.active, false);
+    assert.notEqual(q.raw.supported, false);
+    assert.equal(q.option.disabled, false);
+    assert.equal(q.document.exited, 0);
+    assert.match(q.printed.at(-1), /stays plain for now \(NotAllowedError\)/);
+    // The next click in the game asks once more, and that can be granted.
+    q.press();
+    await settle();
+    assert.deepEqual(q.locks.at(-1), { unadjustedMovement: true });
+    assert.equal(q.locks.length, 3);
+    assert.equal(q.raw.active, true, 'raw after the click');
+    q.press();
+    await settle();
+    assert.equal(q.locks.length, 3, 'not asked again once raw');
+    // Turned down both times: no more asking for this lock, until a new one.
+    const t = await open(EDGE_WIN);
+    await t.lock();
+    t.view.fullscreen = true;
+    t.canvas.refuse = 'NotAllowedError';
+    t.fire('fullscreenchange');
+    await settle();
+    t.canvas.refuse = 'NotAllowedError';
+    t.press();
+    await settle();
+    t.press();
+    await settle();
+    assert.equal(t.locks.length, 3, 'two tries per lock');
+    assert.equal(t.raw.active, false);
+    t.unlock();
+    await t.lock();  // the next lock in fullscreen goes raw from the start
+    assert.deepEqual(t.locks.at(-1), { unadjustedMovement: true });
+    assert.equal(t.raw.active, true);
+    // A click in a window asks for nothing (the plain lock is right there).
+    const w = await open(EDGE_WIN);
+    await w.lock();
+    w.press();
+    await settle();
+    assert.deepEqual(w.locks, [null], 'in a window');
+    // Not asked again with the box unticked, or with two screens.
+    for (const [why, setup] of [['box unticked', { local: storage({ 'jkdf2mp-raw-mouse': 'off' }) }],
+                                ['two screens', { view: { extended: true } }]]) {
+        const r = await open(EDGE_WIN, setup);
+        await r.lock();
+        r.view.fullscreen = true;
+        r.fire('fullscreenchange');
+        await settle();
+        assert.deepEqual(r.locks, [null], why);
+    }
+    // Nor with no lock held, nor when the lock is raw already.
+    const s = await open(EDGE_WIN);
+    s.view.fullscreen = true;
+    s.fire('fullscreenchange');
+    await settle();
+    assert.deepEqual(s.locks, [], 'no lock');
+    await s.lock();
+    s.fire('fullscreenchange');
+    await settle();
+    assert.deepEqual(s.locks, [{ unadjustedMovement: true }], 'raw already');
+});
+
 test('elsewhere a lock is raw in a window too, as before', async () => {
     for (const browser of [FIREFOX_WIN, CHROME_MAC]) {
         const p = await open(browser, { local: storage({ 'jkdf2mp-raw-mouse': 'on' }) });
         await p.lock();
         assert.deepEqual(p.locks, [{ unadjustedMovement: true }], browser.ua);
+        p.view.fullscreen = true;
+        p.fire('fullscreenchange');
+        await settle();
+        assert.equal(p.locks.length, 1, 'not asked again in fullscreen: ' + browser.ua);
     }
 });
 
