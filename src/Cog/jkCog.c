@@ -1,4 +1,7 @@
 #include "jkCog.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include <math.h>
 #include <stdlib.h>
@@ -619,6 +622,9 @@ void jkCog_EnableSaber(sithCog *ctx)
     v3 = v2;
     if ( v2 && v2->type == SITH_THING_PLAYER )
     {
+#ifdef PLATFORM_WSRELAY
+        if (sithDuelCombat_Phase(v2) == 1) return;
+#endif
         jkSaber_Enable(v2, a2, a3, a1a);
 #ifdef PLATFORM_WSRELAY
         // Added: each swing gets a number, which the message below carries.

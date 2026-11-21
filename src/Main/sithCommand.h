@@ -57,6 +57,7 @@ void sithCommand_ShutdownBinds();
 void sithCommand_SaveBinds();
 void sithCommand_LoadBinds();
 void sithCommand_HandleBinds(uint16_t key);
+int sithCommand_IsKeyBound(uint16_t key);
 void sithCommand_AddBind(uint16_t key, const char* pCmd);
 void sithCommand_RemoveBind(uint16_t key);
 

@@ -1,4 +1,7 @@
 #include "sithPlayerActions.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 #include "stdPlatform.h" // Added
 
 #include "World/sithThing.h"
@@ -106,6 +109,9 @@ void sithPlayerActions_JumpWithVel(SithThing *thing, flex_t vel)
     int v14; // eax
     sithPlayingSound *v15; // eax
 
+#ifdef PLATFORM_WSRELAY
+    if (sithDuelCombat_Phase(thing) == 1) return;
+#endif
     // MoTS Added: SITH_AF_FREEZE_MOVEMENT
     if ( (thing->type == SITH_THING_ACTOR || thing->type == SITH_THING_PLAYER) && (thing->actorParams.flags & SITH_AF_COMBO_FREEZE) == 0 )
     {

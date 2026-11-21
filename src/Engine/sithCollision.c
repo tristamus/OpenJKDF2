@@ -1,4 +1,7 @@
 #include "sithCollision.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "World/sithThing.h"
 #include "World/sithWeapon.h"
@@ -246,6 +249,9 @@ flex_t sithCollision_SearchForThingCollisions(SithSector *pSector, SithThing *pT
             if ( (!v10 || (v7->flags & SITH_TF_80))
               && ((searchFlags & RAYCAST_10) == 0 || (v7->flags & SITH_TF_STANDABLE) != 0)
               && v7->collide
+#ifdef PLATFORM_WSRELAY
+              && sithDuelCombat_AllowsCollision(v8, v7)
+#endif
               && (v7->flags & (SITH_TF_DISABLED|SITH_TF_DESTROYED)) == 0
               && ((searchFlags & RAYCAST_2000) == 0 || v7->type == SITH_THING_COG) )
             {

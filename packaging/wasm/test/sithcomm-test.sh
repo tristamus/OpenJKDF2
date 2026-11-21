@@ -61,6 +61,7 @@ cut_out() {
     cut_out Devices/sithComm.c '#ifdef SITHCOMM_HEAP_MSGBUF' '#endif'
     cut_out Devices/sithComm.c 'int sithComm_SendMsgToPlayer('
     cut_out Devices/sithComm.c 'int sithMessage_ProcessMessages('
+    cut_out Devices/sithComm.c 'int sithMessage_Process('
     cut_out Devices/sithComm.c 'void sithComm_ForgetSender('
     cut_out Devices/sithComm.c 'void sithComm_ForgetRecipient('
     cut_out Devices/sithComm.c 'void sithComm_SyncWithPlayers('
@@ -70,6 +71,13 @@ cut_out() {
     cut_out Win95/stdComm.c 'int stdComm_SendToPlayer('
     cut_out Gameplay/sithPlayer.c 'uint32_t sithPlayer_GetPlayerNum('
     cut_out Gameplay/sithPlayer.c 'void sithPlayer_Startup('
+    echo '#ifdef PLATFORM_WSRELAY'
+    cut_out Gameplay/sithPlayer.c 'int sithPlayer_ShowPlayer('
+    cut_out Dss/sithMulti.c 'void sithMulti_SendWelcome('
+    cut_out Dss/sithMulti.c 'static void sithMulti_ActivateJoined('
+    cut_out Dss/sithMulti.c 'int sithMulti_ProcessWelcome('
+    cut_out Dss/sithMulti.c 'static void sithMulti_CompleteJoin('
+    echo '#endif'
     cut_out Dss/sithMulti.c 'int sithMulti_ProcessSyncPlayers('
 } > "$out/sithcomm-code.inc"
 

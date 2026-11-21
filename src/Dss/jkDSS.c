@@ -1,4 +1,7 @@
 #include "jkDSS.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "Cog/sithCog.h"
 #include "Dss/sithMulti.h"
@@ -558,6 +561,11 @@ int jkDSS_ProcessJKEnableSaber(SithMessage *msg)
     flex32_t arg2 = NETMSG_POPF32();
     flex32_t arg3 = NETMSG_POPF32();
 
+#ifdef PLATFORM_WSRELAY
+    int duelPhase = sithDuelCombat_Phase(pThing);
+    if (duelPhase == 1 || (duelPhase && pThing->actorParams.pPlayer->playerNetId != (uint32_t)msg->netMsg.idx))
+        return 0;
+#endif
     jkSaber_Enable(pThing, arg1, arg2, arg3);
 #ifdef PLATFORM_WSRELAY
     // Added: the swing's number, which a message from an older build doesn't

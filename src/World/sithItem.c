@@ -1,4 +1,7 @@
 #include "sithItem.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "General/stdConffile.h"
 #include "Gameplay/sithTime.h"
@@ -16,6 +19,9 @@
 
 int sithItem_PlayerCollisionHandler(SithThing *pItem, SithThing *pPlayer, SithCollision *pCollision, int a5)
 {
+#ifdef PLATFORM_WSRELAY
+    if (sithDuelCombat_Phase(pPlayer)) return 0;
+#endif
     if ( !sithNet_isMulti || (!(pPlayer->flags & SITH_TF_INVULN)) )
     {
         // MOTS added
@@ -74,6 +80,9 @@ void sithItem_Initialize(SithThing *pThing)
 
 void sithItem_SetItemTaken(SithThing *pItem, SithThing *pSrcThing, int bNoMultiSync)
 {
+#ifdef PLATFORM_WSRELAY
+    if (sithDuelCombat_Phase(pSrcThing)) return;
+#endif
     if (sithNet_isMulti && !bNoMultiSync)
     {
         sithDSSThing_Take(pItem, pSrcThing, 255);

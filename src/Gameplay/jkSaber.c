@@ -1,4 +1,7 @@
 #include "jkSaber.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "World/jkPlayer.h"
 #include "Engine/rdroid.h"
@@ -450,6 +453,10 @@ void  jkSaber_UpdateCollision2(SithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
 
             resultThing = searchResult->pThingCollided;
 
+#ifdef PLATFORM_WSRELAY
+            if (!sithDuelCombat_AllowsCollision(pPlayerThing, resultThing))
+                continue;
+#endif
             if ( resultThing->type == SITH_THING_ITEM || resultThing->type == SITH_THING_EXPLOSION || resultThing->type == SITH_THING_PARTICLE )
             {
                 continue;
@@ -459,6 +466,12 @@ void  jkSaber_UpdateCollision2(SithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
             {
                 jkSaber_SpawnSparks(playerInfo, &local_54, pSectorIter, SPARKTYPE_WALL);
             }
+#ifdef PLATFORM_WSRELAY
+            /* Solid map things still stop the swing, even when the duel
+               prevents it from damaging them. Keep the normal wall spark. */
+            if (!sithDuelCombat_AllowsDamage(resultThing, pPlayerThing, 1))
+                break;
+#endif
             if ( pCollideInfo->numDamagedThings == 6 )
             {
                 break;
@@ -482,7 +495,7 @@ void  jkSaber_UpdateCollision2(SithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
             {
                 jkSaber_SpawnSparks(playerInfo, &local_54, pSectorIter, SPARKTYPE_BLOOD);
 
-                sithThing_DamageThing(searchResult->pThingCollided, pPlayerThing, pCollideInfo->damage, SITH_DAMAGE_SABER);
+                sithThing_DamageSaber(searchResult->pThingCollided, pPlayerThing, pCollideInfo->damage);
                 pCollideInfo->damagedThings[pCollideInfo->numDamagedThings++] = searchResult->pThingCollided;
                 break;
             }
@@ -525,7 +538,7 @@ void  jkSaber_UpdateCollision2(SithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
 
             jkSaber_SpawnSparks(playerInfo, &local_54, pSectorIter, SPARKTYPE_BLOOD);
 
-            sithThing_DamageThing(resultThing, pPlayerThing, pCollideInfo->damage, SITH_DAMAGE_SABER);
+            sithThing_DamageSaber(resultThing, pPlayerThing, pCollideInfo->damage);
             pCollideInfo->damagedThings[pCollideInfo->numDamagedThings++] = searchResult->pThingCollided;
             break;
         }
@@ -704,6 +717,9 @@ void jkSaber_Enable(SithThing *pThing, flex_t damage, flex_t bladeLength, flex_t
 {
     if (!pThing || !pThing->playerInfo) return; // MOTS added
 
+#ifdef PLATFORM_WSRELAY
+    if (sithDuelCombat_Phase(pThing) == 1) return;
+#endif
     pThing->playerInfo->saberCollideInfo.damage = damage;
     pThing->playerInfo->saberCollideInfo.bladeLength = bladeLength;
     pThing->playerInfo->saberCollideInfo.stunDelay = stunDelay;
