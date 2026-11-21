@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>jkdf2mp Game Rooms</title>
+    <title>Jedi Knight Zone Game Rooms</title>
     <!-- The tab's icon, in the page so browsers don't ask for /favicon.ico:
          a play button in the landing page's gold on its two teals. -->
     <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%23003333'/%3E%3Cpath%20d='M10%200h3a3%203%200%200%201%203%203v10a3%203%200%200%201-3%203H8z'%20fill='%23336666'/%3E%3Cpath%20d='M5%204l7%204-7%204z'%20fill='%23ffcc66'/%3E%3C/svg%3E">
@@ -454,9 +454,13 @@
         background: linear-gradient(100deg, var(--teal-dark) 0 62%, var(--teal) 62%);
       }
       .brand { padding: 10px 14px 8px; min-width: 190px; }
+      /* The site's name, Jedi Knight Zone, with Zone in the look's accent.
+         34px keeps the banner's first line on one line at the page's full
+         width; phones get 32px (below). */
       .brand-mark {
-        font: italic bold 40px/1 Verdana, Geneva, sans-serif;
-        letter-spacing: -2px;
+        font: italic bold 34px/1 Verdana, Geneva, sans-serif;
+        letter-spacing: -1.5px;
+        white-space: nowrap;
         color: #fff;
       }
       .brand-mark span { color: var(--gold); }
@@ -2411,7 +2415,7 @@
 
         <header class="masthead">
           <div class="brand">
-            <div class="brand-mark">jkdf2<span>mp</span></div>
+            <div class="brand-mark">Jedi Knight <span>Zone</span></div>
             <div class="brand-sub">Game Rooms</div>
           </div>
           <div class="banner">
@@ -3107,7 +3111,7 @@
             </section>
             <section id="support" aria-labelledby="support-title">
               <h2 class="ruled" id="support-title">Keep the Lobby Running</h2>
-              <p>jkdf2mp is free, with no ads. Here's what it costs to run each year:</p>
+              <p>Jedi Knight Zone is free, with no ads. Here's what it costs to run each year:</p>
               <table class="support-costs">
                 <tr><td>Cloudflare (the lobby server and this website)</td><td>$60</td></tr>
                 <tr><td>The jediknight.zone address</td><td>$66</td></tr>
@@ -3121,7 +3125,7 @@
         </div>
 
         <footer class="footer">
-          <p>jkdf2mp is a free fan project built on OpenJKDF2. It is not affiliated with or endorsed by
+          <p>Jedi Knight Zone is a free fan project built on OpenJKDF2. It is not affiliated with or endorsed by
             Lucasfilm or Disney. Star Wars and Jedi Knight are trademarks of Lucasfilm Ltd.
             You need your own copy of the game to play.</p>
           <p><a href="https://github.com/shinyquagsire23/OpenJKDF2">OpenJKDF2</a><a href="https://github.com/tristamus/OpenJKDF2">Source code</a><a href="https://github.com/tristamus/jkdf2mp-bb-server">Lobby source</a></p>
@@ -5065,7 +5069,7 @@
           }
           if (files.length) {
             var d = new Date();
-            downloadFile(zipFiles(files), 'jkdf2mp screenshots ' + d.getFullYear() + '-' +
+            downloadFile(zipFiles(files), 'Jedi Knight Zone screenshots ' + d.getFullYear() + '-' +
                          String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + '.zip',
                          'application/zip');
           }
@@ -10517,7 +10521,7 @@
         watchFull(false);
         watchWindow = false;
         document.documentElement.classList.remove('watch-window');
-        document.title = 'jkdf2mp Game Rooms';
+        document.title = 'Jedi Knight Zone Game Rooms';
         history.replaceState(history.state, '', location.pathname + location.search);
       }
       window.jkJoinWatched = function(id) {
@@ -10544,7 +10548,7 @@
           'Watching ' + shown.no + ' · ' + (shown.g.name || '(no name)') + ' — ' + ROOMS[shown.key].name :
           'Watching';
         // A window of its own is named for it, in the taskbar too.
-        if (watchWindow) document.title = document.getElementById('watch-title').textContent + ' · jkdf2mp';
+        if (watchWindow) document.title = document.getElementById('watch-title').textContent + ' · Jedi Knight Zone';
         watchGames = {};
 
         // The matches, by room.
