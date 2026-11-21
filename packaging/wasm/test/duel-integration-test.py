@@ -26,7 +26,8 @@ REPO = args.repo
 SOURCES = ['src/Gameplay/sithDuel.c', 'src/Gameplay/sithDuelState.c', 'src/Gameplay/sithDuelCombat.c']
 records = {'scope': 'Production adapter, state codec, and combat module across three independent native processes and loopback TCP',
            'not_covered': ['WASM browser runtime', 'actual renderer', 'live engine collision and damage callsites',
-                           'COG execution', 'DSS_DEATH packet decoding', 'WebRTC or browser WebSocket path', 'real-map line-of-sight'],
+                           'COG execution', 'DSS_DEATH packet decoding', 'WebRTC or browser WebSocket path',
+                           'real-map line-of-sight and aim geometry', 'physical input and binding persistence'],
            'source_sha256': {p: hashlib.sha256((REPO/p).read_bytes()).hexdigest() for p in SOURCES},
            'cases': [], 'snapshots': {}, 'wire': [], 'logs': []}
 
@@ -170,6 +171,43 @@ try:
     check('all peers learn the host initial snapshot', len({p['last']['epoch'] for p in state.values()}) == 1 and state['1']['last']['epoch'] > 0)
     check('ordinary combat and contact allowed before any duel', all(all(p[k]) for p in state.values() for k in ('damage_saber','collision','skill')))
 
+    # Invoke the exact no-argument command used by the native control binding.
+    # Contact order and visibility are explicit world fixtures. Real 3D aim,
+    # physical device events, and saved bindings are outside this fixture.
+    router.ask(2,'aim 0 0'); router.ask(2,'button')
+    empty_aim=router.all('aim-no-target')
+    check('the button-style command creates no invitation with no aimed player', all(p['last']['phase']==0 for p in empty_aim.values()) and empty_aim['2']['aim_fixture']['searches']==1)
+    router.ask(2,'aim 1 1'); router.ask(2,'button')
+    blocked_aim=router.all('aim-world-obstruction')
+    check('an obstructing world contact prevents challenging the player behind it', all(p['last']['phase']==0 for p in blocked_aim.values()) and blocked_aim['2']['aim_fixture']['popped']==1 and blocked_aim['2']['aim_fixture']['searches']==blocked_aim['2']['aim_fixture']['releases'], blocked_aim['2'])
+
+    router.ask(1,'aim 2 0'); router.ask(1,'button')
+    aimed_offer=router.all('aim-host-offer')
+    check('the host button-style command challenges its aimed player', all(p['last']['phase']==1 and p['last']['a']==1 and p['last']['b']==2 and p['phase']==[0,0,0] for p in aimed_offer.values()), aimed_offer)
+    aimed_revision=aimed_offer['1']['last']['revision']
+    router.ask(2,'aim 0 0'); router.ask(2,'button')
+    check('an incoming challenge is not accepted by a button press without an aimed target', all(p['last']['phase']==1 and p['last']['revision']==aimed_revision and p['phase']==[0,0,0] for p in router.all().values()))
+    router.ask(2,'aim 1 1'); router.ask(2,'button')
+    check('an incoming challenge is not accepted through an obstructing world contact', all(p['last']['phase']==1 and p['last']['revision']==aimed_revision for p in router.all().values()))
+    router.ask(2,'aim 3 0'); router.ask(2,'button')
+    wrong_aim=router.all('aim-wrong-player')
+    check('aiming at an unrelated player cannot accept or replace the incoming challenge', all(p['last']['phase']==1 and p['last']['revision']==aimed_revision and p['last']['a']==1 and p['last']['b']==2 for p in wrong_aim.values()), wrong_aim)
+    router.ask(3,'aim 1 0'); router.ask(3,'button')
+    check('an outsider aiming at the challenger cannot accept another player invitation', all(p['last']['phase']==1 and p['last']['revision']==aimed_revision for p in router.all().values()))
+    router.ask(2,'aim 1 0'); router.ask(2,'button')
+    aimed_prepare=router.all('aim-reciprocal-acceptance')
+    check('aiming back at the challenger and pressing the same command accepts mutually', all(p['phase']==[1,1,0] and p['last']['a']==1 and p['last']['b']==2 for p in aimed_prepare.values()), aimed_prepare)
+    check('production aiming releases every supplied collision stack', all(p['aim_fixture']['searches']==p['aim_fixture']['releases'] for p in aimed_prepare.values()))
+    router.ask(1,'time 3000')
+    check('a mutually aimed challenge proceeds through the normal ready countdown', all(p['phase']==[2,2,0] for p in router.all().values()))
+
+    router.reset(); router.ask(2,'aim 1 0'); router.ask(2,'button')
+    reverse_aim=router.all('aim-client-offer')
+    check('a client button-style command sends its aimed challenge to the host', all(p['last']['phase']==1 and p['last']['a']==2 and p['last']['b']==1 for p in reverse_aim.values()), reverse_aim)
+    router.ask(1,'aim 2 0'); router.ask(1,'button')
+    check('the host can accept a client invitation by aiming back with the same command', all(p['phase']==[1,1,0] for p in router.all().values()))
+
+    router.reset()
     offered = router.offer()
     offer_wire = next(w['hex'] for w in reversed(records['wire']) if w['from']==2 and w['to']==1 and bytes.fromhex(w['hex'])[1]==1)
     rev = offered['1']['last']['revision']

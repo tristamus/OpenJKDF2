@@ -49,6 +49,8 @@ static sithCog saberCog, jumpCog;
 static uint32_t clockMs = 1000;
 static int connected, sight = 1, matchOn = 1;
 static int disables, weaponResets, movementResets, inventoryWrites;
+static int aimTarget, aimWorld, aimCount, aimNext, aimSearches, aimReleases;
+static SithCollision aimContacts[2];
 static uint8_t lastSnapshot[DUEL_WIRE_SIZE];
 static DuelState observed;
 static char report[16384];
@@ -134,9 +136,24 @@ int sithCollision_HasLOS(SithThing *a, SithThing *b, int flags) { (void)a; (void
 SithSector *sithCollision_FindSectorInRadius(SithSector *s, const rdVector3 *a, rdVector3 *b, flex_t r)
 { (void)a; (void)b; (void)r; return s; }
 flex_t sithCollision_SearchForCollisions(SithSector *s, SithThing *t, const rdVector3 *p, const rdVector3 *v, flex_t d, flex_t r, int flags)
-{ (void)s; (void)t; (void)p; (void)v; (void)d; (void)r; (void)flags; return 0; }
-SithCollision *sithCollision_PopStack(void) { return NULL; }
-void sithCollision_DecreaseStackLevel(void) {}
+{
+    (void)s; (void)t; (void)p; (void)v; (void)d; (void)r; (void)flags;
+    /* Ordered contacts are fixture inputs, not computed 3D geometry. The
+     * production aimedPlayer loop decides whether to stop at the wall or
+     * resolve the actor behind it. Its target-selection logic is unmodified.
+     */
+    ++aimSearches; aimCount=aimNext=0;
+    if (aimWorld)
+        aimContacts[aimCount++]=(SithCollision){.type=SITHCOLLISION_WORLD,.distance=0.1f};
+    if (aimTarget)
+        aimContacts[aimCount++]=(SithCollision){.type=SITHCOLLISION_THING,.pThingCollided=&people[aimTarget-1],.distance=0.4f};
+    return 0;
+}
+SithCollision *sithCollision_PopStack(void)
+{
+    return aimNext<aimCount ? &aimContacts[aimNext++] : NULL;
+}
+void sithCollision_DecreaseStackLevel(void) { ++aimReleases; }
 void jkSaber_Disable(SithThing *p) { (void)p; ++disables; }
 void sithWeapon_StartupEntry(void) { ++weaponResets; }
 void sithPhysics_ResetThingMovement(SithThing *p) { (void)p; ++movementResets; }
@@ -188,6 +205,8 @@ static void receipt(void)
         people[0].flags,people[1].flags,people[2].flags);
     append(",\"callbacks\":{\"saber_disable\":%d,\"weapon_reset\":%d,\"movement_reset\":%d,\"inventory_writes\":%d}",
         disables,weaponResets,movementResets,inventoryWrites);
+    append(",\"aim_fixture\":{\"target\":%d,\"world_obstruction\":%d,\"searches\":%d,\"releases\":%d,\"popped\":%d}",
+        aimTarget,aimWorld,aimSearches,aimReleases,aimNext);
     append(",\"last\":{\"epoch\":%u,\"revision\":%u,\"generation\":%u,\"phase\":%d,\"reason\":%d,\"a\":%u,\"b\":%u,\"winner\":%u},\"wire\":\"",
         observed.epoch,observed.revision,observed.generation,observed.phase,observed.reason,observed.a,observed.b,observed.winner);
     for (int i=0;i<DUEL_WIRE_SIZE;++i) append("%02x",lastSnapshot[i]);
@@ -231,6 +250,7 @@ static void setup(void)
     stdComm_Imperial_bActive=stdComm_WSRelay_bViewer=jkGuiNetHost_bIsDedicated=0;
     sithNet_bNeedsFullThingSyncForLeaveJoin=0; sithMulti_curWelcomePlayerNum=0; sithMulti_newPlayerId=0;
     disables=weaponResets=movementResets=inventoryWrites=0;
+    aimTarget=aimWorld=aimCount=aimNext=aimSearches=aimReleases=0;
     sithWeapon_8BD024=-1; sithInventory_bUnkPower=sithInventory_g_bSendDeactivateMessage=0;
     strcpy(sithInventory_g_aTypes[SITHBIN_LIGHTSABER].fpath,"Lightsaber");
     sithInventory_g_aTypes[SITHBIN_LIGHTSABER].flags=SITHINVENTORY_TYPE_REGISTERED|ITEMINFO_WEAPON;
@@ -264,6 +284,10 @@ static void command(char *text)
         for(int i=0;i<3;++i) if(i+1!=stdComm_dplayIdSelf) sithDuel_Hello(i,i+1,1);
     }
     else if (!strncmp(text,"chat ",5)) sithDuel_Chat(text+5);
+    else if (!strcmp(text,"button")) sithDuel_Command(NULL, "");
+    else if (sscanf(text,"aim %d %d",&a,&b)==2 && a>=0 && a<=3 && b>=0 && b<=1) {
+        aimTarget=a; aimWorld=b;
+    }
     else if (sscanf(text,"time %u",&t)==1) {clockMs=t;sithDuel_Frame();}
     else if (sscanf(text,"clock %u",&t)==1) clockMs=t;
     else if (!strcmp(text,"tick")) sithDuel_Frame();

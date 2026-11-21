@@ -1,6 +1,7 @@
 #include "sithControl.h"
 #ifdef PLATFORM_WSRELAY
 #include "Gameplay/sithDuelCombat.h"
+#include "Gameplay/sithDuel.h"
 #endif
 
 #include "General/sithStrTable.h"
@@ -232,9 +233,12 @@ static const char *sithControl_aFunctionStrs[INPUT_FUNC_MAX+1] =
     "ACTIVATE29",
     "ACTIVATE30",
     "ACTIVATE31",
-#ifdef QOL_IMPROVEMENTS
+#if defined(QOL_IMPROVEMENTS) || defined(PLATFORM_WSRELAY)
     "USELASTSELECTED", // Common button for both items and force power usage for controllers
-#endif // QOL_IMPROVEMENTS
+#endif
+#ifdef PLATFORM_WSRELAY
+    "DUEL",
+#endif
     "INPUT_FUNC_MAX"
 };
 
@@ -387,6 +391,9 @@ void sithControl_RegisterControlFunctions()
         sithControl_inputFuncToControlType[INPUT_FUNC_DEBUG] = 4 | 1;
 #ifdef QOL_IMPROVEMENTS
     sithControl_inputFuncToControlType[INPUT_FUNC_USELASTSELECTED] = 4 | 1;
+#endif
+#ifdef PLATFORM_WSRELAY
+    sithControl_inputFuncToControlType[INPUT_FUNC_DUEL] = 4 | 1;
 #endif
 }
 
@@ -735,7 +742,7 @@ int sithControl_ReadConf()
         {
             v0 = _atoi(stdConffile_g_entry.aArgs[1].value);
             v1 = v0;
-            if ( v0 <= 0x4A && (sithControl_inputFuncToControlType[v0] & 1) != 0 && _sscanf(stdConffile_g_entry.aArgs[3].value, "%x", &v19) == 1 )
+            if ( v0 < INPUT_FUNC_MAX && (sithControl_inputFuncToControlType[v0] & 1) != 0 && _sscanf(stdConffile_g_entry.aArgs[3].value, "%x", &v19) == 1 )
             {
                 dxKeyNum = _atoi(stdConffile_g_entry.aArgs[2].value);
                 dxKeyNum_ = dxKeyNum;
@@ -1140,6 +1147,19 @@ void sithControl_RegisterControlCallback(sithControl_handler_t pfCallback)
 int sithControl_buttonPressDebounce = 0;
 #endif
 
+#ifdef PLATFORM_WSRELAY
+static void sithControl_DuelKey(SithThing *player)
+{
+    int presses = 0;
+    sithControl_GetKey(INPUT_FUNC_DUEL, &presses);
+    /* Use press transitions, not held state. Both challenge and acceptance
+       must use the player's current aim through the same consent path. */
+    if (presses > 0 && player == sithPlayer_g_pLocalPlayerThing &&
+        !jkHud_bChatOpen && !jkQuakeConsole_bOpen && !sithDuelCombat_Phase(player))
+        sithDuel_Command(NULL, "");
+}
+#endif
+
 // MOTS altered
 int sithControl_HandlePlayer(SithThing *player, flex_t deltaSecs)
 {
@@ -1268,6 +1288,7 @@ LABEL_39:
                 }
 
 #ifdef PLATFORM_WSRELAY
+                sithControl_DuelKey(player);
                 if (sithDuelCombat_Phase(player) == 1)
                     return 0; /* Keep looking around. Gravity and moving floors still apply. */
 #endif

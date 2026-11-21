@@ -26,6 +26,11 @@ These are implementation defaults chosen for this feature:
   `players`. `duel accept`, `duel decline`, `duel cancel`, `duel status`, and
   `/duel ...` chat equivalents provide explicit controls. Requests use stable
   network identities and challenge generations, never display names.
+- **Challenge to a duel** is a bindable Controls action for keyboard, mouse
+  and joystick buttons. It uses the same aimed challenge for either player:
+  the recipient must aim back and press their action to accept. Press
+  transitions trigger it once; holding does not repeat. It starts unassigned
+  and persists with the player's chosen controls, without shifting old IDs.
 - Saber combat and ordinary movement during fighting; no guns, saber throw,
   consumables or targeted Force powers. Stock Force Jump may be used during
   the fight. Preparation suppresses movement/attacks. Preserve starting health,

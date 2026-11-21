@@ -232,6 +232,8 @@ jobs:
         run: sh packaging/wasm/test/duel-mutations-test.sh
       - name: Test private duels across three independent peers
         run: sh packaging/wasm/test/duel-integration-test.sh
+      - name: Test private duel controls and saved bindings
+        run: sh packaging/wasm/test/duel-controls-test.sh
       # Engine and page only. No game files are ever part of this artifact:
       # players pick their own install folder in the page.
       - name: Collect web build

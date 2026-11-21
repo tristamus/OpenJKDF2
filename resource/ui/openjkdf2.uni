@@ -1,4 +1,4 @@
-MSGS 130          # <--- DON'T FORGET TO UPDATE THIS COUNT
+MSGS 131          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
 #  "<key>"     <unused number>   "<string>"
 
@@ -188,6 +188,7 @@ MSGS 130          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GAMERECORD"      0 "Game Record"
    "DEBUG"           0 "Debug"
    "USELASTSELECTED" 0 "Use Selected Skill/Item"
+   "DUEL"            0 "Challenge to a duel"
 
 
 END

@@ -174,7 +174,7 @@ static void status(void)
     label(state.a, a, sizeof(a));
     label(state.b, b, sizeof(b));
     if (state.phase == DUEL_OFFER && state.b == ownId())
-        snprintf(line, sizeof(line), "%s challenges you. Type /duel accept or /duel decline within five seconds.", a);
+        snprintf(line, sizeof(line), "%s challenges you. Aim back and press your duel button, or type /duel accept within five seconds. /duel decline refuses.", a);
     else if (state.phase == DUEL_OFFER && state.a == ownId())
         snprintf(line, sizeof(line), "Duel challenge sent to %s. Type /duel cancel to withdraw.", b);
     else if (state.phase >= DUEL_PREPARE)

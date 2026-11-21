@@ -58,3 +58,8 @@ Node.js asset-free regressions.
 - The rendered browser match remains an acceptance check: Chromium's IPC
   socket initialization was denied by the environment. Native process
   integration results are not represented as live browser gameplay.
+- Added the bindable **Challenge to a duel** control as an alternative to
+  text commands. Aimed challenge/acceptance now has 12 additional integration
+  assertions (131 total). The new controls fixture verifies menu enumeration,
+  persistent keyboard/mouse bindings, tap/hold behavior and native profile
+  compatibility. All 33 browser/native groups passed after this addition.

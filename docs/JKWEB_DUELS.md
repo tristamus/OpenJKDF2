@@ -12,20 +12,27 @@ public upstream JediKnight.zone deployment is separate.
 
 1. Everyone in the room needs a build supporting private duels. Choose a
    free-for-all game. Finish any active Force powers and equip a usable saber.
-2. Stand near another player, aim at them and type `/duel` in ordinary chat.
-   They receive a challenge that expires after five seconds.
-3. The other player types `/duel accept`, or aims back and issues `/duel`.
-   They must still be nearby, visible, alive and holding their saber.
-4. Both players prepare for two seconds, then fight. During preparation,
+2. Open **Setup > Controls > Keyboard**, select **Challenge to a duel**, and
+   assign a key. The same action is available for mouse and joystick buttons
+   in their Controls screens. It starts unassigned and saves with your profile.
+3. Stand near another player, aim at them and press your duel button. They
+   receive a challenge that expires after five seconds.
+4. The other player aims back at you and presses their own duel button to
+   accept. Both must still be nearby, visible, alive and holding their saber.
+   Aiming at somebody else does not accept the challenge. Holding the button
+   does not send repeated requests.
+5. Both players prepare for two seconds, then fight. During preparation,
    movement and attacks are suppressed. Ordinary movement and stock Force
    Jump are available once fighting starts.
-5. The surviving winner of a completed duel recovers full health and shields.
+6. The surviving winner of a completed duel recovers full health and shields.
    The defeated player uses the game's normal death/respawn flow.
 
-The console accepts `duel` without the slash. `players` lists player slots;
-`duel <slot>` challenges a particular player. `bind k duel` assigns the action
-to K through the existing console binding system; choose a free key that suits
-your controls.
+Chat remains an alternative: `/duel` challenges the player you aim at, and
+`/duel accept` accepts an incoming challenge. The console accepts `duel` without
+the slash. `players` lists player slots; `duel <slot>` challenges a particular
+player. The existing console shortcut `bind k duel` also works. If you already
+use that shortcut and want to assign K through the Controls menu instead,
+run `unbind k` first to remove the separate console binding.
 
 | Command | Action |
 | --- | --- |
@@ -91,6 +98,7 @@ sh packaging/wasm/test/duel-state-test.sh
 sh packaging/wasm/test/duelcombat-test.sh
 sh packaging/wasm/test/duel-mutations-test.sh
 sh packaging/wasm/test/duel-integration-test.sh
+sh packaging/wasm/test/duel-controls-test.sh
 ```
 
 The `WebAssembly` workflow builds both engines and runs the existing browser
@@ -103,15 +111,16 @@ engine and web page only. Players supply their own game files; never enable
 | Check | Result |
 | --- | --- |
 | Full Asyncify and JSPI WebAssembly builds, Emscripten 6.0.12 | Passed |
-| Existing browser/native test groups plus all four new duel groups | 32/32 passed |
+| Existing browser/native test groups plus all five new duel groups | 33/33 passed |
 | Reliable messages, roster authority and join compatibility | 140 desktop, 153 browser and 140 retro checks passed |
-| Three independent native peers running the production duel modules over TCP | 119/119 assertions passed; 280 game frames |
+| Three independent native peers running the production duel modules over TCP | 131/131 assertions passed; 300 game frames |
+| Controls enumeration, keyboard/mouse profile save/load and press handling | Passed in browser/native builds, with and without quality-of-life controls |
 | Production saber-trace and body-update handlers | Passed, including door obstruction, outsider pass-through and owner death evidence |
 | Hit-claim validation and motion/playout | 430/430 and 80/80 checks passed |
 | Level Library and playlist menus | 1,879 and 2,250 checks passed |
 | JSPI suspension/exports and both engines' lost-graphics support | Passed |
 
-The reliable-message and three-peer checks are included in the 32 test groups,
+The reliable-message, controls and three-peer checks are included in the 33 test groups,
 not additional groups. Independent source review completed with the identified
 authority, cancellation, respawn, obstruction and mixed-version join defects
 fixed and covered by regressions. The existing upstream build warnings remain.
@@ -120,7 +129,10 @@ The TCP fixture compiles the complete production adapter, codec and combat
 modules against real engine types. It supplies a minimal world, clock and
 runtime callbacks; it is not a complete running game. It covers host/client
 winner roles, an observing host, consent, expiry, duplicate and forged packets,
-recovery, ambiguous death evidence, replacement lives and cancellation races.
+recovery, ambiguous death evidence, replacement lives, cancellation races and
+reciprocal aimed challenges. The controls fixture runs the production binding,
+profile and input code with simulated device state, verifying saved keyboard
+and mouse bindings and one command per press.
 The separate handler fixtures exercise the real saber trace and network body
 message receivers.
 
