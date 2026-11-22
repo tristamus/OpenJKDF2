@@ -3293,12 +3293,49 @@
       var progressElement = document.getElementById('progress');
       var spinnerElement = document.getElementById('spinner');
 
+      // HD menu pictures (the game's Setup > Display > Advanced > HD Menus
+      // and Backgrounds): the 4:3 set and the wide one, in the engine's
+      // picture order (src/Gui/jkGUIHd_data.h), in rooms/ beside the page,
+      // named by their content so they're kept a year (_headers). Made by
+      // packaging/wasm/make-hd-menus.py, which writes this list. The game
+      // fetches one set, only with the box ticked (std3D_wasmHdTexture in
+      // std3D.c); with no list here the box isn't offered.
+      var HD_MENU_PICTURES = {
+        '43': [
+          'rooms/hdmenu-43-bkmain.85723368.webp',
+          'rooms/hdmenu-43-bksingle.404463ee.webp',
+          'rooms/hdmenu-43-bkmulti.c5b2719a.webp',
+          'rooms/hdmenu-43-bksetup.5fbca936.webp',
+          'rooms/hdmenu-43-bkesc.f889cc1a.webp',
+          'rooms/hdmenu-43-bkloading.6ac4a6cb.webp',
+          'rooms/hdmenu-43-bkfieldlog.097184e0.webp',
+          'rooms/hdmenu-43-bkforce.e184e55b.webp',
+          'rooms/hdmenu-43-bktally.b63869cd.webp',
+          'rooms/hdmenu-43-bkbuildmulti.0455e690.webp',
+          'rooms/hdmenu-43-bkbuildload.f3cd5b83.webp'
+        ],
+        'wide': [
+          'rooms/hdmenu-wide-bkmain.e0da7d2d.webp',
+          'rooms/hdmenu-wide-bksingle.4e99ddb8.webp',
+          'rooms/hdmenu-wide-bkmulti.8f23246b.webp',
+          'rooms/hdmenu-wide-bksetup.0f3223a8.webp',
+          'rooms/hdmenu-wide-bkesc.168a61e6.webp',
+          'rooms/hdmenu-wide-bkloading.0494a8f3.webp',
+          'rooms/hdmenu-wide-bkfieldlog.f4d27d32.webp',
+          'rooms/hdmenu-wide-bkforce.6fdf01a7.webp',
+          'rooms/hdmenu-wide-bktally.12335da2.webp',
+          'rooms/hdmenu-wide-bkbuildmulti.a9628854.webp',
+          'rooms/hdmenu-wide-bkbuildload.47d74602.webp'
+        ]
+      };
+
       var ENGINE_LOG_LINES = 2000;
       var engineLog = [];
 
       var Module = {
         preRun: [],
         postRun: [],
+        jkHdMenus: { pictures: HD_MENU_PICTURES },
         // The engine's stdout. Every line goes to the browser console, and the
         // last ENGINE_LOG_LINES are kept in engineLog for the saved network log.
         // Lines used to be added to a text box under the game as well, which

@@ -12,6 +12,7 @@
 #include "World/jkPlayer.h"
 #include "Win95/Window.h"
 #include "Platform/std3D.h"
+#include "Gui/jkGUIHd.h"
 
 #include "jk.h"
 
@@ -107,6 +108,8 @@ static jkGuiElement jkGuiDisplay_aElementsAdvanced[22] = {
     
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_EN_JKGFXMOD",            0, {20, 150, 300, 40},  1, 0, "GUIEXT_EN_JKGFXMOD_HINT",          0, 0, 0, {0}, 0},
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_EN_TEXTURE_PRECACHE",   0, {20, 190, 300, 40},  1, 0, "GUIEXT_EN_TEXTURE_PRECACHE_HINT",          0, 0, 0, {0}, 0},
+    // Added: HD menu pictures (jkGUIHd.h), shown only where they're offered
+    { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_EN_HD_MENUS",           0, {20, 230, 300, 40},  0, 0, "GUIEXT_EN_HD_MENUS_HINT",                  0, 0, 0, {0}, 0},
     
     { ELEMENT_END,         0,            0, NULL,                   0, {0},                 0, 0, NULL,                        0, 0, 0, {0}, 0},
 };
@@ -123,6 +126,7 @@ void jkGuiDisplay_Startup()
     // (jkPlayer_ReadConf), as the flashes are hidden placeholders without it.
     jkGuiDisplay_aElementsAdvanced[9].bIsVisible = 0;
     jkGuiDisplay_aElementsAdvanced[10].rect.y = 150;
+    jkGuiDisplay_aElementsAdvanced[11].rect.y = 190;
 #endif
     jkGui_InitMenu(&jkGuiDisplay_menu, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
     jkGui_InitMenu(&jkGuiDisplay_menuAdvanced, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
@@ -180,6 +184,9 @@ int jkGuiDisplay_ShowAdvanced()
     jkGui_sub_412E20(&jkGuiDisplay_menuAdvanced, 100, 104, 100);
     jkGuiDisplay_aElementsAdvanced[9].selectedTextEntry = jkPlayer_bEnableJkgm;
     jkGuiDisplay_aElementsAdvanced[10].selectedTextEntry = jkPlayer_bEnableTexturePrecache;
+    // Added: in the browser build, in Jedi Knight, with the page's pictures (jkGuiHd_IsOffered)
+    jkGuiDisplay_aElementsAdvanced[11].bIsVisible = jkGuiHd_IsOffered();
+    jkGuiDisplay_aElementsAdvanced[11].selectedTextEntry = jkGuiHd_IsEnabled();
     
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiDisplay_menuAdvanced, &jkGuiDisplay_aElementsAdvanced[7]);
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiDisplay_menuAdvanced, &jkGuiDisplay_aElementsAdvanced[8]);
@@ -193,6 +200,8 @@ int jkGuiDisplay_ShowAdvanced()
         {
             jkPlayer_bEnableJkgm = jkGuiDisplay_aElementsAdvanced[9].selectedTextEntry;
             jkPlayer_bEnableTexturePrecache = jkGuiDisplay_aElementsAdvanced[10].selectedTextEntry;
+            if (jkGuiDisplay_aElementsAdvanced[11].bIsVisible) // Added: kept with the game's settings
+                jkGuiHd_SetEnabled(jkGuiDisplay_aElementsAdvanced[11].selectedTextEntry);
 
             std3D_PurgeEntireTextureCache();
 
