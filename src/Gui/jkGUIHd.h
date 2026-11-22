@@ -9,6 +9,7 @@
 // the 4:3 set or, on a wider window, the wide set, which reaches past the 4:3 menu to the
 // window's sides (up to 2.39:1). Only Jedi Knight's own art is covered: a background that a mod
 // (or Mysteries of the Sith) changed keeps its own picture. See jkGUIHd.c.
+// The HD pictures were provided by JKLE_Cougar (credited in the box's hint).
 
 #define JKGUIHD_NUM_PICTURES (11)
 

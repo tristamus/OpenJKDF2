@@ -52,7 +52,7 @@ MSGS 130          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_EN_TEXTURE_PRECACHE"           0 "Enable texture precaching"
    "GUIEXT_EN_TEXTURE_PRECACHE_HINT"      0 "Load all material textures ahead-of-time instead of just-in-time?"
    "GUIEXT_EN_HD_MENUS"                   0 "HD Menus and Backgrounds"
-   "GUIEXT_EN_HD_MENUS_HINT"              0 "Draw the menu backgrounds from sharper HD pictures, downloaded once."
+   "GUIEXT_EN_HD_MENUS_HINT"              0 "Sharper HD menu backgrounds, provided by JKLE_Cougar. Downloaded once."
 
 # TWL-only for now
    "GUIEXT_EN_EMISSIVE_TEXTURES"          0 "Enable emissive textures"
