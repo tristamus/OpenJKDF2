@@ -2682,6 +2682,63 @@ test('synchronizing, a viewer gets the keyframe and all after it at once, then t
     assert.deepEqual(viewRecv(game), [[1, 11]], 'a keyframe in the level is for starting, and skipped');
 });
 
+// A record of kind 3, as an Imperial relay's dedicated server's feed has
+// them (imperial-feed.js in jkdf2mp-bb-server): each packet with who sent
+// it, a u32 player id, before its length.
+function feedWideRecord(ms, seat, sent) {
+    const size = 10 + sent.reduce((n, [, p]) => n + 6 + p.length, 0);
+    const rec = new Uint8Array(size), dv = new DataView(rec.buffer);
+    dv.setUint32(0, size - 4, true);
+    dv.setUint32(4, ms, true);
+    rec[8] = 3;
+    rec[9] = seat;
+    let at = 10;
+    for (const [who, p] of sent) {
+        dv.setUint32(at, who, true);
+        dv.setUint16(at + 4, p.length, true);
+        rec.set(p, at + 6);
+        at += 6 + p.length;
+    }
+    return rec;
+}
+
+test('an Imperial relay server\'s feed: its players\' packets as from who sent each (kind 3), its own as from the host id its keyframe names', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world);
+    feed.deliver('feed 30');
+    const HOST = 0x10002, P1 = 0x10005, P2 = 0x80000001;
+    feed.deliver(feedBatch(
+        feedWideRecord(900, 1, [[P1, dss(1, 99)]]),                                   // before the keyframe: left out
+        feedRecord(1000, 1, 1, [keyLevel('JK1CTF', 'c3.jkl', { host: HOST }), dss(12, 1)]),
+        feedRecord(1000, 2, 1, [dss(11, 2), keyEnd()]),
+        feedWideRecord(1250, 1, [[P1, dss(1, 3)], [P2, dss(1, 4)], [HOST, dss(10, 5)]]),
+        feedRecord(1250, 0, 1, [dss(10, 6)])));                                         // its own, without ids
+    assert.equal(viewLevel(game).r, 1);
+    viewSync(game, 'JK1CTF', 'c3.jkl');
+    assert.deepEqual(viewRecv(game), [[HOST, 1], [HOST, 2], [P1, 3], [P2 | 0, 4], [HOST, 5], [HOST, 6], 'welcome'],
+                     'the keyframe and its own packets from the host id, the rest from who sent each, in order');
+    // Then live, in order, at its pace.
+    feed.deliver(feedBatch(feedWideRecord(1500, 1, [[P2, dss(1, 7)], [P1, dss(1, 8)]])));
+    const played = [];
+    for (let t = 0; t <= 1000; t += 25) {
+        played.push(...viewRecv(game));
+        await world.run(25);
+    }
+    assert.deepEqual(played, [[P2 | 0, 7], [P1, 8]]);
+    // A cut-short packet ends the record there.
+    const bad = feedWideRecord(1750, 1, [[P1, dss(1, 9)], [P2, dss(1, 10)]]);
+    feed.deliver(feedBatch(bad.slice(0, bad.length - 3)));
+});
+
+test('a lobby room\'s feed (no host id in its keyframe) plays seat 1 as player 1', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world);
+    feed.deliver(feedBatch(feedRecord(1000, 1, 1, [keyLevel(), dss(12, 1), keyEnd()]), feedRecord(1100, 0, 1, [dss(1, 2)])));
+    viewSync(game);
+    assert.deepEqual(viewRecv(game), [[1, 1], [1, 2], 'welcome']);
+    assert.equal(game.Module.jkView.hostId, undefined);
+});
+
 test('with two players, a viewer plays their records side by side, each player\'s own in order, not one after the other', async () => {
     const world = makeWorld();
     const { game, feed } = await viewer(world);

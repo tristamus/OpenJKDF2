@@ -2081,34 +2081,61 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
             }, 1000 * view.tries);
         };
     };
-    /* A keyframe's JKF1 packets: its level (head) and its end (keyEnd). */
+    /* A keyframe's JKF1 packets: its level (head) and its end (keyEnd).
+       host, in the head of a feed an Imperial relay's dedicated server sends
+       (imperial-feed.js in jkdf2mp-bb-server): the server's own player id,
+       which its packets without one of their own (the seat's) are from. */
     view.marker = function(rec, pkt) {
         if (pkt.length < 5 || pkt[0] !== 74 || pkt[1] !== 75 || pkt[2] !== 70 || pkt[3] !== 49) return false;
         var h = null;
         try { h = JSON.parse(new TextDecoder().decode(pkt.subarray(4))); } catch (e) {}
         if (h && h.v === 1 && h.end) rec.keyEnd = true;
-        else if (h && h.v === 1 && typeof h.episode === 'string' && typeof h.map === 'string' && rec.kind === 1) rec.head = h;
+        else if (h && h.v === 1 && typeof h.episode === 'string' && typeof h.map === 'string' && rec.kind === 1) {
+            rec.head = h;
+            if (typeof h.host === 'number' && h.host >= 1 && h.host <= 0xFFFFFFFF && h.host === Math.floor(h.host))
+                view.hostId = h.host | 0;
+        }
         return true;
     };
+    /* Packets sent to everyone: kind 0, from the record's seat, and kind 3
+       (a feed an Imperial relay's dedicated server sends), each with who
+       sent it. */
+    view.isDelta = function(rec) { return rec.kind === 0 || rec.kind === 3; };
     /* A batch of records: u32 length (LE), u32 ms, u8 kind, u8 seat, then
-       packets, each u16 length and its bytes. */
+       packets, each u16 length and its bytes; in kind 3, a u32 player id
+       (LE) before each. from: who each packet is from, kept only when one
+       isn't the seat's (a seat is its player's net id, but for a dedicated
+       server's: its host id, view.hostId, once its keyframe said). */
     view.take = function(buf) {
         var bytes = new Uint8Array(buf), dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), at = 0;
         while (at + 10 <= bytes.length) {
             var len = dv.getUint32(at, true), end = at + 4 + len;
             if (len < 6 || end > bytes.length) break;
             var rec = { ms: dv.getUint32(at + 4, true), kind: bytes[at + 8], seat: bytes[at + 9], packets: [], pi: 0, head: null, keyEnd: false };
-            for (var p = at + 10; p + 2 <= end; ) {
+            var wide = rec.kind === 3, from = null;
+            for (var p = at + 10; p + (wide ? 6 : 2) <= end; ) {
+                var who = wide ? dv.getUint32(p, true) : 0;
+                if (wide) p += 4;
                 var n = bytes[p] | (bytes[p + 1] << 8);
                 if (p + 2 + n > end) break;
                 var pkt = bytes.slice(p + 2, p + 2 + n);
-                if (rec.kind === 0 || !view.marker(rec, pkt)) rec.packets.push(pkt);
+                if (view.isDelta(rec) || !view.marker(rec, pkt)) {
+                    if (wide) (from = from || []).push(who | 0);
+                    rec.packets.push(pkt);
+                }
                 p += 2 + n;
             }
+            if (!from && view.hostId && rec.seat === 1) {
+                from = [];
+                for (var k = 0; k < rec.packets.length; k++) from.push(view.hostId);
+            }
+            rec.from = from;
             at = end;
             view.add(rec);
         }
     };
+    /* The player rec's packet i is from. */
+    view.fromOf = function(rec, i) { return rec.from && i < rec.from.length ? rec.from[i] : rec.seat; };
     view.same = function(h, want) {
         function name(s) {
             s = String(s || '').toLowerCase();
@@ -2182,10 +2209,13 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                     r = view.recs[view.ri];
                     view.lastMs = r.ms;
                     view.seatMs[r.seat] = r.ms;
-                    if (view.pi < r.packets.length) return [r.packets[view.pi++], r.seat];
+                    if (view.pi < r.packets.length) {
+                        var i0 = view.pi++;
+                        return [r.packets[i0], view.fromOf(r, i0)];
+                    }
                     /* Whole: its end, or the host's game going on after it
                        (it sends its keyframe's chunks before anything else). */
-                    if (r.keyEnd || (view.ri > 0 && r.kind === 0 && r.seat === 1)) view.keyDone = true;
+                    if (r.keyEnd || (view.ri > 0 && view.isDelta(r) && r.seat === 1)) view.keyDone = true;
                     view.ri++;
                     view.pi = 0;
                 }
@@ -2224,7 +2254,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
            seat's last played came again after the feed was opened again. */
         while (view.ri < view.recs.length) {
             r = view.recs[view.ri];
-            if (r.kind === 0 && r.seat === view.rekeySeat) view.rekey = false;
+            if (view.isDelta(r) && r.seat === view.rekeySeat) view.rekey = false;
             else if (!r.pi && view.resync && view.isKey(r) && view.same(r.head, view.want) && r.ms >= view.lastMs) {
                 view.resync = false;
                 view.rekey = true;
@@ -2248,9 +2278,9 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
            things right (one of those plays on its own). */
         var best = r, bestDue = view.due(r), seats = {}, c, cDue;
         seats[r.seat] = 1;
-        for (var i = view.ri + 1; r.kind === 0 && i < view.recs.length && i < view.ri + 64; i++) {
+        for (var i = view.ri + 1; view.isDelta(r) && i < view.recs.length && i < view.ri + 64; i++) {
             c = view.recs[i];
-            if (c.kind !== 0 && (view.resync || view.rekey)) break;
+            if (!view.isDelta(c) && (view.resync || view.rekey)) break;
             if (c.pi >= c.packets.length || (!c.pi && view.stale(c)) || seats[c.seat]) continue;
             if (!c.pi && c.ms + view.offset - SPREAD_MS > now) break;
             seats[c.seat] = 1;
@@ -2263,7 +2293,8 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         if (now < bestDue) return 0;
         if (best.ms > view.lastMs) view.lastMs = best.ms;
         view.seatMs[best.seat] = best.ms;
-        var out = [best.packets[best.pi++], best.seat];
+        var bi = best.pi++;
+        var out = [best.packets[bi], view.fromOf(best, bi)];
         if (best === r && r.pi >= r.packets.length) {
             if (r.keyEnd) view.rekey = false;
             view.ri++;
@@ -2275,7 +2306,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
        right, what came again, nothing in it. */
     view.stale = function(rec) {
         var last = view.seatMs[rec.seat];
-        return (rec.kind !== 0 && !view.rekey) || (last !== undefined && rec.ms < last) || !rec.packets.length;
+        return (!view.isDelta(rec) && !view.rekey) || (last !== undefined && rec.ms < last) || !rec.packets.length;
     };
     /* When its next packet is due: spread over the SPREAD_MS before its time. */
     view.due = function(rec) {
@@ -2337,8 +2368,9 @@ EM_JS(void, wsrelay_js_view_sync, (const char* pEpisode, const char* pMap), {
 });
 
 // The next packet due (view.recv), from cogMsgId on, into pBuf: its length,
-// with the seat it came from (the player's net id) in pFrom; or 0 for none
-// yet, -1 for the welcome, -2 once the feed ended.
+// with the player it came from (its seat, the player's net id, or the id the
+// feed gave it: view.fromOf) in pFrom; or 0 for none yet, -1 for the
+// welcome, -2 once the feed ended.
 EM_JS(int, wsrelay_js_view_recv, (void* pBuf, int maxLen, int* pFrom), {
     var view = Module.jkView;
     if (!view) return -2;
