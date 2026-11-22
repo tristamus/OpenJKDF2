@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Makes the HD menu pictures (Setup > Display > Advanced > HD Menus and Backgrounds), which the
-# game fetches from beside the page when the box is ticked, from the "Jedi Knight Hi-Res Backgrounds" zip:
+# game fetches from beside the page when the box is ticked, from the "Jedi Knight Hi-Res Backgrounds" zip
+# (provided by JKLE_Cougar):
 # its "4 to 3" and "2.39 to 1" folders, each with 11 PNGs named like the game's ui/bm/bk*.bm (no
 # bkDialog). Needs Python 3 with Pillow (WebP) and numpy.
 #
