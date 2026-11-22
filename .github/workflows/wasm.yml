@@ -129,6 +129,11 @@ jobs:
       # pictures (rooms/) are named by their content.
       - name: Test the room list
         run: node packaging/wasm/test/rooms-test.mjs
+      # HD menu pictures: the files the page names (rooms/hdmenu-*), the sizes
+      # the engine knows them by, and how the engine fetches them and makes
+      # their textures.
+      - name: Test the HD menu pictures
+        run: node packaging/wasm/test/hdmenus-test.mjs
       # A page the browser keeps in its back/forward cache closes its sockets,
       # so the lobby doesn't count it as watching or playing.
       - name: Test leaving for another page

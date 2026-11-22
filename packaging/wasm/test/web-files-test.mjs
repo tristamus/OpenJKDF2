@@ -1,6 +1,7 @@
 // The files packaging/wasm/index.html loads or opens by name beside itself
 // (each engine's script and wasm and unzip.js, from ENGINE_FILES; the room
-// pictures, from ROOM_PICTURES; move-out.html), and the page itself, are
+// pictures, from ROOM_PICTURES; the HD menu pictures, from HD_MENU_PICTURES;
+// move-out.html), and the page itself, are
 // all in both web folders a build makes: the one the CI collects (web/, in
 // .github/workflows/wasm.yml) and the one build_run_openjkdf2_wasm.sh makes
 // for local testing (wasm_out/). Read from the cp lines of each, nothing
@@ -21,8 +22,9 @@ function cut(s, from, to) {
 
 const files = JSON.parse(cut(html, '/* kit-files */', '/* /kit-files */').slice('/* kit-files */'.length));
 const pictures = new Function(cut(html, '      var ROOM_PICTURES = {', '      (function() {') + 'return ROOM_PICTURES;')();
+const hdPictures = new Function(cut(html, '      var HD_MENU_PICTURES = {', '\n      };\n') + '\n      };\nreturn HD_MENU_PICTURES;')();
 const wanted = ['index.html', 'move-out.html', files.unzip, ...['jspi', 'asyncify'].flatMap(e => [files[e].js, files[e].wasm]),
-                ...Object.values(pictures)];
+                ...Object.values(pictures), ...Object.values(hdPictures).flat()];
 assert.ok(html.includes("MOVE_FROM + '/move-out.html'"), 'the page opens move-out.html by name');
 
 // What a script's cp lines put under out/ (lines joined at a trailing

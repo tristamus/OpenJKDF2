@@ -10,6 +10,7 @@
 #include "Main/jkGame.h"
 #include "World/jkPlayer.h"
 #include "General/stdBitmap.h"
+#include "Gui/jkGUIHd.h"
 #include "stdPlatform.h"
 
 #include "jk.h"
@@ -28,6 +29,9 @@
 // Added (P22): getting the graphics back after the browser takes them away; at the end of this file
 static int std3D_WasmGlReady(void);
 static int std3D_WasmGlLost(void);
+// Added: HD menu pictures (jkGUIHd.h), before std3D_DrawMenu
+static void std3D_HdFree(void);
+static void std3D_HdForget(void);
 static void std3D_WasmGlDrew(void);
 static int std3D_bWasmFrameDrawn = 0; // the last std3D_DrawMenu drew a frame (std3D_WasmFrameDrawn)
 #endif
@@ -875,6 +879,9 @@ void std3D_Shutdown()
 void std3D_FreeResources()
 {
     std3D_PurgeEntireTextureCache();
+#ifdef ARCH_WASM
+    std3D_HdFree(); // Added
+#endif
 
     glDeleteProgram(programDefault);
     glDeleteProgram(programMenu);
@@ -1508,6 +1515,317 @@ static void std3D_PresentSWWorld(void)
 }
 #endif
 
+#ifdef ARCH_WASM
+// Added: HD menu pictures (Setup > Display > Advanced > HD Menus and Backgrounds, jkGUIHd.h).
+// With the box ticked and the menu buffer showing one of Jedi Knight's own backgrounds
+// (jkGuiHd_FindBackground), the background's HD picture is drawn over the window first, lined
+// up so the part made for the 640x480 menu lies under it (the wide set reaches past it to the
+// window's sides), and the menu then draws over it with shaders/menuhd, which leaves out each
+// pixel that still has the background's value. Until a picture has come, the game's own shows.
+
+// The textures of the HD pictures, made in JS from the files the page names
+// (Module.jkHdMenus.pictures, index.html's HD_MENU_PICTURES): fetched and decoded one at a
+// time, the one asked for first, then the rest of the set so the other menus have theirs when
+// they open; uploaded one a frame. Each picture's file stays in memory after its texture is
+// made, so a texture lost with the graphics (Module.jkGl.rebuilds changes) is made again
+// without fetching. Only menu frames ask, so nothing is fetched or decoded during play. A
+// file that can't be had is asked for again later, up to 4 times. Returns the GL texture name
+// (Emscripten's table, GL.textures, as glGenTextures fills it), or 0 while it isn't there.
+EM_JS(int, std3D_wasmHdTexture, (int picture, int bWide), {
+  var hd = Module.jkHdMenus, set = bWide ? 'wide' : '43';
+  var list = hd && hd.pictures && hd.pictures[set], gl = Module.ctx;
+  if (!list || !list[picture] || !gl || gl.isContextLost()) return 0;
+  var t = Module.jkHdTex;
+  if (!t) {
+    t = Module.jkHdTex = { set: null, pics: [], rebuilds: 0, busy: null };
+    t.drop = function(p) {
+      var gl = Module.ctx;
+      if (p.id && GL.textures[p.id] && gl && !gl.isContextLost()) gl.deleteTexture(GL.textures[p.id]);
+      if (p.id) GL.textures[p.id] = null;
+      p.id = 0;
+      if (p.bitmap) { p.bitmap.close(); p.bitmap = null; }
+    };
+    t.free = function(bKeepFiles) {
+      t.pics.forEach(t.drop);
+      if (bKeepFiles) return;
+      t.pics = [];
+      t.set = null;
+      t.busy = null;
+    };
+    t.upload = function(p) {
+      var gl = Module.ctx, tex = gl.createTexture();
+      if (!tex) return;
+      var id = GL.getNewId(GL.textures);
+      tex.name = id;
+      GL.textures[id] = tex;
+      var was = gl.getParameter(gl.TEXTURE_BINDING_2D), pbo = gl.getParameter(gl.PIXEL_UNPACK_BUFFER_BINDING);
+      if (pbo) gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, p.bitmap);
+      gl.bindTexture(gl.TEXTURE_2D, was);
+      if (pbo) gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, pbo);
+      p.id = id;
+      p.bitmap.close();
+      p.bitmap = null;
+    };
+    t.next = function(first) {
+      if (t.busy) return;
+      var now = performance.now();
+      for (var k = -1; k < t.pics.length; k++) {
+        var p = t.pics[k < 0 ? first : k];
+        if (!p || p.id || p.bitmap || p.tries >= 4 || p.retryAt > now) continue;
+        var job = t.busy = {};
+        var got = p.blob ? Promise.resolve(p.blob) : fetch(p.url).then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.blob();
+        });
+        got.then(function(blob) {
+          p.blob = blob;
+          return createImageBitmap(blob);
+        }).then(function(bitmap) {
+          if (t.busy === job) p.bitmap = bitmap; else bitmap.close();
+        }, function(e) {
+          p.tries++;
+          p.retryAt = performance.now() + 20000 * p.tries;
+          console.warn('OpenJKDF2: HD menu picture ' + p.url + ': ' + (e && e.message || e));
+        }).then(function() {
+          if (t.busy === job) t.busy = null;
+        });
+        return;
+      }
+    };
+  }
+  var rebuilds = Module.jkGl ? Module.jkGl.rebuilds : 0;
+  if (t.rebuilds !== rebuilds) {
+    t.rebuilds = rebuilds;
+    t.pics.forEach(function(p) { p.id = 0; });
+  }
+  if (t.set !== set) {
+    t.free();
+    t.set = set;
+    t.pics = list.map(function(url) { return { url: url, id: 0, blob: null, bitmap: null, tries: 0, retryAt: 0 }; });
+  }
+  var want = t.pics[picture];
+  if (!want.id && want.bitmap) t.upload(want);
+  else for (var i = 0; i < t.pics.length; i++)
+    if (!t.pics[i].id && t.pics[i].bitmap) { t.upload(t.pics[i]); break; }
+  t.next(picture);
+  return want.id;
+});
+
+// The picture textures go (the graphics are made again, std3D_FreeResources); the files stay,
+// for the textures to be made again from. Turning the box off lets the files go too (jkGUIHd.c).
+EM_JS(void, std3D_wasmHdFree, (), {
+  if (Module.jkHdTex) Module.jkHdTex.free(true);
+});
+
+static GLuint std3D_hdProgram = 0;
+static int std3D_hdProgramTried = 0; // shaders/menuhd failed to build: the box does nothing
+static GLint std3D_hdAttrCoord3d, std3D_hdAttrColor, std3D_hdAttrUv;
+static GLint std3D_hdUniMvp, std3D_hdUniTex, std3D_hdUniOrig, std3D_hdUniPalette, std3D_hdUniMode, std3D_hdUniOrigMap, std3D_hdUniHoles;
+static GLuint std3D_hdOrigTex = 0;  // the background's 640x480 pixels (R8)
+static uint32_t std3D_hdOrigGen = 0; // jkGuiHd_FindBackground's *pOrigGen when they were uploaded
+
+// Forgets the HD names (the graphics were made again: they're gone with the old ones)
+static void std3D_HdForget(void)
+{
+    std3D_hdProgram = 0;
+    std3D_hdProgramTried = 0;
+    std3D_hdOrigTex = 0;
+    std3D_hdOrigGen = 0;
+}
+
+static void std3D_HdFree(void)
+{
+    if (std3D_hdProgram)
+        glDeleteProgram(std3D_hdProgram);
+    if (std3D_hdOrigTex)
+        glDeleteTextures(1, &std3D_hdOrigTex);
+    std3D_HdForget();
+    std3D_wasmHdFree();
+}
+
+static int std3D_HdLoadProgram(void)
+{
+    if (std3D_hdProgram)
+        return 1;
+    if (std3D_hdProgramTried)
+        return 0;
+    std3D_hdProgramTried = 1;
+    int bWasQuiet = shader_utils_bQuiet;
+    shader_utils_bQuiet = 1;
+    std3D_hdProgram = std3D_loadProgram("shaders/menuhd");
+    shader_utils_bQuiet = bWasQuiet;
+    if (!std3D_hdProgram)
+    {
+        stdPlatform_Printf("OpenJKDF2: HD menu pictures: shaders/menuhd didn't build, the game's own pictures stay\n");
+        return 0;
+    }
+    std3D_hdAttrCoord3d = glGetAttribLocation(std3D_hdProgram, "coord3d");
+    std3D_hdAttrColor = glGetAttribLocation(std3D_hdProgram, "v_color");
+    std3D_hdAttrUv = glGetAttribLocation(std3D_hdProgram, "v_uv");
+    std3D_hdUniMvp = glGetUniformLocation(std3D_hdProgram, "mvp");
+    std3D_hdUniTex = glGetUniformLocation(std3D_hdProgram, "tex");
+    std3D_hdUniOrig = glGetUniformLocation(std3D_hdProgram, "orig");
+    std3D_hdUniPalette = glGetUniformLocation(std3D_hdProgram, "displayPalette");
+    std3D_hdUniMode = glGetUniformLocation(std3D_hdProgram, "mode");
+    std3D_hdUniOrigMap = glGetUniformLocation(std3D_hdProgram, "origMap");
+    std3D_hdUniHoles = glGetUniformLocation(std3D_hdProgram, "holes");
+    if (std3D_hdAttrCoord3d < 0 || std3D_hdAttrColor < 0 || std3D_hdAttrUv < 0)
+    {
+        stdPlatform_Printf("OpenJKDF2: HD menu pictures: shaders/menuhd has no coord3d, v_color or v_uv, the game's own pictures stay\n");
+        glDeleteProgram(std3D_hdProgram);
+        std3D_hdProgram = 0;
+        return 0;
+    }
+    return 1;
+}
+
+static void std3D_HdDrawTris(const D3DVERTEX* pVerts, int nVerts, const rdTri* pTris, int nTris)
+{
+    glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
+    glBufferData(GL_ARRAY_BUFFER, nVerts * sizeof(D3DVERTEX), pVerts, GL_STREAM_DRAW);
+    glVertexAttribPointer(std3D_hdAttrCoord3d, 3, GL_FLOAT, GL_FALSE, sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, x));
+    glVertexAttribPointer(std3D_hdAttrColor, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, color));
+    glVertexAttribPointer(std3D_hdAttrUv, 2, GL_FLOAT, GL_FALSE, sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, tu));
+    for (int j = 0; j < nTris; j++)
+    {
+        menu_data_elements[(j*3)+0] = pTris[j].v1;
+        menu_data_elements[(j*3)+1] = pTris[j].v2;
+        menu_data_elements[(j*3)+2] = pTris[j].v3;
+    }
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, nTris * 3 * sizeof(GLushort), menu_data_elements, GL_STREAM_DRAW);
+    glDrawElements(GL_TRIANGLES, (GLsizei)(nTris * 3), GL_UNSIGNED_SHORT, 0);
+}
+
+// In std3D_DrawMenu, once the menu buffer is uploaded (texture unit 0) and its quads queued
+// (GL_tmpVertices): when its background has an HD picture ready, draws the picture and then the
+// menu over it, and returns 1 (the plain menu draw is then left out). The 640x480 menu covers
+// menu_x..menu_x+menu_w across and 0..menu_h down the window. bBuildMulti: the character
+// screen, whose 3D view shows through its background's holes.
+static int std3D_HdMenuDraw(int bBuildMulti, float menu_x, float menu_w, float menu_h)
+{
+    SDL_Surface* pSurf = Video_menuBuffer.sdlSurface;
+    if (!pSurf || !pSurf->pixels || GL_tmpTrisAmt <= 0)
+        return 0;
+    int menuW = Video_menuBuffer.format.width, menuH = Video_menuBuffer.format.height;
+    if (menuW > pSurf->w) menuW = pSurf->w;
+    if (menuH > pSurf->h) menuH = pSurf->h;
+    int pitch = (int)Video_menuBuffer.format.rowSize;
+    if (pitch < menuW || (long long)pitch * (menuH - 1) + menuW > (long long)pSurf->pitch * pSurf->h)
+        pitch = pSurf->pitch;
+
+    const uint8_t* pOrig = NULL;
+    int origPitch = 0;
+    uint32_t origGen = 0;
+    int picture = jkGuiHd_FindBackground((const uint8_t*)pSurf->pixels, pitch, menuW, menuH, &pOrig, &origPitch, &origGen);
+    if (picture < 0)
+        return 0;
+
+    // The wide set past 1.4:1 (16:9 and wider, the sides cut as the window needs), else 4:3
+    int bWide = (double)Window_xSize > 1.4 * (double)Window_ySize;
+    int picW = 0, picH = 0;
+    float part[4];
+    if (!jkGuiHd_GetPictureInfo(picture, bWide, &picW, &picH, part) || part[2] <= 0 || part[3] <= 0)
+        return 0;
+    int texId = std3D_wasmHdTexture(picture, bWide);
+    if (texId <= 0 || !std3D_HdLoadProgram())
+        return 0;
+
+    // The background's pixels, as the menu buffer's are uploaded (std3D_UploadBuffer)
+    glActiveTexture(GL_TEXTURE0 + 2);
+    if (!std3D_hdOrigTex || std3D_hdOrigGen != origGen)
+    {
+        if (!std3D_hdOrigTex)
+        {
+            glGenTextures(1, &std3D_hdOrigTex);
+            glBindTexture(GL_TEXTURE_2D, std3D_hdOrigTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 640, 480, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+        }
+        glBindTexture(GL_TEXTURE_2D, std3D_hdOrigTex);
+        int bOddRow = (origPitch & 3) != 0;
+        if (bOddRow)
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, origPitch);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 640, 480, GL_RED, GL_UNSIGNED_BYTE, pOrig);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        if (bOddRow)
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        std3D_hdOrigGen = origGen;
+    }
+    glBindTexture(GL_TEXTURE_2D, std3D_hdOrigTex);
+    glActiveTexture(GL_TEXTURE0 + 3);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)texId);
+    glActiveTexture(GL_TEXTURE0 + 0);
+
+    glUseProgram(std3D_hdProgram);
+    {
+        float scaleX = 1.0 / ((double)Window_xSize / 2.0);
+        float scaleY = 1.0 / ((double)Window_ySize / 2.0);
+        float width = Window_xSize, height = Window_ySize;
+        float d3dmat[16] = {
+            scaleX, 0, 0, 0,
+            0, -scaleY, 0, 0,
+            0, 0, 1, 0,
+            -(width / 2) * scaleX, (height / 2) * scaleY, -1, 1
+        };
+        glUniformMatrix4fv(std3D_hdUniMvp, 1, GL_FALSE, d3dmat);
+    }
+    glUniform1i(std3D_hdUniOrig, 2);
+    glUniform1i(std3D_hdUniPalette, 1);
+    glUniform1i(std3D_hdUniHoles, bBuildMulti ? 1 : 0);
+    glUniform4f(std3D_hdUniOrigMap, (float)picW / part[2], (float)picH / part[3], -part[0] / part[2], -part[1] / part[3]);
+    glEnableVertexAttribArray(std3D_hdAttrCoord3d);
+    glEnableVertexAttribArray(std3D_hdAttrColor);
+    glEnableVertexAttribArray(std3D_hdAttrUv);
+
+    // The picture: its part under the menu on the menu's place
+    float kx = menu_w / part[2], ky = menu_h / part[3];
+    float x0 = menu_x - part[0] * kx, y0 = -part[1] * ky;
+    float x1 = x0 + picW * kx, y1 = y0 + picH * ky;
+    D3DVERTEX aQuad[4];
+    memset(aQuad, 0, sizeof(aQuad));
+    aQuad[0].x = x0; aQuad[0].y = y0; aQuad[0].tu = 0.0; aQuad[0].tv = 0.0;
+    aQuad[1].x = x0; aQuad[1].y = y1; aQuad[1].tu = 0.0; aQuad[1].tv = 1.0;
+    aQuad[2].x = x1; aQuad[2].y = y1; aQuad[2].tu = 1.0; aQuad[2].tv = 1.0;
+    aQuad[3].x = x1; aQuad[3].y = y0; aQuad[3].tu = 1.0; aQuad[3].tv = 0.0;
+    for (int i = 0; i < 4; i++)
+        aQuad[i].color = 0xFFFFFFFF;
+    rdTri aQuadTris[2];
+    aQuadTris[0].v1 = 1; aQuadTris[0].v2 = 0; aQuadTris[0].v3 = 2;
+    aQuadTris[1].v1 = 0; aQuadTris[1].v2 = 3; aQuadTris[1].v3 = 2;
+    glUniform1i(std3D_hdUniTex, 3);
+    glUniform1i(std3D_hdUniMode, 0);
+    std3D_HdDrawTris(aQuad, 4, aQuadTris, 2);
+
+    // The menu over it, from the menu buffer (unit 0)
+    glUniform1i(std3D_hdUniTex, 0);
+    glUniform1i(std3D_hdUniMode, 1);
+    std3D_HdDrawTris(GL_tmpVertices, GL_tmpVerticesAmt, GL_tmpTris, GL_tmpTrisAmt);
+
+    glDisableVertexAttribArray(std3D_hdAttrUv);
+    glDisableVertexAttribArray(std3D_hdAttrColor);
+    glDisableVertexAttribArray(std3D_hdAttrCoord3d);
+    glActiveTexture(GL_TEXTURE0 + 3);
+    glBindTexture(GL_TEXTURE_2D, blank_tex);
+    glActiveTexture(GL_TEXTURE0 + 2);
+    glBindTexture(GL_TEXTURE_2D, blank_tex);
+    glActiveTexture(GL_TEXTURE0 + 0);
+    glUseProgram(programMenu);
+    return 1;
+}
+#endif
+
 void std3D_DrawMenu()
 {
     if (Main_bHeadless) return;
@@ -1555,6 +1873,7 @@ void std3D_DrawMenu()
     menu_x = 0.0;
     
     int bFixHudScale = 0;
+    int hdMode = 0; // Added: 1 a menu, 2 the character screen, which can have HD pictures (jkGUIHd.h)
 
     double fake_windowW = (double)Window_xSize;
     double fake_windowH = (double)Window_ySize;
@@ -1571,6 +1890,7 @@ void std3D_DrawMenu()
         // Keep 4:3 aspect
         menu_x = (menu_w - (menu_h * (640.0 / 480.0))) / 2.0;
         menu_w = (menu_h * (640.0 / 480.0));
+        hdMode = rdsw_bWorldPresented ? 0 : 1;
     }
     else if (jkCutscene_isRendering) {
         bFixHudScale = 1;
@@ -1601,6 +1921,7 @@ void std3D_DrawMenu()
         // Keep 4:3 aspect
         menu_x = (menu_w - (menu_h * (640.0 / 480.0))) / 2.0;
         menu_w = (menu_h * (640.0 / 480.0));
+        hdMode = rdsw_bWorldPresented ? 0 : 2;
     }
     else
     {
@@ -1793,6 +2114,13 @@ void std3D_DrawMenu()
     glActiveTexture(GL_TEXTURE0 + 0);
     glUniform1i(programMenu_uniform_tex, 0);
     glUniform1i(programMenu_uniform_displayPalette, 1);
+
+#ifdef ARCH_WASM
+    // Added: HD menu pictures (jkGUIHd.h): the picture and the menu over it, the plain draw
+    // below left out
+    if (hdMode && std3D_HdMenuDraw(hdMode == 2, menu_x, menu_w, menu_h))
+        GL_tmpTrisAmt = 0;
+#endif
 
     D3DVERTEX* vertexes = GL_tmpVertices;
 
@@ -4393,6 +4721,7 @@ static void std3D_ForgetGLResources(void)
     // Shaders, framebuffers, palettes, buffers; the HUD's bitmaps load again (jkHudInv)
     if (has_initted)
         std3D_FreeResources();
+    std3D_HdForget(); // the HD menu pictures' (made again as they're next drawn)
     memset(std3D_framebuffers, 0, sizeof(std3D_framebuffers));
     std3D_swWorldTexId = 0;
     std3D_swWorldTexW = std3D_swWorldTexH = 0;
