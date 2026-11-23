@@ -528,6 +528,33 @@ test('a match over: what the box said goes on the page, which says the match end
     assert.equal(p.env.watchBox.frame, null);
 });
 
+test('an Imperial server\'s card with a new feed is a new match: what the last one\'s box said doesn\'t stop it', () => {
+    const p = page();
+    p.games[5] = { key: 'narshaddaa', no: 'Game 1', g: { id: 5, uid: 'ipin0', imperial: true, mod: '' } };
+    const f = p.boxShow(p.games[5]);
+    assert.equal(p.env.watchBox.uid, 'ipin0-5');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'left', 'The host turned watching off.');
+    assert.equal(p.boxShow(p.games[5]), null, 'that feed: not again by itself');
+    // The server asks for its feed again: the same card, a new room.
+    p.games[5] = { key: 'narshaddaa', no: 'Game 1', g: { id: 9, uid: 'ipin0', imperial: true, mod: '' } };
+    p.env.watchLive.id = 5;
+    const again = p.boxShow(p.games[5]);
+    assert.ok(again, 'a box for the new feed');
+    assert.equal(p.env.watchBox.id, 9);
+    assert.equal(p.boxNote(p.games[5]).children[0].textContent, 'The game stopped watching this match.', 'not the old feed\'s note');
+});
+
+test('what the box\'s game says is kept whole up to 400 characters, and why its feed ended is kept for the page', () => {
+    const p = page();
+    const long = 'x'.repeat(300) + 'y'.repeat(200);
+    const f = p.boxShow(p.games[5]);
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'said', 'The host turned watching off.');
+    assert.equal(p.env.watchBox.said, 'The host turned watching off.');
+    p.env.window.jkWatchBoxSays(f.contentWindow, 'left', long);
+    assert.equal(p.boxNote(p.games[5]).children[0].textContent, long.substring(0, 400));
+    assert.equal(p.env.watchBox.said, '', 'a new box starts with nothing said');
+});
+
 test('a box that stopped with nothing to say says the game stopped', () => {
     const p = page();
     const f = p.boxShow(p.games[5]);

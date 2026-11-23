@@ -9130,7 +9130,10 @@
           for (var i = 0; i < imp.length && !f; i++) if (g.sid && imp[i].sid === g.sid && !used[imp[i].id]) f = imp[i];
           if (!f) return g;
           used[f.id] = true;
-          return Object.assign({}, g, { id: f.id, spect: 1, feed: 1, watching: f.watching,
+          // Its feed is on, so it runs, though the relay doesn't list it
+          // (or isn't answering): watch only, not "Not running right now".
+          var why = g.why === 'not-listed' || g.why === 'relay-down' ? IMPERIAL_WATCH_ONLY : g.why;
+          return Object.assign({}, g, { id: f.id, spect: 1, feed: 1, watching: f.watching, why: why,
                                         map: g.map || f.map, episode: g.episode || f.episode });
         });
         imp.forEach(function(f) {
@@ -10070,8 +10073,9 @@
       // live and panel: what its page last said (jkWatchBoxSays), for the
       // classes of where it is: the viewing page's box, or the room window's
       // preview (pvScreen) before that.
+      // said: why its game's feed ended, once it says (jkWatchBoxSays).
       var watchBox = { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, follow: '', followEls: {}, ended: 0, left: {},
-                       live: false, panel: false };
+                       live: false, panel: false, said: '' };
       // uid -> the game, as the viewing page last drew it (tickLive).
       var watchGames = {};
 
@@ -10832,9 +10836,13 @@
           }, BOX_END_MS);
         }
         if (keepBox) {
+          // Once the box's game says why its feed ended, that, rather than
+          // that its last seconds play: a feed that ended at once has none
+          // ("The host turned watching off.").
+          var said = watchBox.said || '';
           info.append(el('p', 'empty', !lobbyLive.status ? empty :
             (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ')' : 'This game') +
-            ' has ended. Its last seconds still play above, as they were played.'));
+            ' has ended. ' + (said || 'Its last seconds still play above, as they were played.')));
         } else if (empty) {
           info.append(el('p', 'empty', empty));
           // On the whole screen, it says so there, until Esc.
@@ -10851,7 +10859,7 @@
           var view = watchView(w, v);
           if (watchCanFull) view.title = 'Double-click for full screen';
           var frame = boxShow(w);
-          if (!frame && watchBox.left[w.g.uid] !== undefined) view.append(boxNote(w));
+          if (!frame && watchBox.left[boxUid(w.g)] !== undefined) view.append(boxNote(w));
           boxScreen(frame, view, watchHud(w, v, list), frame ? watchKeysPanel() : null,
                     frame ? watchFollowLabel('watch-follow') : null);
           watchScreen.hidden = false;
@@ -11119,15 +11127,22 @@
       // How long the box plays on once its match has left the lobby, at most:
       // its delay (30 s by default) and then some.
       var BOX_END_MS = 90000;
+      // What the box's game says is kept up to this many characters, as long
+      // as the engine's own (its aText, 400 bytes).
+      var VIEW_NOTE_MAX = 400;
       function boxCan(w) {
         var can = watchInGame(w);
         return !!can && !can.why && !window.jkLobbyMock && !phoneNote() && /^https?:$/.test(location.protocol);
       }
+      // The match the box knows a game's card by: its uid, and for an Imperial
+      // relay server's card, which stays the same through its feeds, the
+      // room its feed is now (imperialWithFeeds), so a new feed is a new match.
+      function boxUid(g) { return g.uid + (g.imperial && g.id ? '-' + g.id : ''); }
       // The box's frame for w, made if it hasn't one; null for none (it
       // can't, or it stopped: watchBox.left).
       function boxShow(w) {
-        if (!w || !boxCan(w) || watchBox.left[w.g.uid] !== undefined) return boxStop();
-        if (watchBox.frame && watchBox.uid === w.g.uid) return watchBox.frame;
+        if (!w || !boxCan(w) || watchBox.left[boxUid(w.g)] !== undefined) return boxStop();
+        if (watchBox.frame && watchBox.uid === boxUid(w.g)) return watchBox.frame;
         boxStop();
         var f = document.createElement('iframe');
         f.className = 'watch-frame';
@@ -11138,7 +11153,7 @@
         f.style.width = size.w + 'px';
         f.style.height = size.h + 'px';
         watchBox.frame = f;
-        watchBox.uid = w.g.uid;
+        watchBox.uid = boxUid(w.g);
         watchBox.id = w.g.id;
         watchBox.w = size.w;
         watchBox.h = size.h;
@@ -11236,6 +11251,7 @@
         watchBox.uid = '';
         watchBox.id = 0;
         watchBox.ended = 0;
+        watchBox.said = '';
         watchBox.keys = null;
         watchBox.follow = '';
         watchBox.followEls = {};
@@ -11258,7 +11274,7 @@
       // Why the box's game stopped, and Watch again.
       function boxNote(w) {
         var note = el('div', 'box-note');
-        note.append(el('p', null, watchBox.left[w.g.uid] || 'The game stopped watching this match.'));
+        note.append(el('p', null, watchBox.left[boxUid(w.g)] || 'The game stopped watching this match.'));
         var again = el('button', 'watch-btn go', 'Watch again');
         again.type = 'button';
         again.dataset.wact = 'again';
@@ -11267,7 +11283,7 @@
       }
       function boxAgain() {
         var w = watchLive.id ? watchedGame() : null;
-        if (w) delete watchBox.left[w.g.uid];
+        if (w) delete watchBox.left[boxUid(w.g)];
         renderWatch();
       }
       // The keys for watching (Controls): over the box's game once it
@@ -11432,6 +11448,12 @@
             if (f.parentNode === watchScreen) watchKeysShown();
             renderWatch();
           }
+        } else if (state === 'said') {
+          // Why its feed ended ("The match is over.", "The host turned
+          // watching off."), as its game says over the match: the viewing
+          // page says it once the match has left the lobby.
+          watchBox.said = String(text || '').substring(0, VIEW_NOTE_MAX);
+          if (watchDlg.open && watchBox.ended) renderWatch();
         } else if (state === 'keys') {
           // H in the box (its page's own keydown).
           if (watchDlg.open && f.parentNode === watchScreen) watchKeysToggle();
@@ -11454,7 +11476,7 @@
           watchBox.panel = state === 'panel';
           boxClasses();
         } else if (state === 'left') {
-          text = String(text || '').substring(0, 200);
+          text = String(text || '').substring(0, VIEW_NOTE_MAX);
           // A match that's over: what it said stays on the page, which says
           // the match has ended.
           if (!watchedGame(watchBox.id) && text) watchLive.note = text;
@@ -11507,6 +11529,9 @@
       Module.jkViewNotice = function(text) {
         var note = document.getElementById('view-note');
         viewNoteLast = String(text || '');
+        // Why its feed ended (Module.jkView's end says it): the lobby page
+        // says it beside the box too (jkWatchBoxSays 'said').
+        if (watchEmbed && viewNoteLast && Module.jkView && Module.jkView.ended) embedSays('said', viewNoteLast);
         note.textContent = viewNoteLast;
         note.hidden = !viewNoteLast;
         clearTimeout(viewNoteTimer);
@@ -11536,7 +11561,7 @@
           text = sessionStorage.getItem(VIEW_NOTE_KEY) || '';
           sessionStorage.removeItem(VIEW_NOTE_KEY);
         } catch (e) {}
-        return text.substring(0, 200);
+        return text.substring(0, VIEW_NOTE_MAX);
       }
 
       // The room window's Watch, the preview's close, Watch full size and

@@ -290,6 +290,17 @@ test("a feed the lobby has of a relay server (its status's imp) puts Watch on it
     // Another sid: no Watch on Coruscant's card.
     const other = p.imperialWithFeeds(relay, [{ ...imp[0], sid: 'ffffffffffffffff' }]);
     assert.deepEqual(other.map(g => [g.uid, g.id]), [[relay[0].uid, undefined], [relay[1].uid, undefined], ['f1201', 1201]]);
+    // A pinned server the relay doesn't list (or a relay that's down) whose
+    // feed is on: it runs, so watch only, not "Not running right now".
+    for (const why of ['not-listed', 'relay-down']) {
+        const pinned = [{ ...relay[0], key: '', listed: false, joinable: false, why }];
+        assert.equal(p.imperialStop(pinned[0]), why === 'not-listed' ? 'Not running right now' : 'Imperial relay not answering');
+        const fed = p.imperialWithFeeds(pinned, imp);
+        assert.deepEqual([fed[0].id, p.imperialStop(fed[0])], [1201, 'Watch only'], why);
+    }
+    // A server that isn't taking players stays so.
+    const closed = p.imperialWithFeeds([{ ...relay[0], joinable: false, why: 'closed' }], imp);
+    assert.equal(p.imperialStop(closed[0]), 'Not taking players');
 });
 
 test("the page's status keeps imp only with a room id and sid, and canWatch takes a relay card with a feed", () => {
