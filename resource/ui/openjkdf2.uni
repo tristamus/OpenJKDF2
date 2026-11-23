@@ -93,7 +93,7 @@ MSGS 133          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_HIT_REACH"               0 "Hit reach (ms):"
    "GUIEXT_HIT_REACH_HINT"          0 "With Hit what you see: how far back a hit can count, 150 to 500 ms."
    "GUIEXT_PRIVATE_DUELS"           0 "Private duels"
-   "GUIEXT_PRIVATE_DUELS_HINT"      0 "Players can challenge each other to a saber-only duel with K. Others can't hit them while they fight."
+   "GUIEXT_PRIVATE_DUELS_HINT"      0 "Players can challenge each other to a private saber duel with K."
    "GUIEXT_LEVEL_LIBRARY"           0 "Level Library..."
    "GUIEXT_LEVEL_LIBRARY_HINT"      0 "Community levels from Massassi.net, saved in this browser for hosting."
    "GUIEXT_PLAYLIST"                0 "Playlist..."

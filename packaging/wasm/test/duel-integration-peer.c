@@ -127,6 +127,16 @@ void sithMulti_SendChatTo(const char *text, int a, int b, int to)
 }
 
 uint32_t stdPlatform_GetTimeMsec(void) { return clockMs; }
+static char netLog[4096];
+int stdPlatform_Printf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    size_t used = strlen(netLog);
+    int n = vsnprintf(netLog + used, sizeof(netLog) - used, fmt, ap);
+    va_end(ap);
+    return n;
+}
 int stdComm_WSRelay_InMatch(void) { return matchOn; }
 int stdString_WcharToChar(char *out, const char16_t *in, int n)
 {

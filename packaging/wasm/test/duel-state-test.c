@@ -117,6 +117,26 @@ static void pairs(void)
     sithDuelState_WriteRequest(packet, &r);
     packet[0] = 1; // the single-pair version is refused
     assert(!sithDuelState_ReadRequest(packet, sizeof(packet), &got));
+
+    // A game without the host's header asks for it: no session, pair or player.
+    r = (DuelRequest){DUEL_SYNC, 0, 0, 0, 0, DUEL_NO_PAIR};
+    sithDuelState_WriteRequest(packet, &r);
+    assert(packet[1] == DUEL_SYNC && packet[2] == DUEL_NO_PAIR);
+    assert(sithDuelState_ReadRequest(packet, sizeof(packet), &got) && got.action == DUEL_SYNC && !got.epoch);
+    r.epoch = 90; // one that had a session may still ask
+    sithDuelState_WriteRequest(packet, &r);
+    assert(sithDuelState_ReadRequest(packet, sizeof(packet), &got) && got.action == DUEL_SYNC);
+    packet[2] = 0;
+    assert(!sithDuelState_ReadRequest(packet, sizeof(packet), &got));
+    sithDuelState_WriteRequest(packet, &r);
+    packet[16] = 3;
+    assert(!sithDuelState_ReadRequest(packet, sizeof(packet), &got));
+    sithDuelState_WriteRequest(packet, &r);
+    packet[8] = 1;
+    assert(!sithDuelState_ReadRequest(packet, sizeof(packet), &got));
+    sithDuelState_WriteRequest(packet, &r);
+    packet[1] = DUEL_SYNC + 1;
+    assert(!sithDuelState_ReadRequest(packet, sizeof(packet), &got));
 }
 
 static void header(void)

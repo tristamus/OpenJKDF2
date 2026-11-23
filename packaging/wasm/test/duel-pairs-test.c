@@ -22,6 +22,7 @@
 #include "globals.h"
 #include <assert.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -86,6 +87,16 @@ void sithMulti_SendChatTo(const char *text, int a, int b, int to)
 }
 
 uint32_t stdPlatform_GetTimeMsec(void) { return clockMs; }
+static char netLog[4096];
+int stdPlatform_Printf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    size_t used = strlen(netLog);
+    int n = vsnprintf(netLog + used, sizeof(netLog) - used, fmt, ap);
+    va_end(ap);
+    return n;
+}
 int stdComm_WSRelay_InMatch(void) { return 1; }
 int stdString_WcharToChar(char *out, const char16_t *in, int n)
 {
@@ -326,6 +337,46 @@ static void dedicatedHost(void)
     assert(seen[p45].reason == DUEL_DEFEAT && seen[p45].winner == 4 && seen[p23].phase == DUEL_FIGHT);
 }
 
+// A Dedicated Server host hears no hellos, since its seat isn't in the game.
+// A game it doesn't know can duel asks for the host's state and is told; any
+// duel request counts the same, and the asks are answered once a second.
+static void dedicatedHostAsked(void)
+{
+    setup(1);
+    for (int i = 1; i < PEOPLE; i++) sithDuel_Forget(i, (uint32_t)i + 1);
+    told = (DuelHeader){0};
+    forget();
+    clockMs += 2600;
+    sithDuel_Frame();
+    assert(!framesTo[2] && !framesTo[5]);
+    netLog[0] = 0;
+    ask(2, DUEL_SYNC, 0, -1);
+    assert(framesTo[2] == 1 && firstWasHeader[2] && told.epoch && told.allowed);
+    assert(strstr(netLog, "player 2's game asked, and this host hadn't known it can duel."));
+    ask(2, DUEL_SYNC, 0, -1);
+    assert(framesTo[2] == 1);
+    clockMs += 1000;
+    ask(2, DUEL_SYNC, 0, -1);
+    assert(framesTo[2] == 2);
+    // Seats 3-5 haven't asked, so nobody can start a duel yet.
+    ask(2, DUEL_CHALLENGE, 3, -1);
+    assert(pairOf(2, 3) < 0 && strstr(chat[2], "Every active player must support private duels."));
+    ask(4, DUEL_SYNC, 0, -1);
+    ask(5, DUEL_SYNC, 0, -1);
+    assert(framesTo[4] == 1 && framesTo[5] == 1);
+    // Seat 3's challenge is its first word, and it stands.
+    ask(3, DUEL_CHALLENGE, 2, -1);
+    int i = pairOf(3, 2);
+    assert(i >= 0 && seen[i].phase == DUEL_OFFER && framesTo[3] >= 2);
+    // A frame from a player who isn't seated, or the host's own id, is no ask.
+    clockMs += 1000;
+    int before2 = framesTo[2], before5 = framesTo[5];
+    ask(1, DUEL_SYNC, 0, -1);
+    jkPlayer_playerInfos[4].flags = 0;
+    ask(5, DUEL_SYNC, 0, -1);
+    assert(framesTo[2] == before2 && framesTo[5] == before5);
+}
+
 // Teams, a lobby viewer, and a room whose first seat isn't the host have no duels.
 static void notADuelRoom(void)
 {
@@ -353,6 +404,7 @@ int main(void)
 {
     twoDuelsAtOnce();
     dedicatedHost();
+    dedicatedHostAsked();
     notADuelRoom();
-    puts("Several private duels at once, the host's box and a Dedicated Server host passed.");
+    puts("Several private duels at once, the host's box and a Dedicated Server host (told, and asked) passed.");
 }

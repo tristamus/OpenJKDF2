@@ -9,7 +9,9 @@
 enum DuelPhase { DUEL_IDLE, DUEL_OFFER, DUEL_PREPARE, DUEL_FIGHT };
 enum DuelReason { DUEL_NONE, DUEL_EXPIRED, DUEL_CANCELLED, DUEL_DECLINED, DUEL_LEFT,
                   DUEL_SEPARATED, DUEL_UNSUPPORTED, DUEL_DEFEAT, DUEL_INELIGIBLE, DUEL_DRAW };
-enum DuelAction { DUEL_CHALLENGE = 1, DUEL_ACCEPT, DUEL_DECLINE, DUEL_CANCEL, DUEL_READY };
+// DUEL_SYNC: a game without the host's header asks for it (and for the pairs
+// under way). It names no pair or player and needs no epoch.
+enum DuelAction { DUEL_CHALLENGE = 1, DUEL_ACCEPT, DUEL_DECLINE, DUEL_CANCEL, DUEL_READY, DUEL_SYNC };
 enum { DUEL_WIRE_SIZE = 28, DUEL_HOST_ID = 1, DUEL_MAX_ID = 64, DUEL_MAX_PAIRS = 32, DUEL_NO_PAIR = 0xFF };
 
 typedef struct DuelState {

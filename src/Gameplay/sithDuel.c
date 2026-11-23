@@ -46,6 +46,12 @@ static int localCancelPending;
 static int localCancelIndex = -1;
 static int cancelFromPreparation;
 static uint32_t lastCancelAt;
+// A peer without the host's header asks for it (askHost), a few times.
+static uint32_t askedAt;
+static int asks;
+// The host answers each seat's asks at most once a second.
+static uint32_t answeredAt[JKPLAYER_NUM_INFOS];
+static int loggedNoRoom; // the network log says once why a host can't referee
 
 static void sendRequest(enum DuelAction action, uint32_t target, int index);
 
@@ -190,6 +196,10 @@ void sithDuel_Reset(void)
     localCancelIndex = -1;
     cancelFromPreparation = 0;
     lastCancelAt = 0;
+    askedAt = 0;
+    asks = 0;
+    memset(answeredAt, 0, sizeof(answeredAt));
+    loggedNoRoom = 0;
 }
 
 // A separate message avoids overwriting an incoming DSS packet while replying.
@@ -248,6 +258,22 @@ static void publish(void)
             tellAll(id);
     }
     lastSnapshotAt = stdPlatform_GetTimeMsec();
+}
+
+// A peer without the host's header asks the host for it. The host learns
+// which games can duel from their join requests and hellos, but a Dedicated
+// Server host hears no hellos (its seat isn't in the game), and a game that
+// never heard back would wait for good. Six asks, from entering the match
+// and then 2, 4, 8, 16 and 32 s apart, so a host without duels costs six
+// frames; /duel asks again.
+static void askHost(uint32_t now)
+{
+    DuelRequest r = { DUEL_SYNC, 0, 0, 0, 0, DUEL_NO_PAIR };
+    uint8_t bytes[DUEL_WIRE_SIZE];
+    sithDuelState_WriteRequest(bytes, &r);
+    sendFrame(DUEL_HOST_ID, bytes);
+    askedAt = now;
+    asks++;
 }
 
 static void label(uint32_t id, char *text, size_t size)
@@ -503,6 +529,7 @@ static void judge(int i, uint32_t now)
 void sithDuel_Frame(void)
 {
     if (!room()) {
+        asks = 0;
         for (int i = 0; i < DUEL_MAX_PAIRS; i++) {
             if (pairs[i].s.phase == DUEL_IDLE)
                 continue;
@@ -513,6 +540,8 @@ void sithDuel_Frame(void)
     }
     uint32_t now = stdPlatform_GetTimeMsec();
     if (!stdComm_bIsServer) {
+        if (!header.epoch && asks < 6 && (!asks || (uint32_t)(now - askedAt) >= (1000u << asks)))
+            askHost(now);
         // Owner-only inventory and powers can change between consent and
         // acceptance. Recheck during preparation before the host starts play.
         int mine = pairOf(ownId(), DUEL_PREPARE);
@@ -680,6 +709,8 @@ static void hostRequest(uint32_t actor, const DuelRequest *r)
         else
             tell(actor, "That duel action is unavailable.");
         return;
+    case DUEL_SYNC: // answered in sithDuel_Process
+        return;
     case DUEL_CHALLENGE:
     case DUEL_ACCEPT:
         break;
@@ -749,18 +780,54 @@ static void hostRequest(uint32_t actor, const DuelRequest *r)
 
 void sithDuel_Process(SithMessage *msg)
 {
-    if (!room() || msg->netMsg.msg_size != DUEL_WIRE_SIZE)
+    if (msg->netMsg.msg_size != DUEL_WIRE_SIZE)
         return;
+    if (!room()) {
+        if (stdComm_bIsServer && !loggedNoRoom) {
+            loggedNoRoom = 1;
+            stdPlatform_Printf("OpenJKDF2: private duels: a player's game asked, but this game can't referee duels"
+                               " (in the match %d, first seat %u, own id %u, free-for-all %d).\n",
+                               stdComm_WSRelay_InMatch(), (unsigned)(jkPlayer_maxPlayers ? jkPlayer_playerInfos[0].playerNetId : 0),
+                               (unsigned)ownId(), freeForAll());
+        }
+        return;
+    }
     uint32_t sender = msg->netMsg.idx; // stamped by transport, never read from the request body
     const uint8_t *bytes = (const uint8_t *)msg->pktData;
     if (stdComm_bIsServer) {
         DuelRequest request;
-        if (sender != DUEL_HOST_ID && sithDuelState_ReadRequest(bytes, DUEL_WIRE_SIZE, &request))
-            hostRequest(sender, &request);
+        if (sender == DUEL_HOST_ID || !sithDuelState_ReadRequest(bytes, DUEL_WIRE_SIZE, &request))
+            return;
+        // Only a game that can duel sends these, so one the host didn't know
+        // could (its join request said nothing, or a hello never came) is
+        // one now, and is told everything.
+        int slot = findSeat(sender);
+        if (slot < 0)
+            return;
+        int learned = capableId[slot] != sender;
+        if (learned) {
+            stdPlatform_Printf("OpenJKDF2: private duels: player %u's game asked, and this host hadn't known it can duel.\n", (unsigned)sender);
+            capableId[slot] = sender;
+        }
+        if (request.action == DUEL_SYNC) {
+            uint32_t now = stdPlatform_GetTimeMsec();
+            if (header.epoch && (learned || !answeredAt[slot] || (uint32_t)(now - answeredAt[slot]) >= 1000)) {
+                answeredAt[slot] = now ? now : 1;
+                tellAll(sender);
+            }
+            return;
+        }
+        if (learned && header.epoch)
+            tellAll(sender);
+        hostRequest(sender, &request);
         return;
     }
-    if (sithDuelState_ReadHeader(&header, bytes, DUEL_WIRE_SIZE, sender))
+    uint32_t hadEpoch = header.epoch;
+    if (sithDuelState_ReadHeader(&header, bytes, DUEL_WIRE_SIZE, sender)) {
+        if (header.epoch != hadEpoch)
+            stdPlatform_Printf("OpenJKDF2: private duels: the host's are %s.\n", header.allowed ? "on" : "off");
         return;
+    }
     int i = sithDuelState_FrameIndex(bytes, DUEL_WIRE_SIZE);
     if (i < 0 || !header.epoch)
         return;
@@ -866,6 +933,9 @@ int sithDuel_Command(stdDebugConsoleCmd *cmd, const char *args)
     word[len] = 0;
     sithDuel_Frame();
     if (!header.epoch) {
+        uint32_t now = stdPlatform_GetTimeMsec();
+        if (!stdComm_bIsServer && (!asks || (uint32_t)(now - askedAt) >= 1000))
+            askHost(now);
         sithConsole_PrintString("Waiting for a host with private-duel support.");
         return 1;
     }

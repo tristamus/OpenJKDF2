@@ -124,10 +124,16 @@ void sithDuelState_WriteRequest(uint8_t *p, const DuelRequest *r)
 
 int sithDuelState_ReadRequest(const uint8_t *p, size_t n, DuelRequest *out)
 {
-    if (n != DUEL_WIRE_SIZE || p[0] != WIRE_VERSION || p[1] < DUEL_CHALLENGE || p[1] > DUEL_READY
+    if (n != DUEL_WIRE_SIZE || p[0] != WIRE_VERSION || p[1] < DUEL_CHALLENGE || p[1] > DUEL_SYNC
         || p[3] || !zero(p, 20))
         return 0;
     DuelRequest r = {p[1], get32(p+4), get32(p+8), get32(p+12), get32(p+16), p[2]};
+    if (r.action == DUEL_SYNC) {
+        if (r.index != DUEL_NO_PAIR || r.revision || r.generation || r.target)
+            return 0;
+        *out = r;
+        return 1;
+    }
     if (!r.epoch)
         return 0;
     if (r.action == DUEL_CHALLENGE) {

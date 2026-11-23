@@ -468,6 +468,31 @@ try:
     left=router.all('disconnected')
     check('participant-left callback clears both peer restrictions without reward', all(p['phase']==[0,0,0] and p['callbacks']['inventory_writes']==0 for p in left.values()))
     check('finished adapter returns normal outsider combat and contact', all(all(p['damage_saber']) and all(p['collision']) and all(p['skill']) for p in left.values()))
+    # A Dedicated Server host hears no hellos, so it may not know which games
+    # can duel. A game without the host's header asks for it: at once, then
+    # 2, 4, 8, 16 and 32 s apart while unanswered, and again on /duel.
+    for peer in (1,2,3): router.ask(peer,'reset')
+    router.drop = lambda frm, to, payload: frm == 2 and to == 1 and payload[:2] == b'\x02\x06'
+    before=len(records['wire'])
+    router.ask(1,'tick')
+    for step in ('tick','time 2999','time 3000','time 6999','time 7000','time 15000','time 31000','time 63000','time 200000'):
+        router.ask(2,step)
+    asks=[w for w in records['wire'][before:] if w['from']==2 and w['hex'][:4]=='0206']
+    check('an unanswered game asks the host six times, backing off', len(asks)==6 and all(w['to']==1 and w['dropped'] for w in asks), asks)
+    check('the six asks are all it sends', not any(w['from']==2 and w['hex'][:4]!='0206' for w in records['wire'][before:]))
+    unheard=router.all('asked-unanswered')
+    check('a game whose asks are lost has no header', unheard['2']['header']['epoch']==0, unheard['2']['header'])
+    router.drop=None
+    router.ask(2,'chat /duel status'); router.ask(3,'tick')
+    told=router.all('asked-answered')
+    check('/duel asks again, and the host tells the games that asked', all(p['header']['epoch']==told['1']['header']['epoch'] and p['header']['allowed']==1 for p in told.values()), told)
+    after=len(records['wire'])
+    router.ask(2,'time 400000'); router.ask(3,'time 400000')
+    check('a game that has the header asks no more', not any(w['hex'][:4]=='0206' for w in records['wire'][after:]))
+    router.ask(2,'chat /duel 2'); router.ask(3,'chat /duel accept')
+    asked=router.all('asked-then-duel')
+    check('games the host learned of by asking can duel', all(p['phase']==[0,1,1] for p in asked.values()), asked)
+
     records['result']='PASS'
 except Exception as exc:
     records['result']='FAIL'; records['error']=str(exc); records['trace']=traceback.format_exc()

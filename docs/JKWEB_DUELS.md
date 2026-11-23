@@ -131,6 +131,19 @@ the newest challenge accepted and the others ended, one challenge of your
 own at a time, the box turned off mid-duel, and a Dedicated Server host. The
 three-peer TCP test also covers two offers to one player and the box off.
 
+### A game that never hears the host (2026-11-23)
+
+On beta kit 184 a Dedicated Server host never reached its joiners: both
+waited for "a host with private-duel support". Such a host hears no hellos
+(its seat isn't in the game), so it relied on the join request alone. Now a
+game without the host's header asks for it with a `DUEL_SYNC` request
+(action 6, no session, pair or player): on entering the match, then 2, 4,
+8, 16 and 32 s apart while unanswered, and again on `/duel`. The host takes
+any duel frame from a seated player as that game's support, answers asks
+at most once a second per seat, and logs `private duels:` lines to the
+network log (a game that asked, the host's header arriving, or why a host
+can't referee). `duel-pairs-test.sh` and the three-peer test cover it.
+
 ### Verified on 2026-11-21 (the single-pair version)
 
 | Check | Result |
