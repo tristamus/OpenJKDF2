@@ -476,6 +476,30 @@ test("the host says when the level's script keeps the score, and its mode as it 
     assert.equal(r.rules.mode, 0x18);
 });
 
+test("a host whose game allows private duels says so in its rules, through the script's mode changes", () => {
+    const g = makeGame();
+    start(g, { host: true });
+    g.L.duels(true);
+    g.world.run(0);
+    let [r] = g.reports();
+    assert.deepEqual(r.rules, { mode: 0x18, sl: 15, tl: 20, duels: 1 });
+    g.L.scores(SB, TEAMS, 0x1c, 0);
+    g.world.run(30000);
+    [r] = g.reports();
+    assert.deepEqual(r.rules, { mode: 0x1c, sl: 15, tl: 20, duels: 1 }, 'still said after the mode changes');
+    // The next level: the engine says again, and a game without them says nothing.
+    start(g, { host: true, map: 'm5.jkl' });
+    g.L.duels(false);
+    g.world.run(0);
+    [r] = g.reports();
+    assert.deepEqual(r.rules, { mode: 0x18, sl: 15, tl: 20 });
+    const j = makeGame();
+    start(j, {});
+    j.L.duels(true);
+    j.world.run(0);
+    assert.equal(j.reports()[0].rules, undefined, "only the host's");
+});
+
 test("a joiner's game says nothing of scripts, and a kept last report still does", () => {
     const j = makeGame();
     start(j);
@@ -641,9 +665,10 @@ test("the lobby's word that a match was saved reaches the page", () => {
 
 test('the engine calls what ladder.js has, and is built with it', () => {
     for (const call of ['Module.jkLadder.start(', 'Module.jkLadder.kill(', 'Module.jkLadder.scores(',
-                        'Module.jkLadder.end(', 'Module.jkLadder.saved(', 'Module.jkLadder.playlist('])
+                        'Module.jkLadder.end(', 'Module.jkLadder.saved(', 'Module.jkLadder.playlist(',
+                        'Module.jkLadder.duels('])
         assert.ok(relayC.includes(call), 'stdComm_WSRelay.c has ' + call);
-    for (const name of ['start', 'kill', 'scores', 'end', 'saved', 'playlist'])
+    for (const name of ['start', 'kill', 'scores', 'end', 'saved', 'playlist', 'duels'])
         assert.equal(typeof makeGame().L[name], 'function');
     // The host's game clock, which the engine keeps for ladder.js to call.
     assert.ok(relayC.includes('EMSCRIPTEN_KEEPALIVE int stdComm_WSRelay_MatchClock(void)'));

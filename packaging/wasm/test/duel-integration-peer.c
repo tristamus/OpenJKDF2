@@ -52,7 +52,8 @@ static int disables, weaponResets, movementResets, inventoryWrites;
 static int aimTarget, aimWorld, aimCount, aimNext, aimSearches, aimReleases;
 static SithCollision aimContacts[2];
 static uint8_t lastSnapshot[DUEL_WIRE_SIZE];
-static DuelState observed;
+static DuelState observed, observedPairs[DUEL_MAX_PAIRS];
+static DuelHeader observedHeader;
 static char report[16384];
 static size_t used;
 
@@ -87,13 +88,24 @@ static void envelope(uint32_t kind, uint32_t to, const void *data, uint32_t n)
     if (!allwrite(head, sizeof(head)) || (n && !allwrite(data, n))) exit(4);
 }
 
+/* "last" is the newest change to any pair, as a peer saw it; a repeat of a
+ * pair's current state is not a change. */
 static void observe(const unsigned char *data, size_t n)
 {
-    DuelState parsed = {0};
-    if (sithDuelState_ReadSnapshot(&parsed, data, n, DUEL_HOST_ID)) {
-        observed = parsed;
-        memcpy(lastSnapshot, data, DUEL_WIRE_SIZE);
+    DuelHeader h = {0};
+    if (sithDuelState_ReadHeader(&h, data, n, DUEL_HOST_ID)) {
+        observedHeader = h;
+        return;
     }
+    DuelState parsed = {0};
+    if (!sithDuelState_ReadSnapshot(&parsed, data, n, DUEL_HOST_ID))
+        return;
+    DuelState *seen = &observedPairs[parsed.index];
+    if (seen->epoch == parsed.epoch && (int32_t)(parsed.revision - seen->revision) <= 0)
+        return;
+    *seen = parsed;
+    observed = parsed;
+    memcpy(lastSnapshot, data, DUEL_WIRE_SIZE);
 }
 
 int sithComm_SendMsgToPlayer(SithMessage *msg, int to, int outstream, int flags)
@@ -210,7 +222,14 @@ static void receipt(void)
     append(",\"last\":{\"epoch\":%u,\"revision\":%u,\"generation\":%u,\"phase\":%d,\"reason\":%d,\"a\":%u,\"b\":%u,\"winner\":%u},\"wire\":\"",
         observed.epoch,observed.revision,observed.generation,observed.phase,observed.reason,observed.a,observed.b,observed.winner);
     for (int i=0;i<DUEL_WIRE_SIZE;++i) append("%02x",lastSnapshot[i]);
-    append("\"");
+    append("\",\"header\":{\"epoch\":%u,\"revision\":%u,\"allowed\":%d},\"pairs\":[",
+        observedHeader.epoch,observedHeader.revision,observedHeader.allowed);
+    for (int i=0,n=0;i<DUEL_MAX_PAIRS;++i) if (observedPairs[i].epoch) {
+        const DuelState *v=&observedPairs[i];
+        append("%s{\"index\":%u,\"phase\":%d,\"reason\":%d,\"a\":%u,\"b\":%u,\"winner\":%u}",
+            n++?",":"",v->index,v->phase,v->reason,v->a,v->b,v->winner);
+    }
+    append("]");
     array("damage_saber",0); array("damage_other",1); array("collision",2); array("skill",3);
     append(",\"claims\":[");
     for(int i=0;i<3;++i) for(int j=0;j<3;++j) for(int k=0;k<3;++k)
@@ -246,6 +265,8 @@ static void setup(void)
     memset(sithInventory_powerKeybinds,0,sizeof(sithInventory_powerKeybinds));
     memset(&jkEpisode_mLoad,0,sizeof(jkEpisode_mLoad));
     memset(&observed,0,sizeof(observed)); memset(lastSnapshot,0,sizeof(lastSnapshot));
+    memset(observedPairs,0,sizeof(observedPairs)); memset(&observedHeader,0,sizeof(observedHeader));
+    sithDuel_bAllowDuels=1;
     sithNet_isMulti=1; sithNet_MultiModeFlags=0; matchOn=sight=1; clockMs=1000;
     stdComm_Imperial_bActive=stdComm_WSRelay_bViewer=jkGuiNetHost_bIsDedicated=0;
     sithNet_bNeedsFullThingSyncForLeaveJoin=0; sithMulti_curWelcomePlayerNum=0; sithMulti_newPlayerId=0;
@@ -316,6 +337,7 @@ static void command(char *text)
     else if (sscanf(text,"sight %d",&a)==1) sight=a;
     else if (sscanf(text,"saber %d",&a)==1) jkPlayer_playerInfos[playerThingIdx].curWeaponID=a?SITHBIN_LIGHTSABER:SITHBIN_BRYARPISTOL;
     else if (sscanf(text,"team %d",&a)==1) sithNet_MultiModeFlags=a?MULTIMODEFLAG_TEAMS:0;
+    else if (sscanf(text,"allow %d",&a)==1) sithDuel_bAllowDuels=a;
     else if (!strncmp(text,"emit ",5)) {
         char hex[4096];
         if(sscanf(text+5,"%d %4095s",&a,hex)==2) {
@@ -347,12 +369,7 @@ int main(int argc,char **argv)
             msg.netMsg.cogMsgId=SITHDUEL_MSG; msg.netMsg.idx=head[1]; msg.netMsg.msg_size=head[2];
             memcpy(msg.pktData,data,head[2]);
             sithDuel_Process(&msg);
-            if(!stdComm_bIsServer && head[1]==DUEL_HOST_ID) {
-                DuelState parsed={0};
-                if(sithDuelState_ReadSnapshot(&parsed,data,head[2],DUEL_HOST_ID) &&
-                   (!observed.epoch||(parsed.epoch==observed.epoch&&(int32_t)(parsed.revision-observed.revision)>0)))
-                    observe(data,head[2]);
-            }
+            if(!stdComm_bIsServer && head[1]==DUEL_HOST_ID) observe(data,head[2]);
         }
     }
     close(connected);

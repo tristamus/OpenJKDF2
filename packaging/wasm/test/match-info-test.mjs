@@ -51,7 +51,7 @@ check("the page keeps a game's live part as it shows it, whatever arrives", () =
     const s = status([game(FFA)]);
     assert.equal(s.now, NOW);
     assert.equal(s.games[0].rank, 8);
-    assert.deepEqual(s.games[0].live, { mode: 0x18, sl: 20, tl: 15, at: FFA.at, over: 0, nocount: '', count: 120, pl: null,
+    assert.deepEqual(s.games[0].live, { mode: 0x18, sl: 20, tl: 15, at: FFA.at, over: 0, duels: false, nocount: '', count: 120, pl: null,
                                         sb: FFA.sb, teams: null, last: FFA.last, kills: null, streak: FFA.streak, nk: -1 });
     // Nothing live, or nothing it can use.
     for (const v of [undefined, null, 5, 'x', [], {}, { at: -1 }, { at: 'now' }])
@@ -246,6 +246,10 @@ check('the rules, as Info has them', () => {
     assert.deepEqual(lib.ruleRows(g, { ...g.live, nocount: 'coop' }).pop(), ['Leaderboard', "Doesn't count (co-op level)"]);
     assert.deepEqual(lib.ruleRows(g, { ...g.live, tl: 0, sl: 0 }).slice(1, 3), [['Time limit', 'None'], ['Score limit', 'None']]);
     assert.equal(lib.ruleRows({ ...g, rank: -1 }, g.live).length, 4, 'no rank from an older lobby');
+    const duels = status([game({ ...FFA, duels: 1 })]).games[0];
+    assert.equal(duels.live.duels, true);
+    assert.deepEqual(lib.ruleRows(duels, duels.live).slice(3), [['Max Force rank', '8'], ['Private duels', 'On'], ['Leaderboard', 'Counts']]);
+    assert.equal(status([game({ ...FFA, duels: 'yes' })]).games[0].live.duels, false, 'only the 1 the lobby sends');
     const ctf = { ...g, episode: 'JK1CTF.gob' };
     assert.equal(lib.modeText(ctf, 0x15, false), 'Capture the Flag');
     assert.equal(lib.modeText(g, 0x1, false), 'Teams');

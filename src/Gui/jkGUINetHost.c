@@ -26,6 +26,7 @@
 #include "Gui/jkGUIPlaylist.h"
 #include "Main/jkPlaylist.h"
 #include "Platform/Networking/Imperial/stdComm_Imperial.h"
+#include "Gameplay/sithDuel.h"
 #endif
 
 enum jkGuiNetHostButton_t
@@ -101,7 +102,9 @@ enum jkGuiNetHostAdvancedElement_t
     // Added: how far back a hit can reach, with Hit what you see
     // (stdComm_WSRelayHits.c).
     NETHOST_HITREACH_TEXTBOX = NETHOST_ADVANCED_ADDED + 1,
-    NETHOST_ADVANCED_OK_BUTTON = NETHOST_ADVANCED_ADDED + 2,
+    // Added: Private duels, off by default (Gameplay/sithDuel.c).
+    NETHOST_PRIVATE_DUELS_CHECKBOX = NETHOST_ADVANCED_ADDED + 2,
+    NETHOST_ADVANCED_OK_BUTTON = NETHOST_ADVANCED_ADDED + 3,
 #else
     NETHOST_ADVANCED_OK_BUTTON = NETHOST_ADVANCED_ADDED,
 #endif
@@ -290,6 +293,7 @@ static jkGuiElement jkGuiNetHost_aSettingsElements[] =
 #ifdef PLATFORM_WSRELAY
     { ELEMENT_TEXT, 0, 0, "GUIEXT_HIT_REACH", 2, { 70, 330, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBOX, 0, 0, NULL, 0, { 280, 340, 50, 20 }, 1, 0, "GUIEXT_HIT_REACH_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
+    { ELEMENT_CHECKBOX, 0, 0, "GUIEXT_PRIVATE_DUELS", 0, { 70, 360, 200, 40 }, 1, 0, "GUIEXT_PRIVATE_DUELS_HINT", NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
 #endif
     { ELEMENT_TEXTBUTTON, GUI_OK, 2, "GUI_OK", 3, { 420, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
     { ELEMENT_TEXTBUTTON, GUI_CANCEL, 2, "GUI_CANCEL", 3, { 20, 430, 200, 40 }, 1, 0, NULL, NULL, NULL, NULL, { 0, 0, 0, 0, 0, { 0, 0, 0, 0 } }, 0 },
@@ -364,11 +368,14 @@ static void jkGuiNetHost_ShowHitReach()
     jk_snwprintf(jkGuiNetHost_hitReachText, 0x20u, u"%d", stdComm_WSRelay_ClampReach(stdComm_WSRelay_hitReachMs));
     jkGuiNetHost_aSettingsElements[NETHOST_HITREACH_TEXTBOX].wstr = jkGuiNetHost_hitReachText;
     jkGuiNetHost_aSettingsElements[NETHOST_HITREACH_TEXTBOX].selectedTextEntry = 8;
+    // Private duels sits under Hit reach and, like it, takes effect on Ok.
+    jkGuiNetHost_aSettingsElements[NETHOST_PRIVATE_DUELS_CHECKBOX].selectedTextEntry = !!sithDuel_bAllowDuels;
 }
 
 static void jkGuiNetHost_TakeHitReach()
 {
     stdComm_WSRelay_hitReachMs = wstr_to_int_clamped(jkGuiNetHost_hitReachText, STDCOMM_WSRELAY_REACH_MIN, STDCOMM_WSRELAY_REACH_MAX);
+    sithDuel_bAllowDuels = !!jkGuiNetHost_aSettingsElements[NETHOST_PRIVATE_DUELS_CHECKBOX].selectedTextEntry;
 }
 
 // Added: the Level Library (Gui/jkGUILibrary.c), which Level Library... on
@@ -478,6 +485,7 @@ void jkGuiNetHost_SaveSettings()
 #ifdef PLATFORM_WSRELAY
     wuRegistry_SaveBool("bClassicHits", stdComm_WSRelay_bClassicHits);
     wuRegistry_SaveInt("hitReachMs", stdComm_WSRelay_hitReachMs);
+    wuRegistry_SaveBool("bPrivateDuels", sithDuel_bAllowDuels);
 #endif
 }
 
@@ -587,6 +595,7 @@ void jkGuiNetHost_LoadSettings()
 #ifdef PLATFORM_WSRELAY
     stdComm_WSRelay_bClassicHits = !!wuRegistry_GetBool("bClassicHits", stdComm_WSRelay_bClassicHits);
     stdComm_WSRelay_hitReachMs = stdComm_WSRelay_ClampReach(wuRegistry_GetInt("hitReachMs", stdComm_WSRelay_hitReachMs));
+    sithDuel_bAllowDuels = !!wuRegistry_GetBool("bPrivateDuels", 0);
 #endif
 }
 

@@ -64,7 +64,7 @@ for shape in browser browser-legacy native native-legacy; do
     flags=
     case "$shape" in browser*) flags=-DPLATFORM_WSRELAY ;; esac
     case "$shape" in *-legacy) ;; *) flags="$flags -DQOL_IMPROVEMENTS" ;; esac
-    "${CC:-cc}" -std=gnu11 -O1 -Wall -Werror -Wno-unused-variable -Wno-unused-value \
+    "${CC:-cc}" -std=gnu11 -O1 -Wall -Werror -Wno-unused-variable -Wno-unused-value -Wno-unused-result \
         -Wno-parentheses -DLINUX -DNO_JK_MMAP -DSTDSOUND_OPENAL $flags -I"$out" -I"$top/src" \
         "$top/packaging/wasm/test/duel-controls-test.c" -o "$out/test"
     "$out/test" "$top/resource/ui/openjkdf2.uni"

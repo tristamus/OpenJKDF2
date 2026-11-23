@@ -31,6 +31,10 @@ records = {'scope': 'Production adapter, state codec, and combat module across t
            'source_sha256': {p: hashlib.sha256((REPO/p).read_bytes()).hexdigest() for p in SOURCES},
            'cases': [], 'snapshots': {}, 'wire': [], 'logs': []}
 
+def live_pairs(peer):
+    """(challenger, challenged, phase) of each pair under way, as one peer has them."""
+    return sorted((q['a'], q['b'], q['phase']) for q in peer['pairs'] if q['phase'])
+
 def check(name, value, detail=None):
     records['cases'].append({'name': name, 'passed': bool(value), 'detail': detail})
     if not value:
@@ -168,7 +172,7 @@ try:
     router.start()
     state = router.reset()
     check('three distinct operating-system processes', len({p['pid'] for p in state.values()}) == 3, {i:p['pid'] for i,p in state.items()})
-    check('all peers learn the host initial snapshot', len({p['last']['epoch'] for p in state.values()}) == 1 and state['1']['last']['epoch'] > 0)
+    check('all peers learn the host session and that it allows duels', len({p['header']['epoch'] for p in state.values()}) == 1 and state['1']['header']['epoch'] > 0 and all(p['header']['allowed'] == 1 for p in state.values()), state)
     check('ordinary combat and contact allowed before any duel', all(all(p[k]) for p in state.values() for k in ('damage_saber','collision','skill')))
 
     # Invoke the exact no-argument command used by the native control binding.
@@ -183,20 +187,22 @@ try:
 
     router.ask(1,'aim 2 0'); router.ask(1,'button')
     aimed_offer=router.all('aim-host-offer')
-    check('the host button-style command challenges its aimed player', all(p['last']['phase']==1 and p['last']['a']==1 and p['last']['b']==2 and p['phase']==[0,0,0] for p in aimed_offer.values()), aimed_offer)
+    check('the host button-style command challenges its aimed player', all(live_pairs(p)==[(1,2,1)] and p['last']['a']==1 and p['last']['b']==2 and p['phase']==[0,0,0] for p in aimed_offer.values()), aimed_offer)
     aimed_revision=aimed_offer['1']['last']['revision']
     router.ask(2,'aim 0 0'); router.ask(2,'button')
-    check('an incoming challenge is not accepted by a button press without an aimed target', all(p['last']['phase']==1 and p['last']['revision']==aimed_revision and p['phase']==[0,0,0] for p in router.all().values()))
+    check('an incoming challenge is not accepted by a button press without an aimed target', all(live_pairs(p)==[(1,2,1)] and p['last']['revision']==aimed_revision and p['phase']==[0,0,0] for p in router.all().values()))
     router.ask(2,'aim 1 1'); router.ask(2,'button')
-    check('an incoming challenge is not accepted through an obstructing world contact', all(p['last']['phase']==1 and p['last']['revision']==aimed_revision for p in router.all().values()))
+    check('an incoming challenge is not accepted through an obstructing world contact', all(live_pairs(p)==[(1,2,1)] and p['last']['revision']==aimed_revision for p in router.all().values()))
     router.ask(2,'aim 3 0'); router.ask(2,'button')
     wrong_aim=router.all('aim-wrong-player')
-    check('aiming at an unrelated player cannot accept or replace the incoming challenge', all(p['last']['phase']==1 and p['last']['revision']==aimed_revision and p['last']['a']==1 and p['last']['b']==2 for p in wrong_aim.values()), wrong_aim)
+    check('aiming at an unrelated player challenges them separately and leaves the incoming challenge waiting', all(live_pairs(p)==[(1,2,1),(2,3,1)] and p['phase']==[0,0,0] for p in wrong_aim.values()), wrong_aim)
     router.ask(3,'aim 1 0'); router.ask(3,'button')
-    check('an outsider aiming at the challenger cannot accept another player invitation', all(p['last']['phase']==1 and p['last']['revision']==aimed_revision for p in router.all().values()))
+    third=router.all('aim-third-offer')
+    check('an outsider aiming at the challenger makes its own offer and accepts nothing', all(live_pairs(p)==[(1,2,1),(2,3,1),(3,1,1)] and p['phase']==[0,0,0] for p in third.values()), third)
     router.ask(2,'aim 1 0'); router.ask(2,'button')
     aimed_prepare=router.all('aim-reciprocal-acceptance')
-    check('aiming back at the challenger and pressing the same command accepts mutually', all(p['phase']==[1,1,0] and p['last']['a']==1 and p['last']['b']==2 for p in aimed_prepare.values()), aimed_prepare)
+    check('aiming back at the challenger and pressing the same command accepts mutually', all(p['phase']==[1,1,0] and live_pairs(p)==[(1,2,2)] for p in aimed_prepare.values()), aimed_prepare)
+    check('accepting ends every other offer to or from either duelist', all(sorted((q['a'],q['b'],q['reason']) for q in p['pairs'] if not q['phase'])==[(2,3,2),(3,1,2)] for p in aimed_prepare.values()), aimed_prepare)
     check('production aiming releases every supplied collision stack', all(p['aim_fixture']['searches']==p['aim_fixture']['releases'] for p in aimed_prepare.values()))
     router.ask(1,'time 3000')
     check('a mutually aimed challenge proceeds through the normal ready countdown', all(p['phase']==[2,2,0] for p in router.all().values()))
@@ -212,17 +218,26 @@ try:
     offer_wire = next(w['hex'] for w in reversed(records['wire']) if w['from']==2 and w['to']==1 and bytes.fromhex(w['hex'])[1]==1)
     rev = offered['1']['last']['revision']
     check('an offer alone imposes no combat restrictions', all(p['phase']==[0,0,0] and all(p['damage_saber']) for p in offered.values()))
-    for cmd in ('accept', 'cancel', '0'):
+    for cmd in ('accept', 'cancel'):
         router.ask(3, 'chat /duel '+cmd)
     result = router.all('outsider-rejected')
-    check('outsider cannot accept, cancel, or replace another pair offer', result['1']['last']['revision']==rev and result['1']['last']['phase']==1)
-    for packet in ('0102', '02'+offer_wire[2:], offer_wire[:-2], offer_wire+'00'):
+    check('outsider cannot accept or cancel another pair offer', result['1']['last']['revision']==rev and result['1']['last']['phase']==1)
+    # The last case names a pair in a challenge, which only ever names its target.
+    for packet in ('0102', '01'+offer_wire[2:], offer_wire[:-2], offer_wire+'00', offer_wire[:4]+'00'+offer_wire[6:]):
         router.ask(3, 'emit 1 '+packet)
-    check('malformed and truncated network requests do not mutate the duel', router.all()['1']['last']['revision']==rev)
+    check('malformed, old-version and truncated network requests do not mutate the duel', router.all()['1']['last']['revision']==rev)
+
+    # Several pairs: an outsider may challenge someone who already has an
+    # offer waiting, and each offer is its own pair on every peer.
+    router.ask(3, 'chat /duel 0')
+    two = router.all('second-offer')
+    check('a second offer to the same player is a separate pair on every peer', all(sorted((q['a'],q['b'],q['phase']) for q in p['pairs'] if q['phase']) == [(2,1,1),(3,1,1)] for p in two.values()), two)
+    check('an offer from a third player leaves the first offer as it was', all(any(q['index']==0 and q['a']==2 and q['phase']==1 for q in p['pairs']) for p in two.values()))
 
     router.ask(1, 'chat /duel 1')
     result=router.all('prepare')
     check('reciprocal challenge is consent', all(p['phase']==[1,1,0] for p in result.values()))
+    check('accepting one challenge ends the other offers to that player on every peer', all(sorted((q['a'],q['b'],q['phase'],q['reason']) for q in p['pairs']) == [(2,1,2,0),(3,1,0,2)] for p in result.values()), result)
     check('preparation blocks even partner saber damage and Force jump', all(not p['damage_saber'][1] and not p['damage_saber'][3] and p['permissions'][0]==[0,0,0,0,0] for p in result.values()))
     check('preparation resets only each owner movement/weapon but both saber presentations', all(p['callbacks']['movement_reset']==(1 if i!='3' else 0) and p['callbacks']['weapon_reset']==(1 if i!='3' else 0) and p['callbacks']['saber_disable']==2 for i,p in result.items()), {i:p['callbacks'] for i,p in result.items()})
     router.ask(1,'time 2999')
@@ -392,6 +407,26 @@ try:
     router.reset(); router.fight(); router.ask(1,'joining 3 0')
     incompatible=router.all('unsupported-arrival')
     check('unsupported arrival immediately releases the existing duelists', all(incompatible[i]['phase']==[0,0,0] and incompatible[i]['callbacks']['inventory_writes']==0 for i in ('1','2')))
+
+    router.reset(); router.ask(1,'chat /duel 1'); router.ask(2,'clock 1100'); router.ask(3,'chat /duel 1')
+    router.ask(2,'chat /duel accept')
+    newest=router.all('accept-newest')
+    check('/duel accept takes the challenge a client heard of last and ends the other', all(live_pairs(p)==[(3,2,2)] and p['phase']==[0,1,1] and any(q['a']==1 and q['b']==2 and q['reason']==2 for q in p['pairs']) for p in newest.values()), newest)
+
+    router.reset(); router.ask(1,'allow 0'); router.ask(1,'tick')
+    off=router.all('host-turned-off')
+    check('a host with Private duels unticked tells every peer', all(p['header']['allowed']==0 and p['header']['epoch']==off['1']['header']['epoch'] for p in off.values()), off)
+    before=len(records['wire'])
+    router.ask(2,'chat /duel 0'); router.ask(1,'chat /duel 1')
+    refused=router.all('refused-when-off')
+    check('no duel can start while the host has Private duels off', all(p['phase']==[0,0,0] and not p['pairs'] for p in refused.values()), refused)
+    check('a peer refuses locally without sending a request', not any(w['from']==2 and w['to']==1 for w in records['wire'][before:]))
+    check('players are told the host has not turned duels on', sum("hasn't turned on private duels" in l['text'] for l in records['logs'] if l['peer'] in (1,2)) >= 2)
+    router.ask(1,'allow 1'); router.ask(1,'tick')
+    check('ticking the box again tells every peer', all(p['header']['allowed']==1 for p in router.all().values()))
+    router.reset(); router.fight(); router.ask(1,'allow 0'); router.ask(1,'tick')
+    stopped=router.all('turned-off-mid-duel')
+    check('turning duels off ends a duel under way without a winner', all(p['phase']==[0,0,0] and p['last']['reason']==8 and p['last']['winner']==0 and p['callbacks']['inventory_writes']==0 for p in stopped.values()), stopped)
 
     router.reset(); router.ask(1,'sight 0'); router.ask(2,'chat /duel 0')
     check('host enforces the line-of-sight callback', router.all()['1']['last']['phase']==0)

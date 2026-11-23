@@ -4,14 +4,16 @@ JKWeb Duels adds a consensual private saber fight inside an ordinary browser
 free-for-all. It takes inspiration from Jedi Outcast and Jedi Academy and uses
 JK/MotS's existing combat, maps and characters.
 
-This development branch is `jkweb-duels` in
-`CodaLilitari/OpenJKDF2-MotS-Fixes`. Build and serve the branch to use it. The
-public upstream JediKnight.zone deployment is separate.
+It started as `jkweb-duels` in `CodaLilitari/OpenJKDF2-MotS-Fixes` and is
+part of the jediknight.zone browser build. A host turns it on for their game
+with **Private duels** on **Host > Advanced**. It is off by default, and the
+choice is kept for the next game that host opens.
 
 ## Playing
 
-1. Everyone in the room needs a build supporting private duels. Choose a
-   free-for-all game. Finish any active Force powers and equip a usable saber.
+1. The host ticks **Private duels** on **Host > Advanced** and starts a
+   free-for-all game. The room's Info then shows **Private duels: On**.
+   Finish any active Force powers and equip a usable saber.
 2. **K** is the default **Challenge to a duel** button. Remap it in
    **Setup > Controls > Keyboard**, or assign a mouse or joystick button in
    its Controls screen. Older profiles receive K only when it is free and
@@ -42,18 +44,23 @@ same press does not trigger both. Other assigned duel buttons remain usable.
 | --- | --- |
 | `duel` | Challenge the aimed-at player, or accept their reciprocal challenge |
 | `duel <slot>` | Challenge the player listed in that slot by `players` |
-| `duel accept` | Accept the current incoming challenge |
-| `duel decline` | Decline the incoming challenge |
-| `duel cancel` | Withdraw a challenge or end your duel |
-| `duel status` | Show the current private-duel state |
+| `duel accept` | Accept the newest incoming challenge |
+| `duel decline` | Decline every incoming challenge |
+| `duel cancel` | Withdraw your challenge or end your duel |
+| `duel status` | Show your duel and how many others are under way |
 
 Use `/duel ...` for the same actions from chat. Commands are handled locally
 before ordinary chat is broadcast.
 
 ## Combat and spectators
 
-One duel can run at a time. Both players remain visible in the same map, so
-everyone else can watch. Outsiders and duelists pass through each other;
+Several pairs can duel at once, up to 32 in a game. Each player is in one
+duel at most and has at most one challenge of their own waiting: challenging
+someone else replaces it. A player can have several challenges waiting for
+them; accepting one ends the other challenges to and from both duelists, and
+nobody can challenge a player who is already in a duel. Each pair is isolated
+from everyone else, other duelists included. Both players remain visible in
+the same map, so everyone else can watch. Outsiders and duelists pass through each other;
 outsider bodies do not block, shove or absorb the duelists' saber contacts.
 Projectiles, explosions and targeted Force effects are filtered across the
 duel boundary in both directions. The two opponents still collide and fight
@@ -69,14 +76,16 @@ Challenges require a distance of at most 2 JK units and line of sight. At
 map changes and incompatible late joiners release the duel restrictions.
 Declining, expiring or cancelling a challenge does not heal either player;
 disconnecting and abandoning a duel do not grant recovery. Ordinary match
-scoring remains in charge of kills and deaths.
+scoring remains in charge of kills and deaths: a duel kill counts for the
+match's score and the leaderboard like any other kill.
 
 ## Compatibility
 
 The extension targets peer-hosted browser free-for-all, in both Jedi Knight and
 Mysteries of the Sith. It uses the stock saber bin for each game. Team/objective
 modes, spectator-only clients and Imperial/native/retail transport sessions
-cannot initiate it. All active players must advertise support before it starts.
+cannot initiate it. A host running a Dedicated Server referees the duels
+without playing. All active players must advertise support before it starts.
 If an unsupported player joins, the duel ends instead of silently losing its
 protection on that client.
 
@@ -102,6 +111,7 @@ sh packaging/wasm/test/duel-state-test.sh
 sh packaging/wasm/test/duelcombat-test.sh
 sh packaging/wasm/test/duel-mutations-test.sh
 sh packaging/wasm/test/duel-integration-test.sh
+sh packaging/wasm/test/duel-pairs-test.sh
 sh packaging/wasm/test/duel-controls-test.sh
 ```
 
@@ -110,7 +120,18 @@ regressions plus the duel checks on this branch. Its artifact contains the
 engine and web page only. Players supply their own game files; never enable
 `OPENJKDF2_WASM_PRELOAD_DATA` for a distributable build.
 
-### Verified on 2026-11-21
+### Several pairs and the host's box (2026-11-22)
+
+Wire version 2 carries a pair index in every frame (28 bytes each, as
+before) and a header frame from the host with its session and whether it
+allows duels; the join tag is `JDL2` and the hello capability bit 1. A
+version 1 frame is refused. `duel-pairs-test.sh` runs the host with five
+seats: two duels fighting at once, isolation between them, busy players,
+the newest challenge accepted and the others ended, one challenge of your
+own at a time, the box turned off mid-duel, and a Dedicated Server host. The
+three-peer TCP test also covers two offers to one player and the box off.
+
+### Verified on 2026-11-21 (the single-pair version)
 
 | Check | Result |
 | --- | --- |
