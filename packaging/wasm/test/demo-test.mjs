@@ -17,7 +17,9 @@ function cut(from, to) {
     return html.substring(a, b);
 }
 
-const rooms = new Function('imperialLive',
+// The relay's games with no lobby feeds of them come through as they are
+// (imperialWithFeeds, in imperial-lobby-test.mjs).
+const rooms = new Function('imperialLive', 'lobbyLive', 'imperialWithFeeds',
     cut('      var ROOMS = {', "      var room = document.getElementById('room');") +
     cut("      // A game of the free demo's", '      // ---- The Imperial relay') +
     'return { ROOMS, isDemoGame, roomStatus, roomImperial };');
@@ -29,7 +31,10 @@ const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 
 const relay = [{ uid: 'iabc', imperial: true, game: 'jk1', listed: true }];
-const { ROOMS, isDemoGame, roomStatus, roomImperial } = rooms({ games: relay });
+const { ROOMS, isDemoGame, roomStatus, roomImperial } = rooms({ games: relay }, { status: null }, (games, imp) => {
+    assert.deepEqual(imp, []);
+    return games;
+});
 
 const status = {
     online: 9, lobby: ['Waiting'],
