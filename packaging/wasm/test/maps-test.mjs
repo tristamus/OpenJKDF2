@@ -1507,6 +1507,26 @@ test('a watcher gets a level the Level Library hasn\'t got from the host\'s game
     }
 });
 
+test('a watcher on a server that doesn\'t send levels (feed no-files) stops asking at once and says why', async () => {
+    const g = makeGame({ hostFiles: { ...retailInstall }, joinFiles: { ...retailInstall } });
+    g.join.jkLibrary = { gobFromSite: async () => null };
+    const feed = makeFeed(null);
+    // The feed answers the first ask with "feed no-files" (an Imperial relay
+    // server's, jkdf2mp-bb-server's src/feed.js hostTakes).
+    let refused = false;
+    feed.src.ask = fp => { feed.asks.push(fp); refused = true; };
+    feed.src.refused = () => refused;
+    const began = Date.now();
+    await withFetch(feed.fetch, async () => {
+        g.join.jkMaps.viewFetch('ctf_test', 'gob', sha(customMap), () => {}, feed.src);
+        assert.equal(await waitState(g.join, 10000), 2);
+    });
+    assert.ok(Date.now() - began < 8000, 'not the 90 s a silent host gets');
+    assert.deepEqual(feed.asks, [sha(customMap)], 'asked once');
+    assert.match(g.join.jkMaps.viewError(), /This server doesn't send its levels to spectators yet/);
+    assert.equal(g.join.FS.files.get('/jk1/episode/ctf_test.gob'), undefined);
+});
+
 test('a host\'s game that isn\'t on the level asked for sends nothing; nor one hosting nothing, or an original level', async () => {
     const g = makeGame({ hostFiles: { ...retailInstall, '/jk1/episode/ctf_test.gob': customMap }, joinFiles: { ...retailInstall } });
     const feed = makeFeed(null);

@@ -876,6 +876,10 @@
             return "The Mod Library couldn't be reached to get " + name + '. Try again in a minute.';
         case 'host-silent':
             return "The host's game didn't send " + name + ". It may be on an older version of the page." + how;
+        case 'host-no-files':
+            return 'This match is played with ' + name + ", which your game doesn't have and the Mod Library " +
+                   "doesn't either. This server doesn't send its mods to spectators yet. To watch it, put the same " +
+                   'mod in your game folder.';
         case 'host-stalled':
             return "The host's game stopped sending " + name + '. Try again in a minute.';
         case 'too-big':
@@ -1027,7 +1031,8 @@
     async function fromHost(j, want) {
         var root = core.gameRoot();
         var ext = gameExt();
-        var src = { base: j.feed.url + '/mod/' + want.fp + '/', ask: function() { j.feed.ask(want.fp); } };
+        var src = { base: j.feed.url + '/mod/' + want.fp + '/', ask: function() { j.feed.ask(want.fp); },
+                    refused: function() { return !!(j.feed.refused && j.feed.refused()); } };
         var bytes = await core.feedGet(j, src, function(info) {
             if (info.ext !== ext)
                 throw fail('other-game');

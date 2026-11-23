@@ -991,6 +991,27 @@ test('a host\'s game that can\'t send its mod says why, and a feed that won\'t t
     assert.equal(host2.jkMods.feedUp(feed.url, fp, () => true), false);
 });
 
+test('a game watching a server that doesn\'t send mods (feed no-files) stops asking at once and says why', async () => {
+    const host = await sbxHost();
+    host.jkMods.host();
+    await settle();
+    const feed = makeFeed(null);
+    // The feed answers the first ask with "feed no-files" (an Imperial relay
+    // server's, jkdf2mp-bb-server's src/feed.js hostTakes).
+    let refused = false;
+    feed.src.ask = fp => { feed.asks.push(fp); refused = true; };
+    feed.src.refused = () => refused;
+    const watcher = await makeTab({ files: { ...retailInstall } });
+    const began = Date.now();
+    await withFetch(feed.fetch, async () => {
+        watcher.jkMods.viewFetch(tailOf(host), '', () => {}, feed.src);
+        assert.equal(await waitMod(watcher, 10000), STATE_FAILED);
+    });
+    assert.ok(Date.now() - began < 8000, 'not the 90 s a silent host gets');
+    assert.equal(feed.asks.length, 1, 'asked once');
+    assert.match(watcher.jkMods.viewError(), /This server doesn't send its mods to spectators yet/);
+});
+
 test('a host whose mod the Mod Library saved names the library\'s id for it (libId)', async () => {
     const idb = makeIDB();
     const bytes = await sbxPack();
