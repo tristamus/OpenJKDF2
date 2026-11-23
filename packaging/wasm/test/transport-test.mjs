@@ -2437,6 +2437,21 @@ test('a viewer opens the room\'s feed beside the lobby, and has a level once a k
     assert.deepEqual(viewLevel(game), { r: 1, episode: 'JK1MP', map: 'm2.jkl', mode: 4, mots: 1 });
 });
 
+test('a viewer told its host takes no files or messages (an Imperial server\'s feed) stops asking, and says so for a message', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world, 7);
+    const said = [];
+    game.Module.jkViewNotice = t => said.push(t);
+    assert.equal(game.Module.jkView.noFiles, undefined);
+    feed.deliver('feed no-files');
+    assert.equal(game.Module.jkView.noFiles, true, 'feed.refused() says so to mods.js and maps.js');
+    assert.equal(said.length, 0);
+    feed.deliver('feed no-say');
+    assert.ok(said.some(t => /doesn't pass spectators' messages to its players yet/.test(t)), said.join('\n'));
+    assert.equal(feed.readyState, 1, 'still watching');
+    assert.equal(game.Module.jkView.ended, '');
+});
+
 test('a viewer can\'t watch a match with another mod than the one it runs, and says why', async () => {
     const world = makeWorld();
     const { game, feed } = await viewer(world);

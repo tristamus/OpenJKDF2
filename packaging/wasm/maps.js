@@ -1592,6 +1592,10 @@
                     throw fail('corrupt');
                 break;
             }
+            // Its host said it doesn't send them (an Imperial relay server's
+            // feed: "feed no-files").
+            if (src.refused && src.refused())
+                throw fail('host-no-files');
             var now = Date.now();
             if (now - began > FEED_WAIT_MS)
                 throw fail('host-silent');
@@ -2259,6 +2263,10 @@
         case 'host-silent':
             return "Your game files don't have " + level + ", the Level Library doesn't have the host's version of it, " +
                    "and the host's game didn't send it. It may be on an older version of the page." + how;
+        case 'host-no-files':
+            return "Your game files don't have " + level + ", and the Level Library doesn't have the server's version " +
+                   "of it. This server doesn't send its levels to spectators yet. To watch it, put the same level in " +
+                   'your game folder.';
         case 'host-stalled':
             return "The host's game stopped sending " + level + '. Try again in a minute.';
         case 'other-map':
@@ -2346,7 +2354,8 @@
     // (feedGet), checked against the keyframe's SHA-256 as it's put back
     // together (fillRefs).
     async function viewFromHost(j) {
-        var src = { base: j.feed.url + '/mod/' + j.sha + '/', ask: function() { j.feed.ask(j.sha); } };
+        var src = { base: j.feed.url + '/mod/' + j.sha + '/', ask: function() { j.feed.ask(j.sha); },
+                    refused: function() { return !!(j.feed.refused && j.feed.refused()); } };
         return feedGet(j, src, function(info) {
             if (info.ext !== j.ext)
                 throw fail('other-game');

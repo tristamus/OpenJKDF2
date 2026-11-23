@@ -2061,6 +2061,13 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                               why === 'watching off' ? 'The host turned watching off.' : 'The match stopped sending.');
             } else if (parts[1] === 'waiting') {
                 if (view.phase === 'wait') view.say('Waiting for the match to send a picture to start from.');
+            } else if (parts[1] === 'no-files') {
+                /* Its host (an Imperial relay server, src/imperial-feed.js in
+                   jkdf2mp-bb-server) doesn't send its level or mod to games
+                   watching: what's getting one stops asking (feed.refused). */
+                view.noFiles = true;
+            } else if (parts[1] === 'no-say') {
+                view.say("This server doesn't pass spectators' messages to its players yet.");
             } else if (parseInt(parts[1], 10) >= 0) {
                 view.delay = parseInt(parts[1], 10);
             }
@@ -2428,7 +2435,7 @@ EM_JS(void, wsrelay_js_view_fetch_mod, (), {
         if (view.ws && view.ws.readyState === 1) {
             try { view.ws.send('mod ' + fp); } catch (e) {}
         }
-    } };
+    }, refused: function() { return !!view.noFiles; } };
     mods.viewFetch(h.tail || '', h.lib || '', function(done, total, from) {
         var pct = total ? Math.floor(100 * Math.min(done, total) / total) : 0, now = performance.now();
         var text = from === 'host' && !total ? "Asking the host's game for this match's mod." :
@@ -2476,7 +2483,7 @@ EM_JS(int, wsrelay_js_view_fetch_level, (const char* pExt), {
         if (view.ws && view.ws.readyState === 1) {
             try { view.ws.send('mod ' + fp); } catch (e) {}
         }
-    } };
+    }, refused: function() { return !!view.noFiles; } };
     Module.jkMaps.viewFetch(name, ext, h.sha, function(done, total, from) {
         var now = performance.now(), all = total > 0 && done >= total;
         var pct = total > 0 ? (all ? 100 : Math.floor(100 * done / total)) : 0;
