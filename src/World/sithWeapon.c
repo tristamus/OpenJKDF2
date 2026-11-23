@@ -1,4 +1,7 @@
 #include "sithWeapon.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "World/sithThing.h"
 #include "World/jkPlayer.h"
@@ -539,6 +542,10 @@ SithThing* sithWeapon_WeaponFireProjectile(SithThing *pShooter, SithThing *pProj
 
     if ( pProjectileTemplate )
     {
+#ifdef PLATFORM_WSRELAY
+        if (!sithDuelCombat_AllowsProjectile(pShooter))
+            return NULL;
+#endif
         rdMatrix_BuildFromLook34(&a3a, pFireDir);
 
         flex_t fVar3, fVar2;
@@ -1010,6 +1017,10 @@ int sithWeapon_SelectWeapon(SithThing *pThing, int typeId, int a3)
 
     //printf("%x\n", sithWeapon_8BD024);
 
+#ifdef PLATFORM_WSRELAY
+    if (!sithDuelCombat_AllowsWeapon(pThing, typeId))
+        return 0;
+#endif
     v4 = sithInventory_GetCurrentWeapon(pThing);
     if ( typeId == v4 || sithInventory_GetInventory(pThing, typeId) == 0.0 || !sithInventory_IsInventoryAvailable(pThing, typeId) || sithWeapon_8BD024 != -1 )
         return 0;
@@ -1091,6 +1102,10 @@ void sithWeapon_UpdateActorWeaponState(SithThing *pThing)
 
     //printf("%x %x %f %f %f\n", sithWeapon_8BD024, sithWeapon_8BD05C, sithWeapon_secMountWait, sithWeapon_fireWait, sithTime_g_secGameTime);
 
+#ifdef PLATFORM_WSRELAY
+    if (sithDuelCombat_Phase(pThing) == 1)
+        return;
+#endif
     if ( sithWeapon_8BD024 == -1 || sithTime_g_secGameTime < (flex_d_t)sithWeapon_secMountWait )
     {
         // aaaaaaaaaaa ????? wtf is going on here
@@ -1132,6 +1147,10 @@ void sithWeapon_UpdateActorWeaponState(SithThing *pThing)
 
 void sithWeapon_ActivateWeapon(SithThing *pThing, sithCog *pCog, flex_t waitTime, int mode)
 {
+#ifdef PLATFORM_WSRELAY
+    if (sithDuelCombat_Phase(pThing) == 1)
+        return;
+#endif
     sithWeapon_fireRate = waitTime;
     sithWeapon_CurWeaponMode = mode;
     sithWeapon_8BD0A0[mode] = sithTime_g_secGameTime;
@@ -1234,7 +1253,11 @@ int sithWeapon_ProcessWeaponControls(SithThing *pThing, flex_t secDeltaTime)
     if ( pThing->type != SITH_THING_PLAYER || (pThing->flags & SITH_TF_DEAD) != 0 )
         return 0;
 
-    if ( (pThing->weaponParams.flags & SITH_WF_EMITAITARGETEDEVENT) == 0 )
+    if ( (pThing->weaponParams.flags & SITH_WF_EMITAITARGETEDEVENT) == 0
+#ifdef PLATFORM_WSRELAY
+         && sithDuelCombat_Phase(pThing) != 1
+#endif
+       )
     {
         if ( sithTime_g_secGameTime < sithWeapon_secMountWait )
             return 0;
@@ -1417,7 +1440,11 @@ void sithWeapon_GetAimOrient(rdMatrix34 *pOutOrient, SithThing *pShooter, rdMatr
         do
         {
             v12 = *v11;
-            if ( *v11 != pShooter && (v12->actorParams.flags & SITH_AF_NOTARGET) == 0 )
+            if ( *v11 != pShooter && (v12->actorParams.flags & SITH_AF_NOTARGET) == 0
+#ifdef PLATFORM_WSRELAY
+                 && sithDuelCombat_AllowsCollision(pShooter, v12)
+#endif
+               )
             {
                 if ( sithCollision_HasLOS(pShooter, v12, 0) )
                 {

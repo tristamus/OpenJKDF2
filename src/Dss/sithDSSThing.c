@@ -1,4 +1,9 @@
 #include "sithDSSThing.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#include "Gameplay/sithDuel.h"
+#include "Gameplay/sithDuelState.h"
+#endif
 
 #include "Cog/sithCog.h"
 #include "World/sithSoundClass.h"
@@ -24,6 +29,21 @@
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
 #endif
 #include "Engine/sithInterp.h"
+
+#ifdef PLATFORM_WSRELAY
+/* Active duel bodies are driven by their owners. A joining client and a
+   spectator also receive the host's world snapshot, before live play. */
+static int sithDSSThing_DuelOwner(const SithThing *pThing, const SithMessage *pMsg)
+{
+    if (!sithDuelCombat_Phase(pThing))
+        return 1;
+    if (pThing->actorParams.pPlayer &&
+        pThing->actorParams.pPlayer->playerNetId == (uint32_t)pMsg->netMsg.idx)
+        return 1;
+    return pMsg->netMsg.idx == DUEL_HOST_ID &&
+           ((g_submodeFlags & 8) || stdComm_WSRelay_bViewer);
+}
+#endif
 
 void sithDSSThing_Pos(SithThing *pThing, int toID, int dpFlags)
 {
@@ -84,6 +104,8 @@ int sithDSSThing_ProcessPos(SithMessage *pMsg)
     if ( !pThing || pThing->type == SITH_THING_FREE || !pThing->sector )
         return 0;
 #ifdef PLATFORM_WSRELAY
+    if (!sithDSSThing_DuelOwner(pThing, pMsg))
+        return 0;
     // Added: Hit what you see: another player's timed update goes to the
     // buffer they're drawn from (stdComm_WSRelayMotion.c).
     if ( stdComm_WSRelay_TakeMotion(pThing, pMsg) )
@@ -222,6 +244,10 @@ int sithDSSThing_ProcessStateUpdate(SithMessage *pMsg)
     SithThing* pThing = sithThing_GetGuidThing(id);
     if ( !pThing )
         return 0;
+#ifdef PLATFORM_WSRELAY
+    if (!sithDSSThing_DuelOwner(pThing, pMsg))
+        return 0;
+#endif
 
     // 1 for multiplayer hackfix:
 #if 0
@@ -918,6 +944,16 @@ int sithDSSThing_ProcessDeath(SithMessage *pMsg)
         }
         else if (senderType == SITH_THING_PLAYER)
         {
+#ifdef PLATFORM_WSRELAY
+            /* A player's own simulation reports their death. Combat checks
+               cannot intercept a death notification, which has no hit type. */
+            if (sithDuelCombat_Phase(pSender) &&
+                pSender->actorParams.pPlayer->playerNetId != (uint32_t)pMsg->netMsg.idx)
+                return 0;
+            /* Record owner evidence before KillActor: an earlier state
+               update can already have marked this proxy DEAD. */
+            sithDuel_OwnerDeath(pSender, (uint32_t)pMsg->netMsg.idx);
+#endif
             if ( cause == 1 )
             {
                 sithPlayer_KillPlayer(pSender);
@@ -959,9 +995,17 @@ int sithDSSThing_ProcessDamage(SithMessage *pMsg)
     SithThing* pDamagedThing = sithThing_GetGuidThing(NETMSG_POPS32());
     if ( pDamagedThing )
     {
-        SithThing* pDamagedBy = sithThing_GetGuidThing(NETMSG_POPS32());
-        if ( !pDamagedBy )
+        int attackerGuid = NETMSG_POPS32();
+        SithThing* pDamagedBy = sithThing_GetGuidThing(attackerGuid);
+        if ( !pDamagedBy ) {
+#ifdef PLATFORM_WSRELAY
+            /* A shot already removed here is still an attack; only the
+               original no-source sentinel means an environmental hit. */
+            if (attackerGuid != -1 && sithDuelCombat_Phase(pDamagedThing))
+                return 1;
+#endif
             pDamagedBy = pDamagedThing;
+        }
 
         flex32_t arg2 = NETMSG_POPF32();
         int16_t arg3 = NETMSG_POPS16();
@@ -1152,8 +1196,12 @@ int sithDSSThing_ProcessFullDescription(SithMessage *pMsg)
         return 0;
 
     idx = NETMSG_POPS16();
-    if ( idx >= sithWorld_g_pCurrentWorld->numThingsLoaded )
+    if ( idx < 0 || idx >= sithWorld_g_pCurrentWorld->numThingsLoaded )
         return 0;
+#ifdef PLATFORM_WSRELAY
+    if (!sithDSSThing_DuelOwner(&sithWorld_g_pCurrentWorld->aThings[idx], pMsg))
+        return 0;
+#endif
 
     if ( sithWorld_g_pCurrentWorld->aThings[idx].type )
         sithThing_RemoveThing(&sithWorld_g_pCurrentWorld->aThings[idx]);
@@ -1456,6 +1504,10 @@ int sithDSSThing_ProcessAttachment(SithMessage *pMsg)
     SithThing* v1 = sithThing_GetGuidThing(NETMSG_POPS32());
     if ( !v1 )
         return 0;
+#ifdef PLATFORM_WSRELAY
+    if (!sithDSSThing_DuelOwner(v1, pMsg))
+        return 0;
+#endif
     int v3 = NETMSG_POPU16();
     if (v3 & SITH_ATTACH_SURFACE)
     {
@@ -1473,6 +1525,11 @@ int sithDSSThing_ProcessAttachment(SithMessage *pMsg)
         SithThing* v9 = sithThing_GetGuidThing(NETMSG_POPS32());
         if ( !v9 )
             return 0;
+#ifdef PLATFORM_WSRELAY
+        if (!sithDSSThing_DuelOwner(v9, pMsg) ||
+            !sithDuelCombat_AllowsCollision(v1, v9))
+            return 0;
+#endif
         if (v3 & SITH_ATTACH_THINGFACE)
         {
             // Added: the face is a number in the sender's copy of the model,
@@ -1691,6 +1748,10 @@ int sithDSSThing_ProcessDestroyThing(SithMessage *pMsg)
     SithThing* pThing = sithThing_GetGuidThing(NETMSG_POPS32());
     if ( pThing )
     {
+#ifdef PLATFORM_WSRELAY
+        if (!sithDSSThing_DuelOwner(pThing, pMsg))
+            return 0;
+#endif
         sithThing_DestroyThing(pThing);
         return 1;
     }

@@ -1,4 +1,7 @@
 #include "jkHud.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuel.h"
+#endif
 
 #ifdef TARGET_DREAMCAST
 #include "Platform/Dreamcast/dcDebug.h" // Added: 4th-port debug overlay (FPS + mem)
@@ -1782,6 +1785,12 @@ void jkHud_SendChat(char a1)
     {
         if ( jkHud_chatStrPos )
         {
+#ifdef PLATFORM_WSRELAY
+            if (sithDuel_Chat(jkHud_chatStr)) {
+                jkHud_idk_time();
+                return;
+            }
+#endif
             if ( jkHud_dword_552D10 == -1 && sithNet_isMulti && jkHud_IsRconLine(jkHud_chatStr) )
             {
                 // Added: not to everyone (see jkHud_IsRconLine)

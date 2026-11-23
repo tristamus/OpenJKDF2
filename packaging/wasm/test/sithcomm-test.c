@@ -155,7 +155,13 @@ static void sithCog_BroadcastMessage(int msg, int senderType, int senderIdx, int
 {
     (void)msg; (void)senderType; (void)senderIdx; (void)sourceType; (void)sourceIdx;
 }
-static void sithDSSThing_UpdateState(SithThing* pThing, int sendto, int mpFlags) { (void)pThing; (void)sendto; (void)mpFlags; }
+static int overwriteDuringJoin;
+static void sithDSSThing_UpdateState(SithThing* pThing, int sendto, int mpFlags)
+{
+    (void)pThing; (void)sendto; (void)mpFlags;
+    if (overwriteDuringJoin)
+        memset(&sithComm_netMsgTmp, 0, sizeof(sithComm_netMsgTmp));
+}
 static void stdString_CharToWchar(char16_t* pOut, const char* pIn, int n)
 {
     int i = 0;
@@ -170,6 +176,28 @@ static void stdString_CharToWchar(char16_t* pOut, const char* pIn, int n)
 static int stdComm_WSRelay_HoldForTimeline(SithMessage* pMsg) { (void)pMsg; return 0; }
 static void stdComm_WSRelay_ProcessHits(SithMessage* pMsg) { (void)pMsg; }
 // What a player holds and sees, for pages watching the match: feed only.
+#define SITHDUEL_MSG 0x444A
+static void sithDuel_Process(SithMessage *msg) { (void)msg; }
+static void sithDuel_Forget(int slot, uint32_t id) { (void)slot; (void)id; }
+// Browser join tests run the real slot activation and WELCOME functions.
+static int stdComm_Imperial_bActive, stdComm_WSRelay_bViewer;
+static int sithNet_bSyncScores;
+#define JKPLAYER_NUM_INFOS 32
+#define SITH_ASSERTREL(x) ((void)0)
+#define sithMulti_verbosePrintf(...) ((void)0)
+#define NETMSG_START uint8_t *craftingPacket = (uint8_t *)sithComm_netMsgTmp.pktData
+#define NETMSG_PUSHS32(x) do { int32_t value = (x); memcpy(craftingPacket, &value, 4); craftingPacket += 4; } while (0)
+#define NETMSG_PUSHWSTR(x,n) do { memcpy(craftingPacket, (x), (n)*2); craftingPacket += (n)*2; } while (0)
+#define NETMSG_END(x) do { sithComm_netMsgTmp.netMsg.cogMsgId = (x); sithComm_netMsgTmp.netMsg.msg_size = craftingPacket - (uint8_t *)sithComm_netMsgTmp.pktData; } while (0)
+#define NETMSG_POPWSTR(x,n) do { memcpy((x), (void *)_readingPacket, (n)*2); (x)[n-1] = 0; _readingPacket += (n)*2; } while (0)
+static void sithInterp_Reset(void) {}
+static void sithThing_LoadPostProcess(void) {}
+static void sithPlayer_SetLocalPlayer(int slot) { playerThingIdx = slot; }
+static void sithPlayer_ResetPalEffects(void) {}
+static void stdComm_WSRelay_ViewerJoined(int slot) { (void)slot; }
+static void sithDuel_Welcome(int slot, uint32_t id) { (void)slot; (void)id; }
+#define sithEvent_RegisterTask(...) ((void)0)
+#define sithMessage_StopProcessMessages() (sithMessage_bStopProcessMessages = 1)
 #define STDCOMM_WSRELAY_POV_MSG (0x504A)
 static void stdComm_WSRelay_ProcessPov(SithMessage* pMsg) { (void)pMsg; }
 // The room's feed: none here.
@@ -334,6 +362,9 @@ static void startGame(int g, int netId, int idx, int n)
     G->typeFuncs[DSS_RESET] = sithComm_cogMsg_Reset;
     G->typeFuncs[TESTMSG] = onTestMessage;
     G->typeFuncs[DSS_LEAVEJOIN] = sithMulti_ProcessSyncPlayers;
+#ifdef PLATFORM_WSRELAY
+    G->typeFuncs[DSS_WELCOME] = sithMulti_ProcessWelcome;
+#endif
 }
 
 // Games 0..n-1, game g as net id g + 1 at index g. Game 0 hosts.
@@ -790,6 +821,36 @@ static void testWire(void)
           "the resend differs from the first send (%d packets)", npackets);
 }
 
+static void testSaveOnlyMessages(void)
+{
+    /* These IDs restore a save's inventory and local controls. They must not
+       be live peer messages, but local save replay must still invoke them. */
+    const int ids[] = { DSS_INVENTORY, DSS_ID_1F };
+    for (int i = 0; i < 2; i++)
+    {
+        setup(2);
+        games[1].typeFuncs[ids[i]] = onTestMessage;
+        SithMessage m = {0};
+        m.netMsg.cogMsgId = ids[i];
+        m.netMsg.msg_size = 4;
+        m.pktData[0] = 42;
+        use(0);
+        sithComm_SendMsgToPlayer(&m, 2, 1, 1);
+        runFor(200);
+#ifdef PLATFORM_WSRELAY
+        CHECK(runs[1][0][42] == 0, "save-only ID %d ran from the live browser network", ids[i]);
+#else
+        CHECK(runs[1][0][42] == 1, "save-only ID %d changed on native transport", ids[i]);
+#endif
+        CHECK(slotsInUse(0) == 0, "save-only ID %d was not acknowledged", ids[i]);
+        use(1);
+        int before = runs[1][0][42];
+        m.netMsg.idx = 1;
+        CHECK(sithMessage_Process(&m) == 1 && runs[1][0][42] == before + 1,
+              "local save replay for ID %d was blocked", ids[i]);
+    }
+}
+
 static void testReceiver(void)
 {
     // The receiver's acks are all lost: it acks every copy, and runs the
@@ -810,15 +871,117 @@ static void testReceiver(void)
     CHECK(runs[2][0][1] == 1 && runs[2][1][2] == 1, "game 2 ran %d and %d", runs[2][0][1], runs[2][1][2]);
 }
 
+#ifdef PLATFORM_WSRELAY
+static int joinAnnouncements;
+static void countJoin(void) { joinAnnouncements++; }
+
+static void testBrowserJoin(void)
+{
+    setup(3);
+    static SithThing avatar[3];
+    for (int g = 0; g < 3; g++) {
+        games[g].players[2].flags = 2;
+        games[g].players[2].playerNetId = 0;
+        games[g].players[2].pLocalPlayer = &avatar[g];
+    }
+    games[2].submodeFlags = 8; // the third game is still synchronizing
+    sithMulti_pfNewPlayerJoinedCallback = countJoin;
+    joinAnnouncements = 0;
+    use(0);
+    sithMulti_CompleteJoin(2, 3);
+    runFor(100);
+    CHECK((games[0].players[2].flags & 1) && games[0].players[2].playerNetId == 3,
+          "host did not activate its reserved slot");
+    CHECK((games[1].players[2].flags & 1) && games[1].players[2].playerNetId == 3,
+          "the existing player did not learn the host's new seat");
+    CHECK((games[2].players[2].flags & 1) && !(games[2].submodeFlags & 8) && games[2].thingIdx == 2,
+          "joining player did not finish synchronizing into the reserved seat");
+    CHECK(joinAnnouncements == 2, "expected one host and one observer join announcement; got %d", joinAnnouncements);
+    use(2);
+    sithMulti_SendWelcome(3, 2, -1); // an older client's redundant self-announcement
+    runFor(100);
+    CHECK(joinAnnouncements == 2, "self-announcement repeated the join");
+
+    // A participant copies a genuine host ID into its otherwise valid roster.
+    int packetStart = npackets;
+    games[2].players[2].playerNetId = 2;
+    sendPlayerList(2, 0);
+    sendPlayerList(2, 1);
+    int32_t hostId = 1;
+    for (int i = packetStart; i < npackets; i++)
+        memcpy(packets[i].data + 8, &hostId, sizeof(hostId));
+    use(2);
+    games[2].players[2].player_name[0] = 'X';
+    sithMulti_SendWelcome(2, 2, 1);
+    sithMulti_SendWelcome(2, 2, 2);
+    runFor(100);
+    CHECK(games[0].players[2].playerNetId == 3 && games[1].players[2].playerNetId == 3,
+          "a non-host roster replaced an active seat");
+    CHECK(!games[0].players[2].player_name[0] && !games[1].players[2].player_name[0],
+          "a non-host welcome replaced an active name");
+
+    SithMessage malformed = {0};
+    malformed.netMsg.idx = 1;
+    malformed.netMsg.msg_size = 40;
+    int32_t outOfBounds = 32;
+    memcpy(malformed.pktData, &outOfBounds, 4);
+    use(1);
+    CHECK(!sithMulti_ProcessWelcome(&malformed), "accepted welcome slot beyond roster capacity");
+    int16_t seats = 33;
+    memcpy((uint8_t *)malformed.pktData + 4, &hostId, 4);
+    memcpy((uint8_t *)malformed.pktData + 8, &seats, 2);
+    CHECK(!sithMulti_ProcessSyncPlayers(&malformed) && G->maxPlayers == 3,
+          "oversized host roster partially applied");
+    seats = 2;
+    malformed.netMsg.msg_size = 11;
+    memcpy((uint8_t *)malformed.pktData + 8, &seats, 2);
+    CHECK(!sithMulti_ProcessSyncPlayers(&malformed) && G->maxPlayers == 3,
+          "truncated host roster partially applied");
+    // The old host sends the new seat's WELCOME only to that seat. Existing
+    // clients learn it from a later trusted roster, after ignoring the old
+    // client's unsolicited self-announcement. That roster includes its name
+    // and scores after the callback that uses the shared receive buffer.
+    setup(3);
+    games[1].players[2].flags = 2;
+    games[1].players[2].playerNetId = 0;
+    games[1].players[2].pLocalPlayer = &avatar[1];
+    avatar[1].flags = SITH_TF_DISABLED;
+    use(2);
+    sithMulti_SendWelcome(3, 2, 2);
+    runFor(100);
+    CHECK(!(games[1].players[2].flags & 1) && (avatar[1].flags & SITH_TF_DISABLED),
+          "an old joiner's self-welcome activated its own seat on the observer");
+    use(0);
+    sendPlayerList(0, 1);
+    uint8_t *third = packets[npackets - 1].data + 4 + 10 + 2 * 34;
+    third[8] = 'Q';
+    int16_t score = 57;
+    memcpy(third + 32, &score, sizeof(score));
+    overwriteDuringJoin = 1;
+    runFor(100);
+    overwriteDuringJoin = 0;
+    CHECK((games[1].players[2].flags & 1) && games[1].players[2].playerNetId == 3
+          && !(avatar[1].flags & SITH_TF_DISABLED),
+          "the old host's roster failed to enable the new player's body");
+    CHECK(games[1].players[2].player_name[0] == 'Q' && games[1].players[2].score == 57,
+          "the join callback overwrote the rest of the received roster");
+    sithMulti_pfNewPlayerJoinedCallback = NULL;
+}
+#endif
+
 int main(void)
 {
     testAckHighIds();
     testSlotCount();
     testIndexReassigned();
+#ifdef PLATFORM_WSRELAY
+    testBrowserJoin();
+#endif
     testLateAck();
     testOneSlot();
     testWire();
     testReceiver();
+    testSaveOnlyMessages();
 
     use(cur);
     for (int g = 0; g < NGAMES; g++)

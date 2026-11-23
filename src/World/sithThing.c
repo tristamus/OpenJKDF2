@@ -1,4 +1,7 @@
 #include "sithThing.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include "General/stdHashtbl.h"
 #include "General/util.h"
@@ -470,13 +473,17 @@ void sithThing_DestroyThing(SithThing* pThing)
         sithCog_ThingSendMessage(pThing, 0, SITH_MESSAGE_REMOVED);
 }
 
-flex_t sithThing_DamageThing(SithThing *pThing, SithThing *pDamageThing, flex_t damage, int hitType)
+static flex_t sithThing_ApplyDamage(SithThing *pThing, SithThing *pDamageThing, flex_t damage, int hitType, int saberSwing)
 {
     flex_t param1; // [esp+0h] [ebp-20h]
 
     // Added: assert ported from OpenJones3D
     SITH_ASSERTREL(pThing);
 
+#ifdef PLATFORM_WSRELAY
+    if (!sithDuelCombat_AllowsDamage(pThing, pDamageThing, saberSwing))
+        return 0.0;
+#endif
     // Added: noclip
     if (pThing == sithPlayer_g_pLocalPlayerThing && (g_debugmodeFlags & DEBUGFLAG_NOCLIP)) {
         return 0.0;
@@ -524,6 +531,18 @@ flex_t sithThing_DamageThing(SithThing *pThing, SithThing *pDamageThing, flex_t 
         damage = damage - sithActor_DamageActor(pThing, pDamageThing, damage, hitType);
     }
     return damage;
+}
+
+flex_t sithThing_DamageThing(SithThing *pThing, SithThing *pDamageThing, flex_t damage, int hitType)
+{
+    return sithThing_ApplyDamage(pThing, pDamageThing, damage, hitType, 0);
+}
+
+/* A blade contact or a validated swing claim. COG DamageThing can specify
+   the saber damage bit too, so that bit alone does not identify a swing. */
+flex_t sithThing_DamageSaber(SithThing *victim, SithThing *attacker, flex_t damage)
+{
+    return sithThing_ApplyDamage(victim, attacker, damage, SITH_DAMAGE_SABER, 1);
 }
 
 //sithThing_Create_idk

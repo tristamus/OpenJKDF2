@@ -22,6 +22,12 @@ OpenJKDF2 already had a WebAssembly (browser) build, but it had no networking, a
 - **Direct connections, with a fallback.** Once you join, your browser links straight to the host's browser over WebRTC and game traffic goes over that link. If a direct link can't be made, traffic goes through the lobby server instead, so you can still play, with more lag.
 - **An always-on lobby.** The lobby runs on Cloudflare's free Workers plan, so it's up without anyone's PC being on. It lists games, helps browsers connect to each other, and relays traffic for players who can't connect directly. It never stores or serves game files. Its source is in [jkdf2mp-bb-server](https://github.com/tristamus/jkdf2mp-bb-server), which also has `relay.py`, a one-file Python lobby for running your own on your PC or local network.
 
+### Private saber duels
+
+- In a free-for-all room, equip your saber, aim at another player and press **K**. They aim back and press K to accept, then both players prepare for two seconds before fighting. Remap **Challenge to a duel** in Setup > Controls; existing custom bindings are preserved.
+- Other players can watch and pass through both duelists. Their bodies, weapons and Force effects cannot interfere with the duel. The living winner recovers full health and shields; the defeated player uses the normal death and respawn flow.
+- Every active player needs a build supporting private duels. Chat commands remain available, and ordinary map geometry and environmental hazards still apply. See [duel controls, rules and verification](docs/JKWEB_DUELS.md), including the remaining live browser acceptance checks.
+
 ### Mysteries of the Sith
 
 - Pick your Mysteries of the Sith folder instead of Jedi Knight's and the expansion starts.

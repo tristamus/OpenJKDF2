@@ -58,7 +58,7 @@
 // already resend and keep order, and a claim that came a resend later would
 // be past its reach anyway. First byte: type.
 //   HELLO     version u8, flags u8 (1 from the host, 2 heard yours), rules
-//             u8, reach ms u16, 0 u16
+//             u8, reach ms u16, capability bits u16 (bit 0: private duels)
 //   CLAIM     source u8, ledger kind u8, flags u8 (1 update number known,
 //             2 moment known, 4 carried on past the target's newest
 //             update), damage f32, damage type s32, attack u32 (the swing's
@@ -75,12 +75,15 @@
 //             started f64 (its game's motion clock)
 
 #include "stdComm_WSRelay.h"
+#include "Gameplay/sithDuel.h"
+#include "Platform/Networking/Imperial/stdComm_Imperial.h"
 #include "stdComm_WSRelayHitCheck.h"
 
 #include "Win95/stdComm.h"
 #include "Dss/sithMulti.h"
 #include "Devices/sithComm.h"
 #include "Gameplay/sithPlayer.h"
+#include "Gameplay/sithDuelCombat.h"
 #include "World/sithThing.h"
 #include "World/sithSector.h"
 #include "World/sithSoundClass.h"
@@ -924,6 +927,13 @@ static void hits_TakeClaim(int fromNetId, int slot, WSRelayHitsIn* in, double no
     SithThing* pSender = jkPlayer_playerInfos[slot].pLocalPlayer;
     int applyType = damageType;
 
+    // Preserve the original claim's provenance: applying a shot below uses
+    // its credited player as the damage source, which alone cannot prove
+    // that this was a direct saber strike from the agreed opponent.
+    if (!sithDuelCombat_AllowsClaim(pLocal, pCredit, pSender,
+                                  claim.source == WSRELAYHIT_SABER))
+        return;
+
     if (!hits_Live() || !p->bHello || p->rules != STDCOMM_WSRELAY_HITS_HWYS)
     {
         v.result = STDCOMM_WSRELAY_HITS_NOT_PLAYING;
@@ -1039,7 +1049,10 @@ static void hits_TakeClaim(int fromNetId, int slot, WSRelayHitsIn* in, double no
         hits_applyDistance = v.distance;
         hits_applyMoment = moment;
         hits_applyAgeMs = ageMs;
-        sithThing_DamageThing(pLocal, pCredit, v.damage, applyType);
+        if (claim.source == WSRELAYHIT_SABER)
+            sithThing_DamageSaber(pLocal, pCredit, v.damage);
+        else
+            sithThing_DamageThing(pLocal, pCredit, v.damage, applyType);
         hits_bApplying = 0;
         return;
     }
@@ -1442,7 +1455,7 @@ static void hits_SendHello(WSRelayHitsPeer* p, double now)
     hits_PutU8(&o, (stdComm_bIsServer ? HITS_HELLO_HOST : 0) | (p->bHello ? HITS_HELLO_HEARD : 0));
     hits_PutU8(&o, hits_rules);
     hits_PutU16(&o, hits_reachMs);
-    hits_PutU16(&o, 0);
+    hits_PutU16(&o, stdComm_Imperial_bActive ? 0 : SITHDUEL_HELLO_CAP);
     hits_Queue(p->netId, body, o.n);
     p->helloAt = now;
     p->bAnswer = 0;
@@ -1456,6 +1469,8 @@ static void hits_TakeHello(int fromNetId, int slot, WSRelayHitsIn* in)
     int reachMs = hits_GetU16(in);
     if (in->bad || version < 1)
         return;
+    int caps = in->len - in->n >= 2 ? hits_GetU16(in) : 0;
+    sithDuel_Hello(slot, fromNetId, caps & SITHDUEL_HELLO_CAP);
     rules = (rules == STDCOMM_WSRELAY_HITS_HWYS) ? STDCOMM_WSRELAY_HITS_HWYS : STDCOMM_WSRELAY_HITS_CLASSIC;
 
     // The host's rules are the match's. Fixed: also a dedicated host's, whose

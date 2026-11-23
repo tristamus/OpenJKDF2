@@ -298,6 +298,17 @@
         L.pl = { i: idx | 0, n: count | 0, loop: loop ? 1 : 0, next: String(next || '').slice(0, 48) };
     };
 
+    // The host's game allows private duels, right after start: its rules
+    // say so (rules.duels), for the room's Info.
+    L.duels = function(on) {
+        if (!L.on || !L.host || !L.rules)
+            return;
+        if (on)
+            L.rules.duels = 1;
+        else
+            delete L.rules.duels;
+    };
+
     L.kill = function(victim, killer, kind) {
         if (!L.on)
             return;
@@ -315,8 +326,12 @@
             return;
         L.sb = rows;
         L.teams = teams;
-        if (typeof mode === 'number' && L.rules)
+        if (typeof mode === 'number' && L.rules) {
+            var duels = L.rules.duels;
             L.rules = { mode: mode >>> 0, sl: L.rules.sl, tl: L.rules.tl };
+            if (duels)
+                L.rules.duels = 1;
+        }
         L.scr |= scripted & 15;
     };
 

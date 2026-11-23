@@ -1,4 +1,9 @@
 #include "sithControl.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#include "Gameplay/sithDuel.h"
+#include "Main/sithCommand.h"
+#endif
 
 #include "General/sithStrTable.h"
 #include "Platform/stdControl.h"
@@ -229,9 +234,12 @@ static const char *sithControl_aFunctionStrs[INPUT_FUNC_MAX+1] =
     "ACTIVATE29",
     "ACTIVATE30",
     "ACTIVATE31",
-#ifdef QOL_IMPROVEMENTS
+#if defined(QOL_IMPROVEMENTS) || defined(PLATFORM_WSRELAY)
     "USELASTSELECTED", // Common button for both items and force power usage for controllers
-#endif // QOL_IMPROVEMENTS
+#endif
+#ifdef PLATFORM_WSRELAY
+    "DUEL",
+#endif
     "INPUT_FUNC_MAX"
 };
 
@@ -384,6 +392,9 @@ void sithControl_RegisterControlFunctions()
         sithControl_inputFuncToControlType[INPUT_FUNC_DEBUG] = 4 | 1;
 #ifdef QOL_IMPROVEMENTS
     sithControl_inputFuncToControlType[INPUT_FUNC_USELASTSELECTED] = 4 | 1;
+#endif
+#ifdef PLATFORM_WSRELAY
+    sithControl_inputFuncToControlType[INPUT_FUNC_DUEL] = 4 | 1;
 #endif
 }
 
@@ -685,6 +696,18 @@ LABEL_7:
     }
 }
 
+#ifdef PLATFORM_WSRELAY
+// Adopt the browser's new default only when it does not replace the player's
+// existing controls, including a console shortcut such as `bind k duel`.
+static void sithControl_DefaultDuelBinding(void)
+{
+    if (!sithControl_aInputFuncToKeyinfo[INPUT_FUNC_DUEL].numEntries &&
+        !sithControl_IsKeyBound(DIK_K) &&
+        !sithCommand_IsKeyBound('k') && !sithCommand_IsKeyBound('K'))
+        sithControl_BindControl(INPUT_FUNC_DUEL, DIK_K, 0);
+}
+#endif
+
 int sithControl_ReadConf()
 {
     unsigned int v0; // eax
@@ -718,6 +741,18 @@ int sithControl_ReadConf()
     {
         return 0;
     }
+#ifdef PLATFORM_WSRELAY
+    // The marker belongs to this controls block, so .plr profiles and .ctl
+    // presets both remember an intentional unbind. Older readers ignore
+    // extra tokens on the flags header.
+    int hasDuelDefault = 0;
+    for (unsigned int i = 1; i < stdConffile_g_entry.numArgs; i++)
+    {
+        if (!_strcmp(stdConffile_g_entry.aArgs[i].key, "dueldefault") &&
+            _atoi(stdConffile_g_entry.aArgs[i].value) > 0)
+            hasDuelDefault = 1;
+    }
+#endif
     while ( stdConffile_ReadArgs() )
     {
         if ( !_strcmp(stdConffile_g_entry.aArgs[0].key, "end.") )
@@ -732,7 +767,7 @@ int sithControl_ReadConf()
         {
             v0 = _atoi(stdConffile_g_entry.aArgs[1].value);
             v1 = v0;
-            if ( v0 <= 0x4A && (sithControl_inputFuncToControlType[v0] & 1) != 0 && _sscanf(stdConffile_g_entry.aArgs[3].value, "%x", &v19) == 1 )
+            if ( v0 < INPUT_FUNC_MAX && (sithControl_inputFuncToControlType[v0] & 1) != 0 && _sscanf(stdConffile_g_entry.aArgs[3].value, "%x", &v19) == 1 )
             {
                 dxKeyNum = _atoi(stdConffile_g_entry.aArgs[2].value);
                 dxKeyNum_ = dxKeyNum;
@@ -809,6 +844,10 @@ LABEL_30:
             }
         }
     }
+#ifdef PLATFORM_WSRELAY
+    if (!hasDuelDefault)
+        sithControl_DefaultDuelBinding();
+#endif
     sithControl_FixNumpadTurn(); // Added
     return 1;
 }
@@ -838,7 +877,11 @@ int sithControl_WriteConf()
     stdControlKeyInfo *v1; // edi
     stdControlKeyInfoEntry* v3; // esi
 
+#ifdef PLATFORM_WSRELAY
+    if (!stdConffile_Printf("flags=%x dueldefault=1\n", sithWeapon_controlOptions))
+#else
     if (!stdConffile_Printf("flags=%x\n", sithWeapon_controlOptions))
+#endif
         return 0;
 
     v1 = sithControl_aInputFuncToKeyinfo;
@@ -890,6 +933,13 @@ int sithControl_GetKey(int keyId, int *pState)
         do
         {
             v4 = v3->dxKeyNum;
+#ifdef PLATFORM_WSRELAY
+            // A console alias may be added after a profile acquired the K
+            // default. Let it own that key without also firing this action;
+            // any other duel button and the scripted-input path still work.
+            if (keyId != INPUT_FUNC_DUEL || v4 != DIK_K ||
+                (!sithCommand_IsKeyBound('k') && !sithCommand_IsKeyBound('K')))
+#endif
             if ( !(sithWeapon_controlOptions & 0x20) || v4 < JK_EXTENDED_KEY_START || KEY_IS_MOUSE(v4) )
                 v6 |= stdControl_ReadKey(v4, pState);
             ++v2;
@@ -1137,6 +1187,19 @@ void sithControl_RegisterControlCallback(sithControl_handler_t pfCallback)
 int sithControl_buttonPressDebounce = 0;
 #endif
 
+#ifdef PLATFORM_WSRELAY
+static void sithControl_DuelKey(SithThing *player)
+{
+    int presses = 0;
+    sithControl_GetKey(INPUT_FUNC_DUEL, &presses);
+    /* Use press transitions, not held state. Both challenge and acceptance
+       must use the player's current aim through the same consent path. */
+    if (presses > 0 && player == sithPlayer_g_pLocalPlayerThing &&
+        !jkHud_bChatOpen && !jkQuakeConsole_bOpen && !sithDuelCombat_Phase(player))
+        sithDuel_Command(NULL, "");
+}
+#endif
+
 // MOTS altered
 int sithControl_HandlePlayer(SithThing *player, flex_t deltaSecs)
 {
@@ -1264,6 +1327,11 @@ LABEL_39:
                     sithControl_PlayerLook(player, deltaSecs);
                 }
 
+#ifdef PLATFORM_WSRELAY
+                sithControl_DuelKey(player);
+                if (sithDuelCombat_Phase(player) == 1)
+                    return 0; /* Keep looking around. Gravity and moving floors still apply. */
+#endif
                 if ( player->attach_flags )
                     sithControl_PlayerMovement(player);
                 else
@@ -2526,6 +2594,9 @@ void sithControl_RegisterKeyboardBindings()
     sithControl_BindControl(INPUT_FUNC_GAMMA, DIK_F11, 0);
     sithControl_BindControl(INPUT_FUNC_SCREENSHOT, DIK_F12, 0);
     sithControl_BindControl(INPUT_FUNC_TALLY, DIK_GRAVE, 0);
+#ifdef PLATFORM_WSRELAY
+    sithControl_DefaultDuelBinding();
+#endif
 }
 
 void sithControl_DefaultInit()

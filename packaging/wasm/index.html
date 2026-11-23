@@ -3037,6 +3037,15 @@
                   </ul>
                 </div>
                 <div class="feature">
+                  <h3>Challenge to a duel</h3>
+                  <ul>
+                    <li>In a free-for-all whose host ticked <strong>Private duels</strong> in Host &gt; Advanced, equip your saber, aim at another player and press <strong>K</strong> to challenge them. Remap <strong>Challenge to a duel</strong> in Setup &gt; Controls; existing custom bindings are preserved.</li>
+                    <li>They aim back and press their duel button to accept. Chat commands <code>/duel</code> and <code>/duel accept</code> also work. Both players prepare for two seconds.</li>
+                    <li>Everyone can watch; other players pass through you and cannot interfere.</li>
+                    <li>The winner recovers full health and shields. Several pairs can duel at once, and duel kills count like any other.</li>
+                  </ul>
+                </div>
+                <div class="feature">
                   <h3>Kept for next time</h3>
                   <ul>
                     <li>Pick your game folder once. This browser keeps the files the game needs.</li>
@@ -8941,7 +8950,7 @@
         // A game's match as it's played (the lobby's liveView), or null.
         function live(v) {
           if (!obj(v) || !num(v.at)) return null;
-          var out = { mode: num(v.mode), sl: num(v.sl), tl: num(v.tl), at: num(v.at), over: num(v.over),
+          var out = { mode: num(v.mode), sl: num(v.sl), tl: num(v.tl), at: num(v.at), over: num(v.over), duels: v.duels === 1,
                       nocount: v.nocount === 'password' || v.nocount === 'coop' ? v.nocount : '', count: num(v.count),
                       pl: null, sb: [], teams: null, last: null, kills: null, streak: null,
                       // How many kills count in all; -1 from a lobby that
@@ -9531,6 +9540,7 @@
         return [['Mode', modeText(g, v.mode, v.nocount === 'coop')],
                 ['Time limit', v.tl ? v.tl + ' min' : 'None'], ['Score limit', v.sl ? String(v.sl) : 'None'],
                 g.rank >= 0 ? ['Max Force rank', String(g.rank)] : null,
+                v.duels ? ['Private duels', 'On'] : null,
                 ['Leaderboard', v.nocount === 'password' ? "Doesn't count (password)" :
                                 v.nocount === 'coop' ? "Doesn't count (co-op level)" :
                                 v.count && since < v.count * 1000 && !v.over ? 'Counts after ' + Math.round(v.count / 60) + ' min' :

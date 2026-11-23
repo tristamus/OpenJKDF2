@@ -168,6 +168,7 @@
 #include "Engine/sithCamera.h"
 #include "Gameplay/sithPlayer.h"
 #include "Gameplay/sithTime.h"
+#include "Gameplay/sithDuel.h"
 #include "General/stdPalEffects.h"
 #include "General/stdMath.h"
 #include "Main/jkHud.h"
@@ -5636,6 +5637,12 @@ EM_JS(void, wsrelay_js_match_playlist, (int idx, int count, int bLoop, const cha
     Module.jkLadder.playlist(idx, count, !!bLoop, String.fromCharCode.apply(null, chars));
 });
 
+// The host's game allows private duels (Host > Advanced, sithDuel.c), for
+// the room's Info.
+EM_JS(void, wsrelay_js_match_duels, (int bOn), {
+    if (Module.jkLadder && Module.jkLadder.duels) Module.jkLadder.duels(!!bOn);
+});
+
 EM_JS(void, wsrelay_js_match_kill, (int victim, int killer, int kind), {
     if (Module.jkLadder) Module.jkLadder.kill(victim, killer, kind);
 });
@@ -5754,6 +5761,8 @@ void stdComm_WSRelay_MatchStart(void)
     int idx = jkPlaylist_Position(&count, &bLoop, &pNext);
     if (idx >= 0)
         wsrelay_js_match_playlist(idx, count, bLoop, pNext);
+    if (sithNet_isServer)
+        wsrelay_js_match_duels(sithDuel_HostAllows());
     stdComm_WSRelay_MatchScores();
 }
 

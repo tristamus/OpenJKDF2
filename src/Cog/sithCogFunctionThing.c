@@ -1,4 +1,7 @@
 #include "sithCogFunctionThing.h"
+#ifdef PLATFORM_WSRELAY
+#include "Gameplay/sithDuelCombat.h"
+#endif
 
 #include <stdint.h>
 #include "World/sithSector.h"
@@ -324,6 +327,12 @@ void sithCogFunctionThing_DamageThing(sithCog *pCog)
     {
         if ( !pThing )
             pThing = pThing2;
+#ifdef PLATFORM_WSRELAY
+        if (!sithDuelCombat_AllowsDamage(pThing2, pThing, 0)) {
+            sithCogExec_PushFlex(pCog, 0.0);
+            return;
+        }
+#endif
         if ( COG_SHOULD_SYNC(pCog) && sithNet_isServer )
         {
             sithDSSThing_DamageThing(pThing2, pThing, a5, a4, -1, 1);
@@ -1893,6 +1902,12 @@ void sithCogFunctionThing_SkillTarget(sithCog *pCog)
     SithThing* otherThing = sithCogExec_PopThing(pCog);
     SithThing* pThing = sithCogExec_PopThing(pCog);
 
+#ifdef PLATFORM_WSRELAY
+    if (!sithDuelCombat_AllowsSkill(pThing, otherThing)) {
+        sithCogExec_PushFlex(pCog, 0.0);
+        return;
+    }
+#endif
     if ( pThing && otherThing && (classCog = pThing->pCog) != 0 )
     {
         if ( sithNet_isMulti && pThing->type == SITH_THING_PLAYER )
