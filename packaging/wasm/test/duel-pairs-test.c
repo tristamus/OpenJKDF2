@@ -377,6 +377,49 @@ static void dedicatedHostAsked(void)
     assert(framesTo[2] == before2 && framesTo[5] == before5);
 }
 
+// The join request's duel tag sits right after its 132 standard bytes. It
+// was read from pktData[132], 528 bytes in, so every join counted as a game
+// without duels and ended the duels under way.
+static void joinTag(void)
+{
+    const size_t joinBytes = 32 + (16 + 32) * 2 + 4;
+    SithMessage m;
+    memset(&m, 0, sizeof(m));
+    uint8_t *b = (uint8_t *)m.pktData;
+    memcpy(b, "01narshadda.jkl", 15);
+    uint32_t tag = SITHDUEL_JOIN_TAG;
+    memcpy(b + joinBytes, &tag, 4);
+    m.netMsg.msg_size = joinBytes + 4;
+    assert(sithDuel_JoinTagged(&m, joinBytes));
+    m.netMsg.msg_size = joinBytes; // an older game's request
+    assert(!sithDuel_JoinTagged(&m, joinBytes));
+    memset(b + joinBytes, 0, 4);
+    m.pktData[joinBytes] = SITHDUEL_JOIN_TAG; // where it used to be looked for
+    m.netMsg.msg_size = joinBytes + 4;
+    assert(!sithDuel_JoinTagged(&m, joinBytes));
+
+    // A game that can duel joining mid-duel leaves the duels alone.
+    setup(0);
+    startFight(2, 3);
+    clockMs += 2000;
+    sithDuel_Frame();
+    int i = pairOf(2, 3);
+    assert(i >= 0 && seen[i].phase == DUEL_FIGHT);
+    jkPlayer_playerInfos[4].flags = 2;
+    jkPlayer_playerInfos[4].playerNetId = 0;
+    sithDuel_Forget(4, 5);
+    sithDuel_Joining(4, 5, 1);
+    jkPlayer_playerInfos[4].flags = 5;
+    jkPlayer_playerInfos[4].playerNetId = 5;
+    sithDuel_Welcome(4, 5);
+    clockMs += 100;
+    sithDuel_Frame();
+    assert(seen[i].phase == DUEL_FIGHT);
+    // One that can't ends them, since its game wouldn't keep the two apart.
+    sithDuel_Joining(4, 5, 0);
+    assert(seen[i].phase == DUEL_IDLE && seen[i].reason == DUEL_UNSUPPORTED);
+}
+
 // Teams, a lobby viewer, and a room whose first seat isn't the host have no duels.
 static void notADuelRoom(void)
 {
@@ -405,6 +448,7 @@ int main(void)
     twoDuelsAtOnce();
     dedicatedHost();
     dedicatedHostAsked();
+    joinTag();
     notADuelRoom();
-    puts("Several private duels at once, the host's box and a Dedicated Server host (told, and asked) passed.");
+    puts("Several private duels at once, the host's box and a Dedicated Server host (told, and asked) and the join tag passed.");
 }

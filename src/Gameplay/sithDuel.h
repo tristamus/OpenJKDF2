@@ -25,6 +25,9 @@ void sithDuel_OwnerDeath(SithThing *player, uint32_t senderId); // transport-aut
 void sithDuel_Respawn(SithThing *player);
 void sithDuel_Hello(int slot, uint32_t id, int capable);
 void sithDuel_Joining(int slot, uint32_t id, int capable);
+// Whether a join request carries SITHDUEL_JOIN_TAG right after its standard
+// joinBytes (counted in bytes; pktData is an array of 32-bit words).
+int sithDuel_JoinTagged(const SithMessage *msg, size_t joinBytes);
 void sithDuel_Welcome(int slot, uint32_t id);
 void sithDuel_Process(SithMessage *msg);
 int sithDuel_Chat(const char *line);

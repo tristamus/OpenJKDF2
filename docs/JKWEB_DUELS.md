@@ -144,6 +144,15 @@ at most once a second per seat, and logs `private duels:` lines to the
 network log (a game that asked, the host's header arriving, or why a host
 can't referee). `duel-pairs-test.sh` and the three-peer test cover it.
 
+On kit 185 the host's log showed it hadn't known either joiner could duel.
+The cause, from #132: the join request's tag was read from `pktData[132]`,
+which counts 32-bit words, so 528 bytes in instead of 132. No game was ever
+taken as able to duel from its join request, and since that counted as a
+game without duels joining, every join ended the duels under way (on any
+host; a normal host's hellos then restored support). `sithDuel_JoinTagged`
+now reads it by bytes, and `duel-pairs-test.sh` checks the offset and that a
+join mid-duel leaves the duels alone.
+
 ### Verified on 2026-11-21 (the single-pair version)
 
 | Check | Result |

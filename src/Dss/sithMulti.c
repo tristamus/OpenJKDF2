@@ -1202,10 +1202,11 @@ int sithMulti_ProcessJoinRequest(SithMessage *pMsg)
 
     v1 = pMsg->netMsg.idx;
 #ifdef PLATFORM_WSRELAY
-    uint32_t duelTag = 0;
+    // The map, both names and the checksum, then the duel tag. Fixed: the
+    // tag was read 528 bytes in (pktData[132] counts 32-bit words), so no
+    // game was ever taken as able to duel, and every join ended the duels.
     const size_t joinBytes = 32 + (16 + 32) * sizeof(char16_t) + sizeof(uint32_t);
-    if (pMsg->netMsg.msg_size == joinBytes + sizeof(duelTag))
-        memcpy(&duelTag, &pMsg->pktData[joinBytes], sizeof(duelTag));
+    int duelTagged = sithDuel_JoinTagged(pMsg, joinBytes);
 #endif
 
     if ( stdComm_bIsServer && v1 )
@@ -1331,7 +1332,7 @@ int sithMulti_ProcessJoinRequest(SithMessage *pMsg)
             }
 
 #ifdef PLATFORM_WSRELAY
-            sithDuel_Joining(sithMulti_curWelcomePlayerNum, v1, duelTag == SITHDUEL_JOIN_TAG);
+            sithDuel_Joining(sithMulti_curWelcomePlayerNum, v1, duelTagged);
 #endif
 
             sithMulti_verbosePrintf("Sending the final\n");

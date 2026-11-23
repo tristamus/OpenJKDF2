@@ -455,6 +455,15 @@ void sithDuel_Joining(int slot, uint32_t id, int capable)
         endAll(DUEL_UNSUPPORTED);
 }
 
+int sithDuel_JoinTagged(const SithMessage *msg, size_t joinBytes)
+{
+    uint32_t tag = 0;
+    if (msg->netMsg.msg_size != joinBytes + sizeof(tag))
+        return 0;
+    memcpy(&tag, (const uint8_t *)msg->pktData + joinBytes, sizeof(tag));
+    return tag == SITHDUEL_JOIN_TAG;
+}
+
 void sithDuel_Welcome(int slot, uint32_t id)
 {
     if (stdComm_bIsServer && header.epoch && slotValid(slot) && capableId[slot] == id && id)
