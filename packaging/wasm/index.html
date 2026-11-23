@@ -8991,7 +8991,15 @@
           var waiting = b ? names(b.lobby) : k === 'jk1' ? lobby : [];
           byGame[k] = { online: b ? num(b.online) : waiting.length + playing, lobby: waiting };
         });
-        return { online: num(s.online), lobby: lobby, byGame: byGame, games: games,
+        // The Imperial relay's dedicated servers sending their match's feed
+        // (imperial-feed.js in jkdf2mp-bb-server): the room id it's watched
+        // by, and the server's sid, which its card has (cleanImperial).
+        var imp = (Array.isArray(s.imp) ? s.imp : []).slice(0, 16).filter(obj).map(function(f) {
+          return { id: num(f.id), sid: typeof f.sid === 'string' && /^[0-9a-f]{16}$/.test(f.sid) ? f.sid : '',
+                   game: f.game === 'mots' ? 'mots' : 'jk1', name: str(f.name, 32), episode: str(f.episode, 64),
+                   map: str(f.map, 64), delay: num(f.delay), watching: num(f.watching) };
+        }).filter(function(f) { return f.id && f.sid; });
+        return { online: num(s.online), lobby: lobby, byGame: byGame, games: games, imp: imp,
                  match: typeof s.match === 'number' && isFinite(s.match) && s.match >= 0 ? Math.floor(s.match) : null,
                  now: num(s.now) };
       }
@@ -9018,7 +9026,9 @@
       }
 
       // The Imperial relay's games a room lists: none in the Free Demo Room.
-      function roomImperial(key) { return ROOMS[key].demo ? [] : imperialLive.games; }
+      function roomImperial(key) {
+        return ROOMS[key].demo ? [] : imperialWithFeeds(imperialLive.games, lobbyLive.status ? lobbyLive.status.imp : []);
+      }
 
       // ---- The Imperial relay's games. The Imperial Network Protocol
       // connection (stdComm_Imperial.c, on when Module.jkImperialUrl is set)
@@ -9045,7 +9055,7 @@
       // Join hands the engine the game to select (Module.jkJoinImperial).
       var IMPERIAL_POLL_MS = 20000;
       var IMPERIAL_STATE = { 'relay-down': 'Imperial relay not answering', 'not-listed': 'Not running right now',
-                             desktop: 'Desktop OpenJKDF2 only', closed: 'Not taking players' };
+                             desktop: 'Desktop OpenJKDF2 only', closed: 'Not taking players', watch: 'Watch only' };
       // state: 'off' (nothing to show), 'connecting', 'live', 'down' (the
       // relay didn't answer the Worker) or 'error' (the Worker didn't answer).
       var imperialLive = { state: 'off', server: '', games: [], updated: null };
@@ -9075,7 +9085,9 @@
                    listed: listed, joinable: joinable,
                    why: joinable ? '' : has(IMPERIAL_STATE, g.why) ? g.why : listed ? 'closed' : 'not-listed',
                    mode: listed && typeof g.mode === 'number' && isFinite(g.mode) && g.mode >= 0 ? Math.floor(g.mode) : -1,
-                   rank: -1, live: null };
+                   rank: -1, live: null,
+                   // A dedicated server's, for the lobby's feed of it (imperialWithFeeds).
+                   sid: dedicated && typeof g.sid === 'string' && /^[0-9a-f]{16}$/.test(g.sid) ? g.sid : '' };
         });
         return { state: a.state, server: server, games: games };
       }
@@ -9092,6 +9104,38 @@
 
       // Why a game of the relay's has no Join, or null when it can be joined.
       function imperialStop(g) { return g.imperial && !g.joinable ? IMPERIAL_STATE[g.why] || IMPERIAL_STATE.closed : null; }
+
+      // The relay's games with the lobby's feeds of them (the status's imp:
+      // a dedicated server sending its match's feed). Its card, found by its
+      // sid, gets the room id the feed is watched by, so Watch shows on it
+      // as on a lobby game's (canWatch); the relay keeps no record of its
+      // matches, so there's still nothing live of them. A feed whose card
+      // isn't there (the relay's list hasn't come) gets one of its own, for
+      // watching only.
+      var IMPERIAL_WATCH_ONLY = 'watch';
+      function imperialWithFeeds(games, imp) {
+        if (!imp || !imp.length) return games;
+        var used = {};
+        var out = games.map(function(g) {
+          var f = null;
+          for (var i = 0; i < imp.length && !f; i++) if (g.sid && imp[i].sid === g.sid && !used[imp[i].id]) f = imp[i];
+          if (!f) return g;
+          used[f.id] = true;
+          // Its feed is on, so it runs, though the relay doesn't list it
+          // (or isn't answering): watch only, not "Not running right now".
+          var why = g.why === 'not-listed' || g.why === 'relay-down' ? IMPERIAL_WATCH_ONLY : g.why;
+          return Object.assign({}, g, { id: f.id, spect: 1, feed: 1, watching: f.watching, why: why,
+                                        map: g.map || f.map, episode: g.episode || f.episode });
+        });
+        imp.forEach(function(f) {
+          if (used[f.id]) return;
+          out.push({ uid: 'f' + f.id, key: '', sid: f.sid, imperial: true, name: f.name, game: f.game, map: f.map,
+                     title: '', episode: f.episode, mod: '', locked: false, players: 0, max: 0, names: [], net: NETCODE,
+                     dedicated: true, pinned: true, listed: true, joinable: false, why: IMPERIAL_WATCH_ONLY, mode: -1,
+                     rank: -1, live: null, id: f.id, spect: 1, feed: 1, watching: f.watching });
+        });
+        return out;
+      }
 
       // Takes the Worker's latest answer, or null with why there's none.
       function imperialShow(answer, state) {
@@ -9580,8 +9624,8 @@
         var meta = el('div', 'table-meta');
         meta.append(info);
         // Watch, for a match that can be watched (Watching a match).
-        if (!g.imperial && g.spect >= 0) meta.append(watchTag(g, no));
-        if (!g.imperial && g.id === watchLive.id) li.classList.add('picked');
+        if (watchable(g) && g.spect >= 0) meta.append(watchTag(g, no));
+        if (watchable(g) && g.id === watchLive.id) li.classList.add('picked');
         if (v) {
           var line = el('p', 'table-summary', liveSummary(v));
           line.dataset.tick = 'summary';
@@ -9702,7 +9746,7 @@
         thead.append(head);
         var tbody = el('tbody');
         games.forEach(function(g, i) {
-          var tr = el('tr', !g.imperial && g.id === watchLive.id ? 'picked' : null);
+          var tr = el('tr', watchable(g) && g.id === watchLive.id ? 'picked' : null);
           var no = gameNumber(i);
           var name = el('td', null, g.name || '(no name)');
           if (g.locked) name.insertAdjacentHTML('beforeend', ' ' + LOCK_SVG);
@@ -9726,7 +9770,7 @@
             action.append(b);
           }
           // Watch, below Join (Watching a match), also for a game that's full.
-          if (!g.imperial && canWatch(g)) {
+          if (canWatch(g)) {
             var wb = el('button', 'zone-button watch-button', g.id === watchLive.id ? 'Watching' : 'Watch');
             wb.type = 'button';
             wb.dataset.watch = g.id;
@@ -10019,8 +10063,9 @@
       // live and panel: what its page last said (jkWatchBoxSays), for the
       // classes of where it is: the viewing page's box, or the room window's
       // preview (pvScreen) before that.
+      // said: why its game's feed ended, once it says (jkWatchBoxSays).
       var watchBox = { frame: null, uid: '', id: 0, w: 0, h: 0, zoom: 1, keys: null, follow: '', followEls: {}, ended: 0, left: {},
-                       live: false, panel: false };
+                       live: false, panel: false, said: '' };
       // uid -> the game, as the viewing page last drew it (tickLive).
       var watchGames = {};
 
@@ -10060,7 +10105,7 @@
         Object.keys(ROOMS).forEach(function(key) {
           var r = roomStatus(s, key);
           roomGameList(r.games, roomImperial(key), ROOMS[key].game).forEach(function(g, i) {
-            if (!g.imperial) out.push({ key: key, g: g, no: gameNumber(i) });
+            if (watchable(g)) out.push({ key: key, g: g, no: gameNumber(i) });
           });
         });
         return out;
@@ -10073,7 +10118,9 @@
         return null;
       }
 
-      function canWatch(g) { return !g.imperial && g.spect === 1; }
+      // A lobby's game, or one of the relay's whose feed the lobby has.
+      function watchable(g) { return !g.imperial || !!g.id; }
+      function canWatch(g) { return watchable(g) && g.spect === 1; }
 
       // Watches a game, by its room id (0 to stop): beside the tables, or on
       // the viewing page while that's open.
@@ -10151,6 +10198,14 @@
       // viewing page. w is {key, g, no}; v its match (gameLive), or null
       // before its host's game has reported.
 
+      // A match with no scores here: a lobby game's whose host's game hasn't
+      // sent them yet, or an Imperial relay server's, whose relay keeps none.
+      function noScoresBadge(g) { return g.imperial ? 'NO SCORES' : 'NO SCORES YET'; }
+      function noScoresNote(g) {
+        return g.imperial ? 'The Imperial relay keeps no scores, so only the match itself shows here.'
+                          : "Its host's game hasn't sent the lobby its scores yet.";
+      }
+
       // The view: the level's picture, LIVE SCORES or how the level stands,
       // how many are watching, and the latest kill.
       function watchView(w, v) {
@@ -10159,7 +10214,7 @@
         if (pic) view.style.backgroundImage = 'url("' + pic + '")';
         else view.append(el('span', 'no-pic', levelTitle(w.g) || w.g.map || ''));
         var live = el('span', 'watch-badge live' + (!v || v.over ? ' over' : ''));
-        live.append(el('i'), !v ? 'NO SCORES YET' : v.over ? 'LEVEL OVER' : 'LIVE SCORES');
+        live.append(el('i'), !v ? noScoresBadge(w.g) : v.over ? 'LEVEL OVER' : 'LIVE SCORES');
         view.append(live);
         if (w.g.watching) {
           var count = el('span', 'watch-badge count');
@@ -10360,7 +10415,7 @@
         b.type = 'button';
         b.dataset.watchJoin = g.id;
         b.dataset.key = 'watch-join';
-        var why = isFull(g) ? 'Game is full' : otherVersion(g) ? VERSION_STATE[otherVersion(g)] : '';
+        var why = imperialStop(g) || (isFull(g) ? 'Game is full' : otherVersion(g) ? VERSION_STATE[otherVersion(g)] : '');
         if (why) {
           b.disabled = true;
           b.title = why;
@@ -10438,7 +10493,7 @@
               body.append(el('div', 'watch-h', 'Last kills'), watchKills(v, 3));
             }
           } else {
-            body.append(el('p', 'watch-note', "Its host's game hasn't sent the lobby its scores yet. " +
+            body.append(el('p', 'watch-note', noScoresNote(w.g) + ' ' +
                                               'Players: ' + (w.g.names.filter(Boolean).join(', ') || plural(w.g.players, 'player', 'players')) + '.'));
           }
           body.append(watchFacts(w.g, v));
@@ -10489,7 +10544,7 @@
         var top = el('div', 'hud-top');
         if (w) {
           var live = el('span', 'watch-badge live' + (!v || v.over ? ' over' : ''));
-          live.append(el('i'), !v ? 'NO SCORES YET' : v.over ? 'LEVEL OVER' : 'LIVE SCORES');
+          live.append(el('i'), !v ? noScoresBadge(w.g) : v.over ? 'LEVEL OVER' : 'LIVE SCORES');
           var title = el('div', 'hud-title');
           title.append(el('b', null, w.no + ' · ' + (w.g.name || '(no name)')),
                        el('span', null, (levelTitle(w.g) || w.g.map || '') + ' · ' + ROOMS[w.key].name));
@@ -10654,7 +10709,7 @@
       }
       window.jkJoinWatched = function(id) {
         var w = watchedGame(Number(id));
-        if (!w || isFull(w.g) || otherVersion(w.g)) return false;
+        if (!w || isFull(w.g) || otherVersion(w.g) || imperialStop(w.g)) return false;
         try { window.focus(); } catch (e) {}
         joinWatched(w.g.id);
         return true;
@@ -10771,9 +10826,13 @@
           }, BOX_END_MS);
         }
         if (keepBox) {
+          // Once the box's game says why its feed ended, that, rather than
+          // that its last seconds play: a feed that ended at once has none
+          // ("The host turned watching off.").
+          var said = watchBox.said || '';
           info.append(el('p', 'empty', !lobbyLive.status ? empty :
             (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ')' : 'This game') +
-            ' has ended. Its last seconds still play above, as they were played.'));
+            ' has ended. ' + (said || 'Its last seconds still play above, as they were played.')));
         } else if (empty) {
           info.append(el('p', 'empty', empty));
           // On the whole screen, it says so there, until Esc.
@@ -10790,7 +10849,7 @@
           var view = watchView(w, v);
           if (watchCanFull) view.title = 'Double-click for full screen';
           var frame = boxShow(w);
-          if (!frame && watchBox.left[w.g.uid] !== undefined) view.append(boxNote(w));
+          if (!frame && watchBox.left[boxUid(w.g)] !== undefined) view.append(boxNote(w));
           boxScreen(frame, view, watchHud(w, v, list), frame ? watchKeysPanel() : null,
                     frame ? watchFollowLabel('watch-follow') : null);
           watchScreen.hidden = false;
@@ -10819,7 +10878,7 @@
               if (v.streak) info.append(el('p', 'watch-note', v.streak[0] + ': ' + v.streak[1] + ' kills in a row.'));
             }
           } else {
-            info.append(el('p', 'watch-note', "Its host's game hasn't sent the lobby its scores yet."));
+            info.append(el('p', 'watch-note', noScoresNote(w.g)));
           }
           info.append(watchFacts(w.g, v));
 
@@ -10969,7 +11028,7 @@
       // the game's room window takes it from there.
       function joinWatched(id) {
         var w = watchedGame(id);
-        if (!w || isFull(w.g) || otherVersion(w.g)) return;
+        if (!w || isFull(w.g) || otherVersion(w.g) || imperialStop(w.g)) return;
         if (watchWindow) {
           var o = openerLobby();
           if (o && o.jkJoinWatched(w.g.id)) {
@@ -10984,7 +11043,10 @@
           watchDlg.close();
         }
         if (lobbyLive.room !== w.key || !room.open) openRoom(w.key);
-        roomAction('join', w.g.id, w.no);
+        // One of the relay's (an Imperial server sending its feed): joined on
+        // the relay, as its table's Join does.
+        if (w.g.imperial) roomAction('join-imperial', w.g.key, w.no);
+        else roomAction('join', w.g.id, w.no);
       }
 
       // ---- Watch in the game: the game itself plays the match's feed (the
@@ -10997,7 +11059,7 @@
       // mod too. The game watches with the player's own pack.
       var PACK_ONLY = 'Remastered pack';
       function watchInGame(w) {
-        if (!w || w.g.imperial || !canWatch(w.g) || !w.g.feed) return null;
+        if (!w || !canWatch(w.g) || !w.g.feed) return null;
         return { why: otherVersion(w.g) ? VERSION_STATE[otherVersion(w.g)] : '' };
       }
       // Starts the game watching the match watched (or the one with room id
@@ -11055,15 +11117,22 @@
       // How long the box plays on once its match has left the lobby, at most:
       // its delay (30 s by default) and then some.
       var BOX_END_MS = 90000;
+      // What the box's game says is kept up to this many characters, as long
+      // as the engine's own (its aText, 400 bytes).
+      var VIEW_NOTE_MAX = 400;
       function boxCan(w) {
         var can = watchInGame(w);
         return !!can && !can.why && !window.jkLobbyMock && !phoneNote() && /^https?:$/.test(location.protocol);
       }
+      // The match the box knows a game's card by: its uid, and for an Imperial
+      // relay server's card, which stays the same through its feeds, the
+      // room its feed is now (imperialWithFeeds), so a new feed is a new match.
+      function boxUid(g) { return g.uid + (g.imperial && g.id ? '-' + g.id : ''); }
       // The box's frame for w, made if it hasn't one; null for none (it
       // can't, or it stopped: watchBox.left).
       function boxShow(w) {
-        if (!w || !boxCan(w) || watchBox.left[w.g.uid] !== undefined) return boxStop();
-        if (watchBox.frame && watchBox.uid === w.g.uid) return watchBox.frame;
+        if (!w || !boxCan(w) || watchBox.left[boxUid(w.g)] !== undefined) return boxStop();
+        if (watchBox.frame && watchBox.uid === boxUid(w.g)) return watchBox.frame;
         boxStop();
         var f = document.createElement('iframe');
         f.className = 'watch-frame';
@@ -11074,7 +11143,7 @@
         f.style.width = size.w + 'px';
         f.style.height = size.h + 'px';
         watchBox.frame = f;
-        watchBox.uid = w.g.uid;
+        watchBox.uid = boxUid(w.g);
         watchBox.id = w.g.id;
         watchBox.w = size.w;
         watchBox.h = size.h;
@@ -11172,6 +11241,7 @@
         watchBox.uid = '';
         watchBox.id = 0;
         watchBox.ended = 0;
+        watchBox.said = '';
         watchBox.keys = null;
         watchBox.follow = '';
         watchBox.followEls = {};
@@ -11194,7 +11264,7 @@
       // Why the box's game stopped, and Watch again.
       function boxNote(w) {
         var note = el('div', 'box-note');
-        note.append(el('p', null, watchBox.left[w.g.uid] || 'The game stopped watching this match.'));
+        note.append(el('p', null, watchBox.left[boxUid(w.g)] || 'The game stopped watching this match.'));
         var again = el('button', 'watch-btn go', 'Watch again');
         again.type = 'button';
         again.dataset.wact = 'again';
@@ -11203,7 +11273,7 @@
       }
       function boxAgain() {
         var w = watchLive.id ? watchedGame() : null;
-        if (w) delete watchBox.left[w.g.uid];
+        if (w) delete watchBox.left[boxUid(w.g)];
         renderWatch();
       }
       // The keys for watching (Controls): over the box's game once it
@@ -11368,6 +11438,12 @@
             if (f.parentNode === watchScreen) watchKeysShown();
             renderWatch();
           }
+        } else if (state === 'said') {
+          // Why its feed ended ("The match is over.", "The host turned
+          // watching off."), as its game says over the match: the viewing
+          // page says it once the match has left the lobby.
+          watchBox.said = String(text || '').substring(0, VIEW_NOTE_MAX);
+          if (watchDlg.open && watchBox.ended) renderWatch();
         } else if (state === 'keys') {
           // H in the box (its page's own keydown).
           if (watchDlg.open && f.parentNode === watchScreen) watchKeysToggle();
@@ -11390,7 +11466,7 @@
           watchBox.panel = state === 'panel';
           boxClasses();
         } else if (state === 'left') {
-          text = String(text || '').substring(0, 200);
+          text = String(text || '').substring(0, VIEW_NOTE_MAX);
           // A match that's over: what it said stays on the page, which says
           // the match has ended.
           if (!watchedGame(watchBox.id) && text) watchLive.note = text;
@@ -11443,6 +11519,9 @@
       Module.jkViewNotice = function(text) {
         var note = document.getElementById('view-note');
         viewNoteLast = String(text || '');
+        // Why its feed ended (Module.jkView's end says it): the lobby page
+        // says it beside the box too (jkWatchBoxSays 'said').
+        if (watchEmbed && viewNoteLast && Module.jkView && Module.jkView.ended) embedSays('said', viewNoteLast);
         note.textContent = viewNoteLast;
         note.hidden = !viewNoteLast;
         clearTimeout(viewNoteTimer);
@@ -11472,7 +11551,7 @@
           text = sessionStorage.getItem(VIEW_NOTE_KEY) || '';
           sessionStorage.removeItem(VIEW_NOTE_KEY);
         } catch (e) {}
-        return text.substring(0, 200);
+        return text.substring(0, VIEW_NOTE_MAX);
       }
 
       // The room window's Watch, the preview's close, Watch full size and

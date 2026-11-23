@@ -23,7 +23,7 @@ assert.match(html, /var IMPERIAL_LOBBY_LIST = true;/, 'the page lists the relay\
 // reply's: time limit and score limit on).
 const CORUSCANT = { key: '13e5dd93743f59055bbf297508845b2b', name: 'Coruscant', game: 'jk1', map: 'c3.jkl', episode: 'JK1CTF',
                     mod: '', locked: false, players: 0, max: 31, dedicated: true, pinned: true, listed: true,
-                    joinable: true, why: '', mode: 24 };
+                    joinable: true, why: '', mode: 24, sid: '5b238bec1ae6e9cb' };
 const LIVE = { state: 'live', server: 'lobby.jkjunkie.com', checked: '2026-10-31T19:20:01.000Z', games: [CORUSCANT] };
 
 // The page's code with made-up surroundings. fetch answers with what
@@ -54,7 +54,7 @@ function page({ url = 'lobby.jkjunkie.com', listed = true, protocol = 'https:', 
         renderRoomCount() {}, renderRoom() { shown.push(JSON.parse(JSON.stringify(env.p.imperialLive))); }, renderWatch() {}
     };
     const names = Object.keys(env).filter(k => k !== 'asks' && k !== 'p');
-    env.p = new Function(...names, code + '\nreturn { cleanImperial, roomGameList, imperialStop, imperialShow, ' +
+    env.p = new Function(...names, code + '\nreturn { cleanImperial, roomGameList, imperialStop, imperialShow, imperialWithFeeds, ' +
                          'startImperialWatch, stopImperialWatch, imperialLive, watch: () => imperialWatch, IMPERIAL_STATE };')(
         ...names.map(k => env[k]));
     env.timers = timers;
@@ -78,7 +78,7 @@ test("the real answer: Coruscant, joinable, credited to nobody", () => {
         uid: 'i13e5dd93743f59055bbf297508845b2b', key: '13e5dd93743f59055bbf297508845b2b', imperial: true,
         name: 'Coruscant', game: 'jk1', map: 'c3.jkl', title: '', episode: 'JK1CTF', mod: '', locked: false, players: 0, max: 31,
         names: [], net: 0, dedicated: true, pinned: true, listed: true, joinable: true, why: '', mode: 24, rank: -1,
-        live: null }]);
+        live: null, sid: '5b238bec1ae6e9cb' }]);
     assert.equal(p.imperialStop(a.games[0]), null);
     // sithmartyr asked for no credit on the card (31 Oct 2026).
     assert.doesNotMatch(html, /sithmartyr|run by/i);
@@ -261,6 +261,63 @@ test('stopped (the game starts): no more asks, even with one under way', async (
     assert.equal(busy.p.imperialLive.state, 'connecting');
     assert.equal(busy.shown.length, 0);
     assert.equal(busy.timers.length, 0);
+});
+
+test("a server's sid is kept only as 16 hex digits, and only for a dedicated server", () => {
+    const { p } = page();
+    const sid = g => p.cleanImperial({ ...LIVE, games: [{ ...CORUSCANT, ...g }] }).games[0].sid;
+    assert.deepEqual([sid({}), sid({ sid: 'X'.repeat(16) }), sid({ sid: 5 }), sid({ sid: 'ab' }), sid({ dedicated: false })],
+                     ['5b238bec1ae6e9cb', '', '', '', '']);
+});
+
+test("a feed the lobby has of a relay server (its status's imp) puts Watch on its card, by sid", () => {
+    const { p } = page();
+    const relay = p.cleanImperial({ ...LIVE, games: [
+        CORUSCANT, { ...CORUSCANT, key: 'a'.repeat(32), name: 'Hosted', dedicated: false, pinned: false, sid: undefined }] }).games;
+    assert.equal(p.imperialWithFeeds(relay, []), relay, 'none: as it was');
+    const imp = [{ id: 1201, sid: '5b238bec1ae6e9cb', game: 'jk1', name: 'Coruscant', episode: 'JK1CTF', map: 'c3.jkl',
+                   delay: 30, watching: 2 }];
+    const out = p.imperialWithFeeds(relay, imp);
+    assert.deepEqual(out.map(g => [g.name, g.id, g.spect, g.feed, g.watching, g.joinable]),
+                     [['Coruscant', 1201, 1, 1, 2, true], ['Hosted', undefined, undefined, undefined, undefined, true]]);
+    assert.equal(relay[0].id, undefined, 'the relay\'s list isn\'t changed');
+    // Its card isn't there (the relay's list hasn't come): one of its own, to watch only.
+    const alone = p.imperialWithFeeds([], imp);
+    assert.deepEqual(alone.map(g => [g.uid, g.name, g.id, g.spect, g.imperial, g.joinable, p.imperialStop(g)]),
+                     [['f1201', 'Coruscant', 1201, 1, true, false, 'Watch only']]);
+    // Listed with the room's other games, first, as a pinned server.
+    assert.deepEqual(p.roomGameList([{ id: 41, name: 'Duels', game: 'jk1' }], alone, 'jk1').map(g => g.uid), ['f1201', 'g41']);
+    // Another sid: no Watch on Coruscant's card.
+    const other = p.imperialWithFeeds(relay, [{ ...imp[0], sid: 'ffffffffffffffff' }]);
+    assert.deepEqual(other.map(g => [g.uid, g.id]), [[relay[0].uid, undefined], [relay[1].uid, undefined], ['f1201', 1201]]);
+    // A pinned server the relay doesn't list (or a relay that's down) whose
+    // feed is on: it runs, so watch only, not "Not running right now".
+    for (const why of ['not-listed', 'relay-down']) {
+        const pinned = [{ ...relay[0], key: '', listed: false, joinable: false, why }];
+        assert.equal(p.imperialStop(pinned[0]), why === 'not-listed' ? 'Not running right now' : 'Imperial relay not answering');
+        const fed = p.imperialWithFeeds(pinned, imp);
+        assert.deepEqual([fed[0].id, p.imperialStop(fed[0])], [1201, 'Watch only'], why);
+    }
+    // A server that isn't taking players stays so.
+    const closed = p.imperialWithFeeds([{ ...relay[0], joinable: false, why: 'closed' }], imp);
+    assert.equal(p.imperialStop(closed[0]), 'Not taking players');
+});
+
+test("the page's status keeps imp only with a room id and sid, and canWatch takes a relay card with a feed", () => {
+    const fn = cut('      function cleanStatus(s) {', '      // A game of the free demo');
+    const clean = new Function('GAME_NAMES', fn + '\nreturn cleanStatus;')({ jk1: 1, mots: 1 });
+    const s = clean({ online: 0, games: [], imp: [
+        { id: 1201, sid: '5b238bec1ae6e9cb', game: 'jk1', name: 'Coruscant\u0007', episode: 'JK1CTF', map: 'c3.jkl', delay: 30, watching: 1 },
+        { id: 0, sid: '5b238bec1ae6e9cb' }, { id: 5, sid: 'nope' }, null, 'x'] });
+    assert.deepEqual(s.imp, [{ id: 1201, sid: '5b238bec1ae6e9cb', game: 'jk1', name: 'Coruscant', episode: 'JK1CTF',
+                               map: 'c3.jkl', delay: 30, watching: 1 }]);
+    assert.deepEqual(clean({ online: 0, games: [] }).imp, [], 'a lobby that has none, or doesn\'t say');
+    const w = cut('      function watchable(g)', '      // Watches a game, by its room id');
+    const { watchable, canWatch } = new Function(w + '\nreturn { watchable, canWatch };')();
+    assert.deepEqual([canWatch({ imperial: false, spect: 1 }), canWatch({ imperial: true, spect: 1 }),
+                      canWatch({ imperial: true, id: 1201, spect: 1 }), canWatch({ imperial: false, spect: 0 })],
+                     [true, false, true, false]);
+    assert.equal(watchable({ imperial: true }), false);
 });
 
 let failed = 0;
