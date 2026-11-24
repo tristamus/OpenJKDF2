@@ -411,6 +411,12 @@ int sithDSSThing_ProcessPlaySound(SithMessage *pMsg)
         if ( (flags & SITHSOUNDFLAG_ABSOLUTE) != 0 )
         {
             rdVector3 pos = NETMSG_POPVEC3();
+#ifdef PLATFORM_WSRELAY
+            // Added: as for one on a thing, below: a looping sound at a spot
+            // (Canyon Oasis's wind) a viewer has already.
+            if ( stdComm_WSRelay_bViewer && (flags & SITHSOUNDFLAG_LOOP) && sithSoundMixer_LoopAt(sound, &pos) )
+                return 1;
+#endif
             out = sithSoundMixer_PlaySoundPos(sound, &pos, 0, 1.0, volume, a5, flags);
         }
         else
@@ -424,9 +430,9 @@ int sithDSSThing_ProcessPlaySound(SithMessage *pMsg)
         if ( !thing )
             return 0;
 #ifdef PLATFORM_WSRELAY
-        // Added: a viewer (spectator mode) gets the players' looping sounds
-        // again with each keyframe of the feed (sithMulti_FeedKeyframe): one
-        // already playing on that player isn't started a second time.
+        // Added: a viewer (spectator mode) gets the looping sounds playing
+        // again with the keyframe it starts from (sithMulti_FeedKeyframe):
+        // one already playing on that thing isn't started a second time.
         if ( stdComm_WSRelay_bViewer && (flags & SITHSOUNDFLAG_LOOP) && sithSoundMixer_LoopOnThing(sound, thing) )
             return 1;
 #endif

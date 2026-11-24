@@ -12739,6 +12739,16 @@
       touchWatch.pad.addEventListener('pointercancel', touchPadUp);
       touchWatch.pad.addEventListener('lostpointercapture', touchPadUp);
       touchWatch.root.addEventListener('contextmenu', function(ev) { ev.preventDefault(); });
+      // A finger held still (Up or Down, held to rise or sink) is a long press
+      // to the phone: Android buzzed and the picture hitched as it went
+      // looking for a menu or a word to select, though none came (Antonio,
+      // 2026-11-24). Not with a thumb already on the move stick: a second
+      // finger is no long press. Turned down where the touch starts, which
+      // leaves the pointer events the controls go by; not on what goes by
+      // its click (Message, the box for it, the turn card).
+      touchWatch.root.addEventListener('touchstart', function(ev) {
+        if (ev.cancelable && !(ev.target.closest && ev.target.closest('[data-tw=msg], .tw-say, .tw-turn'))) ev.preventDefault();
+      }, { passive: false });
       // Nothing of a touch on them reaches the game (its own touch and mouse
       // listeners), but typing a message.
       ['touchstart', 'touchmove', 'touchend', 'touchcancel', 'mousedown', 'mouseup', 'mousemove', 'click', 'wheel'].forEach(function(type) {

@@ -1703,25 +1703,36 @@ void sithMulti_FeedKeyframe(int idTo)
             jkDSS_SendPlayerLooksTo(jkPlayer_playerInfos[i].pLocalPlayer, idTo);
     }
 
-    // And the looping sounds playing on the players, a lit saber's hum among
-    // them: each is sent once, when it starts, so a viewer that came later
-    // heard none until a saber was lit again (Antonio, 2026-11-24, watching
-    // from his phone). Only those on players: a level's own looping sounds
-    // start in every game that loads it (SITH_MESSAGE_STARTUP, never sent).
-    // A viewer that has one already doesn't start it again
-    // (sithDSSThing_ProcessPlaySound).
+    // And the looping sounds playing where they can be heard from: on a
+    // thing (a lit saber's hum on a player) or at a spot (Canyon Oasis's wind,
+    // from its ghost). Each is sent once, when it starts, so a viewer that came
+    // later heard none (Antonio, 2026-11-24, watching from his phone). Those a
+    // level starts itself in every game that loads it (SITH_MESSAGE_STARTUP)
+    // a viewer has already, but the server's game alone runs a cog's timer
+    // (sithCog_SendMessage), and Canyon Oasis starts its wind on one
+    // (00_playambient.cog). A viewer that has one already doesn't start it
+    // again (sithDSSThing_ProcessPlaySound). Not one that plays everywhere
+    // (no thing, no spot): this game's own, its player's alone (PlaySoundLocal)
+    // among them. What only this game's own playing of it says isn't sent:
+    // that it's its own player's (NO_3D), or partway through a fade.
     for (int i = 0; i < SITH_MIXER_NUMPLAYINGSOUNDS; i++)
     {
         sithPlayingSound* pPlaying = &sithSoundMixer_aPlayingSounds[i];
-        if (pPlaying == sithSoundMixer_hCurAmbientChannel || !pPlaying->sound || !pPlaying->thing
-            || pPlaying->thing->type != SITH_THING_PLAYER)
+        if (pPlaying == sithSoundMixer_hCurAmbientChannel || !pPlaying->sound
+            || (pPlaying->flags & (SITHSOUNDFLAG_LOOP | SITHSOUNDFLAG_FADING)) != SITHSOUNDFLAG_LOOP)
             continue;
-        if ((pPlaying->flags & (SITHSOUNDFLAG_LOOP | SITHSOUNDFLAG_FOLLOWSTHING | SITHSOUNDFLAG_FADING))
-            != (SITHSOUNDFLAG_LOOP | SITHSOUNDFLAG_FOLLOWSTHING))
+        int flags = pPlaying->flags & ~(SITHSOUNDFLAG_PLAYING | SITHSOUNDFLAG_PAUSED | SITHSOUNDFLAG_NO_3D
+                                        | SITHSOUNDFLAG_FADE_IN | SITHSOUNDFLAG_FADE_OUT);
+        if (flags & SITHSOUNDFLAG_FOLLOWSTHING)
+        {
+            if (!pPlaying->thing)
+                continue;
+            flags &= ~SITHSOUNDFLAG_ABSOLUTE;
+        }
+        else if (!(flags & SITHSOUNDFLAG_ABSOLUTE))
             continue;
-        sithDSSThing_PlaySound(pPlaying->thing, &pPlaying->pos, pPlaying->sound, pPlaying->anonymous_5,
-                               pPlaying->maxPosition,
-                               pPlaying->flags & ~(SITHSOUNDFLAG_PLAYING | SITHSOUNDFLAG_PAUSED),
+        sithDSSThing_PlaySound((flags & SITHSOUNDFLAG_FOLLOWSTHING) ? pPlaying->thing : NULL, &pPlaying->pos,
+                               pPlaying->sound, pPlaying->anonymous_5, pPlaying->maxPosition, flags,
                                pPlaying->refid, idTo, 1);
     }
 }

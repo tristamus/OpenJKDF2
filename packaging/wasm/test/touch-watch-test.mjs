@@ -190,4 +190,25 @@ test("an iPhone's silent switch doesn't mute watching: its sound plays as a vide
     assert.match(html, /delete Module\.jkWatchPack;\n\s*watchSoundAsVideo\(false\);\n\s*room\.close\(\);/, 'playing: as before');
 });
 
+test("a finger held on Up or Down is no long press: no buzz, but Message and its box still get their click", () => {
+    const code = cut("      touchWatch.root.addEventListener('touchstart', function(ev) {", '      // Nothing of a touch on them reaches the game');
+    let listener, opts;
+    const touchWatch = { root: { addEventListener: (type, fn, o) => { assert.equal(type, 'touchstart'); listener = fn; opts = o; } } };
+    new Function('touchWatch', code)(touchWatch);
+    assert.equal(opts.passive, false, 'may turn it down');
+    const on = (selectors, cancelable = true) => {
+        let prevented = false;
+        const target = { closest: (sel) => (sel.split(', ').some((s) => selectors.includes(s)) ? {} : null) };
+        listener({ cancelable, target, preventDefault: () => { prevented = true; } });
+        return prevented;
+    };
+    assert.equal(on([]), true, 'Up, Down, the stick and the look drag');
+    assert.equal(on(['[data-tw=msg]']), false, 'Message opens its box on its click');
+    assert.equal(on(['.tw-say']), false, 'the box takes the keyboard');
+    assert.equal(on(['.tw-turn']), false, 'the turn card goes by clicks');
+    assert.equal(on([], false), false, 'one already scrolling');
+    // The controls go by pointer events, which turning the touch down leaves.
+    assert.match(html, /b\.addEventListener\('pointerup', up\);/);
+});
+
 console.log('all ' + passed + ' passed');
