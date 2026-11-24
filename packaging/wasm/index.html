@@ -1573,6 +1573,16 @@
       .watch-tag[aria-pressed=true] { background-color: var(--gold); color: #000; }
       .watch-tag[aria-pressed=true] .eye { color: #000; }
       .watch-tag[aria-pressed=true] .wc { border-left-color: rgba(0, 0, 0, 0.35); }
+      /* On a touch screen, a game's Info and Watch big enough for a finger:
+         Watch was 56 by 16 pixels on a phone (the audit of watching,
+         2026-11-24). */
+      @media (pointer: coarse) {
+        .table-meta { flex-wrap: wrap; row-gap: 2px; }
+        .table-info summary, .watch-tag { padding: 5px 10px; font-size: 13px; line-height: 18px; }
+        .watch-tag { gap: 5px; }
+        .watch-tag .eye { width: 15px; height: 15px; }
+        .table-meta .table-summary { margin-top: 10px; }
+      }
       .watch-off {
         display: inline-flex;
         align-items: center;
@@ -1649,6 +1659,26 @@
         inset: 0;
         background: linear-gradient(rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0) 40%, rgba(0, 0, 0, 0.7));
       }
+      .watch-view .watch-play {
+        position: absolute;
+        z-index: 1;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 20px 10px 14px;
+        border: 2px solid var(--join);
+        border-radius: 999px;
+        background-color: rgba(0, 0, 0, 0.72);
+        color: #fff;
+        font: bold 15px Verdana, sans-serif;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .watch-view .watch-play svg { width: 22px; height: 22px; color: var(--join); }
+      .watch-view .watch-play:active { background-color: rgba(0, 0, 0, 0.9); }
       .watch-view .no-pic {
         position: absolute;
         inset: 0;
@@ -1787,6 +1817,9 @@
       .details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0; }
       .details dt { color: #808080; }
       .details dd { margin: 0; overflow-wrap: anywhere; }
+      .stage > .details { flex: none; width: auto; overflow: visible; }
+      .stage > .details section { padding: 0 0 10px; }
+      .stage > .details:empty { display: none; }
       /* The match's view, as big as the window lets it be while the clock
          still shows under it. */
       .watch-info { display: contents; }
@@ -1796,6 +1829,36 @@
         width: min(100%, max(320px, calc((min(760px, 100vh - 32px) - 210px) * 16 / 9)));
       }
       html.watch-window .stage .watch-screen { width: min(100%, max(320px, calc((100vh - 190px) * 16 / 9))); }
+      /* The theater layout, on a computer (Antonio, 2026-11-24): the match
+         as big as the window's height lets it be with its clock showing
+         under it, the list of matches beside it, and the scores, rules and
+         game under it, a scroll away. At 1366 x 768 the match was about
+         710 x 400 between the list and the details; now it's about
+         1010 x 570. The window is no wider than that needs. */
+      @media (min-width: 901px) {
+        #watch {
+          width: min(calc(100vw - 32px), calc(272px + (100vh - 200px) * 16 / 9));
+          height: calc(100vh - 32px);
+        }
+        .stage {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(240px, 36%);
+          align-content: start;
+          gap: 10px 24px;
+          border-right: 0;
+        }
+        .stage .watch-screen {
+          grid-column: 1 / -1;
+          justify-self: center;
+          width: min(100%, max(320px, calc((100vh - 200px) * 16 / 9)));
+        }
+        html.watch-window .stage .watch-screen { width: min(100%, max(320px, calc((100vh - 166px) * 16 / 9))); }
+        .watch-info { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+        /* Nothing beside it (no match, or one that ended): across, in the
+           middle. */
+        .stage:has(> .details:empty) { align-content: center; }
+        .stage:has(> .details:empty) .watch-info { grid-column: 1 / -1; }
+      }
       /* Full screen: the view fills the screen, with the match over it. */
       .watch-screen.full {
         position: fixed;
@@ -1858,6 +1921,31 @@
       .watch-hud .watch-kills { font-size: 0.85em; }
       .hud-keys { grid-column: 2; grid-row: 3; align-self: end; justify-self: end; color: #bbb; font-size: 0.75em; transition: opacity 0.3s; }
       .watch-screen.full.idle .hud-exit, .watch-screen.full.idle .hud-keys { opacity: 0; }
+      /* Hide all (U, .bare): nothing over the match on the whole screen
+         but a small way back, in the top corner, clear of the game's own
+         gauges in the bottom ones (Antonio, 2026-11-24). */
+      .hud-bare-hint { display: none; }
+      .watch-screen.full.bare .watch-hud > :not(.hud-bare-hint), .watch-screen.full.bare .watch-keys,
+      .watch-screen.full.bare .watch-follow { display: none; }
+      .watch-screen.full.bare .hud-bare-hint {
+        display: block;
+        grid-column: 1 / -1;
+        grid-row: 1;
+        align-self: start;
+        justify-self: end;
+        pointer-events: auto;
+        padding: 0.3em 0.7em;
+        border: 0;
+        background-color: rgba(0, 0, 0, 0.45);
+        color: #ddd;
+        font: inherit;
+        font-size: 0.7em;
+        opacity: 0.75;
+        cursor: pointer;
+        transition: opacity 0.3s;
+      }
+      .watch-screen.full.bare.idle .hud-bare-hint { opacity: 0.4; }
+      .watch-screen.full.bare .hud-bare-hint:hover { opacity: 1; }
       /* On a narrow or upright screen (a phone), the match's name and clock
          get lines of their own, and the scores the width. */
       @media (max-width: 700px), (max-aspect-ratio: 1/1) {
@@ -1932,7 +2020,9 @@
         color: #ddd;
         font: 11px/1.35 Verdana, sans-serif;
         pointer-events: none;
+        transition: opacity 0.8s;
       }
+      #watch .watch-keys.fading { opacity: 0; }
       .watch-screen:not(.box-live) .watch-keys, .watch-screen.box-panel .watch-keys,
       .watch-screen:not(.box-live) .hud-controls { display: none; }
       /* Who the box's game follows (watchFollowLabel), in the page's own
@@ -2054,17 +2144,17 @@
         .mlist, .details { width: auto; overflow: visible; border-right: 0; }
         .mlist { border-bottom: 2px solid var(--win-dark); max-height: 30vh; overflow-y: auto; }
         .stage { flex: none; overflow: visible; border-right: 0; }
-        /* In a window of its own, the match comes first. */
-        html.watch-window .watch-body .stage, html.watch-window .watch-body .details { order: -1; }
-        html.watch-window .watch-body .details { border-bottom: 2px solid var(--win-dark); }
+        /* The match comes first, then the list: a phone held sideways (or a
+           tablet) showed only the list's "No games right now" lines above
+           the fold (the audit of watching, 2026-11-24). */
+        .watch-body .stage { order: -1; border-bottom: 2px solid var(--win-dark); }
       }
 
       @media (max-width: 700px) {
         #room, #watch { width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; box-shadow: none; }
         #watch [data-wact=pop] { display: none; }
         .pv { order: -1; width: auto; overflow: visible; border-bottom: 2px solid var(--win-dark); }
-        .watch-body .stage, .watch-body .details { order: -1; }
-        .watch-body .details { border-bottom: 2px solid var(--win-dark); }
+        .watch-body .stage { order: -1; border-bottom: 2px solid var(--win-dark); }
         .mlist { max-height: none; }
         .room-body { flex-direction: column; overflow-y: auto; }
         .room-games { flex: none; overflow: visible; border-right: 0; border-bottom: 2px solid var(--win-dark); padding: 12px 16px; --backdrop-x: -7px; }
@@ -3546,8 +3636,10 @@
                stay on the whole screen (Full screen). -->
           <div class="watch-screen" id="watch-screen" tabindex="-1" hidden></div>
           <div class="watch-info" id="watch-info"></div>
+          <!-- Scores, rules and the game: under the match, beside its clock
+               and kills (the theater layout), or after them on a phone. -->
+          <aside class="details" id="watch-details" aria-label="Match details"></aside>
         </section>
-        <aside class="details" id="watch-details" aria-label="Match details"></aside>
       </div>
       <div class="room-status">
         <span class="panel"><span class="live-dot" id="watch-live-dot"></span><span id="watch-live">Connecting</span></span>
@@ -6149,7 +6241,10 @@
         // says the game needs it). Those get it once they pick their folder.
         if (!problem && !phoneNote() && !(navigator.connection && navigator.connection.saveData) &&
             !(gfxCheck && gfxCheck.state === 'none')) prefetchEngine();
-        showPickerResult(problem || phoneNote() || '', !!problem);
+        // Watching on a phone needs the game files but no keyboard or mouse (touchWatch).
+        var phone = phoneNote() && pickerWant && pickerWant.watch ?
+          'On a phone or tablet, you need the game files on it to watch in the game.' : phoneNote();
+        showPickerResult(problem || phone || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
         showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio !== null ? jitRatio : jitLastSlow());
         showPrivacyNote(document.getElementById('picker-privacy'), !problem && privacyOn);
@@ -6287,6 +6382,18 @@
           ev.preventDefault();
           ev.stopImmediatePropagation();
           if (!ev.repeat) embedSays('keys');
+        }, true);
+        // U, while the viewing page has the box on the whole screen: Hide
+        // all there (.bare), not the game's.
+        window.addEventListener('keydown', function(ev) {
+          if (ev.code !== 'KeyU' || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+          if (typeof Module._sithControl_WebTyping === 'function' && Module._sithControl_WebTyping()) return;
+          var full = false;
+          try { full = !!window.parent.document.fullscreenElement; } catch (e) {}
+          if (!full) return;
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          if (!ev.repeat) embedSays('bare');
         }, true);
         // The keys for watching as the player bound them in the game, for
         // the lobby page's Controls (watchKeysPanel): {fire1: [[the game's
@@ -9040,7 +9147,8 @@
         showPrivacyNote(document.getElementById('picker-privacy'), privacyOn);
         if (!picker.open) picker.showModal();
         prefetchEngine();
-        var phone = phoneNote();
+        // Watching needs no keyboard or mouse on a phone (touchWatch).
+        var phone = want && want.watch ? null : phoneNote();
         var total = DEMO_FILES.reduce(function(n, f) { return n + f.size; }, 0), done = 0;
         function say(now) {
           showPickerResult('Downloading the free demo (' + Math.floor((done + now) * 100 / total) + '%)...' +
@@ -10271,6 +10379,7 @@
         else delete Module.jkJoinImperial;
         delete Module.jkWatchRoom;
         delete Module.jkWatchPack;
+        watchSoundAsVideo(false);
         room.close();
         if (want.demo) startDemo(want);
         else openPicker(want);
@@ -10499,6 +10608,17 @@
           kill.dataset.tick = 'lastkill';
           killLine(kill, v.last, true);
           view.append(kill);
+        }
+        // On a phone that can watch it in the game, that's what the picture
+        // is for: a phone has no box, and the toolbar's Watch in the game was
+        // easy to miss (the audit of watching, 2026-11-24).
+        if (phoneCanWatchNow(w)) {
+          var play = el('button', 'watch-play');
+          play.type = 'button';
+          play.dataset.wact = 'game';
+          play.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>');
+          play.append('Watch in the game');
+          view.append(play);
         }
         return view;
       }
@@ -10843,11 +10963,20 @@
           keysB.dataset.wact = 'keys';
           top.append(keysB);
         }
+        var bare = el('button', 'hud-exit', 'Hide all (U)');
+        bare.type = 'button';
+        bare.dataset.wact = 'bare';
+        bare.title = 'Hide everything over the match; U or the corner brings it back';
         var exit = el('button', 'hud-exit', 'Exit full screen');
         exit.type = 'button';
         exit.dataset.wact = 'full';
-        top.append(exit);
+        top.append(bare, exit);
         hud.append(top);
+        // With all of it hidden (.bare), only this, in the corner.
+        var back = el('button', 'hud-bare-hint', 'U shows the scores and controls');
+        back.type = 'button';
+        back.dataset.wact = 'bare';
+        hud.append(back);
         if (w && v && v.nocount !== 'password') {
           if (v.sb.length || liveTeams(v).length) {
             var scores = el('div', 'hud-panel hud-scores');
@@ -10859,7 +10988,7 @@
           hud.append(kills);
         }
         var others = (list || []).filter(function(x) { return canWatch(x.g) && x.g.id !== watchLive.id; }).length;
-        hud.append(el('div', 'hud-keys', (others ? '← → other matches · ' : '') + 'Esc to leave'));
+        hud.append(el('div', 'hud-keys', (others ? '← → other matches · ' : '') + 'U hides all · Esc to leave'));
         return hud;
       }
 
@@ -10889,6 +11018,16 @@
         clearTimeout(watchIdleTimer);
         if (watchFullOn()) watchIdleTimer = setTimeout(function() { watchScreen.classList.add('idle'); }, 2500);
       }
+      // Hide all: on the whole screen, nothing over the match but the way
+      // back (.hud-bare-hint). U (here, or in the box's game: its page
+      // sends 'bare'), the HUD's Hide all, or the corner's hint; H brings
+      // it all back with the Controls. Over when Full screen is left; the
+      // box's class is all there is of it. No on: the other way.
+      function watchBareSet(on) {
+        if (on === undefined) on = !watchScreen.classList.contains('bare');
+        watchScreen.classList.toggle('bare', !!on);
+        watchAwake();
+      }
       // When Full screen was last left (Esc does that, not close the page).
       var watchFullLeft = 0;
       function watchFullChanged() {
@@ -10905,6 +11044,7 @@
           watchScreen.focus({ preventScroll: true });
         } else {
           watchFullLeft = Date.now();
+          watchScreen.classList.remove('bare');
           if (watchDlg.open && (document.activeElement === watchScreen || document.activeElement === document.body)) {
             b.focus({ preventScroll: true });
           }
@@ -10930,6 +11070,9 @@
           if (!watchBox.frame || watchBox.frame.parentNode !== watchScreen) return;
           ev.preventDefault();
           watchKeysToggle();
+        } else if (ev.code === 'KeyU' && watchFullOn()) {
+          ev.preventDefault();
+          watchBareSet();
         } else if (watchFullOn() && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
           ev.preventDefault();
           watchStep(ev.key === 'ArrowLeft' ? -1 : 1);
@@ -11079,9 +11222,10 @@
         var empty = !lobbyLive.status ?
           (lobbyLive.state === 'down' ? "The lobby isn't answering right now." : 'Connecting to the lobby…') :
           !watchLive.id ? (list.some(function(x) { return canWatch(x.g); }) ?
-            'Pick a match on the left to watch it.' : 'Nobody is playing a match that can be watched right now.') :
-          !w ? (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ') has' : 'This game has') +
-               ' ended. Pick another match on the left.' : '';
+            'Pick a match from the list to watch it.' : 'Nobody is playing a match that can be watched right now.') :
+          !w ? (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ') has' : 'This game has') + ' ended. ' +
+               (list.some(function(x) { return canWatch(x.g); }) ? 'Pick another match from the list.' :
+                'No other match can be watched right now.') : '';
         if (watchLive.note) info.append(el('p', 'watch-said', watchLive.note));
         // The box's game goes on through the lobby's connection dropping, and
         // through the match's end, which it shows its delay later: until it
@@ -11110,7 +11254,7 @@
           // On the whole screen, it says so there, until Esc.
           if (watchFullOn()) {
             var note = el('div', 'watch-view');
-            note.append(el('span', 'no-pic', empty.replace(' on the left', '')));
+            note.append(el('span', 'no-pic', empty.replace(' from the list', '')));
             watchScreen.replaceChildren(note, watchHud(null, null, list));
           } else {
             watchScreen.replaceChildren();
@@ -11231,7 +11375,7 @@
           sayWatching();
         }
         if (!watchDlg.open) {
-          watchKeysOn = !watchKeysSeen();
+          watchKeysOn = watchKeysAuto = !watchKeysSeen();
           watchDlg.showModal();
         }
         watchAddress();
@@ -11291,9 +11435,14 @@
         else if (act.dataset.wact === 'pop') popWatch();
         else if (act.dataset.wact === 'full') watchFull(!watchFullOn());
         else if (act.dataset.wact === 'join') joinWatched();
-        else if (act.dataset.wact === 'game') playWatched();
+        else if (act.dataset.wact === 'game') {
+          // Full screen and sideways on a phone, as the room's Watch goes (phoneWatchStraight).
+          if (phoneCanWatchNow(watchedGame())) touchWatchFullscreen();
+          playWatched();
+        }
         else if (act.dataset.wact === 'again') boxAgain();
         else if (act.dataset.wact === 'keys') watchKeysToggle();
+        else if (act.dataset.wact === 'bare') watchBareSet();
       });
 
       // Join from watching (the game watched, or the one with room id id):
@@ -11338,6 +11487,16 @@
       // id), as Join starts it joining (roomAction): Module.jkWatchRoom
       // tells the engine which. In a window of its own, the page that opened
       // it does it (jkPlayWatched), as for Join.
+      // An iPhone or iPad watching: the match's sound plays with the silent
+      // switch on, as a video's does, and pauses other sound (music) as a
+      // video does. Safari's game sound (Web Audio) follows the switch
+      // unless the page asks (WebKit bug 237322); navigator.audioSession is
+      // Safari 17's, on iOS and iPadOS. Asked in the tap that starts it.
+      function watchSoundAsVideo(on) {
+        try {
+          if (phoneNote() && navigator.audioSession) navigator.audioSession.type = on ? 'playback' : 'auto';
+        } catch (e) {}
+      }
       function playWatched(id) {
         var w = watchedGame(id);
         var can = watchInGame(w);
@@ -11363,6 +11522,7 @@
         delete Module.jkJoinRoom;
         delete Module.jkJoinImperial;
         Module.jkWatchRoom = w.g.id;
+        watchSoundAsVideo(true);
         // MotS: the game runs the player's Remastered pack only if the match
         // does (mods.js), as a joiner's does once it's restarted for it. The
         // lobby names a match with both "<mod>, Remastered pack". A match
@@ -11551,9 +11711,10 @@
       // The keys for watching (Controls): over the box's game once it
       // plays the match, as the player bound them in the game (its page's
       // jkWatchKeys). They show by themselves the first time this browser
-      // watches a match in the box, not after (Antonio, 2026-11-20); H, the
-      // Hide button or the toolbar's Controls shows or hides them, until the
-      // viewing page closes.
+      // watches a match in the box, not after (Antonio, 2026-11-20), and
+      // then go by themselves after WATCH_KEYS_FADE_MS over the match
+      // (2026-11-24); H, the Hide button or the toolbar's Controls shows or
+      // hides them, until the viewing page closes, and they stay as put.
       var WATCH_KEYS_SEEN = 'jkdf2mp-watch-keys-seen';
       function watchKeysSeen() {
         try {
@@ -11563,8 +11724,25 @@
         }
       }
       var watchKeysOn = !watchKeysSeen();
+      // Shown by themselves (not by a key or button): they go by themselves.
+      var watchKeysAuto = watchKeysOn;
+      var WATCH_KEYS_FADE_MS = 15000;
+      var watchKeysFade = 0, watchKeysFading = false;
+      function watchKeysFadeStop() {
+        clearTimeout(watchKeysFade);
+        watchKeysFade = 0;
+        watchKeysFading = false;
+      }
       function watchKeysToggle() {
-        watchKeysOn = !watchKeysOn;
+        watchKeysAuto = false;
+        watchKeysFadeStop();
+        // All hidden (Hide all): back, with the Controls.
+        if (watchFullOn() && watchScreen.classList.contains('bare')) {
+          watchBareSet(false);
+          watchKeysOn = true;
+        } else {
+          watchKeysOn = !watchKeysOn;
+        }
         renderWatch();
       }
       // Once they've shown over a match being played.
@@ -11573,6 +11751,23 @@
         try {
           localStorage.setItem(WATCH_KEYS_SEEN, '1');
         } catch (e) {}
+        if (!watchKeysAuto || watchKeysFade) return;
+        watchKeysFade = setTimeout(function() {
+          watchKeysFade = 0;
+          if (!watchKeysAuto || !watchKeysOn) return;
+          // Drawn again meanwhile, it stays fading (watchKeysPanel).
+          watchKeysFading = true;
+          Array.prototype.forEach.call(watchScreen.children, function(c) {
+            if (c.classList.contains('watch-keys')) c.classList.add('fading');
+          });
+          watchKeysFade = setTimeout(function() {
+            watchKeysFade = 0;
+            watchKeysFading = false;
+            if (!watchKeysAuto || !watchKeysOn) return;
+            watchKeysAuto = watchKeysOn = false;
+            if (watchDlg.open) renderWatch();
+          }, 800);
+        }, WATCH_KEYS_FADE_MS);
       }
       function boxKeys(f) {
         try {
@@ -11662,7 +11857,7 @@
                     .filter(Boolean);
           if (got.length) move = got.join(', ');
         }
-        var panel = el('div', 'watch-keys');
+        var panel = el('div', 'watch-keys' + (watchKeysFading ? ' fading' : ''));
         var head = el('div', 'keys-head');
         var hide = el('button', 'keys-hide', 'Hide (H)');
         hide.type = 'button';
@@ -11720,6 +11915,9 @@
         } else if (state === 'keys') {
           // H in the box (its page's own keydown).
           if (watchDlg.open && f.parentNode === watchScreen) watchKeysToggle();
+        } else if (state === 'bare') {
+          // U in the box, on the whole screen.
+          if (watchDlg.open && f.parentNode === watchScreen && watchFullOn()) watchBareSet();
         } else if (state === 'follow') {
           // Who its game follows now: in place, the page as it is.
           watchBox.follow = String(text || '').substring(0, 48);
@@ -11834,15 +12032,20 @@
       // page and then Watch in the game). Leave comes back to the viewing
       // page on that match (jkViewLeft). Otherwise the preview, as before.
       function phoneWatchStraight(id) {
-        if (watchWindow || watchEmbed || window.jkLobbyMock || !phoneNote() || leaveGuard) return false;
-        var w = watchedGame(id);
-        var can = watchInGame(w);
-        if (!can || can.why || !ROOMS[w.key]) return false;
-        var r = ROOMS[w.key];
-        if (!r.demo && !(gameFiles && savedKnown[r.game] === true)) return false;
+        if (!phoneCanWatchNow(watchedGame(id))) return false;
         touchWatchFullscreen();
         playWatched(id);
         return true;
+      }
+      // Whether this phone or tablet can watch w in the game with no more
+      // asked of it (phoneWatchStraight); the viewing page then puts Watch in
+      // the game over the match's picture (watchView).
+      function phoneCanWatchNow(w) {
+        if (watchWindow || watchEmbed || window.jkLobbyMock || !phoneNote() || leaveGuard) return false;
+        var can = watchInGame(w);
+        if (!can || can.why || !ROOMS[w.key]) return false;
+        var r = ROOMS[w.key];
+        return !!r.demo || (!!gameFiles && savedKnown[r.game] === true);
       }
       // The room window's Watch, the preview's close, Watch full size and
       // Join.
@@ -12180,6 +12383,7 @@
           t.shown = shown;
           t.root.hidden = !shown;
           if (!shown) touchWatchLetGo();
+          else touchWatchBackArm();
           touchWatchWake();
         }
         if (live !== t.live) {
@@ -12347,6 +12551,32 @@
         } catch (e) { return cant(); }
         if (request && request.then) request.then(sideways, cant);
       }
+
+      // Back (Android's Back button or edge swipe, or the browser's) leaves
+      // watching for the viewing page, as Leave does: before, it asked
+      // "Leave site?" and took the phone off the site (the audit of watching,
+      // 2026-11-24). An entry of this page's own in the history, from the
+      // first time the controls show; with the message box open, Back only
+      // closes it. Full screen, Android's first Back leaves full screen.
+      function touchWatchBackArm() {
+        var t = touchWatch;
+        if (t.backArmed || !pickerWant || !pickerWant.watch) return;
+        try {
+          history.pushState({ jkWatching: pickerWant.watch }, '', location.href);
+          t.backArmed = true;
+        } catch (e) {}
+      }
+      window.addEventListener('popstate', function() {
+        var t = touchWatch;
+        if (!t.backArmed) return;
+        t.backArmed = false;
+        if (!pickerWant || !pickerWant.watch || t.leaving) return;
+        if (t.saying) {
+          touchSayClose();
+          return touchWatchBackArm();
+        }
+        touchWatchLeave();
+      });
 
       function touchWatchLeave() {
         if (!pickerWant || !pickerWant.watch || typeof Module.jkViewLeft !== 'function') return;
@@ -12629,6 +12859,47 @@
         }, { capture: true, passive: false });
       });
       if (phoneNote()) setInterval(touchWatchUpdate, 250);
+
+      // ---- The screen stays on while a match is watched: the game
+      // watching one, or the room's preview or the viewing page showing one.
+      // Someone watching doesn't touch the screen, and a phone turned it off
+      // after its usual half a minute or so (the audit of watching,
+      // 2026-11-24), as a computer does after its minutes. The browser lets
+      // go of it while the page is hidden; it's asked for again once the
+      // page shows. Not in the viewing page's box, whose page asks for it.
+      (function() {
+        if (watchEmbed || !navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') return;
+        var lock = null, asking = false, failedAt = 0;
+        function wanted() {
+          if (document.hidden) return false;
+          if (pickerWant && pickerWant.watch) return !gameLost;
+          return !!watchLive.id && (watchDlg.open || room.open);
+        }
+        function update() {
+          var want = wanted();
+          if (want && !lock && !asking && performance.now() - failedAt > 30000) {
+            asking = true;
+            navigator.wakeLock.request('screen').then(function(l) {
+              asking = false;
+              lock = l;
+              l.addEventListener('release', function() { if (lock === l) lock = null; });
+              if (!wanted()) update();
+            }, function() {
+              asking = false;
+              failedAt = performance.now();
+            });
+          } else if (!want && lock) {
+            var l = lock;
+            lock = null;
+            l.release().catch(function() {});
+          }
+        }
+        setInterval(update, 2000);
+        document.addEventListener('visibilitychange', function() {
+          failedAt = 0;
+          update();
+        });
+      })();
 
       // ---- The network log (Module.jkNet.log, kept by stdComm_WSRelay.c):
       // the relay, each direct link and, every 10 s in a game, how each link

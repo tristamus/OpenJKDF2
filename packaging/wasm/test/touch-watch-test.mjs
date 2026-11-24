@@ -133,4 +133,61 @@ test('the message box keeps its keys from the game, which listens later', () => 
     assert.match(code, /\}, true\);/);
 });
 
+test('the screen stays on while a match is watched, and only then', () => {
+    const code = cut('      // ---- The screen stays on while a match is watched', '      // ---- The network log');
+    const run = (o) => {
+        const asked = [];
+        let interval = null, onVis = null;
+        const lock = { released: 0, release() { this.released++; return Promise.resolve(); }, addEventListener() {} };
+        const nav = { wakeLock: { request(kind) { asked.push(kind); return { then(ok) { ok(lock); } }; } } };
+        const doc = { hidden: !!o.hidden, addEventListener(type, fn) { if (type === 'visibilitychange') onVis = fn; } };
+        new Function('watchEmbed', 'navigator', 'document', 'pickerWant', 'gameLost', 'watchLive', 'watchDlg', 'room',
+                     'setInterval', 'performance', code)(
+            !!o.embed, nav, doc, o.pickerWant || null, !!o.lost, { id: o.id || 0 }, { open: !!o.dlg }, { open: !!o.room },
+            (fn) => { interval = fn; }, { now: () => 1e6 });
+        if (interval) interval();
+        return { asked: asked.length, lock, interval, onVis, doc, set(k, v) { o[k] = v; } };
+    };
+    assert.equal(run({ pickerWant: { watch: 5 } }).asked, 1, 'the game watching');
+    assert.equal(run({ id: 5, dlg: true }).asked, 1, 'the viewing page on a match');
+    assert.equal(run({ id: 5, room: true }).asked, 1, "the room's preview");
+    assert.equal(run({ id: 0, dlg: true }).asked, 0, 'the viewing page on no match');
+    assert.equal(run({ id: 5 }).asked, 0, 'neither open');
+    assert.equal(run({ pickerWant: { watch: 5 }, lost: true }).asked, 0, 'the game stopped');
+    assert.equal(run({ pickerWant: { game: 'jk1' } }).asked, 0, 'playing, not watching');
+    assert.equal(run({ pickerWant: { watch: 5 }, hidden: true }).asked, 0, 'a hidden page');
+    assert.equal(run({ pickerWant: { watch: 5 }, embed: true }).interval, null, "the box's page leaves it to the lobby page");
+});
+
+test('Back on a phone leaves watching for the viewing page, once the controls show', () => {
+    assert.match(html, /if \(!shown\) touchWatchLetGo\(\);\n\s*else touchWatchBackArm\(\);/);
+    const code = cut('      function touchWatchBackArm() {', '      function touchWatchLeave() {');
+    assert.match(code, /history\.pushState\(/);
+    assert.match(code, /window\.addEventListener\('popstate'/);
+    assert.match(code, /if \(t\.saying\) \{\s*touchSayClose\(\);\s*return touchWatchBackArm\(\);\s*\}\s*touchWatchLeave\(\);/);
+});
+
+test("a phone that watches isn't told it needs a keyboard and mouse", () => {
+    assert.match(html, /var phone = want && want\.watch \? null : phoneNote\(\);/);
+    assert.match(html, /var phone = phoneNote\(\) && pickerWant && pickerWant\.watch \?\n\s*'On a phone or tablet, you need the game files on it to watch in the game\.' : phoneNote\(\);/);
+});
+
+test("an iPhone's silent switch doesn't mute watching: its sound plays as a video's, and playing goes back", () => {
+    const code = cut('      function watchSoundAsVideo(on) {', '      function playWatched(id) {');
+    const set = (phone, nav) => new Function('phoneNote', 'navigator', code + '\nreturn watchSoundAsVideo;')(() => phone, nav);
+    const ios = { audioSession: { type: 'auto' } };
+    set('a phone', ios)(true);
+    assert.equal(ios.audioSession.type, 'playback');
+    set('a phone', ios)(false);
+    assert.equal(ios.audioSession.type, 'auto');
+    const mac = { audioSession: { type: 'auto' } };
+    set(null, mac)(true);
+    assert.equal(mac.audioSession.type, 'auto', 'not on a computer');
+    set('a phone', {})(true);  // Android: no audioSession, nothing to do
+    const odd = { get audioSession() { throw new Error('no'); } };
+    set('a phone', odd)(true);  // and nothing thrown
+    assert.match(html, /Module\.jkWatchRoom = w\.g\.id;\n\s*watchSoundAsVideo\(true\);/, 'asked in the tap that starts watching');
+    assert.match(html, /delete Module\.jkWatchPack;\n\s*watchSoundAsVideo\(false\);\n\s*room\.close\(\);/, 'playing: as before');
+});
+
 console.log('all ' + passed + ' passed');

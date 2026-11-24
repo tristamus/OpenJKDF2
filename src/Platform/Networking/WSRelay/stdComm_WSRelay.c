@@ -1986,8 +1986,16 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
        newest record due more than this past JITTER_MS from now (it waited
        for the feed, LATE_MS, and the rest came at once), and it plays
        CATCH_RATE faster until it isn't, so each hold-up doesn't add to how
-       far behind the match it is for the rest of it. */
+       far behind the match it is for the rest of it. SKIP_MS: held up so
+       long that what it holds goes on this far past what's next (its frames
+       stopped while the page was hidden, a phone switched to another app,
+       and the feed kept coming: 45 s behind, it caught up at 1.1 times the
+       pace, about 7 minutes, the audit of watching, 2026-11-24), it goes on
+       from the newest keyframe it holds, which sets everything right; and
+       while more than FAR_MS behind, it plays FAR_RATE faster (twice the
+       pace). */
     var JITTER_MS = 500, SPREAD_MS = 250, LATE_MS = 2000, WAIT_MS = 90000, RETRIES = 3, CATCH_MS = 1000, CATCH_RATE = 0.1;
+    var SKIP_MS = 5000, FAR_MS = 3000, FAR_RATE = 1;
     var old = Module.jkView;
     if (old) old.close();
     var base = Module['jkRelayUrl'];
@@ -2008,10 +2016,12 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                  delay: -1, recs: [], ri: 0, pi: 0, phase: 'wait', since: performance.now(), level: null, want: null,
                  found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, caught: 0, recvAt: 0, ended: '',
                  closed: false, waitMs: WAIT_MS,
-                 resync: false, rekey: false, rekeySeat: -1, seatMs: {}, box: !!Module['jkWatchBox'] };
+                 resync: false, rekey: false, rekeySeat: -1, seatMs: {}, skips: 0, box: !!Module['jkWatchBox'],
+                 firstTimer: 0 };
     Module.jkView = view;
-    view.say = function(text) {
-        console.log('OpenJKDF2: watching room ' + room + ': ' + text);
+    /* quiet: not in the log (the countdown's each second). */
+    view.say = function(text, quiet) {
+        if (!quiet) console.log('OpenJKDF2: watching room ' + room + ': ' + text);
         if (typeof Module['jkViewNotice'] === 'function') {
             try { Module['jkViewNotice'](text); } catch (e) {}
         }
@@ -2026,6 +2036,36 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         if (ws) {
             try { ws.close(1000); } catch (e) {}
         }
+    };
+    /* The first picture, counted down each second until it comes (the
+       feed's "feed first <ms>": how long until its first keyframe is of
+       age; early in a match, as long as the delay), rather than only said
+       (the audit of watching, 2026-11-24). Once the keyframe is here, the
+       count goes, and the level loads. */
+    view.countStop = function(clear) {
+        if (!view.firstTimer) return;
+        clearInterval(view.firstTimer);
+        view.firstTimer = 0;
+        if (clear) view.say('', true);
+    };
+    view.countdown = function(ms) {
+        view.countStop(false);
+        var until = performance.now() + ms, told = '';
+        var tick = function() {
+            if (Module.jkView !== view || view.phase !== 'wait' || view.ended) {
+                view.countStop(Module.jkView === view && !view.ended);
+                return;
+            }
+            var left = Math.ceil((until - performance.now()) / 1000);
+            var text = left > 0 ? 'First picture in ' + left + ' s' +
+                                  (view.delay > 0 ? ': watching runs ' + view.delay + ' seconds behind the players.' : '.') :
+                                  'First picture any moment now.';
+            /* In the log: the first, and any moment now once. */
+            view.say(text, told !== '' && (left > 0 || told === text));
+            told = text;
+        };
+        view.firstTimer = setInterval(tick, 1000);
+        tick();
     };
     /* The engine left the match. */
     view.close = function() {
@@ -2061,7 +2101,15 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                 view.end(why, why === 'room ended' ? 'The match is over.' :
                               why === 'watching off' ? 'The host turned watching off.' : 'The match stopped sending.');
             } else if (parts[1] === 'waiting') {
-                if (view.phase === 'wait') view.say('Waiting for the match to send a picture to start from.');
+                /* Said why: early in a match, it waits as long as the delay
+                   (the feed's first keyframe of age). */
+                if (view.phase === 'wait')
+                    view.say(view.delay > 0 ? 'Waiting for the first picture: watching runs ' + view.delay +
+                                              ' seconds behind the players, so early in a match it takes up to that long.' :
+                                              'Waiting for the match to send a picture to start from.');
+            } else if (parts[1] === 'first') {
+                var firstMs = parseInt(parts[2], 10);
+                if (firstMs >= 0 && firstMs <= 10 * 60000 && view.phase === 'wait') view.countdown(firstMs);
             } else if (parts[1] === 'no-files') {
                 /* Its host (an Imperial relay server, src/imperial-feed.js in
                    jkdf2mp-bb-server) doesn't send its level or mod to games
@@ -2163,6 +2211,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                 view.pi = 0;
                 view.level = rec.head;
                 view.phase = 'level';
+                view.countStop(true);
             } else if (view.phase === 'level') {
                 view.recs.push(rec);
             }
@@ -2247,7 +2296,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
            in all. */
         if (view.recs.length) {
             var ahead = view.recs[view.recs.length - 1].ms + view.offset - now - JITTER_MS - CATCH_MS;
-            var step = view.recvAt ? Math.min(now - view.recvAt, 100) * CATCH_RATE : 0;
+            var step = view.recvAt ? Math.min(now - view.recvAt, 100) * (ahead > FAR_MS ? FAR_RATE : CATCH_RATE) : 0;
             if (ahead > 0 && step > 0) {
                 step = Math.min(step, ahead);
                 view.offset -= step;
@@ -2274,6 +2323,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                 continue;
             }
             if (!r.pi && now - (r.ms + view.offset) > LATE_MS) {
+                if (view.recs[view.recs.length - 1].ms - r.ms > SKIP_MS && view.skipToKey()) continue;
                 view.offset = now - r.ms + JITTER_MS;
                 view.late++;
             }
@@ -2309,6 +2359,23 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         }
         view.trim();
         return out;
+    };
+    /* Far behind (SKIP_MS): on from the newest keyframe held of this level
+       that's past what played, as after the feed dropped (resync, then
+       rekey), what's before it left out. 0 for none. */
+    view.skipToKey = function() {
+        for (var i = view.recs.length - 1; i > view.ri; i--) {
+            var k = view.recs[i];
+            if (view.isKey(k) && !k.pi && view.same(k.head, view.want) && k.ms >= view.lastMs) {
+                view.ri = i;
+                view.resync = true;
+                view.rekey = false;
+                view.skips++;
+                view.say('Catching up with the match.');
+                return 1;
+            }
+        }
+        return 0;
     };
     /* Left out, live, before it starts: a keyframe that isn't setting things
        right, what came again, nothing in it. */

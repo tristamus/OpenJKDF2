@@ -2426,7 +2426,7 @@ test('a viewer opens the room\'s feed beside the lobby, and has a level once a k
     feed.deliver('feed 30');
     feed.deliver('feed waiting');
     assert.equal(game.Module.jkView.delay, 30);
-    assert.ok(said.some(t => /Waiting for the match/.test(t)), said.join('\n'));
+    assert.ok(said.some(t => /^Waiting for the first picture: watching runs 30 seconds behind the players/.test(t)), said.join('\n'));
     // Packets before any keyframe are no use.
     feed.deliver(feedBatch(feedRecord(100, 0, 1, [dss(1, 1)])));
     assert.equal(viewLevel(game).r, 0);
@@ -2435,6 +2435,49 @@ test('a viewer opens the room\'s feed beside the lobby, and has a level once a k
     // A newer one takes its place.
     feed.deliver(feedBatch(feedRecord(60200, 1, 1, [keyLevel('JK1MP', 'm2.jkl', { game: 'mots' }), keyEnd()])));
     assert.deepEqual(viewLevel(game), { r: 1, episode: 'JK1MP', map: 'm2.jkl', mode: 4, mots: 1 });
+});
+
+test('a viewer told when its first picture comes (feed first <ms>) counts it down each second, then lets it go once the keyframe is here', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world, 7);
+    const said = [];
+    game.Module.jkViewNotice = t => said.push(t);
+    {
+        feed.deliver('feed 30');
+        feed.deliver('feed waiting');
+        feed.deliver('feed first 12400');
+        assert.equal(said.at(-1), 'First picture in 13 s: watching runs 30 seconds behind the players.');
+        await world.run(1000);
+        assert.equal(said.at(-1), 'First picture in 12 s: watching runs 30 seconds behind the players.');
+        await world.run(12000);
+        assert.equal(said.at(-1), 'First picture any moment now.');
+        await world.run(2000);
+        assert.equal(said.at(-1), 'First picture any moment now.', 'said again, so the page keeps it up');
+        assert.equal(game.log.filter(l => /^OpenJKDF2: watching room 7: First picture/.test(l)).length, 2,
+                     'in the log: the first and any moment now, once each');
+        feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('JK1CTF', 'm5.jkl', { mode: 0x24 }), dss(11, 2), keyEnd()])));
+        assert.equal(viewLevel(game).r, 1);
+        assert.equal(said.at(-1), '', 'the count goes once the keyframe is here');
+        const n = said.length;
+        await world.run(3000);
+        assert.equal(said.length, n, 'and nothing more is said');
+        // A late or odd one: not counted.
+        feed.deliver('feed first 5000');
+        feed.deliver('feed first soon');
+        await world.run(2000);
+        assert.equal(said.length, n, 'not once the level is here');
+    }
+    // Ended while counting: the count stops and the end's words stay.
+    const w2 = makeWorld();
+    const v2 = await viewer(w2, 8);
+    const said2 = [];
+    v2.game.Module.jkViewNotice = t => said2.push(t);
+    v2.feed.deliver('feed 30');
+    v2.feed.deliver('feed first 20000');
+    await w2.run(1000);
+    v2.feed.deliver('feed ended watching off');
+    await w2.run(3000);
+    assert.equal(said2.at(-1), 'The host turned watching off.');
 });
 
 test('a viewer told its host takes no files or messages (an Imperial server\'s feed) stops asking, and says so for a message', async () => {
@@ -2856,6 +2899,51 @@ test('after the feed held up, a viewer plays 10% faster until it\'s near the fee
     assert.equal(view.late, 1, 'it never got late from it');
     assert.deepEqual(played, Array.from({ length: played.length }, (_, i) => i + 1), 'each record once, in order');
     assert.ok(played.length > n - 8, 'all of them but the last second\'s: ' + played.length + ' of ' + n);
+});
+
+test('a viewer far behind (its frames stopped while its feed came) goes on from the newest keyframe it holds, then at twice the pace', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world);
+    const said = [];
+    game.Module.jkViewNotice = t => said.push(t);
+    feed.deliver(feedBatch(feedRecord(1000, 1, 1, [keyLevel(), keyEnd()])));
+    viewSync(game);
+    assert.deepEqual(viewRecv(game), ['welcome']);
+    const view = game.Module.jkView;
+    const played = [];
+    let ms = 1000, n = 0;
+    // Every 250 ms the host's game sends a record; the engine asks every 50 ms, while its frames run.
+    const step = async (frames = true) => {
+        ms += 250;
+        feed.deliver(feedBatch(feedRecord(ms, 0, 2, [dss(1, ++n)])));
+        for (let f = 0; f < 5; f++) {
+            if (frames) for (const p of viewRecv(game)) played.push(p[1]);
+            await world.run(50);
+        }
+    };
+    for (let i = 0; i < 40; i++) await step();
+    assert.equal(view.late, 0);
+    const offset = view.offset;
+    // 45 s without frames (a phone switched to another app); a keyframe 30 s in.
+    for (let i = 0; i < 180; i++) {
+        if (i === 120) feed.deliver(feedBatch(feedRecord(ms, 1, 1, [keyLevel(), dss(12, 1000), keyEnd()])));
+        await step(false);
+    }
+    assert.equal(n, 220);
+    const from = played.length;
+    for (let i = 0; i < 4; i++) await step();
+    assert.equal(view.skips, 1);
+    assert.ok(said.includes('Catching up with the match.'), said.join('\n'));
+    assert.deepEqual(played.slice(from, from + 3), [1000, 161, 162], 'the keyframe, then what came after it');
+    // 15 s behind its feed then: twice the pace while more than 3 s behind.
+    for (let i = 0; i < 56; i++) await step();
+    const behind = view.offset - offset;
+    assert.ok(behind > 1000 && behind < 4500, 'within 1-4.5 s of where it was before, 15 s on: ' + behind);
+    for (let i = 0; i < 200; i++) await step();
+    assert.equal(view.late, 1, 'late once, coming back');
+    const tail = played.slice(from + 1);
+    assert.deepEqual(tail, Array.from({ length: tail.length }, (_, i) => 161 + i), 'each record after the keyframe once, in order');
+    assert.ok(played.slice(0, from).every((p, i) => p === i + 1) && from >= 36, 'before: each once, in order: ' + from);
 });
 
 test('after its feed drops, a viewer sets right what it missed from the next keyframe; otherwise it leaves keyframes out', async () => {
