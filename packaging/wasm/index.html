@@ -2019,7 +2019,9 @@
         color: #ddd;
         font: 11px/1.35 Verdana, sans-serif;
         pointer-events: none;
+        transition: opacity 0.8s;
       }
+      #watch .watch-keys.fading { opacity: 0; }
       .watch-screen:not(.box-live) .watch-keys, .watch-screen.box-panel .watch-keys,
       .watch-screen:not(.box-live) .hud-controls { display: none; }
       /* Who the box's game follows (watchFollowLabel), in the page's own
@@ -11371,7 +11373,7 @@
           sayWatching();
         }
         if (!watchDlg.open) {
-          watchKeysOn = !watchKeysSeen();
+          watchKeysOn = watchKeysAuto = !watchKeysSeen();
           watchDlg.showModal();
         }
         watchAddress();
@@ -11696,9 +11698,10 @@
       // The keys for watching (Controls): over the box's game once it
       // plays the match, as the player bound them in the game (its page's
       // jkWatchKeys). They show by themselves the first time this browser
-      // watches a match in the box, not after (Antonio, 2026-11-20); H, the
-      // Hide button or the toolbar's Controls shows or hides them, until the
-      // viewing page closes.
+      // watches a match in the box, not after (Antonio, 2026-11-20), and
+      // then go by themselves after WATCH_KEYS_FADE_MS over the match
+      // (2026-11-24); H, the Hide button or the toolbar's Controls shows or
+      // hides them, until the viewing page closes, and they stay as put.
       var WATCH_KEYS_SEEN = 'jkdf2mp-watch-keys-seen';
       function watchKeysSeen() {
         try {
@@ -11708,7 +11711,18 @@
         }
       }
       var watchKeysOn = !watchKeysSeen();
+      // Shown by themselves (not by a key or button): they go by themselves.
+      var watchKeysAuto = watchKeysOn;
+      var WATCH_KEYS_FADE_MS = 15000;
+      var watchKeysFade = 0, watchKeysFading = false;
+      function watchKeysFadeStop() {
+        clearTimeout(watchKeysFade);
+        watchKeysFade = 0;
+        watchKeysFading = false;
+      }
       function watchKeysToggle() {
+        watchKeysAuto = false;
+        watchKeysFadeStop();
         // All hidden (Hide all): back, with the Controls.
         if (watchFullOn() && watchScreen.classList.contains('bare')) {
           watchBareSet(false);
@@ -11724,6 +11738,23 @@
         try {
           localStorage.setItem(WATCH_KEYS_SEEN, '1');
         } catch (e) {}
+        if (!watchKeysAuto || watchKeysFade) return;
+        watchKeysFade = setTimeout(function() {
+          watchKeysFade = 0;
+          if (!watchKeysAuto || !watchKeysOn) return;
+          // Drawn again meanwhile, it stays fading (watchKeysPanel).
+          watchKeysFading = true;
+          Array.prototype.forEach.call(watchScreen.children, function(c) {
+            if (c.classList.contains('watch-keys')) c.classList.add('fading');
+          });
+          watchKeysFade = setTimeout(function() {
+            watchKeysFade = 0;
+            watchKeysFading = false;
+            if (!watchKeysAuto || !watchKeysOn) return;
+            watchKeysAuto = watchKeysOn = false;
+            if (watchDlg.open) renderWatch();
+          }, 800);
+        }, WATCH_KEYS_FADE_MS);
       }
       function boxKeys(f) {
         try {
@@ -11813,7 +11844,7 @@
                     .filter(Boolean);
           if (got.length) move = got.join(', ');
         }
-        var panel = el('div', 'watch-keys');
+        var panel = el('div', 'watch-keys' + (watchKeysFading ? ' fading' : ''));
         var head = el('div', 'keys-head');
         var hide = el('button', 'keys-hide', 'Hide (H)');
         hide.type = 'button';

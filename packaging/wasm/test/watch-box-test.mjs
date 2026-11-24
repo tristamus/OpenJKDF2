@@ -501,6 +501,71 @@ test('the Controls show by themselves the first time this browser watches in the
     assert.match(html, /watchKeysOn = !watchKeysSeen\(\);/);
 });
 
+test('the Controls shown by themselves go by themselves after 15 s over the match; ones put there stay', () => {
+    // The page's timers, run by hand.
+    const timers = [];
+    const real = [globalThis.setTimeout, globalThis.clearTimeout];
+    globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms, on: true }); return timers.length; };
+    globalThis.clearTimeout = id => { if (timers[id - 1]) timers[id - 1].on = false; };
+    const waiting = ms => timers.some(t => t.on && t.ms === ms);
+    const run = ms => {
+        const t = timers.find(x => x.on && x.ms === ms);
+        assert.ok(t, 'a timer of ' + ms + ' ms');
+        t.on = false;
+        t.fn();
+    };
+    try {
+        const p = page({ store: {} });
+        const f = p.boxShow(p.games[5]);
+        p.boxScreen(f, elem('div'));
+        assert.ok(!waiting(15000), 'not before the box plays the match');
+        p.env.window.jkWatchBoxSays(f.contentWindow, 'live', '');
+        p.boxScreen(f, elem('div'));
+        assert.equal(timers.filter(t => t.on && t.ms === 15000).length, 1, 'one, however often it is drawn');
+        assert.doesNotMatch(p.watchKeysPanel().className, /fading/);
+        const renders = p.env.renders;
+        run(15000);
+        assert.match(p.watchKeysPanel().className, /fading/, 'drawn again while it fades, it still fades');
+        run(800);
+        assert.equal(p.watchKeysPanel(), null);
+        assert.ok(p.env.renders > renders, 'the page drew it gone');
+        // H brings them back, and then they stay.
+        p.watchKeysToggle();
+        p.boxScreen(f, elem('div'));
+        assert.ok(p.watchKeysPanel());
+        assert.doesNotMatch(p.watchKeysPanel().className, /fading/);
+        assert.ok(!waiting(15000));
+
+        // Hidden with H before 15 s: the fade's timer goes, and H shows
+        // them for good.
+        const q = page({ store: {} });
+        const g = q.boxShow(q.games[5]);
+        q.boxScreen(g, elem('div'));
+        q.env.window.jkWatchBoxSays(g.contentWindow, 'live', '');
+        assert.ok(waiting(15000));
+        q.watchKeysToggle();
+        assert.equal(q.watchKeysPanel(), null);
+        assert.ok(!waiting(15000));
+        q.watchKeysToggle();
+        q.boxScreen(g, elem('div'));
+        assert.ok(q.watchKeysPanel());
+        assert.ok(!waiting(15000));
+
+        // H while they fade: they stay, not fading.
+        const r = page({ store: {} });
+        const h = r.boxShow(r.games[5]);
+        r.boxScreen(h, elem('div'));
+        r.env.window.jkWatchBoxSays(h.contentWindow, 'live', '');
+        run(15000);
+        r.watchKeysToggle();
+        r.watchKeysToggle();
+        assert.ok(!waiting(800));
+        assert.doesNotMatch(r.watchKeysPanel().className, /fading/);
+    } finally {
+        [globalThis.setTimeout, globalThis.clearTimeout] = real;
+    }
+});
+
 test('a box that stopped says why, with Watch again, until it is clicked', () => {
     const p = page();
     const f = p.boxShow(p.games[5]);
