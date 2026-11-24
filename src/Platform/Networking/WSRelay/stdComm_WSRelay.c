@@ -1905,6 +1905,19 @@ EM_JS(void, wsrelay_js_feed_copy, (const void* pData, int len), {
     if (net && net.feed) net.feedCopy(HEAPU8.subarray(pData, pData + len));
 });
 
+// A line of the match's chat for those watching at once (the feed's
+// hostChats, in jkdf2mp-bb-server's feed.js): "chat <line>", on the feed's
+// socket, when it's open. A line that doesn't go reaches them later with the
+// packets, as before.
+EM_JS(void, wsrelay_js_feed_chat, (const char* pLine), {
+    var net = Module.jkNet;
+    var feed = net && net.isHost ? net.feed : null;
+    if (!feed || !feed.ws || feed.ws.readyState !== 1) return;
+    try {
+        feed.ws.send('chat ' + UTF8ToString(pLine));
+    } catch (e) {}
+});
+
 // The next spectator's message the feed brought the host's game (net.feed's
 // said), into pOut; 0 when there's none.
 EM_JS(int, wsrelay_js_feed_take_say, (char* pOut, int maxLen), {
@@ -2008,7 +2021,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                  delay: -1, recs: [], ri: 0, pi: 0, phase: 'wait', since: performance.now(), level: null, want: null,
                  found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, caught: 0, recvAt: 0, ended: '',
                  closed: false, waitMs: WAIT_MS,
-                 resync: false, rekey: false, rekeySeat: -1, seatMs: {}, box: !!Module['jkWatchBox'] };
+                 resync: false, rekey: false, rekeySeat: -1, seatMs: {}, box: !!Module['jkWatchBox'], chats: [] };
     Module.jkView = view;
     view.say = function(text) {
         console.log('OpenJKDF2: watching room ' + room + ': ' + text);
@@ -2052,6 +2065,13 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
             var d = ev && ev.data;
             if (typeof d !== 'string') {
                 if (d) view.take(d);
+                return;
+            }
+            /* A line of the match's chat, at once (the feed's hostChats): the
+               engine shows it on its next frame (wsrelay_js_view_take_chat). */
+            var chat = /^chat ([\x20-\x7e]{1,127})$/.exec(d);
+            if (chat) {
+                if (view.chats.length < 8) view.chats.push(chat[1]);
                 return;
             }
             var parts = d.split(' ');
@@ -2438,6 +2458,16 @@ EM_JS(int, wsrelay_js_view_say, (const char16_t* pName, const char* pText), {
     } catch (e) {
         return 0;
     }
+    return 1;
+});
+
+// The next line of the match's chat the feed brought a viewer at once
+// (view.chats), into pOut; 0 when there's none.
+EM_JS(int, wsrelay_js_view_take_chat, (char* pOut, int maxLen), {
+    var view = Module.jkView;
+    var line = view && view.chats && view.chats.length ? view.chats.shift() : '';
+    if (!line) return 0;
+    stringToUTF8(line, pOut, maxLen);
     return 1;
 });
 
@@ -4503,6 +4533,91 @@ int stdComm_WSRelay_ViewerOwnEcho(const char* pLine)
     return 0;
 }
 
+// The match's chat at once for those watching (the feed's hostChats, in
+// jkdf2mp-bb-server's feed.js). A spectator's message reached the players at
+// once, but their answers came with the picture, 30 s later (Antonio,
+// 2026-11-24). Chat tells a watcher nothing about where the players are:
+// every player in the match reads it. So the host's game sends the feed each
+// line of chat as a game watching shows it, and the feed hands it on
+// straight away. A game watching shows the line at once and leaves it out
+// when the delayed packets bring it (stdComm_WSRelay_ViewerChatSeen).
+#define WSRELAY_CHAT_MAX (127)
+#define WSRELAY_CHATS_KEPT (16)
+#define WSRELAY_CHAT_KEEP_MS (180000)
+static char wsrelay_aChats[WSRELAY_CHATS_KEPT][WSRELAY_CHAT_MAX + 1];
+static uint32_t wsrelay_aChatsMs[WSRELAY_CHATS_KEPT];
+static int wsrelay_chatsNext = 0;
+static char16_t wsrelay_chatWStr[256];
+
+// The line a chat message shows (sithMulti_ProcessChat), cleaned as the
+// feed takes it: the text alone for playerIdx < 0, else "<name> says
+// '<text>'".
+static void wsrelay_ChatLine(char* pOut, int playerIdx, const char* pText)
+{
+    char line[256];
+    if (playerIdx >= 0 && playerIdx < JKPLAYER_NUM_INFOS)
+    {
+        char name[64];
+        stdString_WcharToChar(name, jkPlayer_playerInfos[playerIdx].player_name, sizeof(name) - 1);
+        name[sizeof(name) - 1] = 0;
+        stdString_snprintf(line, sizeof(line), "%s says '%s'", name, pText);
+    }
+    else
+    {
+        stdString_SafeStrCopy(line, pText, sizeof(line));
+    }
+    wsrelay_SayClean(pOut, line, WSRELAY_CHAT_MAX);
+}
+
+void stdComm_WSRelay_FeedChat(int playerIdx, const char* pText)
+{
+    if (stdComm_Imperial_bActive || stdComm_WSRelay_bViewer || !wsrelay_bHosting || !stdComm_bIsServer || !pText)
+        return;
+    char line[WSRELAY_CHAT_MAX + 1];
+    wsrelay_ChatLine(line, playerIdx, pText);
+    if (line[0])
+        wsrelay_js_feed_chat(line);
+}
+
+int stdComm_WSRelay_ViewerChatSeen(int playerIdx, const char* pText)
+{
+    if (!stdComm_WSRelay_bViewer || !pText)
+        return 0;
+    char line[WSRELAY_CHAT_MAX + 1];
+    wsrelay_ChatLine(line, playerIdx, pText);
+    uint32_t now = stdPlatform_GetTimeMsec();
+    for (int i = 0; i < WSRELAY_CHATS_KEPT; i++)
+    {
+        if (wsrelay_aChatsMs[i] && now - wsrelay_aChatsMs[i] < WSRELAY_CHAT_KEEP_MS && !strcmp(line, wsrelay_aChats[i]))
+        {
+            wsrelay_aChatsMs[i] = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// What chat the feed brought at once, shown, and kept to know it again.
+static void wsrelay_ViewerChats()
+{
+    char line[WSRELAY_CHAT_MAX + 1];
+    while (wsrelay_js_view_take_chat(line, sizeof(line)))
+    {
+        if (!line[0])
+            continue;
+        uint32_t now = stdPlatform_GetTimeMsec();
+        stdString_SafeStrCopy(wsrelay_aChats[wsrelay_chatsNext], line, sizeof(wsrelay_aChats[0]));
+        wsrelay_aChatsMs[wsrelay_chatsNext] = now ? now : 1;
+        wsrelay_chatsNext = (wsrelay_chatsNext + 1) % WSRELAY_CHATS_KEPT;
+        // This spectator's own message, back: shown when it was sent.
+        if (stdComm_WSRelay_ViewerOwnEcho(line))
+            continue;
+        jk_snwprintf(wsrelay_chatWStr, 256, u"%S", line);
+        sithConsole_AlertSound();
+        sithConsole_PrintWString(wsrelay_chatWStr);
+    }
+}
+
 // Called by stdComm_SendToPlayer with each message sent to everyone, once,
 // before it goes to each player: a copy for the room's feed, when the lobby
 // asked for one (see the top of this file). The bytes are from cogMsgId on.
@@ -5034,6 +5149,7 @@ void stdComm_WSRelay_ViewerPovFrame(int followIdx)
     stdPalEffects_FlushAllAdds();
     if (!stdComm_WSRelay_bViewer || !sithPlayer_g_pLocalPlayer)
         return;
+    wsrelay_ViewerChats();
     stdPalEffect* p1 = stdPalEffects_GetEffectPointer(sithPlayer_g_pLocalPlayer->palEffectsIdx1);
     stdPalEffect* p2 = stdPalEffects_GetEffectPointer(sithPlayer_g_pLocalPlayer->palEffectsIdx2);
     wsrelay_PovOf* pOf = NULL;
