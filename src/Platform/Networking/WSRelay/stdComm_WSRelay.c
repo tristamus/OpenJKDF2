@@ -4060,8 +4060,10 @@ void stdComm_WSRelay_ViewerNoLevel(const char* pEpisode)
 // level's start (jkMain, jkPlayer_InitSaber) puts every player back on the
 // default green saber, which a joiner sets right from what each player sends
 // it when it joins. A viewer joins no one, so it plays these again then
-// (stdComm_WSRelay_ViewerInLevel). Each: u16 length, u16 0, i32 seat, then
-// the message from cogMsgId on.
+// (stdComm_WSRelay_ViewerInLevel). And the players' looping sounds, a lit
+// saber's hum among them (wsrelay_ViewerKeepLoop). Each: u16 length, u16 0
+// (1 once it's not to be played: a looping sound stopped since), i32 seat,
+// then the message from cogMsgId on.
 #define WSRELAY_VIEW_LOOKS_MAX (32 * 1024)
 static uint8_t wsrelay_aViewLooks[WSRELAY_VIEW_LOOKS_MAX];
 static int wsrelay_viewLooksLen = 0;
@@ -4081,13 +4083,100 @@ static void wsrelay_ViewerKeepLooks(const uint8_t* pMsg, int len, int from)
     wsrelay_viewLooksLen += 8 + len;
 }
 
+// A looping sound on a thing or at a spot (DSS_PLAYSOUND, after cogMsgId and
+// its u16: u32 flags, f32 min and max radius, u16 sound, then the thing's i32
+// guid or the spot, then u32 its channel's refid): its refid, or 0 for any
+// other. One that plays everywhere (no thing, no spot) the keyframe leaves
+// out (sithMulti_FeedKeyframe), and so does this.
+static uint32_t wsrelay_ViewerLoopRefid(const uint8_t* pMsg, int len)
+{
+    uint16_t id;
+    uint32_t flags, refid;
+    if (len < 8)
+        return 0;
+    memcpy(&id, pMsg, 2);
+    memcpy(&flags, pMsg + 4, 4);
+    if (id != DSS_PLAYSOUND || !(flags & SITHSOUNDFLAG_LOOP))
+        return 0;
+    int at;
+    if (flags & SITHSOUNDFLAG_FOLLOWSTHING)
+        at = 4 + 14 + 4;
+    else if (flags & SITHSOUNDFLAG_ABSOLUTE)
+        at = 4 + 14 + 12;
+    else
+        return 0;
+    if (len < at + 4)
+        return 0;
+    memcpy(&refid, pMsg + at, 4);
+    return refid ? refid : 0xFFFFFFFF;
+}
+
+// The looping sound kept with this refid isn't to be played after all. -1:
+// one its player's game had no channel for, which says nothing of which.
+static void wsrelay_ViewerDropLoop(uint32_t refid)
+{
+    if (!refid || refid == 0xFFFFFFFF)
+        return;
+    for (int at = 0; at + 8 <= wsrelay_viewLooksLen; )
+    {
+        uint8_t* p = wsrelay_aViewLooks + at;
+        uint16_t len16;
+        memcpy(&len16, p, 2);
+        if (wsrelay_ViewerLoopRefid(p + 8, len16) == refid)
+        {
+            uint16_t dropped = 1;
+            memcpy(p + 2, &dropped, 2);
+        }
+        at += 8 + len16;
+    }
+}
+
+// While it catches up, a viewer leaves out the sounds (they're over by
+// now), but a looping one plays on until it's stopped: a lit saber's hum,
+// Canyon Oasis's wind. The keyframe a viewer starts from sends those still
+// playing (sithMulti_FeedKeyframe), and they came in here and were left out
+// with the rest, so one that came to watch, or left and came back, heard no
+// saber until it was lit again, and no wind (Antonio, 2026-11-24). Kept to
+// play once it's in the level, and let go if it's stopped before. 1 if it's
+// taken.
+static int wsrelay_ViewerKeepLoop(const uint8_t* pMsg, int len, int from)
+{
+    uint16_t id;
+    memcpy(&id, pMsg, 2);
+    if (id == DSS_STOPSOUND && len >= 8)
+    {
+        uint32_t refid;
+        memcpy(&refid, pMsg + 4, 4);
+        wsrelay_ViewerDropLoop(refid);
+        return 1;
+    }
+    uint32_t refid = wsrelay_ViewerLoopRefid(pMsg, len);
+    if (!refid)
+        return 0;
+    // The same channel again (the keyframe's, after the one it started
+    // with): the latest.
+    wsrelay_ViewerDropLoop(refid);
+    wsrelay_ViewerKeepLooks(pMsg, len, from);
+    return 1;
+}
+
 // In the level, after jkPlayer_InitSaber: the looks kept are due.
 void stdComm_WSRelay_ViewerInLevel()
 {
     if (!stdComm_WSRelay_bViewer)
         return;
     wsrelay_viewLooksAt = 0;
-    stdPlatform_Printf("OpenJKDF2: Watching room %d: the players' looks again, %d bytes.\n", wsrelay_viewRoom, wsrelay_viewLooksLen);
+    int loops = 0;
+    for (int at = 0; at + 8 <= wsrelay_viewLooksLen; )
+    {
+        uint16_t len16, dropped;
+        memcpy(&len16, wsrelay_aViewLooks + at, 2);
+        memcpy(&dropped, wsrelay_aViewLooks + at + 2, 2);
+        if (!dropped && wsrelay_ViewerLoopRefid(wsrelay_aViewLooks + at + 8, len16))
+            loops++;
+        at += 8 + len16;
+    }
+    stdPlatform_Printf("OpenJKDF2: Watching room %d: the players' looks again, %d bytes, and %d looping sounds.\n", wsrelay_viewRoom, wsrelay_viewLooksLen, loops);
 }
 
 // The next look kept, as DirectPlay_Receive gives a message: 0, or -1 when
@@ -4099,12 +4188,13 @@ static int wsrelay_ViewerNextLooks(int* pIdOut, int* pMsgIdOut, int* pLenOut, in
     while (wsrelay_viewLooksAt + 8 <= wsrelay_viewLooksLen)
     {
         uint8_t* p = wsrelay_aViewLooks + wsrelay_viewLooksAt;
-        uint16_t len16;
+        uint16_t len16, dropped;
         int32_t from32;
         memcpy(&len16, p, 2);
+        memcpy(&dropped, p + 2, 2);
         memcpy(&from32, p + 4, 4);
         wsrelay_viewLooksAt += 8 + len16;
-        if ((int)len16 > maxLen)
+        if ((int)len16 > maxLen || dropped)
             continue;
         memcpy(pMsgIdOut, p + 8, len16);
         *pIdOut = from32;
@@ -4376,7 +4466,9 @@ static int wsrelay_ViewerReceive(int* pIdOut, int* pMsgIdOut, int* pLenOut, int 
         memcpy(&id, wsrelay_recvBuf, 2);
         // Hit what you see's claims and answers are between the players'
         // games, and nothing a viewer takes part in.
-        if (id == STDCOMM_WSRELAY_HITS_MSG || (bSync && wsrelay_ViewerSkipsWhileSyncing(id)))
+        if (id == STDCOMM_WSRELAY_HITS_MSG || (bSync && wsrelay_ViewerKeepLoop(wsrelay_recvBuf, len, from)))
+            continue;
+        if (bSync && wsrelay_ViewerSkipsWhileSyncing(id))
             continue;
         if (bSync && (id == DSS_SABERINFO1 || id == DSS_SABERINFO2 || id == DSS_SABERINFO3))
             wsrelay_ViewerKeepLooks(wsrelay_recvBuf, len, from);

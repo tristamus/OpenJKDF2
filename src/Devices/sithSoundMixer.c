@@ -1192,6 +1192,25 @@ sithPlayingSound* sithSoundMixer_LoopOnThing(sithSound* pSound, SithThing* pThin
     return NULL;
 }
 
+// Added: a looping sound playing at pPos (an absolute one), not fading out,
+// or NULL (sithDSSThing_ProcessPlaySound, for a viewer).
+sithPlayingSound* sithSoundMixer_LoopAt(sithSound* pSound, const rdVector3* pPos)
+{
+    for (int i = 0; i < SITH_MIXER_NUMPLAYINGSOUNDS; i++)
+    {
+        sithPlayingSound* pPlaying = &sithSoundMixer_aPlayingSounds[i];
+        if (pPlaying->sound != pSound
+            || (pPlaying->flags & (SITHSOUNDFLAG_LOOP | SITHSOUNDFLAG_FADING | SITHSOUNDFLAG_FOLLOWSTHING | SITHSOUNDFLAG_ABSOLUTE))
+               != (SITHSOUNDFLAG_LOOP | SITHSOUNDFLAG_ABSOLUTE))
+            continue;
+        rdVector3 d;
+        rdVector_Sub3(&d, &pPlaying->pos, pPos);
+        if (rdVector_Dot3(&d, &d) < 0.0001)
+            return pPlaying;
+    }
+    return NULL;
+}
+
 sithPlayingSound* sithSoundMixer_GetChannelHandle(int guid)
 {
     unsigned int playingsound_idx; // ecx

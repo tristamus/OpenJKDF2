@@ -72,6 +72,7 @@ void sithSoundMixer_SetVelocity(sithPlayingSound *sound);
 
 void sithSoundMixer_SyncSounds();
 sithPlayingSound* sithSoundMixer_LoopOnThing(sithSound* pSound, SithThing* pThing); // Added
+sithPlayingSound* sithSoundMixer_LoopAt(sithSound* pSound, const rdVector3* pPos); // Added
 void sithSoundMixer_FreePlayingSound(sithPlayingSound *sound);
 
 void sithSoundMixer_FreeThing(SithThing *thing);
