@@ -2016,10 +2016,12 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                  delay: -1, recs: [], ri: 0, pi: 0, phase: 'wait', since: performance.now(), level: null, want: null,
                  found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, caught: 0, recvAt: 0, ended: '',
                  closed: false, waitMs: WAIT_MS,
-                 resync: false, rekey: false, rekeySeat: -1, seatMs: {}, skips: 0, box: !!Module['jkWatchBox'] };
+                 resync: false, rekey: false, rekeySeat: -1, seatMs: {}, skips: 0, box: !!Module['jkWatchBox'],
+                 firstTimer: 0 };
     Module.jkView = view;
-    view.say = function(text) {
-        console.log('OpenJKDF2: watching room ' + room + ': ' + text);
+    /* quiet: not in the log (the countdown's each second). */
+    view.say = function(text, quiet) {
+        if (!quiet) console.log('OpenJKDF2: watching room ' + room + ': ' + text);
         if (typeof Module['jkViewNotice'] === 'function') {
             try { Module['jkViewNotice'](text); } catch (e) {}
         }
@@ -2034,6 +2036,36 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         if (ws) {
             try { ws.close(1000); } catch (e) {}
         }
+    };
+    /* The first picture, counted down each second until it comes (the
+       feed's "feed first <ms>": how long until its first keyframe is of
+       age; early in a match, as long as the delay), rather than only said
+       (the audit of watching, 2026-11-24). Once the keyframe is here, the
+       count goes, and the level loads. */
+    view.countStop = function(clear) {
+        if (!view.firstTimer) return;
+        clearInterval(view.firstTimer);
+        view.firstTimer = 0;
+        if (clear) view.say('', true);
+    };
+    view.countdown = function(ms) {
+        view.countStop(false);
+        var until = performance.now() + ms, told = '';
+        var tick = function() {
+            if (Module.jkView !== view || view.phase !== 'wait' || view.ended) {
+                view.countStop(Module.jkView === view && !view.ended);
+                return;
+            }
+            var left = Math.ceil((until - performance.now()) / 1000);
+            var text = left > 0 ? 'First picture in ' + left + ' s' +
+                                  (view.delay > 0 ? ': watching runs ' + view.delay + ' seconds behind the players.' : '.') :
+                                  'First picture any moment now.';
+            /* In the log: the first, and any moment now once. */
+            view.say(text, told !== '' && (left > 0 || told === text));
+            told = text;
+        };
+        view.firstTimer = setInterval(tick, 1000);
+        tick();
     };
     /* The engine left the match. */
     view.close = function() {
@@ -2075,6 +2107,9 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                     view.say(view.delay > 0 ? 'Waiting for the first picture: watching runs ' + view.delay +
                                               ' seconds behind the players, so early in a match it takes up to that long.' :
                                               'Waiting for the match to send a picture to start from.');
+            } else if (parts[1] === 'first') {
+                var firstMs = parseInt(parts[2], 10);
+                if (firstMs >= 0 && firstMs <= 10 * 60000 && view.phase === 'wait') view.countdown(firstMs);
             } else if (parts[1] === 'no-files') {
                 /* Its host (an Imperial relay server, src/imperial-feed.js in
                    jkdf2mp-bb-server) doesn't send its level or mod to games
@@ -2176,6 +2211,7 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                 view.pi = 0;
                 view.level = rec.head;
                 view.phase = 'level';
+                view.countStop(true);
             } else if (view.phase === 'level') {
                 view.recs.push(rec);
             }

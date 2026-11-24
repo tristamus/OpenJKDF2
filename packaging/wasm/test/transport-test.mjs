@@ -2437,6 +2437,49 @@ test('a viewer opens the room\'s feed beside the lobby, and has a level once a k
     assert.deepEqual(viewLevel(game), { r: 1, episode: 'JK1MP', map: 'm2.jkl', mode: 4, mots: 1 });
 });
 
+test('a viewer told when its first picture comes (feed first <ms>) counts it down each second, then lets it go once the keyframe is here', async () => {
+    const world = makeWorld();
+    const { game, feed } = await viewer(world, 7);
+    const said = [];
+    game.Module.jkViewNotice = t => said.push(t);
+    {
+        feed.deliver('feed 30');
+        feed.deliver('feed waiting');
+        feed.deliver('feed first 12400');
+        assert.equal(said.at(-1), 'First picture in 13 s: watching runs 30 seconds behind the players.');
+        await world.run(1000);
+        assert.equal(said.at(-1), 'First picture in 12 s: watching runs 30 seconds behind the players.');
+        await world.run(12000);
+        assert.equal(said.at(-1), 'First picture any moment now.');
+        await world.run(2000);
+        assert.equal(said.at(-1), 'First picture any moment now.', 'said again, so the page keeps it up');
+        assert.equal(game.log.filter(l => /^OpenJKDF2: watching room 7: First picture/.test(l)).length, 2,
+                     'in the log: the first and any moment now, once each');
+        feed.deliver(feedBatch(feedRecord(200, 1, 1, [keyLevel('JK1CTF', 'm5.jkl', { mode: 0x24 }), dss(11, 2), keyEnd()])));
+        assert.equal(viewLevel(game).r, 1);
+        assert.equal(said.at(-1), '', 'the count goes once the keyframe is here');
+        const n = said.length;
+        await world.run(3000);
+        assert.equal(said.length, n, 'and nothing more is said');
+        // A late or odd one: not counted.
+        feed.deliver('feed first 5000');
+        feed.deliver('feed first soon');
+        await world.run(2000);
+        assert.equal(said.length, n, 'not once the level is here');
+    }
+    // Ended while counting: the count stops and the end's words stay.
+    const w2 = makeWorld();
+    const v2 = await viewer(w2, 8);
+    const said2 = [];
+    v2.game.Module.jkViewNotice = t => said2.push(t);
+    v2.feed.deliver('feed 30');
+    v2.feed.deliver('feed first 20000');
+    await w2.run(1000);
+    v2.feed.deliver('feed ended watching off');
+    await w2.run(3000);
+    assert.equal(said2.at(-1), 'The host turned watching off.');
+});
+
 test('a viewer told its host takes no files or messages (an Imperial server\'s feed) stops asking, and says so for a message', async () => {
     const world = makeWorld();
     const { game, feed } = await viewer(world, 7);
