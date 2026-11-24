@@ -1573,6 +1573,16 @@
       .watch-tag[aria-pressed=true] { background-color: var(--gold); color: #000; }
       .watch-tag[aria-pressed=true] .eye { color: #000; }
       .watch-tag[aria-pressed=true] .wc { border-left-color: rgba(0, 0, 0, 0.35); }
+      /* On a touch screen, a game's Info and Watch big enough for a finger:
+         Watch was 56 by 16 pixels on a phone (the audit of watching,
+         2026-11-24). */
+      @media (pointer: coarse) {
+        .table-meta { flex-wrap: wrap; row-gap: 2px; }
+        .table-info summary, .watch-tag { padding: 5px 10px; font-size: 13px; line-height: 18px; }
+        .watch-tag { gap: 5px; }
+        .watch-tag .eye { width: 15px; height: 15px; }
+        .table-meta .table-summary { margin-top: 10px; }
+      }
       .watch-off {
         display: inline-flex;
         align-items: center;
@@ -1649,6 +1659,26 @@
         inset: 0;
         background: linear-gradient(rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0) 40%, rgba(0, 0, 0, 0.7));
       }
+      .watch-view .watch-play {
+        position: absolute;
+        z-index: 1;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 20px 10px 14px;
+        border: 2px solid var(--join);
+        border-radius: 999px;
+        background-color: rgba(0, 0, 0, 0.72);
+        color: #fff;
+        font: bold 15px Verdana, sans-serif;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .watch-view .watch-play svg { width: 22px; height: 22px; color: var(--join); }
+      .watch-view .watch-play:active { background-color: rgba(0, 0, 0, 0.9); }
       .watch-view .no-pic {
         position: absolute;
         inset: 0;
@@ -2054,9 +2084,11 @@
         .mlist, .details { width: auto; overflow: visible; border-right: 0; }
         .mlist { border-bottom: 2px solid var(--win-dark); max-height: 30vh; overflow-y: auto; }
         .stage { flex: none; overflow: visible; border-right: 0; }
-        /* In a window of its own, the match comes first. */
-        html.watch-window .watch-body .stage, html.watch-window .watch-body .details { order: -1; }
-        html.watch-window .watch-body .details { border-bottom: 2px solid var(--win-dark); }
+        /* The match comes first, then the list: a phone held sideways (or a
+           tablet) showed only the list's "No games right now" lines above
+           the fold (the audit of watching, 2026-11-24). */
+        .watch-body .stage, .watch-body .details { order: -1; }
+        .watch-body .details { border-bottom: 2px solid var(--win-dark); }
       }
 
       @media (max-width: 700px) {
@@ -6149,7 +6181,10 @@
         // says the game needs it). Those get it once they pick their folder.
         if (!problem && !phoneNote() && !(navigator.connection && navigator.connection.saveData) &&
             !(gfxCheck && gfxCheck.state === 'none')) prefetchEngine();
-        showPickerResult(problem || phoneNote() || '', !!problem);
+        // Watching on a phone needs the game files but no keyboard or mouse (touchWatch).
+        var phone = phoneNote() && pickerWant && pickerWant.watch ?
+          'On a phone or tablet, you need the game files on it to watch in the game.' : phoneNote();
+        showPickerResult(problem || phone || '', !!problem);
         showGfxNotice(document.getElementById('picker-gfx'), problem ? null : gfxCheck);
         showJitNotice(document.getElementById('picker-jit'), problem ? null : jitRatio !== null ? jitRatio : jitLastSlow());
         showPrivacyNote(document.getElementById('picker-privacy'), !problem && privacyOn);
@@ -9040,7 +9075,8 @@
         showPrivacyNote(document.getElementById('picker-privacy'), privacyOn);
         if (!picker.open) picker.showModal();
         prefetchEngine();
-        var phone = phoneNote();
+        // Watching needs no keyboard or mouse on a phone (touchWatch).
+        var phone = want && want.watch ? null : phoneNote();
         var total = DEMO_FILES.reduce(function(n, f) { return n + f.size; }, 0), done = 0;
         function say(now) {
           showPickerResult('Downloading the free demo (' + Math.floor((done + now) * 100 / total) + '%)...' +
@@ -10500,6 +10536,17 @@
           killLine(kill, v.last, true);
           view.append(kill);
         }
+        // On a phone that can watch it in the game, that's what the picture
+        // is for: a phone has no box, and the toolbar's Watch in the game was
+        // easy to miss (the audit of watching, 2026-11-24).
+        if (phoneCanWatchNow(w)) {
+          var play = el('button', 'watch-play');
+          play.type = 'button';
+          play.dataset.wact = 'game';
+          play.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>');
+          play.append('Watch in the game');
+          view.append(play);
+        }
         return view;
       }
 
@@ -11079,9 +11126,10 @@
         var empty = !lobbyLive.status ?
           (lobbyLive.state === 'down' ? "The lobby isn't answering right now." : 'Connecting to the lobby…') :
           !watchLive.id ? (list.some(function(x) { return canWatch(x.g); }) ?
-            'Pick a match on the left to watch it.' : 'Nobody is playing a match that can be watched right now.') :
-          !w ? (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ') has' : 'This game has') +
-               ' ended. Pick another match on the left.' : '';
+            'Pick a match from the list to watch it.' : 'Nobody is playing a match that can be watched right now.') :
+          !w ? (shown ? shown.no + ' (' + (shown.g.name || 'no name') + ') has' : 'This game has') + ' ended. ' +
+               (list.some(function(x) { return canWatch(x.g); }) ? 'Pick another match from the list.' :
+                'No other match can be watched right now.') : '';
         if (watchLive.note) info.append(el('p', 'watch-said', watchLive.note));
         // The box's game goes on through the lobby's connection dropping, and
         // through the match's end, which it shows its delay later: until it
@@ -11110,7 +11158,7 @@
           // On the whole screen, it says so there, until Esc.
           if (watchFullOn()) {
             var note = el('div', 'watch-view');
-            note.append(el('span', 'no-pic', empty.replace(' on the left', '')));
+            note.append(el('span', 'no-pic', empty.replace(' from the list', '')));
             watchScreen.replaceChildren(note, watchHud(null, null, list));
           } else {
             watchScreen.replaceChildren();
@@ -11291,7 +11339,11 @@
         else if (act.dataset.wact === 'pop') popWatch();
         else if (act.dataset.wact === 'full') watchFull(!watchFullOn());
         else if (act.dataset.wact === 'join') joinWatched();
-        else if (act.dataset.wact === 'game') playWatched();
+        else if (act.dataset.wact === 'game') {
+          // Full screen and sideways on a phone, as the room's Watch goes (phoneWatchStraight).
+          if (phoneCanWatchNow(watchedGame())) touchWatchFullscreen();
+          playWatched();
+        }
         else if (act.dataset.wact === 'again') boxAgain();
         else if (act.dataset.wact === 'keys') watchKeysToggle();
       });
@@ -11834,15 +11886,20 @@
       // page and then Watch in the game). Leave comes back to the viewing
       // page on that match (jkViewLeft). Otherwise the preview, as before.
       function phoneWatchStraight(id) {
-        if (watchWindow || watchEmbed || window.jkLobbyMock || !phoneNote() || leaveGuard) return false;
-        var w = watchedGame(id);
-        var can = watchInGame(w);
-        if (!can || can.why || !ROOMS[w.key]) return false;
-        var r = ROOMS[w.key];
-        if (!r.demo && !(gameFiles && savedKnown[r.game] === true)) return false;
+        if (!phoneCanWatchNow(watchedGame(id))) return false;
         touchWatchFullscreen();
         playWatched(id);
         return true;
+      }
+      // Whether this phone or tablet can watch w in the game with no more
+      // asked of it (phoneWatchStraight); the viewing page then puts Watch in
+      // the game over the match's picture (watchView).
+      function phoneCanWatchNow(w) {
+        if (watchWindow || watchEmbed || window.jkLobbyMock || !phoneNote() || leaveGuard) return false;
+        var can = watchInGame(w);
+        if (!can || can.why || !ROOMS[w.key]) return false;
+        var r = ROOMS[w.key];
+        return !!r.demo || (!!gameFiles && savedKnown[r.game] === true);
       }
       // The room window's Watch, the preview's close, Watch full size and
       // Join.
@@ -12180,6 +12237,7 @@
           t.shown = shown;
           t.root.hidden = !shown;
           if (!shown) touchWatchLetGo();
+          else touchWatchBackArm();
           touchWatchWake();
         }
         if (live !== t.live) {
@@ -12347,6 +12405,32 @@
         } catch (e) { return cant(); }
         if (request && request.then) request.then(sideways, cant);
       }
+
+      // Back (Android's Back button or edge swipe, or the browser's) leaves
+      // watching for the viewing page, as Leave does: before, it asked
+      // "Leave site?" and took the phone off the site (the audit of watching,
+      // 2026-11-24). An entry of this page's own in the history, from the
+      // first time the controls show; with the message box open, Back only
+      // closes it. Full screen, Android's first Back leaves full screen.
+      function touchWatchBackArm() {
+        var t = touchWatch;
+        if (t.backArmed || !pickerWant || !pickerWant.watch) return;
+        try {
+          history.pushState({ jkWatching: pickerWant.watch }, '', location.href);
+          t.backArmed = true;
+        } catch (e) {}
+      }
+      window.addEventListener('popstate', function() {
+        var t = touchWatch;
+        if (!t.backArmed) return;
+        t.backArmed = false;
+        if (!pickerWant || !pickerWant.watch || t.leaving) return;
+        if (t.saying) {
+          touchSayClose();
+          return touchWatchBackArm();
+        }
+        touchWatchLeave();
+      });
 
       function touchWatchLeave() {
         if (!pickerWant || !pickerWant.watch || typeof Module.jkViewLeft !== 'function') return;
@@ -12629,6 +12713,47 @@
         }, { capture: true, passive: false });
       });
       if (phoneNote()) setInterval(touchWatchUpdate, 250);
+
+      // ---- The screen stays on while a match is watched: the game
+      // watching one, or the room's preview or the viewing page showing one.
+      // Someone watching doesn't touch the screen, and a phone turned it off
+      // after its usual half a minute or so (the audit of watching,
+      // 2026-11-24), as a computer does after its minutes. The browser lets
+      // go of it while the page is hidden; it's asked for again once the
+      // page shows. Not in the viewing page's box, whose page asks for it.
+      (function() {
+        if (watchEmbed || !navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') return;
+        var lock = null, asking = false, failedAt = 0;
+        function wanted() {
+          if (document.hidden) return false;
+          if (pickerWant && pickerWant.watch) return !gameLost;
+          return !!watchLive.id && (watchDlg.open || room.open);
+        }
+        function update() {
+          var want = wanted();
+          if (want && !lock && !asking && performance.now() - failedAt > 30000) {
+            asking = true;
+            navigator.wakeLock.request('screen').then(function(l) {
+              asking = false;
+              lock = l;
+              l.addEventListener('release', function() { if (lock === l) lock = null; });
+              if (!wanted()) update();
+            }, function() {
+              asking = false;
+              failedAt = performance.now();
+            });
+          } else if (!want && lock) {
+            var l = lock;
+            lock = null;
+            l.release().catch(function() {});
+          }
+        }
+        setInterval(update, 2000);
+        document.addEventListener('visibilitychange', function() {
+          failedAt = 0;
+          update();
+        });
+      })();
 
       // ---- The network log (Module.jkNet.log, kept by stdComm_WSRelay.c):
       // the relay, each direct link and, every 10 s in a game, how each link

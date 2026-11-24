@@ -2061,7 +2061,12 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                 view.end(why, why === 'room ended' ? 'The match is over.' :
                               why === 'watching off' ? 'The host turned watching off.' : 'The match stopped sending.');
             } else if (parts[1] === 'waiting') {
-                if (view.phase === 'wait') view.say('Waiting for the match to send a picture to start from.');
+                /* Said why: early in a match, it waits as long as the delay
+                   (the feed's first keyframe of age). */
+                if (view.phase === 'wait')
+                    view.say(view.delay > 0 ? 'Waiting for the first picture: watching runs ' + view.delay +
+                                              ' seconds behind the players, so early in a match it takes up to that long.' :
+                                              'Waiting for the match to send a picture to start from.');
             } else if (parts[1] === 'no-files') {
                 /* Its host (an Imperial relay server, src/imperial-feed.js in
                    jkdf2mp-bb-server) doesn't send its level or mod to games
