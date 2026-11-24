@@ -71,6 +71,7 @@ MATH_FUNC void sithSoundMixer_UpdateSoundPos(sithPlayingSound *sound);
 void sithSoundMixer_SetVelocity(sithPlayingSound *sound);
 
 void sithSoundMixer_SyncSounds();
+sithPlayingSound* sithSoundMixer_LoopOnThing(sithSound* pSound, SithThing* pThing); // Added
 void sithSoundMixer_FreePlayingSound(sithPlayingSound *sound);
 
 void sithSoundMixer_FreeThing(SithThing *thing);

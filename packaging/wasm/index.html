@@ -239,6 +239,228 @@
         text-align: center;
         pointer-events: none;
       }
+      /* Over the game while it watches a match on a phone or tablet: the
+         spectator's touch controls (touchWatch, below). The buttons fade
+         (tw-faded) and come back with a tap; the move stick shows under the
+         thumb. Clear of the screen's edges, where a swipe is Android's Back. */
+      .touch-watch {
+        position: fixed;
+        inset: 0;
+        z-index: 19;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+        color: #e8f7f9;
+        font: 600 10px Roboto, Arial, sans-serif;
+      }
+      .touch-watch .tw-pad { position: absolute; inset: 0; }
+      .touch-watch .tw-ui { transition: opacity 0.35s; }
+      .touch-watch.tw-faded .tw-ui { opacity: 0; }
+      .touch-watch.tw-faded .tw-ui * { pointer-events: none; }
+      .touch-watch .tw-ui > * { position: absolute; }
+      .touch-watch .tw-b {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        width: 56px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: inherit;
+        font: inherit;
+        text-shadow: 0 1px 2px #000;
+        touch-action: none;
+      }
+      .touch-watch .tw-b i {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+        width: 42px;
+        height: 42px;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 50%;
+        background: rgba(8, 22, 26, 0.55);
+      }
+      .touch-watch .tw-b svg { width: 22px; height: 22px; }
+      .touch-watch .tw-b.tw-on i { border-color: var(--gold); background: rgba(255, 204, 102, 0.28); }
+      .touch-watch .tw-b.tw-down i { background: rgba(143, 219, 228, 0.4); }
+      .touch-watch .tw-b.tw-off { opacity: 0.35; }
+      .touch-watch .tw-leave { top: 8px; left: 14px; }
+      .touch-watch .tw-tr { top: 8px; right: 10px; display: flex; }
+      .touch-watch .tw-side { top: 50%; right: 10px; display: flex; flex-direction: column; gap: 10px; transform: translateY(-50%); }
+      .touch-watch .tw-updown { top: 50%; right: 76px; display: flex; flex-direction: column; gap: 10px; transform: translateY(-50%); }
+      .touch-watch:not(.tw-free) .tw-updown { display: none; }
+      /* At the bottom: the game writes its messages (players' chat, kills, the view
+         picked) and the scoreboard at the top middle, which this covered (beta,
+         2026-11-24). The bottom middle has nothing of the game's for a spectator. */
+      .touch-watch .tw-pill {
+        bottom: max(6px, env(safe-area-inset-bottom));
+        left: 50%;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        max-width: calc(100% - 330px);
+        padding: 3px;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 24px;
+        background: rgba(8, 22, 26, 0.7);
+        transform: translateX(-50%);
+        color: var(--gold);
+        white-space: nowrap;
+      }
+      .touch-watch .tw-pill .tw-b { width: auto; }
+      .touch-watch .tw-pill .tw-b i { width: 36px; height: 36px; border: 0; background: rgba(143, 219, 228, 0.16); }
+      .touch-watch .tw-pill .tw-b.tw-down i { background: rgba(143, 219, 228, 0.4); }
+      .touch-watch .tw-pill .tw-b svg { width: 18px; height: 18px; }
+      .touch-watch .tw-who { min-width: 0; padding: 0 6px; text-align: center; }
+      .touch-watch .tw-name { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 14px; font-weight: 700; letter-spacing: 0.3px; }
+      .touch-watch .tw-sub { display: block; color: #bfe9ee; font-size: 9px; font-weight: 500; }
+      .touch-watch .tw-hint {
+        top: 50%;
+        left: 50%;
+        max-width: min(420px, calc(100% - 180px));
+        padding: 6px 12px;
+        border-radius: 12px;
+        background: rgba(8, 22, 26, 0.75);
+        transform: translate(-50%, -50%);
+        font-size: 12px;
+        text-align: center;
+        text-shadow: 0 1px 2px #000;
+        pointer-events: none;
+      }
+      .touch-watch .tw-stick {
+        position: absolute;
+        box-sizing: border-box;
+        width: 112px;
+        height: 112px;
+        margin: -56px 0 0 -56px;
+        border: 2px solid rgba(143, 219, 228, 0.6);
+        border-radius: 50%;
+        background: rgba(8, 22, 26, 0.28);
+        pointer-events: none;
+      }
+      .touch-watch .tw-stick.tw-fast { border-color: var(--gold); }
+      .touch-watch .tw-knob {
+        position: absolute;
+        top: 30px;
+        left: 30px;
+        box-sizing: border-box;
+        width: 48px;
+        height: 48px;
+        border: 2px solid #bfe9ee;
+        border-radius: 50%;
+        background: rgba(143, 219, 228, 0.45);
+      }
+      .touch-watch .tw-say {
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        display: flex;
+        gap: 6px;
+        box-sizing: border-box;
+        width: min(560px, calc(100% - 32px));
+        margin: 0;
+        padding: 6px;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 24px;
+        background: rgba(8, 22, 26, 0.92);
+        transform: translateX(-50%);
+      }
+      .touch-watch .tw-say input {
+        flex: 1;
+        min-width: 0;
+        padding: 6px 12px;
+        border: 0;
+        border-radius: 18px;
+        background: #fff;
+        color: #000;
+        font: 16px Roboto, Arial, sans-serif;
+        user-select: text;
+        -webkit-user-select: text;
+        touch-action: manipulation;
+      }
+      .touch-watch .tw-say button {
+        padding: 0 14px;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 18px;
+        background: rgba(143, 219, 228, 0.16);
+        color: #e8f7f9;
+        font: 600 14px Roboto, Arial, sans-serif;
+        touch-action: manipulation;
+      }
+      .touch-watch .tw-say button[type="submit"] { border-color: var(--gold); color: var(--gold); }
+      .touch-watch .tw-say .tw-say-name { flex: 0 1 8.5em; }
+      /* Where the move stick is, while the buttons show in the free camera
+         (Antonio, 2026-11-24: it only showed under a thumb, so it had to be found).
+         A touch anywhere on the left still puts the stick under the thumb. */
+      .touch-watch .tw-stick-rest {
+        left: max(26px, calc(env(safe-area-inset-left) + 14px));
+        bottom: max(22px, env(safe-area-inset-bottom));
+        box-sizing: border-box;
+        width: 112px;
+        height: 112px;
+        border: 2px solid rgba(143, 219, 228, 0.6);
+        border-radius: 50%;
+        background: rgba(8, 22, 26, 0.28);
+        opacity: 0.5;
+        pointer-events: none;
+      }
+      .touch-watch .tw-stick-rest span {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        margin-top: 2px;
+        text-align: center;
+        text-shadow: 0 1px 2px #000;
+      }
+      .touch-watch:not(.tw-free) .tw-stick-rest,
+      .touch-watch.tw-sticking .tw-stick-rest { display: none; }
+      /* Upright: turn the phone first (touchWatchTurn). */
+      .touch-watch .tw-turn {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        box-sizing: border-box;
+        width: min(300px, calc(100% - 32px));
+        padding: 18px 16px 14px;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 18px;
+        background: rgba(8, 22, 26, 0.9);
+        transform: translate(-50%, -50%);
+        text-align: center;
+      }
+      .touch-watch .tw-turn[hidden] { display: none; }
+      .touch-watch .tw-turn svg { width: 96px; height: 72px; }
+      .touch-watch .tw-turn p { margin: 0; font-size: 16px; font-weight: 700; color: var(--gold); }
+      .touch-watch .tw-turn button {
+        margin: 0;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 18px;
+        background: rgba(143, 219, 228, 0.16);
+        color: #e8f7f9;
+        font: 600 15px Roboto, Arial, sans-serif;
+        padding: 9px 18px;
+        touch-action: manipulation;
+      }
+      .touch-watch .tw-turn .tw-turn-skip { border: 0; background: none; font-size: 13px; font-weight: 500; color: #bfe9ee; text-decoration: underline; padding: 4px 8px; }
+      .touch-watch.tw-turning .tw-ui > :not(.tw-leave) { display: none; }
+      .touch-watch.tw-saying .tw-ui { display: none; }
+      .touch-watch.tw-wait .tw-ui > :not(.tw-leave) { display: none; }
+      @media (max-width: 600px) {
+        .touch-watch .tw-pill { max-width: calc(100% - 32px); }
+        .touch-watch .tw-say { flex-wrap: wrap; }
+        .touch-watch .tw-say .tw-say-name { flex: 1 1 100%; }
+      }
       /* Over the top of the game in a tab that another tab's game took the
          saves from. It leaves the game playable underneath. */
       .saves-elsewhere {
@@ -2385,6 +2607,45 @@
     </div>
     <p class="quit-note" id="quit-note" role="status" hidden>Saving your settings and going back to the lobby&hellip;</p>
     <p class="view-note" id="view-note" role="status" hidden></p>
+    <div class="touch-watch" id="touch-watch" hidden>
+      <div class="tw-pad"></div>
+      <div class="tw-ui">
+        <button type="button" class="tw-b tw-leave" data-tw="leave"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="#e8f7f9" stroke-width="2.4" stroke-linecap="round"/></svg></i>Leave</button>
+        <div class="tw-pill">
+          <button type="button" class="tw-b" data-tw="prev" aria-label="Player before"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="#e8f7f9" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></i></button>
+          <span class="tw-who"><span class="tw-name">Free camera</span><span class="tw-sub"></span></span>
+          <button type="button" class="tw-b" data-tw="next" aria-label="Next player"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#e8f7f9" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></i></button>
+        </div>
+        <div class="tw-tr">
+          <button type="button" class="tw-b" data-tw="msg"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H10l-4.5 4v-4H4z" fill="none" stroke="#e8f7f9" stroke-width="2" stroke-linejoin="round"/></svg></i>Message</button>
+          <button type="button" class="tw-b" data-tw="scores"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v4a5 5 0 01-10 0z" fill="none" stroke="#e8f7f9" stroke-width="2"/><path d="M7 6H4v1a3 3 0 003 3M17 6h3v1a3 3 0 01-3 3M12 13v4M8 20h8" fill="none" stroke="#e8f7f9" stroke-width="2" stroke-linecap="round"/></svg></i>Scores</button>
+          <button type="button" class="tw-b" data-tw="map"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z M9 4v14 M15 6v14" fill="none" stroke="#e8f7f9" stroke-width="1.9" stroke-linejoin="round"/></svg></i>Map</button>
+        </div>
+        <div class="tw-side">
+          <button type="button" class="tw-b" data-tw="view"><i><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.2" fill="none" stroke="#e8f7f9" stroke-width="2"/><path d="M5.5 20c.5-4 3.2-6.5 6.5-6.5s6 2.5 6.5 6.5" fill="none" stroke="#e8f7f9" stroke-width="2" stroke-linecap="round"/><path d="M2 12h3M19 12h3" stroke="#ffcc66" stroke-width="2" stroke-linecap="round"/></svg></i>1st / 3rd</button>
+          <button type="button" class="tw-b" data-tw="free" aria-pressed="false"><i><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="13" height="10" rx="2" fill="none" stroke="#e8f7f9" stroke-width="2"/><path d="M15.5 10.5l6-3v9l-6-3z" fill="none" stroke="#e8f7f9" stroke-width="2" stroke-linejoin="round"/></svg></i>Free cam</button>
+        </div>
+        <div class="tw-updown">
+          <button type="button" class="tw-b" data-tw="up" data-tw-hold="jump"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15l7-7 7 7" fill="none" stroke="#e8f7f9" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></i>Up</button>
+          <button type="button" class="tw-b" data-tw="down" data-tw-hold="duck"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9l7 7 7-7" fill="none" stroke="#e8f7f9" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></i>Down</button>
+        </div>
+        <p class="tw-hint" hidden></p>
+        <div class="tw-stick-rest" aria-hidden="true"><div class="tw-knob"></div><span>Move</span></div>
+      </div>
+      <div class="tw-stick" hidden><div class="tw-knob"></div></div>
+      <div class="tw-turn" role="dialog" aria-label="Turn your phone sideways" hidden>
+        <svg viewBox="0 0 96 72" aria-hidden="true"><rect x="8" y="10" width="28" height="48" rx="5" fill="none" stroke="#bfe9ee" stroke-width="3"/><rect x="44" y="32" width="48" height="28" rx="5" fill="none" stroke="#ffcc66" stroke-width="3"/><path d="M30 6c14-4 30 2 38 18" fill="none" stroke="#e8f7f9" stroke-width="3" stroke-linecap="round"/><path d="M60 20l8 5 3-9" fill="none" stroke="#e8f7f9" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <p class="tw-turn-say">Turn your phone sideways to watch</p>
+        <button type="button" class="tw-turn-go" data-tw-turn="go">Tap to turn it</button>
+        <button type="button" class="tw-turn-skip" data-tw-turn="skip">Keep watching upright</button>
+      </div>
+      <form class="tw-say" hidden autocomplete="off">
+        <input type="text" class="tw-say-name" maxlength="16" enterkeyhint="next" autocapitalize="words" spellcheck="false" placeholder="Your name" aria-label="Your name, as the players see it">
+        <input type="text" class="tw-say-text" maxlength="96" enterkeyhint="send" autocapitalize="sentences" spellcheck="false" placeholder="Message the players" aria-label="Message the players">
+        <button type="submit">Send</button>
+        <button type="button" data-tw-say="cancel" aria-label="Cancel">&times;</button>
+      </form>
+    </div>
     <p class="saves-elsewhere" id="saves-elsewhere" role="status" hidden>The game was started in another tab, so this one no longer saves controls or games. Close this tab, or reload it to play and save here.</p>
 <div class="spinner" id='spinner'></div>
     <div class="emscripten" id="status">Downloading...</div>
@@ -6031,7 +6292,8 @@
         // the lobby page's Controls (watchKeysPanel): {fire1: [[the game's
         // name for a key (DIK_SPACE), the other way (Back, the other
         // side)], ...], ...}. null before the game is there.
-        var EMBED_KEY_FUNCS = { forward: 0, slide: 2, jump: 4, duck: 5, fast: 6, fire1: 10, fire2: 11, map: 33, camera: 37, talk: 38 };
+        var EMBED_KEY_FUNCS = { forward: 0, slide: 2, jump: 4, duck: 5, fast: 6, fire1: 10, fire2: 11, map: 33, camera: 37, talk: 38,
+                                tally: 41 };
         window.jkWatchKeys = function() {
           if (typeof Module._sithControl_WebFunctionKey !== 'function' || typeof Module._stdControl_WebKeyName !== 'function') return null;
           var out = {};
@@ -11415,6 +11677,7 @@
          ['Up / down', keys('jump', 'Jump', 1) + ' / ' + keys('duck', 'Crouch', 1)],
          ['Faster', keys('fast', 'Run')],
          ['Map', keys('map', 'Map')],
+         ['Scores', keys('tally', 'Tally')],
          ['Message the players', keys('talk', 'Talk')],
          ['Show / hide controls', 'H'],
          ['Give back the mouse', 'Esc']].forEach(function(row) {
@@ -11564,12 +11827,30 @@
         return text.substring(0, VIEW_NOTE_MAX);
       }
 
+      // On a phone or tablet, a room's Watch goes straight into the game,
+      // full screen and sideways, with its touch controls (touchWatch), when
+      // it has what it needs: the game files saved in this browser, or none
+      // for the free demo (Antonio, 2026-11-24, A: one tap, not the viewing
+      // page and then Watch in the game). Leave comes back to the viewing
+      // page on that match (jkViewLeft). Otherwise the preview, as before.
+      function phoneWatchStraight(id) {
+        if (watchWindow || watchEmbed || window.jkLobbyMock || !phoneNote() || leaveGuard) return false;
+        var w = watchedGame(id);
+        var can = watchInGame(w);
+        if (!can || can.why || !ROOMS[w.key]) return false;
+        var r = ROOMS[w.key];
+        if (!r.demo && !(gameFiles && savedKnown[r.game] === true)) return false;
+        touchWatchFullscreen();
+        playWatched(id);
+        return true;
+      }
       // The room window's Watch, the preview's close, Watch full size and
       // Join.
       room.addEventListener('click', function(ev) {
         var t = ev.target.closest('[data-watch], [data-watch-stop], [data-watch-full], [data-watch-join]');
         if (!t) return;
         if (t.dataset.watch) {
+          if (Number(t.dataset.watch) !== watchLive.id && phoneWatchStraight(Number(t.dataset.watch))) return;
           watchGame(Number(t.dataset.watch) === watchLive.id ? 0 : Number(t.dataset.watch));
           // On a phone the preview sits above the tables: bring it in view.
           var pv = watchLive.id && window.matchMedia && matchMedia('(max-width: 700px)').matches && room.querySelector('.pv');
@@ -11822,6 +12103,532 @@
         if (/^(Alt|Control|Shift|Meta|OS|F\d+)$/.test(ev.key)) return;
         playFullscreen();
       }, true);
+
+      // ---- Touch controls for watching a match in the game on a phone or
+      // tablet (Antonio, 2026-11-24: a phone had no way to move the free
+      // camera, look around, change player or view, see the scores or send a
+      // message). Over the game (#touch-watch), only on a phone or tablet
+      // (phoneNote) and only while the game watches a match
+      // (pickerWant.watch): buttons and gestures that press the game's own
+      // commands, whatever keys are bound to them (sithControl_WebTouch*,
+      // sithControl.c). A tap on the picture shows or hides the buttons
+      // instead of reaching the game, where it was Fire (the next player). A
+      // key or a mouse hides them all until the next touch.
+      var TOUCH_FUNCS = { forward: 0, slide: 2, jump: 4, duck: 5, fast: 6, fire1: 10, fire2: 11, map: 33, camera: 37, tally: 41 };
+      // The move stick's reach (CSS pixels), and how many times that the
+      // thumb goes for the camera to go faster; the look drag's degrees per
+      // pixel (0.3 was too slow on Antonio's phone, 2026-11-24).
+      var TOUCH_STICK_R = 48, TOUCH_FAST_AT = 1.4, TOUCH_LOOK_DEG = 0.5;
+      // A tap moves less than this and lets go within this; a swipe goes at
+      // least this far, mostly sideways, within this.
+      var TOUCH_TAP_PX = 12, TOUCH_TAP_MS = 400, TOUCH_SWIPE_PX = 50, TOUCH_SWIPE_MS = 1000;
+      // The buttons fade this long after the last touch.
+      var TOUCH_IDLE_MS = 8000;
+      // How to use them, over the game the first few times.
+      var TOUCH_HINTS_KEY = 'jkdf2mp-touch-hints', TOUCH_HINTS_MAX = 3, TOUCH_HINT_MS = 7000;
+      // As the game's own chat line and the feed take a message (stdComm_WSRelay_ViewerSay),
+      // and the name the feed puts on it: the one typed in the message box, kept here
+      // (a phone that only watches has no player of its own to take it from).
+      var TOUCH_SAY_MAX = 96, TOUCH_NAME_MAX = 16, TOUCH_NAME_KEY = 'jkdf2mp-watch-name';
+      var touchWatch = {
+        root: document.getElementById('touch-watch'), shown: false, live: false, on: false, kbd: false,
+        free: true, name: '', saying: false, leaving: false, idleTimer: 0, hintTimer: 0, hinted: false,
+        pointers: {}, swallow: false, upright: false, uprightOk: false
+      };
+      touchWatch.pad = touchWatch.root.querySelector('.tw-pad');
+      touchWatch.stick = touchWatch.root.querySelector('.tw-stick');
+      touchWatch.knob = touchWatch.root.querySelector('.tw-stick .tw-knob');
+      touchWatch.turn = touchWatch.root.querySelector('.tw-turn');
+      touchWatch.hint = touchWatch.root.querySelector('.tw-hint');
+      touchWatch.form = touchWatch.root.querySelector('.tw-say');
+      touchWatch.input = touchWatch.form.querySelector('.tw-say-text');
+      touchWatch.input.maxLength = TOUCH_SAY_MAX;
+      touchWatch.nameInput = touchWatch.form.querySelector('.tw-say-name');
+      touchWatch.nameInput.maxLength = TOUCH_NAME_MAX;
+      // As the feed takes a name: printable ASCII, spaces as one, at most 16.
+      function touchNameClean(name) {
+        return String(name || '').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim().substring(0, TOUCH_NAME_MAX).trim();
+      }
+      (function() {
+        var name = '';
+        try { name = touchNameClean(localStorage.getItem(TOUCH_NAME_KEY)); } catch (e) {}
+        // The engine puts it on what this game says while watching (wsrelay_js_view_say).
+        if (name) Module.jkWatchName = name;
+      })();
+
+      function touchCall(name) {
+        var f = Module['_sithControl_WebTouch' + name];
+        if (typeof f !== 'function') return;
+        try { f.apply(null, Array.prototype.slice.call(arguments, 1)); } catch (e) {}
+      }
+      function touchTap(name) { touchCall('Tap', TOUCH_FUNCS[name]); }
+
+      // Whether they show now: the game watching, nothing over it, and no
+      // key or mouse used since the last touch.
+      function touchWatchWanted() {
+        return !watchEmbed && !touchWatch.kbd && !touchWatch.leaving && !!pickerWant && !!pickerWant.watch &&
+               !gameLost && document.getElementById('zone').hidden && !document.querySelector('dialog[open]') &&
+               typeof Module._sithControl_WebTouchOn === 'function';
+      }
+      // Until the game plays the match (Module.jkView live), only Leave.
+      function touchWatchUpdate() {
+        var t = touchWatch;
+        var shown = touchWatchWanted();
+        var view = Module.jkView;
+        var live = shown && !!view && view.phase === 'live' && !view.ended;
+        if (shown !== t.shown) {
+          t.shown = shown;
+          t.root.hidden = !shown;
+          if (!shown) touchWatchLetGo();
+          touchWatchWake();
+        }
+        if (live !== t.live) {
+          t.live = live;
+          t.root.classList.toggle('tw-wait', !live);
+          if (!live) touchWatchLetGo();
+          touchWatchWake();
+        }
+        touchWatchTurn();
+        // How to use them, once the phone is sideways (or kept upright).
+        if (t.live && !t.upright) touchWatchHint();
+        // The game shows who it follows itself, and lets go of what was held, without them.
+        if (live !== t.on) {
+          t.on = live;
+          touchCall('On', live ? 1 : 0);
+        }
+      }
+
+      // The game takes the mouse as a level starts, and on a click in it:
+      // not while these show, which need none. Under a lock, Chromium gave
+      // the touches on them the locked mouse's place, not the finger's
+      // (a phone-sized test, 2026-11-24): the buttons and the stick didn't
+      // work. A lock it has already, the game lets go of itself once they're
+      // on (sithControl_WebTouchIsOn, Window.c): let go here, the game would
+      // take it for Esc and open its menu.
+      (function touchWatchNoLock() {
+        var canvas = Module.canvas, lock = canvas && canvas.requestPointerLock;
+        if (typeof lock !== 'function') return;
+        canvas.requestPointerLock = function() {
+          if (touchWatch.shown) return Promise.resolve();
+          return lock.apply(canvas, arguments);
+        };
+      })();
+
+      // Who the game follows (sithControl_ViewSays): in the bar at the top.
+      function touchWatchMode() {
+        var t = touchWatch, r = t.root;
+        r.classList.toggle('tw-free', t.free);
+        r.querySelector('.tw-name').textContent = t.free ? 'Free camera' : 'Following ' + t.name;
+        r.querySelector('.tw-sub').textContent = t.free ? '\u2039 \u203a jump to a player' : 'swipe \u2190 \u2192 for other players';
+        var free = r.querySelector('[data-tw="free"]');
+        free.classList.toggle('tw-on', t.free);
+        free.setAttribute('aria-pressed', String(t.free));
+        var view = r.querySelector('[data-tw="view"]');
+        view.classList.toggle('tw-off', t.free);
+        view.setAttribute('aria-disabled', String(t.free));
+        if (t.hinted && !t.hint.hidden) touchWatchHintText();
+      }
+      if (!watchEmbed) {
+        Module.jkWatchFollow = function(name, following) {
+          name = String(name || '').replace(/[^\x20-\x7e]/g, '?').replace(/\s+/g, ' ').trim().substring(0, 31).trim();
+          touchWatch.free = !following;
+          touchWatch.name = name || 'a player';
+          touchWatchMode();
+        };
+      }
+      touchWatchMode();
+
+      // The buttons back, fading again TOUCH_IDLE_MS after the last touch.
+      function touchWatchWake() {
+        var t = touchWatch;
+        t.root.classList.remove('tw-faded');
+        clearTimeout(t.idleTimer);
+        if (!t.shown || !t.live) return;
+        t.idleTimer = setTimeout(function() {
+          if (t.saying || Object.keys(t.pointers).length) return touchWatchWake();
+          t.root.classList.add('tw-faded');
+          touchWatchHintOff();
+        }, TOUCH_IDLE_MS);
+      }
+      function touchWatchToggle() {
+        if (touchWatch.root.classList.contains('tw-faded')) return touchWatchWake();
+        clearTimeout(touchWatch.idleTimer);
+        touchWatch.root.classList.add('tw-faded');
+        touchWatchHintOff();
+      }
+
+      function touchWatchHintText() {
+        touchWatch.hint.textContent = touchWatch.free ?
+          'Left thumb moves (push far to go faster), drag on the right to look around. Tap the picture to hide or show these.' :
+          'Swipe left or right for other players. Tap the picture to hide or show these.';
+      }
+      function touchWatchHint() {
+        var t = touchWatch, n = 0;
+        if (t.hinted) return;
+        t.hinted = true;
+        try { n = Number(localStorage.getItem(TOUCH_HINTS_KEY)) || 0; } catch (e) {}
+        if (n >= TOUCH_HINTS_MAX) return;
+        try { localStorage.setItem(TOUCH_HINTS_KEY, String(n + 1)); } catch (e) {}
+        touchWatchHintText();
+        t.hint.hidden = false;
+        t.hintTimer = setTimeout(touchWatchHintOff, TOUCH_HINT_MS);
+      }
+      function touchWatchHintOff() {
+        clearTimeout(touchWatch.hintTimer);
+        touchWatch.hint.hidden = true;
+      }
+
+      // Lets go of everything held: the stick, Up and Down.
+      function touchWatchLetGo() {
+        var t = touchWatch;
+        Object.keys(t.pointers).forEach(function(id) {
+          if (t.pointers[id].kind === 'stick') touchStickEnd(t.pointers[id]);
+        });
+        t.pointers = {};
+        t.root.querySelectorAll('.tw-down').forEach(function(b) {
+          b.classList.remove('tw-down');
+          if (b.dataset.twHold) touchCall('Hold', TOUCH_FUNCS[b.dataset.twHold], 0);
+        });
+        if (t.saying) touchSayClose();
+      }
+
+      // Held upright: first a card to turn the phone sideways, or to turn it with
+      // a tap (full screen, then the screen locked sideways, where the phone lets
+      // a page), and then the hint (Antonio, 2026-11-24). Leave stays.
+      function touchWatchTurn() {
+        var t = touchWatch;
+        var upright = t.shown && !t.uprightOk && innerHeight > innerWidth;
+        if (upright === t.upright) return;
+        t.upright = upright;
+        t.root.classList.toggle('tw-turning', upright);
+        t.turn.hidden = !upright;
+        if (upright) {
+          touchWatchHintOff();
+          touchWatchLetGo();
+          t.turn.querySelector('.tw-turn-say').textContent = 'Turn your phone sideways to watch';
+          t.turn.querySelector('.tw-turn-go').hidden = !document.fullscreenEnabled;
+        }
+        touchWatchWake();
+      }
+      touchWatch.turn.addEventListener('click', function(ev) {
+        var t = touchWatch, b = ev.target.closest('[data-tw-turn]');
+        ev.stopPropagation();
+        if (b && b.dataset.twTurn === 'skip') {
+          t.uprightOk = true;
+          return touchWatchTurn();
+        }
+        touchWatchFullscreen(true);
+      });
+      ['pointerdown', 'pointerup'].forEach(function(type) {
+        touchWatch.turn.addEventListener(type, function(ev) { ev.stopPropagation(); });
+      });
+
+      // Full screen and sideways, on a touch (which, let go, lets a page do
+      // either), as the game's Full screen box says. asked: the turn card's
+      // button, which says so when the phone won't.
+      function touchWatchFullscreen(asked) {
+        var cant = function() {
+          if (!asked) return;
+          touchWatch.turn.querySelector('.tw-turn-say').textContent = 'This phone can\u2019t turn it from here. Turn it sideways by hand.';
+          touchWatch.turn.querySelector('.tw-turn-go').hidden = true;
+        };
+        if ((!asked && !fullscreenOption.checked) || !document.fullscreenEnabled) return cant();
+        var sideways = function() {
+          try {
+            var lock = screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape');
+            if (lock && lock.catch) lock.catch(cant);
+            else if (!lock) cant();
+          } catch (e) { cant(); }
+        };
+        if (document.fullscreenElement) return sideways();
+        var request;
+        try {
+          request = document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+        } catch (e) { return cant(); }
+        if (request && request.then) request.then(sideways, cant);
+      }
+
+      function touchWatchLeave() {
+        if (!pickerWant || !pickerWant.watch || typeof Module.jkViewLeft !== 'function') return;
+        touchWatchLetGo();
+        touchWatch.leaving = true;
+        touchWatchUpdate();
+        if (document.fullscreenElement && document.exitFullscreen) {
+          var leaving = document.exitFullscreen();
+          if (leaving && leaving.catch) leaving.catch(function() {});
+        }
+        Module.jkViewLeft(pickerWant.watch);
+      }
+
+      function touchWatchAct(name) {
+        var t = touchWatch;
+        if (name === 'leave') return touchWatchLeave();
+        if (!t.live) return;
+        if (name === 'next') touchTap('fire1');
+        else if (name === 'prev') touchTap('fire2');
+        // From the free camera, on to the first player, as Fire goes.
+        else if (name === 'free') t.free ? touchTap('fire1') : touchCall('FreeCam');
+        else if (name === 'view') { if (!t.free) touchTap('camera'); }
+        else if (name === 'scores') touchTap('tally');
+        else if (name === 'map') touchTap('map');
+      }
+
+      // The buttons: on letting go over one, and held for Up and Down.
+      touchWatch.root.querySelectorAll('[data-tw]').forEach(function(b) {
+        b.addEventListener('pointerdown', function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (ev.pointerType === 'mouse') return;
+          try { b.setPointerCapture(ev.pointerId); } catch (e) {}
+          b.classList.add('tw-down');
+          if (b.dataset.twHold && touchWatch.live) touchCall('Hold', TOUCH_FUNCS[b.dataset.twHold], 1);
+          touchWatchHintOff();
+          touchWatchWake();
+        });
+        var up = function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (!b.classList.contains('tw-down')) return;
+          b.classList.remove('tw-down');
+          if (b.dataset.twHold) touchCall('Hold', TOUCH_FUNCS[b.dataset.twHold], 0);
+          if (ev.type === 'pointerup') {
+            var r = b.getBoundingClientRect();
+            if (!b.dataset.twHold && ev.clientX >= r.left - 16 && ev.clientX <= r.right + 16 &&
+                ev.clientY >= r.top - 16 && ev.clientY <= r.bottom + 16) touchWatchAct(b.dataset.tw);
+            if (b.dataset.tw !== 'leave') touchWatchFullscreen();
+          }
+          touchWatchWake();
+        };
+        b.addEventListener('pointerup', up);
+        b.addEventListener('pointercancel', up);
+        b.addEventListener('lostpointercapture', up);
+        b.addEventListener('contextmenu', function(ev) { ev.preventDefault(); });
+        // Message opens its box on the tap's click, its last event: opened
+        // on letting go, the box came up under the finger and the click
+        // landed on its Send. A phone shows its keyboard for a box given the
+        // keys in a click.
+        b.addEventListener('click', function(ev) {
+          ev.preventDefault();
+          if (b.dataset.tw === 'msg' && touchWatch.live && !touchWatch.saying) touchSayOpen();
+        });
+      });
+
+      // The picture: in the free camera, the move stick under a thumb on the
+      // left and the look drag on the right; following a player, a swipe to
+      // the next (left) or the one before (right). A tap shows or hides the
+      // buttons.
+      function touchStickMove(p) {
+        var dx = p.x - p.x0, dy = p.y - p.y0, d = Math.sqrt(dx * dx + dy * dy);
+        var k = d > TOUCH_STICK_R ? TOUCH_STICK_R / d : 1;
+        touchWatch.knob.style.transform = 'translate(' + (dx * k) + 'px, ' + (dy * k) + 'px)';
+        var forward = -dy * k / TOUCH_STICK_R, slide = dx * k / TOUCH_STICK_R;
+        if (d < TOUCH_STICK_R * 0.15) forward = slide = 0;
+        touchCall('Axis', TOUCH_FUNCS.forward, forward);
+        touchCall('Axis', TOUCH_FUNCS.slide, slide);
+        var fast = d > TOUCH_STICK_R * TOUCH_FAST_AT;
+        if (fast !== !!p.fast) {
+          p.fast = fast;
+          touchCall('Hold', TOUCH_FUNCS.fast, fast ? 1 : 0);
+          touchWatch.stick.classList.toggle('tw-fast', fast);
+        }
+      }
+      function touchStickEnd(p) {
+        touchCall('Axis', TOUCH_FUNCS.forward, 0);
+        touchCall('Axis', TOUCH_FUNCS.slide, 0);
+        if (p.fast) touchCall('Hold', TOUCH_FUNCS.fast, 0);
+        p.fast = false;
+        touchWatch.stick.hidden = true;
+        touchWatch.stick.classList.remove('tw-fast');
+        touchWatch.knob.style.transform = '';
+        touchWatch.root.classList.remove('tw-sticking');
+      }
+      function touchEventMs(ev) {
+        return ev.timeStamp > 0 ? ev.timeStamp : performance.now();
+      }
+      function touchHas(kind) {
+        var t = touchWatch;
+        return Object.keys(t.pointers).some(function(id) { return t.pointers[id].kind === kind; });
+      }
+      touchWatch.pad.addEventListener('pointerdown', function(ev) {
+        var t = touchWatch;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (ev.pointerType === 'mouse' || Object.keys(t.pointers).length >= 2) return;
+        var kind = !t.live ? 'tap' : !t.free ? 'swipe' : ev.clientX < innerWidth * 0.4 && !touchHas('stick') ? 'stick' : 'look';
+        if (kind === 'look' && touchHas('look')) return;
+        // When the finger touched, not when this ran: a slow frame of the game's holds
+        // the page's handlers back, and a tap would then pass for a long press (beta,
+        // 2026-11-24: a tap didn't bring the buttons back).
+        var p = { kind: kind, x0: ev.clientX, y0: ev.clientY, x: ev.clientX, y: ev.clientY, at: touchEventMs(ev), moved: false, fast: false };
+        t.pointers[ev.pointerId] = p;
+        try { t.pad.setPointerCapture(ev.pointerId); } catch (e) {}
+        if (kind === 'stick') {
+          t.stick.style.left = p.x0 + 'px';
+          t.stick.style.top = p.y0 + 'px';
+          t.knob.style.transform = '';
+          t.stick.hidden = false;
+          t.root.classList.add('tw-sticking');
+        }
+        touchWatchHintOff();
+        if (!t.root.classList.contains('tw-faded')) touchWatchWake();
+      });
+      touchWatch.pad.addEventListener('pointermove', function(ev) {
+        var p = touchWatch.pointers[ev.pointerId];
+        if (!p) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        var dx = ev.clientX - p.x, dy = ev.clientY - p.y;
+        p.x = ev.clientX;
+        p.y = ev.clientY;
+        if (Math.abs(p.x - p.x0) > TOUCH_TAP_PX || Math.abs(p.y - p.y0) > TOUCH_TAP_PX) p.moved = true;
+        // Turn left and look up positive: the view goes the way the finger does.
+        if (p.kind === 'look' && (dx || dy)) touchCall('Look', -dx * TOUCH_LOOK_DEG, -dy * TOUCH_LOOK_DEG);
+        else if (p.kind === 'stick') touchStickMove(p);
+      });
+      var touchPadUp = function(ev) {
+        var t = touchWatch, p = t.pointers[ev.pointerId];
+        if (!p) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        delete t.pointers[ev.pointerId];
+        if (p.kind === 'stick') touchStickEnd(p);
+        if (ev.type !== 'pointerup') return;
+        var dx = p.x - p.x0, dy = p.y - p.y0, ms = touchEventMs(ev) - p.at;
+        // Upright, a tap on the picture turns the phone, where it lets a page.
+        if (!p.moved && ms < TOUCH_TAP_MS && t.upright) return touchWatchFullscreen(true);
+        if (!p.moved && ms < TOUCH_TAP_MS) touchWatchToggle();
+        else {
+          if (p.kind === 'swipe' && t.live && Math.abs(dx) >= TOUCH_SWIPE_PX && Math.abs(dx) > 1.5 * Math.abs(dy) &&
+              ms < TOUCH_SWIPE_MS) touchTap(dx < 0 ? 'fire1' : 'fire2');
+          // The buttons stay for TOUCH_IDLE_MS from letting go, not from touching down.
+          if (!t.root.classList.contains('tw-faded')) touchWatchWake();
+        }
+        touchWatchFullscreen();
+      };
+      touchWatch.pad.addEventListener('pointerup', touchPadUp);
+      touchWatch.pad.addEventListener('pointercancel', touchPadUp);
+      touchWatch.pad.addEventListener('lostpointercapture', touchPadUp);
+      touchWatch.root.addEventListener('contextmenu', function(ev) { ev.preventDefault(); });
+      // Nothing of a touch on them reaches the game (its own touch and mouse
+      // listeners), but typing a message.
+      ['touchstart', 'touchmove', 'touchend', 'touchcancel', 'mousedown', 'mouseup', 'mousemove', 'click', 'wheel'].forEach(function(type) {
+        touchWatch.root.addEventListener(type, function(ev) {
+          ev.stopPropagation();
+        }, { passive: true });
+      });
+
+      // Message: the phone's keyboard, the line sent as the game's chat
+      // line sends one (the engine takes it from Module.jkTouchSay,
+      // jkHud_SayFromPage), and the game's own keys left out of it.
+      function touchSayOpen() {
+        var t = touchWatch;
+        t.saying = true;
+        t.root.classList.add('tw-saying');
+        t.form.hidden = false;
+        t.input.value = '';
+        var name = '';
+        try { name = touchNameClean(localStorage.getItem(TOUCH_NAME_KEY)); } catch (e) {}
+        // A player of this game's own, else nothing yet: the box asks.
+        t.nameInput.value = name || touchNameClean(Module.jkViewProfileName);
+        touchWatchWake();
+        try { (t.nameInput.value ? t.input : t.nameInput).focus({ preventScroll: true }); } catch (e) {}
+      }
+      function touchSayClose() {
+        var t = touchWatch;
+        t.saying = false;
+        t.root.classList.remove('tw-saying');
+        t.form.hidden = true;
+        t.input.value = '';
+        try { t.input.blur(); t.nameInput.blur(); } catch (e) {}
+        touchWatchWake();
+      }
+      function touchSaySend() {
+        var name = touchNameClean(touchWatch.nameInput.value);
+        try {
+          if (name) localStorage.setItem(TOUCH_NAME_KEY, name);
+          else localStorage.removeItem(TOUCH_NAME_KEY);
+        } catch (e) {}
+        if (name) Module.jkWatchName = name;
+        else delete Module.jkWatchName;
+        var text = touchWatch.input.value.replace(/[\ud800-\udbff][\udc00-\udfff]/g, '?').replace(/[^\x20-\x7e]/g, '?')
+                                         .replace(/\s+/g, ' ').trim().substring(0, TOUCH_SAY_MAX).trim();
+        if (text) {
+          if (!Array.isArray(Module.jkTouchSay)) Module.jkTouchSay = [];
+          if (Module.jkTouchSay.length < 4) Module.jkTouchSay.push(text);
+        }
+        touchSayClose();
+      }
+      touchWatch.form.addEventListener('submit', function(ev) {
+        ev.preventDefault();
+        // Enter on the name goes on to the message.
+        if (document.activeElement === touchWatch.nameInput && !touchWatch.input.value.trim()) {
+          try { touchWatch.input.focus({ preventScroll: true }); } catch (e) {}
+          return;
+        }
+        touchSaySend();
+      });
+      touchWatch.form.addEventListener('click', function(ev) {
+        if (ev.target.closest('[data-tw-say="cancel"]')) touchSayClose();
+        else if (ev.target === touchWatch.input || ev.target === touchWatch.nameInput) {
+          try { ev.target.focus(); } catch (e) {}
+        }
+      });
+      // In the page, before the game's own listeners: the game takes keys
+      // (and stops the browser typing them), so the message box's never
+      // reach it. Another key, or a mouse, hides the touch controls until
+      // the next touch.
+      ['keydown', 'keyup', 'keypress'].forEach(function(type) {
+        window.addEventListener(type, function(ev) {
+          var t = touchWatch;
+          if (ev.target === t.input || ev.target === t.nameInput) {
+            ev.stopImmediatePropagation();
+            if (type !== 'keydown' || ev.isComposing) return;
+            if (ev.key === 'Enter' && ev.target === t.nameInput && !t.input.value.trim()) {
+              ev.preventDefault();
+              try { t.input.focus({ preventScroll: true }); } catch (e) {}
+            } else if (ev.key === 'Enter') {
+              ev.preventDefault();
+              touchSaySend();
+            } else if (ev.key === 'Escape') {
+              ev.preventDefault();
+              touchSayClose();
+            }
+            return;
+          }
+          // Not a phone's own buttons (volume, media, back) either.
+          if (type === 'keydown' && t.shown &&
+              !/^(Alt|Control|Shift|Meta|OS|Unidentified|AudioVolume.*|Media.*|Browser.*|GoBack)$/.test(ev.key)) {
+            t.kbd = true;
+            touchWatchUpdate();
+          }
+        }, true);
+      });
+      window.addEventListener('pointermove', function(ev) {
+        if (ev.pointerType !== 'mouse' || !touchWatch.shown || (!ev.movementX && !ev.movementY)) return;
+        touchWatch.kbd = true;
+        touchWatchUpdate();
+      }, true);
+      // The first touch after a key or a mouse brings them back, and the
+      // game doesn't take it as Fire.
+      window.addEventListener('pointerdown', function(ev) {
+        var t = touchWatch;
+        if (ev.pointerType === 'mouse' || !t.kbd) return;
+        t.kbd = false;
+        if (!touchWatchWanted()) return;
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        t.swallow = true;
+        touchWatchUpdate();
+      }, true);
+      ['touchstart', 'touchmove', 'touchend', 'touchcancel'].forEach(function(type) {
+        window.addEventListener(type, function(ev) {
+          if (!touchWatch.swallow) return;
+          ev.stopImmediatePropagation();
+          if (type === 'touchstart' && ev.cancelable) ev.preventDefault();
+          if ((type === 'touchend' || type === 'touchcancel') && !ev.touches.length) touchWatch.swallow = false;
+        }, { capture: true, passive: false });
+      });
+      if (phoneNote()) setInterval(touchWatchUpdate, 250);
 
       // ---- The network log (Module.jkNet.log, kept by stdComm_WSRelay.c):
       // the relay, each direct link and, every 10 s in a game, how each link

@@ -2399,21 +2399,40 @@ EM_JS(void, wsrelay_js_view_end, (const char* pWhy, const char* pText), {
     if (view) view.end(UTF8ToString(pWhy), UTF8ToString(pText));
 });
 
-// A viewer's message, on the feed's socket: "say <name>\t<text>", the name
-// as the feed shows it (printable ASCII, at most 16). 0 when the feed isn't
-// open.
-EM_JS(int, wsrelay_js_view_say, (const char16_t* pName, const char* pText), {
-    var view = Module.jkView;
-    if (!view || view.ended || !view.ws || view.ws.readyState !== 1) return 0;
+// The name of this game's player (jkPlayer_playerShortName), as the feed
+// shows a viewer's name: printable ASCII ('?' for the rest), at most 16. ""
+// when there's none.
+// No \s here: the C compiler reads an EM_JS body as a string and makes \s an
+// s. Past the first replace, a space is the only white space left.
+EM_JS(void, wsrelay_js_view_profile_name, (const char16_t* pName), {
     var chars = [];
     for (var i = 0; pName && i < 31; i++) {
         var ch = HEAPU16[(pName >> 1) + i];
         if (!ch) break;
         chars.push(ch);
     }
-    // No \s here: the C compiler reads an EM_JS body as a string and makes
-    // \s an s. Past the first replace, a space is the only white space left.
-    var name = String.fromCharCode.apply(null, chars).replace(/[^\x20-\x7e]/g, '?').replace(/ +/g, ' ').trim().substring(0, 16).trim();
+    Module.jkViewProfileName = String.fromCharCode.apply(null, chars).replace(/[^\x20-\x7e]/g, '?').replace(/ +/g, ' ').trim().substring(0, 16).trim();
+});
+
+// A viewer's message, on the feed's socket: "say <name>\t<text>", the name
+// as the feed shows it (printable ASCII, at most 16). The name is the one
+// typed in the page's touch controls (Module.jkWatchName, index.html
+// touchSaySend), else the player's (wsrelay_js_view_profile_name), else
+// "Someone": a phone often has no player of its own (Antonio, 2026-11-24).
+// 0 when the feed isn't open.
+EM_JS(int, wsrelay_js_view_say, (const char16_t* pName, const char* pText), {
+    var view = Module.jkView;
+    if (!view || view.ended || !view.ws || view.ws.readyState !== 1) return 0;
+    var name = typeof Module.jkWatchName === 'string' ? Module.jkWatchName.replace(/[^\x20-\x7e]/g, '').replace(/ +/g, ' ').trim().substring(0, 16).trim() : '';
+    if (!name) {
+        var chars = [];
+        for (var i = 0; pName && i < 31; i++) {
+            var ch = HEAPU16[(pName >> 1) + i];
+            if (!ch) break;
+            chars.push(ch);
+        }
+        name = String.fromCharCode.apply(null, chars).replace(/[^\x20-\x7e]/g, '?').replace(/ +/g, ' ').trim().substring(0, 16).trim();
+    }
     try {
         view.ws.send('say ' + (name || 'Someone') + '\t' + UTF8ToString(pText));
     } catch (e) {
@@ -4075,6 +4094,8 @@ int stdComm_WSRelay_ViewerOpen(char* pEpisode, int episodeLen, char* pMap, int m
     wsrelay_bViewEnded = 0;
     wsrelay_viewLooksLen = 0;
     wsrelay_viewLooksAt = -1;
+    // For the page's touch controls, whose message box starts with it.
+    wsrelay_js_view_profile_name(jkPlayer_playerShortName);
     if (!wsrelay_js_view_open(wsrelay_viewRoom))
     {
         wsrelay_ViewerOff();

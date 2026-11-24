@@ -29,6 +29,7 @@
 #include "stdPlatform.h"
 #include "Platform/Networking/WSRelay/stdComm_WSRelay.h"
 #include "Dss/jkDSS.h" // Added: jkDSS_SendPlayerLooksTo (sithMulti_FeedKeyframe)
+#include "Devices/sithSoundMixer.h" // Added: the players' looping sounds (sithMulti_FeedKeyframe)
 
 #define sithMulti_infoPrintf(fmt, ...) stdPlatform_Printf(fmt, ##__VA_ARGS__)
 #define sithMulti_verbosePrintf(fmt, ...) if (Main_bVerboseNetworking) \
@@ -1700,6 +1701,28 @@ void sithMulti_FeedKeyframe(int idTo)
     {
         if ((jkPlayer_playerInfos[i].flags & 1) && jkPlayer_playerInfos[i].pLocalPlayer)
             jkDSS_SendPlayerLooksTo(jkPlayer_playerInfos[i].pLocalPlayer, idTo);
+    }
+
+    // And the looping sounds playing on the players, a lit saber's hum among
+    // them: each is sent once, when it starts, so a viewer that came later
+    // heard none until a saber was lit again (Antonio, 2026-11-24, watching
+    // from his phone). Only those on players: a level's own looping sounds
+    // start in every game that loads it (SITH_MESSAGE_STARTUP, never sent).
+    // A viewer that has one already doesn't start it again
+    // (sithDSSThing_ProcessPlaySound).
+    for (int i = 0; i < SITH_MIXER_NUMPLAYINGSOUNDS; i++)
+    {
+        sithPlayingSound* pPlaying = &sithSoundMixer_aPlayingSounds[i];
+        if (pPlaying == sithSoundMixer_hCurAmbientChannel || !pPlaying->sound || !pPlaying->thing
+            || pPlaying->thing->type != SITH_THING_PLAYER)
+            continue;
+        if ((pPlaying->flags & (SITHSOUNDFLAG_LOOP | SITHSOUNDFLAG_FOLLOWSTHING | SITHSOUNDFLAG_FADING))
+            != (SITHSOUNDFLAG_LOOP | SITHSOUNDFLAG_FOLLOWSTHING))
+            continue;
+        sithDSSThing_PlaySound(pPlaying->thing, &pPlaying->pos, pPlaying->sound, pPlaying->anonymous_5,
+                               pPlaying->maxPosition,
+                               pPlaying->flags & ~(SITHSOUNDFLAG_PLAYING | SITHSOUNDFLAG_PAUSED),
+                               pPlaying->refid, idTo, 1);
     }
 }
 #endif

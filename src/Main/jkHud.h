@@ -57,6 +57,9 @@ MATH_FUNC void jkHud_DrawGPU();
 int jkHud_GetWeaponAmmo(SithThing *player);
 int jkHud_Chat();
 void jkHud_SendChat(char a1);
+#ifdef ARCH_WASM
+void jkHud_SayFromPage(const char* pStr); // Added: the touch controls' Message
+#endif
 void jkHud_SetTargetColors(int *color_idxs);
 void jkHud_SetTarget(SithThing *target);
 void jkHud_EndTarget();

@@ -54,6 +54,10 @@ MATH_FUNC void sithControl_PlayerMovement(SithThing *player);
 MATH_FUNC void sithControl_PlayerMovementMots(SithThing *player);
 MATH_FUNC void sithControl_FreeCam(SithThing *player);
 void sithControl_SpectatorNext(int dir); // Added: a spectator's camera on to the next player
+void sithControl_SpectatorFollow(int i); // Added: a spectator's camera on to player slot i, -1 the free camera
+#ifdef ARCH_WASM
+int sithControl_WebTouchIsOn(void); // Added: the page's touch controls for watching are on
+#endif
 int sithControl_SpectatorFollowing(); // Added: the player a spectator follows, -1 for none
 #ifdef PLATFORM_WSRELAY
 int sithControl_SpectatorDrawAll(const rdVector3 *pEye, SithSector *pSector); // Added: a watching game's free camera outside the level's sectors

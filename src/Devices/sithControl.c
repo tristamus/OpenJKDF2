@@ -32,6 +32,7 @@
 #include "Main/Main.h"
 #include "Dw/dwCog.h"
 #include "jk.h"
+#include "Main/jkHud.h" // Added: jkHud_SayFromPage
 #ifdef ARCH_WASM
 #include <emscripten.h>
 #endif
@@ -58,6 +59,27 @@ static void sithControl_ViewSays();
 #endif
 static int sithControl_curDebugCam = 0;
 static char16_t sithControl_debugWStrTmp[256];
+#ifdef ARCH_WASM
+// Added: the page's touch controls for watching a match on a phone or tablet
+// (index.html, touchWatch; Antonio, 2026-11-24). They press the game's own
+// commands, whatever keys the player bound to them: held (Up, Down, faster),
+// tapped (next player, camera view, scores, map), the move stick's forward and
+// sideways (-1 to 1) and the look drag's turn (degrees, left and up positive).
+// A tap counts once and a turn is made once, in the next frame that reads the
+// controls (sithControl_ReadControls). Only for a spectator: a player's game
+// lets go of all of it.
+static int sithControl_webTouchHeld[INPUT_FUNC_MAX];
+static int sithControl_webTouchTapsNext[INPUT_FUNC_MAX];
+static int sithControl_webTouchTaps[INPUT_FUNC_MAX];
+static flex_t sithControl_webTouchAxis[INPUT_FUNC_MAX];
+static flex_t sithControl_webTouchLookNext[2];
+static flex_t sithControl_webTouchLook[2];
+// The free camera asked for (the Free cam button), and whether the touch
+// controls are on: the page then shows who's followed, so the game doesn't.
+static int sithControl_webTouchFreeCam = 0;
+static int sithControl_bWebTouch = 0;
+static void sithControl_WebTouchFrame(void);
+#endif
 
 // MOTS added
 static flex_t sithControl_008d7f44 = 0.0;
@@ -948,12 +970,24 @@ int sithControl_GetKey(int keyId, int *pState)
         while ( v2 < sithControl_aInputFuncToKeyinfo[keyId].numEntries );
     }
 
+#ifdef ARCH_WASM
+    // Added: the page's touch controls (sithControl_WebTouchHold, _Tap)
+    if (sithControl_webTouchHeld[keyId] || sithControl_webTouchTaps[keyId])
+    {
+        if (pState)
+            *pState += sithControl_webTouchTaps[keyId];
+        v6 = 1;
+    }
+#endif
     return v6;
 }
 
 void sithControl_ReadControls()
 {
     stdControl_ReadControls();
+#ifdef ARCH_WASM
+    sithControl_WebTouchFrame(); // Added
+#endif
 }
 
 void sithControl_FinishRead()
@@ -1489,6 +1523,15 @@ debug_controls:
         sithControl_GetKey(INPUT_FUNC_FIRE2, &fireRead);
         if (fireRead)
             spectatorStep = -1;
+#ifdef ARCH_WASM
+        // Added: the touch controls' Free cam button
+        if (sithControl_webTouchFreeCam)
+        {
+            sithControl_webTouchFreeCam = 0;
+            if (!spectatorStep && sithControl_followingPlayer >= 0)
+                sithControl_SpectatorFollow(-1);
+        }
+#endif
     }
     if ( input_read || spectatorStep )
     {
@@ -1633,6 +1676,9 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
                  + sithControl_GetMouseLook(INPUT_FUNC_PITCH) * 90.0 * SITHCONTROL_MOUSE_AXIS_SECS
 #endif
                  + sithControl_GetKeyAsAxis(INPUT_FUNC_PITCH) * 90.0 * deltaSecs;
+#ifdef ARCH_WASM
+    pitch += sithControl_webTouchLook[1]; // Added: the touch controls' look drag
+#endif
     rdVector3* pHead = &player->actorParams.headPYR;
     // Every frame, so going to the camera behind looking far down comes up
     // to its limit at once.
@@ -1664,6 +1710,9 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
     flex_t yaw = sithControl_GetAxis(INPUT_FUNC_TURN)
                + sithControl_GetMouseLook(INPUT_FUNC_TURN) * player->actorParams.maxRotVelocity * SITHCONTROL_MOUSE_AXIS_SECS
                + sithControl_GetKeyAsAxis(INPUT_FUNC_TURN) * player->actorParams.maxRotVelocity * deltaSecs;
+#ifdef ARCH_WASM
+    yaw += sithControl_webTouchLook[0]; // Added: the touch controls' look drag
+#endif
     if (yaw != 0.0)
     {
         rdVector3 pyr = {0.0, yaw, 0.0};
@@ -1677,6 +1726,11 @@ void sithControl_SpectatorFly(SithThing *player, flex_t deltaSecs)
     flex_t slide = sithControl_GetKeyAsAxisNormalized(INPUT_FUNC_SLIDE);
     if (Main_bMotsCompat)
         slide = -slide; // as sithControl_FreeCam's
+#ifdef ARCH_WASM
+    // Added: the touch controls' move stick, right for slide whatever the game
+    forward = stdMath_Clamp(forward + sithControl_webTouchAxis[INPUT_FUNC_FORWARD], -1.0, 1.0);
+    slide = stdMath_Clamp(slide + sithControl_webTouchAxis[INPUT_FUNC_SLIDE], -1.0, 1.0);
+#endif
     // Straight up or down, whichever way it looks. GetKey's return is
     // whether it's held.
     flex_t rise = (sithControl_GetKey(INPUT_FUNC_JUMP, 0) ? 1.0 : 0.0)
@@ -1884,6 +1938,14 @@ void sithControl_SpectatorNext(int dir)
         if (i != (int)playerThingIdx && (jkPlayer_playerInfos[i].flags & 1) && jkPlayer_playerInfos[i].pLocalPlayer)
             break;
     }
+    sithControl_SpectatorFollow(i);
+}
+
+// Added: a spectator's camera on to player slot i, or the free camera (-1),
+// from where the last view was.
+void sithControl_SpectatorFollow(int i)
+{
+    sithControl_bViewerPicked = 1;
     int wasFollowing = sithControl_followingPlayer >= 0;
     sithControl_followingPlayer = i;
     // The free camera starts where the player followed was, a step behind
@@ -1899,6 +1961,10 @@ void sithControl_SpectatorNext(int dir)
         jk_snwprintf(sithControl_debugWStrTmp, 256, u"Following %s", jkPlayer_playerInfos[i].player_name);
     else
         jk_snwprintf(sithControl_debugWStrTmp, 256, u"Free camera");
+#ifdef ARCH_WASM
+    // Added: the touch controls show who's followed themselves (their top bar)
+    if (!sithControl_bWebTouch)
+#endif
     sithConsole_PrintWString(sithControl_debugWStrTmp);
     if (i < 0 && sithWorld_g_pCurrentWorld && sithPlayer_g_pLocalPlayerThing)
         sithWorld_g_pCurrentWorld->pCameraFocusThing = sithPlayer_g_pLocalPlayerThing;
@@ -3320,5 +3386,99 @@ EMSCRIPTEN_KEEPALIVE const char* sithControl_WebFunctionName(int funcIdx)
 EMSCRIPTEN_KEEPALIVE int sithControl_WebTyping()
 {
     return (jkHud_bChatOpen || jkQuakeConsole_bOpen) ? 1 : 0;
+}
+
+// Added: the page's touch controls for watching a match (index.html,
+// touchWatch). See sithControl_webTouchHeld. Off lets go of everything.
+static void sithControl_WebTouchClear(void)
+{
+    memset(sithControl_webTouchHeld, 0, sizeof(sithControl_webTouchHeld));
+    memset(sithControl_webTouchTapsNext, 0, sizeof(sithControl_webTouchTapsNext));
+    memset(sithControl_webTouchTaps, 0, sizeof(sithControl_webTouchTaps));
+    memset(sithControl_webTouchAxis, 0, sizeof(sithControl_webTouchAxis));
+    sithControl_webTouchLookNext[0] = sithControl_webTouchLookNext[1] = 0.0;
+    sithControl_webTouchLook[0] = sithControl_webTouchLook[1] = 0.0;
+    sithControl_webTouchFreeCam = 0;
+}
+
+EMSCRIPTEN_KEEPALIVE void sithControl_WebTouchOn(int bOn)
+{
+    sithControl_bWebTouch = !!bOn;
+    sithControl_WebTouchClear();
+}
+
+// Whether they're on: the game then wants no mouse lock (Window.c).
+int sithControl_WebTouchIsOn(void)
+{
+    return sithControl_bWebTouch;
+}
+
+// A command held down (1) or let go (0).
+EMSCRIPTEN_KEEPALIVE void sithControl_WebTouchHold(int funcIdx, int bDown)
+{
+    if (funcIdx >= 0 && funcIdx < INPUT_FUNC_MAX)
+        sithControl_webTouchHeld[funcIdx] = !!bDown;
+}
+
+// A command pressed once.
+EMSCRIPTEN_KEEPALIVE void sithControl_WebTouchTap(int funcIdx)
+{
+    if (funcIdx >= 0 && funcIdx < INPUT_FUNC_MAX && sithControl_webTouchTapsNext[funcIdx] < 8)
+        sithControl_webTouchTapsNext[funcIdx]++;
+}
+
+// The move stick: Forward (positive forward) or Slide (positive right), -1 to 1.
+EMSCRIPTEN_KEEPALIVE void sithControl_WebTouchAxis(int funcIdx, float value)
+{
+    if (funcIdx < 0 || funcIdx >= INPUT_FUNC_MAX || !(value == value))
+        return;
+    sithControl_webTouchAxis[funcIdx] = stdMath_Clamp(value, -1.0, 1.0);
+}
+
+// The look drag: turn left and look up, in degrees, added up until the next frame.
+EMSCRIPTEN_KEEPALIVE void sithControl_WebTouchLook(float yawDeg, float pitchDeg)
+{
+    if (!(yawDeg == yawDeg) || !(pitchDeg == pitchDeg))
+        return;
+    sithControl_webTouchLookNext[0] = stdMath_Clamp(sithControl_webTouchLookNext[0] + yawDeg, -360.0, 360.0);
+    sithControl_webTouchLookNext[1] = stdMath_Clamp(sithControl_webTouchLookNext[1] + pitchDeg, -180.0, 180.0);
+}
+
+// The free camera, from following a player.
+EMSCRIPTEN_KEEPALIVE void sithControl_WebTouchFreeCam(void)
+{
+    sithControl_webTouchFreeCam = 1;
+}
+
+// The next message typed on the touch controls (Module.jkTouchSay, a list the
+// page adds to), into pOut; 0 for none.
+EM_JS(int, sithControl_js_touch_take_say, (char* pOut, int maxLen), {
+    var list = Module.jkTouchSay;
+    var line = list && list.length ? String(list.shift() || '') : '';
+    if (!line) return 0;
+    stringToUTF8(line, pOut, maxLen);
+    return 1;
+});
+
+// Each frame that reads the controls: this frame's taps and turn are the ones
+// asked for since the last. A game that isn't spectating takes none of it.
+static void sithControl_WebTouchFrame(void)
+{
+    if (!sithMulti_IsSpectating())
+    {
+        int bOn = sithControl_bWebTouch;
+        sithControl_WebTouchClear();
+        sithControl_bWebTouch = bOn;
+        return;
+    }
+    // A message typed on the touch controls (Message), one a frame.
+    char say[128];
+    if (sithControl_js_touch_take_say(say, (int)sizeof(say)) && say[0])
+        jkHud_SayFromPage(say);
+    memcpy(sithControl_webTouchTaps, sithControl_webTouchTapsNext, sizeof(sithControl_webTouchTaps));
+    memset(sithControl_webTouchTapsNext, 0, sizeof(sithControl_webTouchTapsNext));
+    sithControl_webTouchLook[0] = sithControl_webTouchLookNext[0];
+    sithControl_webTouchLook[1] = sithControl_webTouchLookNext[1];
+    sithControl_webTouchLookNext[0] = sithControl_webTouchLookNext[1] = 0.0;
 }
 #endif // ARCH_WASM
