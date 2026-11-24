@@ -76,8 +76,6 @@ void stdComm_WSRelay_ViewerInLevel();
 // shown when it was sent, so it isn't shown again).
 void stdComm_WSRelay_ViewerSay(const char* pStr);
 int stdComm_WSRelay_ViewerOwnEcho(const char* pLine);
-void stdComm_WSRelay_FeedChat(int playerIdx, const char* pText);
-int stdComm_WSRelay_ViewerChatSeen(int playerIdx, const char* pText);
 
 // What a player holds in first person, for a viewer following them (see
 // "What a player holds" in stdComm_WSRelay.c). Each player's own game tells

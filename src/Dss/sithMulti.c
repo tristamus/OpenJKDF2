@@ -57,8 +57,6 @@ void sithMulti_SendChat(const char *pStr, int arg0, int arg1)
         stdComm_WSRelay_ViewerSay(pStr);
         return;
     }
-    // Added: the host's game passes the line to those watching at once.
-    stdComm_WSRelay_FeedChat(arg1, pStr);
 #endif
 
     pStr_len = strlen(pStr) + 1;
@@ -118,12 +116,6 @@ int sithMulti_ProcessChat(SithMessage *pMsg)
     // feed: it was shown when it was sent.
     if ( arg1 < 0 && stdComm_WSRelay_ViewerOwnEcho(v5) )
         return 1;
-    // Added: a line a viewer was shown at once, from the feed
-    // (stdComm_WSRelay_ViewerChatSeen), and the host's game passing the line
-    // to those watching at once.
-    if ( stdComm_WSRelay_ViewerChatSeen(arg1, v5) )
-        return 1;
-    stdComm_WSRelay_FeedChat(arg1, v5);
 #endif
 
     if ( arg1 < 0 )
