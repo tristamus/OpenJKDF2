@@ -1393,6 +1393,17 @@ EM_JS(void, wsrelay_js_connect, (int netcode), {
                 net.askFeed();
                 return true;
             }
+            /* Who watches this game's match (the lobby's "watching <n>
+               <names>", tab-separated): for the scoreboard
+               (stdComm_WSRelay_Watchers; Antonio, 2026-11-24: the players
+               see who watches too). */
+            if (op === 'watching') {
+                var wn = parseInt(sp < 0 ? '' : text.substring(sp + 1), 10);
+                var wrest = text.substring(sp + 1), wsp = wrest.indexOf(' ');
+                var wnames = wsp < 0 ? [] : wrest.substring(wsp + 1).split('\t').filter(function(x) { return x; }).slice(0, 32);
+                net.watching = wn >= 0 ? { n: Math.max(wn, wnames.length), names: wnames } : null;
+                return true;
+            }
             /* The room's feed for pages watching its match: where to send,
                or to stop. */
             if (op === 'feed') {
@@ -1846,6 +1857,7 @@ EM_JS(int, wsrelay_js_send_text, (const char* pText), {
     if ((op === 'host' || op === 'update') && sp > 0) net.entry = text.substring(sp + 1);
     if (op === 'host' || op === 'join' || op === 'leave') {
         net.seat = null;
+        net.watching = null;
         if (net.feedStop) net.feedStop('left the room');
         if (net.feedAskCancel) net.feedAskCancel();
         net.feedAskMs = 0;
@@ -1870,6 +1882,7 @@ EM_JS(int, wsrelay_js_join, (int room, const char16_t* pPassword), {
         hex += (0x100 | (ch & 0xFF)).toString(16).substring(1) + (0x100 | (ch >> 8)).toString(16).substring(1);
     }
     net.seat = null;
+    net.watching = null;
     if (net.state !== 1) return 0;
     net.ws.send('join ' + room + (hex ? ' ' + hex : ""));
     return 1;
@@ -2017,8 +2030,40 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
                  found: false, keyDone: false, syncAt: 0, offset: 0, lastMs: -1, late: 0, caught: 0, recvAt: 0, ended: '',
                  closed: false, waitMs: WAIT_MS,
                  resync: false, rekey: false, rekeySeat: -1, seatMs: {}, skips: 0, box: !!Module['jkWatchBox'],
-                 firstTimer: 0 };
+                 firstTimer: 0, nameTold: null, watching: null };
     Module.jkView = view;
+    /* Who's watching (the feed's "feed watching <n> <names>", jkdf2mp-bb-
+       server's src/feed.js): this game's own name for the others to see, the
+       one typed in the page's touch controls (Module.jkWatchName) else its
+       player's (Module.jkViewProfileName), told once the socket is open and
+       again when it changes; "name " for none (Antonio, 2026-11-24: no way
+       to see who else was watching). */
+    view.myName = function() {
+        var name = typeof Module.jkWatchName === 'string' ? Module.jkWatchName : '';
+        name = name.replace(/[^\x20-\x7e]/g, '').replace(/ +/g, ' ').trim().substring(0, 16).trim();
+        if (!name && typeof Module.jkViewProfileName === 'string') name = Module.jkViewProfileName;
+        return name || '';
+    };
+    view.sendName = function() {
+        var ws = view.ws, name = view.myName();
+        if (!ws || ws.readyState !== 1 || view.ended || name === view.nameTold) return;
+        try {
+            ws.send('name ' + name);
+            view.nameTold = name;
+        } catch (e) {}
+    };
+    /* What the feed said of who watches: {n, names}. The page hears it
+       (Module.jkWatchersChanged) for its touch controls' count. */
+    view.onWatching = function(rest) {
+        var sp = rest.indexOf(' ');
+        var n = parseInt(sp < 0 ? rest : rest.substring(0, sp), 10);
+        if (!(n >= 0)) return;
+        var names = sp < 0 ? [] : rest.substring(sp + 1).split('\t').filter(function(x) { return x; }).slice(0, 32);
+        view.watching = { n: Math.max(n, names.length), names: names };
+        if (typeof Module['jkWatchersChanged'] === 'function') {
+            try { Module['jkWatchersChanged'](view.watching.n, view.watching.names.slice()); } catch (e) {}
+        }
+    };
     /* quiet: not in the log (the countdown's each second). */
     view.say = function(text, quiet) {
         if (!quiet) console.log('OpenJKDF2: watching room ' + room + ': ' + text);
@@ -2072,6 +2117,10 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         view.closed = true;
         view.end('closed', '');
         if (Module.jkView === view) Module.jkView = null;
+        if (view.watching && typeof Module['jkWatchersChanged'] === 'function') {
+            view.watching = null;
+            try { Module['jkWatchersChanged'](0, []); } catch (e) {}
+        }
     };
     view.open = function() {
         var ws;
@@ -2086,7 +2135,11 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
         }
         ws.binaryType = 'arraybuffer';
         view.ws = ws;
-        ws.onopen = function() { view.tries = 0; };
+        ws.onopen = function() {
+            view.tries = 0;
+            view.nameTold = null;
+            view.sendName();
+        };
         ws.onmessage = function(ev) {
             if (view.ws !== ws) return;
             var d = ev && ev.data;
@@ -2096,7 +2149,9 @@ EM_JS(int, wsrelay_js_view_open, (int room), {
             }
             var parts = d.split(' ');
             if (parts[0] !== 'feed') return;
-            if (parts[1] === 'ended') {
+            if (parts[1] === 'watching') {
+                view.onWatching(d.substring(14));
+            } else if (parts[1] === 'ended') {
                 var why = parts.slice(2).join(' ') || 'over';
                 view.end(why, why === 'room ended' ? 'The match is over.' :
                               why === 'watching off' ? 'The host turned watching off.' : 'The match stopped sending.');
@@ -2479,6 +2534,7 @@ EM_JS(void, wsrelay_js_view_profile_name, (const char16_t* pName), {
         chars.push(ch);
     }
     Module.jkViewProfileName = String.fromCharCode.apply(null, chars).replace(/[^\x20-\x7e]/g, '?').replace(/ +/g, ' ').trim().substring(0, 16).trim();
+    if (Module.jkView && Module.jkView.sendName) Module.jkView.sendName();
 });
 
 // A viewer's message, on the feed's socket: "say <name>\t<text>", the name
@@ -2490,6 +2546,8 @@ EM_JS(void, wsrelay_js_view_profile_name, (const char16_t* pName), {
 EM_JS(int, wsrelay_js_view_say, (const char16_t* pName, const char* pText), {
     var view = Module.jkView;
     if (!view || view.ended || !view.ws || view.ws.readyState !== 1) return 0;
+    /* The name it's watching by, as the others see it, changed with it. */
+    if (view.sendName) view.sendName();
     var name = typeof Module.jkWatchName === 'string' ? Module.jkWatchName.replace(/[^\x20-\x7e]/g, '').replace(/ +/g, ' ').trim().substring(0, 16).trim() : '';
     if (!name) {
         var chars = [];
@@ -2506,6 +2564,36 @@ EM_JS(int, wsrelay_js_view_say, (const char16_t* pName, const char* pText), {
         return 0;
     }
     return 1;
+});
+
+// Who watches the match, for the scoreboard (stdComm_WSRelay_Watchers): a
+// viewer's from its feed (view.watching), a player's from the lobby
+// (net.watching). Up to 8 entries, tab-separated, in pOut (maxLen units):
+// the names, this viewer's own first as "You", and "and N more" for those
+// with no name (watching without the game) or past the 8. How many watch,
+// 0 for none.
+EM_JS(int, wsrelay_js_watchers, (int bViewer, char16_t* pOut, int maxLen), {
+    if (!pOut || maxLen < 2) return 0;
+    HEAPU16[pOut >> 1] = 0;
+    var view = Module.jkView, net = Module.jkNet;
+    var w = bViewer ? view && view.watching : net && net.watching;
+    if (!w || !(w.n > 0)) return 0;
+    var names = w.names.slice(), more = w.n - names.length, MAX = 8;
+    if (bViewer && view) {
+        var you = view.nameTold ? names.indexOf(view.nameTold) : -1;
+        if (you >= 0) names.splice(you, 1);
+        else if (more > 0) more--;
+        if (you >= 0 || w.n > names.length + more) names.unshift('You');
+    }
+    if (names.length + (more > 0 ? 1 : 0) > MAX) {
+        more += names.length - (MAX - 1);
+        names = names.slice(0, MAX - 1);
+    }
+    if (more > 0) names.push('and ' + more + ' more');
+    var text = names.join('\t'), len = Math.min(text.length, maxLen - 1);
+    for (var i = 0; i < len; i++) HEAPU16[(pOut >> 1) + i] = text.charCodeAt(i);
+    HEAPU16[(pOut >> 1) + len] = 0;
+    return w.n;
 });
 
 // Starts getting this game onto the match's mod and Remastered pack, as the
@@ -2673,6 +2761,7 @@ EM_JS(void, wsrelay_js_rtc_end, (), {
     net.hostRetry = null;
     net.isHost = false;
     net.seat = null;
+    net.watching = null;
     net.rejoinMs = 1000;
     clearTimeout(net.retry);
     net.retry = null;
@@ -5176,6 +5265,11 @@ int stdComm_WSRelay_PovWaggle(int idx, rdVector3* pVec, flex_t* pMag)
     *pVec = wsrelay_aPovOf[idx].waggleVec;
     *pMag = wsrelay_aPovOf[idx].waggleMag;
     return 1;
+}
+
+int stdComm_WSRelay_Watchers(char16_t* pOut, int maxLen)
+{
+    return wsrelay_js_watchers(stdComm_WSRelay_bViewer ? 1 : 0, pOut, maxLen);
 }
 
 int stdComm_WSRelay_PovHud(int idx, struct jkHudValues* pOut)

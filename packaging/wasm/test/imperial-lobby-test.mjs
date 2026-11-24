@@ -310,7 +310,12 @@ test("the page's status keeps imp only with a room id and sid, and canWatch take
         { id: 1201, sid: '5b238bec1ae6e9cb', game: 'jk1', name: 'Coruscant\u0007', episode: 'JK1CTF', map: 'c3.jkl', delay: 30, watching: 1 },
         { id: 0, sid: '5b238bec1ae6e9cb' }, { id: 5, sid: 'nope' }, null, 'x'] });
     assert.deepEqual(s.imp, [{ id: 1201, sid: '5b238bec1ae6e9cb', game: 'jk1', name: 'Coruscant', episode: 'JK1CTF',
-                               map: 'c3.jkl', delay: 30, watching: 1 }]);
+                               map: 'c3.jkl', delay: 30, watching: 1, watchers: [] }]);
+    // Who watches by name, as the lobby says: names only, each cut to 32, at most 32.
+    const named = clean({ online: 0, games: [{ id: 7, name: 'R', watching: 3, watchers: ['Rogue', 5, 'K'.repeat(40)] }],
+                          imp: [{ id: 1202, sid: '5b238bec1ae6e9cc', watchers: Array.from({ length: 40 }, (_, i) => 'P' + i) }] });
+    assert.deepEqual(named.games[0].watchers, ['Rogue', 'K'.repeat(32)]);
+    assert.equal(named.imp[0].watchers.length, 32);
     assert.deepEqual(clean({ online: 0, games: [] }).imp, [], 'a lobby that has none, or doesn\'t say');
     const w = cut('      function watchable(g)', '      // Watches a game, by its room id');
     const { watchable, canWatch } = new Function(w + '\nreturn { watchable, canWatch };')();

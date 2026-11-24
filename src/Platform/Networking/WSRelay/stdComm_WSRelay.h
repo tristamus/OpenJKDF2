@@ -94,6 +94,11 @@ int stdComm_WSRelay_PovWaggle(int idx, rdVector3* pVec, flex_t* pMag);
 // game said; 0 when it hasn't.
 struct jkHudValues;
 int stdComm_WSRelay_PovHud(int idx, struct jkHudValues* pOut);
+// Who watches the match this game plays or watches, for the scoreboard
+// (jkHud_DrawGPU): how many (0 for none), with up to 8 entries in pOut,
+// tab-separated: the names of those watching from a game, "You" for a
+// viewer's own, and "and N more" for the rest (wsrelay_js_watchers).
+int stdComm_WSRelay_Watchers(char16_t* pOut, int maxLen);
 // A viewer, each frame it spectates (sithControl, for stdPalEffects_FlushAllAdds
 // before): the screen's flashes and tints are those of the player it follows
 // in first person (followIdx, -1 for none), as their game said, faded here
