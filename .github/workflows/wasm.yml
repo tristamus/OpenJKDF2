@@ -145,6 +145,10 @@ jobs:
       # per match, kept while the page is drawn again, and counted once.
       - name: Test the match in the viewing page's box
         run: node packaging/wasm/test/watch-box-test.mjs
+      # Touch controls for watching a match in the game on a phone: the
+      # engine's commands, the message, and Watch going straight in.
+      - name: Test the touch controls for watching
+        run: node packaging/wasm/test/touch-watch-test.mjs
       # The files the page loads or opens by name beside itself: all in the
       # web folder collected below and in build_run_openjkdf2_wasm.sh's.
       - name: Test the web folder's files

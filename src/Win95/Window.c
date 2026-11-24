@@ -23,6 +23,7 @@
 
 #ifdef ARCH_WASM
 #include <emscripten.h>
+#include "Devices/sithControl.h" // Added: sithControl_WebTouchIsOn
 #endif
 
 #ifdef PLATFORM_WSRELAY
@@ -80,6 +81,35 @@ int Window_isHiDpi = 0;
 int Window_isFullscreen = 0;
 int Window_needsRecreate = 0;
 int Window_bShouldPopSteamKeyboard = 0;
+
+// Added: the game lays out a window under 640x480 as 640x480 at least. Each side was
+// raised on its own, so a phone held sideways (its page about 803x360) was laid out at
+// 803x480 and drawn into the 803x360 canvas, squashed: the HUD's round gauges came out
+// 1.33 times too wide (kit 190, on Antonio's phone). Both sides grow together now, to
+// 1071x480 there, so the frame keeps the window's shape and is only drawn smaller
+// (std3D_UpdateWindowViewport). A window so long and thin that keeping its shape would
+// pass WINDOW_KEEP_SHAPE_MAX on a side gets the old 640x480 minimum instead.
+#define WINDOW_KEEP_SHAPE_MAX (4096)
+void Window_KeepMinimumSize(void)
+{
+    if (Window_xSize > 0 && Window_ySize > 0 && (Window_xSize < 640 || Window_ySize < 480))
+    {
+        double k = 1.0;
+        if (Window_xSize < 640 && 640.0 / Window_xSize > k)
+            k = 640.0 / Window_xSize;
+        if (Window_ySize < 480 && 480.0 / Window_ySize > k)
+            k = 480.0 / Window_ySize;
+        double w = Window_xSize * k + 0.5;
+        double h = Window_ySize * k + 0.5;
+        if (w <= WINDOW_KEEP_SHAPE_MAX && h <= WINDOW_KEEP_SHAPE_MAX)
+        {
+            Window_xSize = (int)w;
+            Window_ySize = (int)h;
+        }
+    }
+    if (Window_xSize < 640) Window_xSize = 640;
+    if (Window_ySize < 480) Window_ySize = 480;
+}
 
 void Window_SetHiDpi(int val)
 {
@@ -1198,8 +1228,7 @@ void Window_HandleWindowEvent(SDL_Event* event)
             SDL_GetWindowSizeInPixels(displayWindow, &Window_xSize, &Window_ySize);
             SDL_GetWindowSize(displayWindow, &Window_screenXSize, &Window_screenYSize);
 
-            if (Window_xSize < 640) Window_xSize = 640;
-            if (Window_ySize < 480) Window_ySize = 480;
+            Window_KeepMinimumSize(); // Added: was 640 and 480 each on its own
             //printf("%u %u\n", Window_xSize, Window_ySize);
             break;
         case SDL_EVENT_WINDOW_MINIMIZED:
@@ -2129,7 +2158,11 @@ void Window_SdlUpdate()
         // isn't harmless in a browser: within a few seconds of a click it
         // gets the lock, after the game's own release, and the menu opens
         // with the mouse still locked.
-        if (!jkQuakeConsole_bOpen && SDL_GetWindowFlags(displayWindow) & SDL_WINDOW_MOUSE_FOCUS && stdControl_bControlsActive) {
+        // Nor while the page's touch controls for watching are on (index.html, touchWatch): a
+        // phone needs no mouse there, and under a lock Chromium gave the touches on those
+        // controls the locked mouse's place (2026-11-24). Letting go here sends no Esc.
+        if (!jkQuakeConsole_bOpen && SDL_GetWindowFlags(displayWindow) & SDL_WINDOW_MOUSE_FOCUS && stdControl_bControlsActive &&
+            !sithControl_WebTouchIsOn()) {
 #else
         if (!jkQuakeConsole_bOpen && SDL_GetWindowFlags(displayWindow) & SDL_WINDOW_MOUSE_FOCUS) {
 #endif
@@ -2364,6 +2397,7 @@ void Window_RecreateSDL2Window()
 
     SDL_GetWindowSizeInPixels(displayWindow, &Window_xSize, &Window_ySize);
     SDL_GetWindowSize(displayWindow, &Window_screenXSize, &Window_screenYSize);
+    Window_KeepMinimumSize(); // Added: as a resize does
 
     Window_resized = 1;
 }

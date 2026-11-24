@@ -40,6 +40,7 @@ int Window_DefaultHandler(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, voi
 extern int Window_isHiDpi;
 extern int Window_isFullscreen;
 void Window_SetHiDpi(int val);
+void Window_KeepMinimumSize(void); // Added
 void Window_SetFullscreen(int val);
 
 

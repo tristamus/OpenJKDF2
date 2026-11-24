@@ -722,7 +722,9 @@ void jkHud_Draw()
                 if ((playerInfoIter->flags & 1) != 0)
                 {
                     stdString_SafeWStrCopy(jkHud_aPlayerScores[v29].playerName, playerInfoIter->player_name, 0x20);
-                    v33 = v32->pLocalPlayer->renderData.model3->filename;
+                    // Added: a player's body with no model yet (a watching game can
+                    // show the scoreboard before the feed has given it one)
+                    v33 = (v32->pLocalPlayer && v32->pLocalPlayer->renderData.model3) ? v32->pLocalPlayer->renderData.model3->filename : (char*)"";
                     stdFnames_CopyShortName(tmpFname, 16, v33);
                     jkGuiTitle_sub_4189A0(tmpFname);
                     v34 = jkStrings_GetUniStringWithFallback(tmpFname);
@@ -1072,7 +1074,10 @@ void jkHud_DrawGPU()
     jkHudValues hud;
     memset(&hud, 0, sizeof(hud));
     int bSpectatorHud = bSpectating && jkHud_SpectatorValues(&hud);
-    if (!(Video_modeStruct.viewSizeIdx < 0xAu) || (bSpectating && !bSpectatorHud && !sithOverlayMap_bMapVisible))
+    // Added: and the scoreboard (Tally), which a spectator never saw before: the returns
+    // below for a spectator went past it (Antonio, 2026-11-24: no way to check the score
+    // while watching).
+    if (!(Video_modeStruct.viewSizeIdx < 0xAu) || (bSpectating && !bSpectatorHud && !sithOverlayMap_bMapVisible && !jkHud_bViewScores))
     {
         return;
     }
@@ -1112,6 +1117,8 @@ void jkHud_DrawGPU()
 
     if (bSpectating && !bSpectatorHud)
     {
+        if (jkHud_bViewScores)
+            goto spectator_scores; // Added
 #ifdef SDL2_RENDER
         stdDisplay_VBufferUnlock(Video_pCanvasOverlayMap->pVBuffer);
         stdDisplay_VBufferUnlock(Video_pCanvas->pVBuffer);
@@ -1342,9 +1349,11 @@ void jkHud_DrawGPU()
         //std3D_DrawUIClearedRect(tmpInt, &rect1a);
     }
 
-    // Added: nothing else for a spectator (as before it showed the bars).
+    // Added: nothing else for a spectator (as before it showed the bars), but the scoreboard.
     if (bSpectating)
     {
+        if (jkHud_bViewScores)
+            goto spectator_scores;
 #ifdef SDL2_RENDER
         stdDisplay_VBufferUnlock(Video_pCanvasOverlayMap->pVBuffer);
         stdDisplay_VBufferUnlock(Video_pCanvas->pVBuffer);
@@ -1392,6 +1401,7 @@ void jkHud_DrawGPU()
     }
 
     
+spectator_scores: // Added
     if ( jkHud_bViewScores )
     {
         char tmpFname[16];
@@ -1413,7 +1423,9 @@ void jkHud_DrawGPU()
                 if ((playerInfoIter->flags & 1) != 0)
                 {
                     stdString_SafeWStrCopy(jkHud_aPlayerScores[v29].playerName, playerInfoIter->player_name, 0x20);
-                    v33 = v32->pLocalPlayer->renderData.model3->filename;
+                    // Added: a player's body with no model yet (a watching game can
+                    // show the scoreboard before the feed has given it one)
+                    v33 = (v32->pLocalPlayer && v32->pLocalPlayer->renderData.model3) ? v32->pLocalPlayer->renderData.model3->filename : (char*)"";
                     stdFnames_CopyShortName(tmpFname, 16, v33);
                     jkGuiTitle_sub_4189A0(tmpFname);
                     // MOTS altered here "_SHORT" TODO
@@ -1771,6 +1783,25 @@ static int jkHud_IsRconLine(const char* pStr)
         return 0;
     return pStr[4] == 0 || pStr[4] == ' ' || pStr[4] == '\t' || pStr[4] == '_';
 }
+
+#ifdef ARCH_WASM
+// Added: a message typed in the page's touch controls (index.html, touchWatch: a phone
+// has no keys for the game's own chat line, Antonio 2026-11-24), sent as Enter sends
+// that line to everyone. A spectator's goes through the feed (sithMulti_SendChat).
+void jkHud_SayFromPage(const char* pStr)
+{
+    if (!pStr || !pStr[0] || !sithNet_isMulti)
+        return;
+    if (jkHud_IsRconLine(pStr))
+    {
+        jkDev_DebugLog("Not sent: that looks like an rcon command. Type it in the console (~), not the chat.");
+        return;
+    }
+    stdString_snprintf(std_g_genBuffer, 0x400, "You say, '%s'", pStr);
+    jkDev_DebugLog(std_g_genBuffer);
+    sithMulti_SendChat(pStr, -1, playerThingIdx);
+}
+#endif
 
 // MOTS altered
 void jkHud_SendChat(char a1)
