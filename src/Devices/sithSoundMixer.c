@@ -1122,6 +1122,20 @@ void sithSoundMixer_FreeThing(SithThing *thing)
     }
 }
 
+// Added: a looping sound playing on pThing, not fading out, or NULL
+// (sithDSSThing_ProcessPlaySound, for a viewer).
+sithPlayingSound* sithSoundMixer_LoopOnThing(sithSound* pSound, SithThing* pThing)
+{
+    for (int i = 0; i < SITH_MIXER_NUMPLAYINGSOUNDS; i++)
+    {
+        sithPlayingSound* pPlaying = &sithSoundMixer_aPlayingSounds[i];
+        if (pPlaying->sound == pSound && pPlaying->thing == pThing
+            && (pPlaying->flags & (SITHSOUNDFLAG_LOOP | SITHSOUNDFLAG_FADING)) == SITHSOUNDFLAG_LOOP)
+            return pPlaying;
+    }
+    return NULL;
+}
+
 sithPlayingSound* sithSoundMixer_GetChannelHandle(int guid)
 {
     unsigned int playingsound_idx; // ecx

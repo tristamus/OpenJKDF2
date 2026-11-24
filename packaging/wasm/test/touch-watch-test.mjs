@@ -50,17 +50,39 @@ test("the Controls list's keys are the engine's commands, Scores (Tally) too", (
     assert.match(html, /\['Scores', keys\('tally', 'Tally'\)\]/);
 });
 
+const nameClean = new Function('TOUCH_NAME_MAX', cut('      function touchNameClean(name) {', '      (function() {') +
+                              '\nreturn touchNameClean;')(16);
+
+test('the name on a message is cleaned as the feed takes a name', () => {
+    assert.equal(nameClean('  Antonio  '), 'Antonio');
+    assert.equal(nameClean('Ant\u00f3nio   the   Great Jedi'), 'Antnio the Great');
+    assert.equal(nameClean(null), '');
+    assert.equal(nameClean(undefined), '');
+    assert.equal(nameClean('\u{1F600}'), '');
+});
+
 test('a message is cleaned as the feed takes it, and at most 4 wait', () => {
     const code = cut('      function touchSaySend() {', '      touchWatch.form.addEventListener(');
-    const run = (text, queue) => {
-        const Module = { jkTouchSay: queue };
+    const runFull = (text, queue, name) => {
+        const Module = { jkTouchSay: queue, jkWatchName: 'old' };
+        const store = {};
+        const localStorage = { setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
         let closed = 0;
-        const touchWatch = { input: { value: text } };
-        new Function('Module', 'touchWatch', 'touchSayClose', 'TOUCH_SAY_MAX', code + '\ntouchSaySend();')(
-            Module, touchWatch, () => closed++, 96);
+        const touchWatch = { input: { value: text }, nameInput: { value: name || '' } };
+        new Function('Module', 'touchWatch', 'touchSayClose', 'TOUCH_SAY_MAX', 'touchNameClean', 'TOUCH_NAME_KEY', 'localStorage',
+                     code + '\ntouchSaySend();')(
+            Module, touchWatch, () => closed++, 96, nameClean, 'jkdf2mp-watch-name', localStorage);
         assert.equal(closed, 1);
-        return Module.jkTouchSay;
+        return { Module, store };
     };
+    const run = (text, queue) => runFull(text, queue).Module.jkTouchSay;
+    // The name typed goes on what this game says (wsrelay_js_view_say), and is kept.
+    let r = runFull('hi', undefined, ' Antonio ');
+    assert.equal(r.Module.jkWatchName, 'Antonio');
+    assert.equal(r.store['jkdf2mp-watch-name'], 'Antonio');
+    r = runFull('hi', undefined, '');
+    assert.equal('jkWatchName' in r.Module, false, 'no name: the player of the game files, or Someone');
+    assert.equal('jkdf2mp-watch-name' in r.store, false);
     assert.deepEqual(run('  hello   there  '), ['hello there']);
     assert.deepEqual(run('café 😀!'), ['caf? ?!']);
     assert.equal(run('x'.repeat(200))[0].length, 96);
@@ -107,7 +129,7 @@ test("the room window's Watch asks it first, only for a match not already shown"
 test('the message box keeps its keys from the game, which listens later', () => {
     const code = cut("      ['keydown', 'keyup', 'keypress'].forEach(function(type) {\n        window.addEventListener(type, function(ev) {\n          var t = touchWatch;",
                      "      window.addEventListener('pointermove'");
-    assert.match(code, /if \(ev\.target === t\.input\) \{\s*ev\.stopImmediatePropagation\(\);/);
+    assert.match(code, /if \(ev\.target === t\.input \|\| ev\.target === t\.nameInput\) \{\s*ev\.stopImmediatePropagation\(\);/);
     assert.match(code, /\}, true\);/);
 });
 

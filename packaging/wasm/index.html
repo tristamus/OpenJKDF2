@@ -394,10 +394,72 @@
         touch-action: manipulation;
       }
       .touch-watch .tw-say button[type="submit"] { border-color: var(--gold); color: var(--gold); }
+      .touch-watch .tw-say .tw-say-name { flex: 0 1 8.5em; }
+      /* Where the move stick is, while the buttons show in the free camera
+         (Antonio, 2026-11-24: it only showed under a thumb, so it had to be found).
+         A touch anywhere on the left still puts the stick under the thumb. */
+      .touch-watch .tw-stick-rest {
+        left: max(26px, calc(env(safe-area-inset-left) + 14px));
+        bottom: max(22px, env(safe-area-inset-bottom));
+        box-sizing: border-box;
+        width: 112px;
+        height: 112px;
+        border: 2px solid rgba(143, 219, 228, 0.6);
+        border-radius: 50%;
+        background: rgba(8, 22, 26, 0.28);
+        opacity: 0.5;
+        pointer-events: none;
+      }
+      .touch-watch .tw-stick-rest span {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        margin-top: 2px;
+        text-align: center;
+        text-shadow: 0 1px 2px #000;
+      }
+      .touch-watch:not(.tw-free) .tw-stick-rest,
+      .touch-watch.tw-sticking .tw-stick-rest { display: none; }
+      /* Upright: turn the phone first (touchWatchTurn). */
+      .touch-watch .tw-turn {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        box-sizing: border-box;
+        width: min(300px, calc(100% - 32px));
+        padding: 18px 16px 14px;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 18px;
+        background: rgba(8, 22, 26, 0.9);
+        transform: translate(-50%, -50%);
+        text-align: center;
+      }
+      .touch-watch .tw-turn[hidden] { display: none; }
+      .touch-watch .tw-turn svg { width: 96px; height: 72px; }
+      .touch-watch .tw-turn p { margin: 0; font-size: 16px; font-weight: 700; color: var(--gold); }
+      .touch-watch .tw-turn button {
+        margin: 0;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 18px;
+        background: rgba(143, 219, 228, 0.16);
+        color: #e8f7f9;
+        font: 600 15px Roboto, Arial, sans-serif;
+        padding: 9px 18px;
+        touch-action: manipulation;
+      }
+      .touch-watch .tw-turn .tw-turn-skip { border: 0; background: none; font-size: 13px; font-weight: 500; color: #bfe9ee; text-decoration: underline; padding: 4px 8px; }
+      .touch-watch.tw-turning .tw-ui > :not(.tw-leave) { display: none; }
       .touch-watch.tw-saying .tw-ui { display: none; }
       .touch-watch.tw-wait .tw-ui > :not(.tw-leave) { display: none; }
       @media (max-width: 600px) {
         .touch-watch .tw-pill { max-width: calc(100% - 32px); }
+        .touch-watch .tw-say { flex-wrap: wrap; }
+        .touch-watch .tw-say .tw-say-name { flex: 1 1 100%; }
       }
       /* Over the top of the game in a tab that another tab's game took the
          saves from. It leaves the game playable underneath. */
@@ -2568,10 +2630,18 @@
           <button type="button" class="tw-b" data-tw="down" data-tw-hold="duck"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9l7 7 7-7" fill="none" stroke="#e8f7f9" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></i>Down</button>
         </div>
         <p class="tw-hint" hidden></p>
+        <div class="tw-stick-rest" aria-hidden="true"><div class="tw-knob"></div><span>Move</span></div>
       </div>
       <div class="tw-stick" hidden><div class="tw-knob"></div></div>
+      <div class="tw-turn" role="dialog" aria-label="Turn your phone sideways" hidden>
+        <svg viewBox="0 0 96 72" aria-hidden="true"><rect x="8" y="10" width="28" height="48" rx="5" fill="none" stroke="#bfe9ee" stroke-width="3"/><rect x="44" y="32" width="48" height="28" rx="5" fill="none" stroke="#ffcc66" stroke-width="3"/><path d="M30 6c14-4 30 2 38 18" fill="none" stroke="#e8f7f9" stroke-width="3" stroke-linecap="round"/><path d="M60 20l8 5 3-9" fill="none" stroke="#e8f7f9" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <p class="tw-turn-say">Turn your phone sideways to watch</p>
+        <button type="button" class="tw-turn-go" data-tw-turn="go">Tap to turn it</button>
+        <button type="button" class="tw-turn-skip" data-tw-turn="skip">Keep watching upright</button>
+      </div>
       <form class="tw-say" hidden autocomplete="off">
-        <input type="text" maxlength="96" enterkeyhint="send" autocapitalize="sentences" spellcheck="false" placeholder="Message the players" aria-label="Message the players">
+        <input type="text" class="tw-say-name" maxlength="16" enterkeyhint="next" autocapitalize="words" spellcheck="false" placeholder="Your name" aria-label="Your name, as the players see it">
+        <input type="text" class="tw-say-text" maxlength="96" enterkeyhint="send" autocapitalize="sentences" spellcheck="false" placeholder="Message the players" aria-label="Message the players">
         <button type="submit">Send</button>
         <button type="button" data-tw-say="cancel" aria-label="Cancel">&times;</button>
       </form>
@@ -12047,8 +12117,8 @@
       var TOUCH_FUNCS = { forward: 0, slide: 2, jump: 4, duck: 5, fast: 6, fire1: 10, fire2: 11, map: 33, camera: 37, tally: 41 };
       // The move stick's reach (CSS pixels), and how many times that the
       // thumb goes for the camera to go faster; the look drag's degrees per
-      // pixel.
-      var TOUCH_STICK_R = 48, TOUCH_FAST_AT = 1.4, TOUCH_LOOK_DEG = 0.3;
+      // pixel (0.3 was too slow on Antonio's phone, 2026-11-24).
+      var TOUCH_STICK_R = 48, TOUCH_FAST_AT = 1.4, TOUCH_LOOK_DEG = 0.5;
       // A tap moves less than this and lets go within this; a swipe goes at
       // least this far, mostly sideways, within this.
       var TOUCH_TAP_PX = 12, TOUCH_TAP_MS = 400, TOUCH_SWIPE_PX = 50, TOUCH_SWIPE_MS = 1000;
@@ -12056,20 +12126,35 @@
       var TOUCH_IDLE_MS = 8000;
       // How to use them, over the game the first few times.
       var TOUCH_HINTS_KEY = 'jkdf2mp-touch-hints', TOUCH_HINTS_MAX = 3, TOUCH_HINT_MS = 7000;
-      // As the game's own chat line and the feed take a message (stdComm_WSRelay_ViewerSay).
-      var TOUCH_SAY_MAX = 96;
+      // As the game's own chat line and the feed take a message (stdComm_WSRelay_ViewerSay),
+      // and the name the feed puts on it: the one typed in the message box, kept here
+      // (a phone that only watches has no player of its own to take it from).
+      var TOUCH_SAY_MAX = 96, TOUCH_NAME_MAX = 16, TOUCH_NAME_KEY = 'jkdf2mp-watch-name';
       var touchWatch = {
         root: document.getElementById('touch-watch'), shown: false, live: false, on: false, kbd: false,
         free: true, name: '', saying: false, leaving: false, idleTimer: 0, hintTimer: 0, hinted: false,
-        pointers: {}, swallow: false
+        pointers: {}, swallow: false, upright: false, uprightOk: false
       };
       touchWatch.pad = touchWatch.root.querySelector('.tw-pad');
       touchWatch.stick = touchWatch.root.querySelector('.tw-stick');
-      touchWatch.knob = touchWatch.root.querySelector('.tw-knob');
+      touchWatch.knob = touchWatch.root.querySelector('.tw-stick .tw-knob');
+      touchWatch.turn = touchWatch.root.querySelector('.tw-turn');
       touchWatch.hint = touchWatch.root.querySelector('.tw-hint');
       touchWatch.form = touchWatch.root.querySelector('.tw-say');
-      touchWatch.input = touchWatch.form.querySelector('input');
+      touchWatch.input = touchWatch.form.querySelector('.tw-say-text');
       touchWatch.input.maxLength = TOUCH_SAY_MAX;
+      touchWatch.nameInput = touchWatch.form.querySelector('.tw-say-name');
+      touchWatch.nameInput.maxLength = TOUCH_NAME_MAX;
+      // As the feed takes a name: printable ASCII, spaces as one, at most 16.
+      function touchNameClean(name) {
+        return String(name || '').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim().substring(0, TOUCH_NAME_MAX).trim();
+      }
+      (function() {
+        var name = '';
+        try { name = touchNameClean(localStorage.getItem(TOUCH_NAME_KEY)); } catch (e) {}
+        // The engine puts it on what this game says while watching (wsrelay_js_view_say).
+        if (name) Module.jkWatchName = name;
+      })();
 
       function touchCall(name) {
         var f = Module['_sithControl_WebTouch' + name];
@@ -12101,9 +12186,11 @@
           t.live = live;
           t.root.classList.toggle('tw-wait', !live);
           if (!live) touchWatchLetGo();
-          else touchWatchHint();
           touchWatchWake();
         }
+        touchWatchTurn();
+        // How to use them, once the phone is sideways (or kept upright).
+        if (t.live && !t.upright) touchWatchHint();
         // The game shows who it follows itself, and lets go of what was held, without them.
         if (live !== t.on) {
           t.on = live;
@@ -12205,22 +12292,60 @@
         if (t.saying) touchSayClose();
       }
 
+      // Held upright: first a card to turn the phone sideways, or to turn it with
+      // a tap (full screen, then the screen locked sideways, where the phone lets
+      // a page), and then the hint (Antonio, 2026-11-24). Leave stays.
+      function touchWatchTurn() {
+        var t = touchWatch;
+        var upright = t.shown && !t.uprightOk && innerHeight > innerWidth;
+        if (upright === t.upright) return;
+        t.upright = upright;
+        t.root.classList.toggle('tw-turning', upright);
+        t.turn.hidden = !upright;
+        if (upright) {
+          touchWatchHintOff();
+          touchWatchLetGo();
+          t.turn.querySelector('.tw-turn-say').textContent = 'Turn your phone sideways to watch';
+          t.turn.querySelector('.tw-turn-go').hidden = !document.fullscreenEnabled;
+        }
+        touchWatchWake();
+      }
+      touchWatch.turn.addEventListener('click', function(ev) {
+        var t = touchWatch, b = ev.target.closest('[data-tw-turn]');
+        ev.stopPropagation();
+        if (b && b.dataset.twTurn === 'skip') {
+          t.uprightOk = true;
+          return touchWatchTurn();
+        }
+        touchWatchFullscreen(true);
+      });
+      ['pointerdown', 'pointerup'].forEach(function(type) {
+        touchWatch.turn.addEventListener(type, function(ev) { ev.stopPropagation(); });
+      });
+
       // Full screen and sideways, on a touch (which, let go, lets a page do
-      // either), as the game's Full screen box says.
-      function touchWatchFullscreen() {
-        if (!fullscreenOption.checked || !document.fullscreenEnabled) return;
+      // either), as the game's Full screen box says. asked: the turn card's
+      // button, which says so when the phone won't.
+      function touchWatchFullscreen(asked) {
+        var cant = function() {
+          if (!asked) return;
+          touchWatch.turn.querySelector('.tw-turn-say').textContent = 'This phone can\u2019t turn it from here. Turn it sideways by hand.';
+          touchWatch.turn.querySelector('.tw-turn-go').hidden = true;
+        };
+        if ((!asked && !fullscreenOption.checked) || !document.fullscreenEnabled) return cant();
         var sideways = function() {
           try {
             var lock = screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape');
-            if (lock && lock.catch) lock.catch(function() {});
-          } catch (e) {}
+            if (lock && lock.catch) lock.catch(cant);
+            else if (!lock) cant();
+          } catch (e) { cant(); }
         };
         if (document.fullscreenElement) return sideways();
         var request;
         try {
           request = document.documentElement.requestFullscreen({ navigationUI: 'hide' });
-        } catch (e) { return; }
-        if (request && request.then) request.then(sideways, function() {});
+        } catch (e) { return cant(); }
+        if (request && request.then) request.then(sideways, cant);
       }
 
       function touchWatchLeave() {
@@ -12315,6 +12440,7 @@
         touchWatch.stick.hidden = true;
         touchWatch.stick.classList.remove('tw-fast');
         touchWatch.knob.style.transform = '';
+        touchWatch.root.classList.remove('tw-sticking');
       }
       function touchEventMs(ev) {
         return ev.timeStamp > 0 ? ev.timeStamp : performance.now();
@@ -12341,6 +12467,7 @@
           t.stick.style.top = p.y0 + 'px';
           t.knob.style.transform = '';
           t.stick.hidden = false;
+          t.root.classList.add('tw-sticking');
         }
         touchWatchHintOff();
         if (!t.root.classList.contains('tw-faded')) touchWatchWake();
@@ -12367,6 +12494,8 @@
         if (p.kind === 'stick') touchStickEnd(p);
         if (ev.type !== 'pointerup') return;
         var dx = p.x - p.x0, dy = p.y - p.y0, ms = touchEventMs(ev) - p.at;
+        // Upright, a tap on the picture turns the phone, where it lets a page.
+        if (!p.moved && ms < TOUCH_TAP_MS && t.upright) return touchWatchFullscreen(true);
         if (!p.moved && ms < TOUCH_TAP_MS) touchWatchToggle();
         else {
           if (p.kind === 'swipe' && t.live && Math.abs(dx) >= TOUCH_SWIPE_PX && Math.abs(dx) > 1.5 * Math.abs(dy) &&
@@ -12397,8 +12526,12 @@
         t.root.classList.add('tw-saying');
         t.form.hidden = false;
         t.input.value = '';
+        var name = '';
+        try { name = touchNameClean(localStorage.getItem(TOUCH_NAME_KEY)); } catch (e) {}
+        // A player of this game's own, else nothing yet: the box asks.
+        t.nameInput.value = name || touchNameClean(Module.jkViewProfileName);
         touchWatchWake();
-        try { t.input.focus({ preventScroll: true }); } catch (e) {}
+        try { (t.nameInput.value ? t.input : t.nameInput).focus({ preventScroll: true }); } catch (e) {}
       }
       function touchSayClose() {
         var t = touchWatch;
@@ -12406,10 +12539,17 @@
         t.root.classList.remove('tw-saying');
         t.form.hidden = true;
         t.input.value = '';
-        try { t.input.blur(); } catch (e) {}
+        try { t.input.blur(); t.nameInput.blur(); } catch (e) {}
         touchWatchWake();
       }
       function touchSaySend() {
+        var name = touchNameClean(touchWatch.nameInput.value);
+        try {
+          if (name) localStorage.setItem(TOUCH_NAME_KEY, name);
+          else localStorage.removeItem(TOUCH_NAME_KEY);
+        } catch (e) {}
+        if (name) Module.jkWatchName = name;
+        else delete Module.jkWatchName;
         var text = touchWatch.input.value.replace(/[\ud800-\udbff][\udc00-\udfff]/g, '?').replace(/[^\x20-\x7e]/g, '?')
                                          .replace(/\s+/g, ' ').trim().substring(0, TOUCH_SAY_MAX).trim();
         if (text) {
@@ -12420,12 +12560,17 @@
       }
       touchWatch.form.addEventListener('submit', function(ev) {
         ev.preventDefault();
+        // Enter on the name goes on to the message.
+        if (document.activeElement === touchWatch.nameInput && !touchWatch.input.value.trim()) {
+          try { touchWatch.input.focus({ preventScroll: true }); } catch (e) {}
+          return;
+        }
         touchSaySend();
       });
       touchWatch.form.addEventListener('click', function(ev) {
         if (ev.target.closest('[data-tw-say="cancel"]')) touchSayClose();
-        else if (ev.target === touchWatch.input) {
-          try { touchWatch.input.focus(); } catch (e) {}
+        else if (ev.target === touchWatch.input || ev.target === touchWatch.nameInput) {
+          try { ev.target.focus(); } catch (e) {}
         }
       });
       // In the page, before the game's own listeners: the game takes keys
@@ -12435,10 +12580,13 @@
       ['keydown', 'keyup', 'keypress'].forEach(function(type) {
         window.addEventListener(type, function(ev) {
           var t = touchWatch;
-          if (ev.target === t.input) {
+          if (ev.target === t.input || ev.target === t.nameInput) {
             ev.stopImmediatePropagation();
             if (type !== 'keydown' || ev.isComposing) return;
-            if (ev.key === 'Enter') {
+            if (ev.key === 'Enter' && ev.target === t.nameInput && !t.input.value.trim()) {
+              ev.preventDefault();
+              try { t.input.focus({ preventScroll: true }); } catch (e) {}
+            } else if (ev.key === 'Enter') {
               ev.preventDefault();
               touchSaySend();
             } else if (ev.key === 'Escape') {

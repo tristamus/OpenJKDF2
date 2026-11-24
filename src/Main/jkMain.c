@@ -1965,6 +1965,14 @@ void jkMain_FixRes()
     
     Video_format.width = newW;
     Video_format.height = newH;
+
+    // Added: the messages on screen and the scoreboard, kept through a new
+    // window size. jkDev_Open and jkHud_Open start both afresh, and a phone
+    // changes the window's size whenever its keyboard closes or it turns, so a
+    // message sent from the page's touch controls was gone at once and the
+    // other messages with it (Antonio, 2026-11-24, kit 192).
+    int keptLogCount = jkDev_log_55A4A4;
+    int keptViewScores = jkHud_bViewScores;
     
     jkDev_Close();
     jkHud_Close();
@@ -1987,6 +1995,17 @@ void jkMain_FixRes()
         jkHudCameraView_Open();
     }
     jkDev_Open();
+    if (jkDev_bOpened && keptLogCount > 0 && keptLogCount <= 5)
+    {
+        jkDev_log_55A4A4 = keptLogCount;
+        for (int i = 0; i < keptLogCount; i++)
+        {
+            jkDev_aEntries[i].bDrawEntry = 2;
+            jkDev_aEntries[i].field_10C = 2;
+        }
+        jkDev_bScreenNeedsUpdate = 1;
+    }
+    jkHud_bViewScores = keptViewScores;
     
     Video_pCanvas = rdCanvas_New(2, Video_pMenuBuffer, Video_pVbufIdk, 0, 0, newW, newH, 6);
 #if defined(SDL2_RENDER)

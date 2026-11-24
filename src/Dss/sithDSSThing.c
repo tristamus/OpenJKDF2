@@ -423,6 +423,13 @@ int sithDSSThing_ProcessPlaySound(SithMessage *pMsg)
         SithThing* thing = sithThing_GetGuidThing(NETMSG_POPS32());
         if ( !thing )
             return 0;
+#ifdef PLATFORM_WSRELAY
+        // Added: a viewer (spectator mode) gets the players' looping sounds
+        // again with each keyframe of the feed (sithMulti_FeedKeyframe): one
+        // already playing on that player isn't started a second time.
+        if ( stdComm_WSRelay_bViewer && (flags & SITHSOUNDFLAG_LOOP) && sithSoundMixer_LoopOnThing(sound, thing) )
+            return 1;
+#endif
         out = sithSoundMixer_PlaySoundThing(sound, thing, 1.0, volume, a5, flags);
     }
 
