@@ -1888,6 +1888,30 @@
       .watch-hud .watch-kills { font-size: 0.85em; }
       .hud-keys { grid-column: 2; grid-row: 3; align-self: end; justify-self: end; color: #bbb; font-size: 0.75em; transition: opacity 0.3s; }
       .watch-screen.full.idle .hud-exit, .watch-screen.full.idle .hud-keys { opacity: 0; }
+      /* Hide all (U, .bare): nothing over the match on the whole screen
+         but a small way back, in the corner (Antonio, 2026-11-24). */
+      .hud-bare-hint { display: none; }
+      .watch-screen.full.bare .watch-hud > :not(.hud-bare-hint), .watch-screen.full.bare .watch-keys,
+      .watch-screen.full.bare .watch-follow { display: none; }
+      .watch-screen.full.bare .hud-bare-hint {
+        display: block;
+        grid-column: 1 / -1;
+        grid-row: 3;
+        align-self: end;
+        justify-self: end;
+        pointer-events: auto;
+        padding: 0.3em 0.7em;
+        border: 0;
+        background-color: rgba(0, 0, 0, 0.45);
+        color: #ddd;
+        font: inherit;
+        font-size: 0.7em;
+        opacity: 0.75;
+        cursor: pointer;
+        transition: opacity 0.3s;
+      }
+      .watch-screen.full.bare.idle .hud-bare-hint { opacity: 0.4; }
+      .watch-screen.full.bare .hud-bare-hint:hover { opacity: 1; }
       /* On a narrow or upright screen (a phone), the match's name and clock
          get lines of their own, and the scores the width. */
       @media (max-width: 700px), (max-aspect-ratio: 1/1) {
@@ -6322,6 +6346,18 @@
           ev.preventDefault();
           ev.stopImmediatePropagation();
           if (!ev.repeat) embedSays('keys');
+        }, true);
+        // U, while the viewing page has the box on the whole screen: Hide
+        // all there (.bare), not the game's.
+        window.addEventListener('keydown', function(ev) {
+          if (ev.code !== 'KeyU' || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+          if (typeof Module._sithControl_WebTyping === 'function' && Module._sithControl_WebTyping()) return;
+          var full = false;
+          try { full = !!window.parent.document.fullscreenElement; } catch (e) {}
+          if (!full) return;
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          if (!ev.repeat) embedSays('bare');
         }, true);
         // The keys for watching as the player bound them in the game, for
         // the lobby page's Controls (watchKeysPanel): {fire1: [[the game's
@@ -10890,11 +10926,20 @@
           keysB.dataset.wact = 'keys';
           top.append(keysB);
         }
+        var bare = el('button', 'hud-exit', 'Hide all (U)');
+        bare.type = 'button';
+        bare.dataset.wact = 'bare';
+        bare.title = 'Hide everything over the match; U or the corner brings it back';
         var exit = el('button', 'hud-exit', 'Exit full screen');
         exit.type = 'button';
         exit.dataset.wact = 'full';
-        top.append(exit);
+        top.append(bare, exit);
         hud.append(top);
+        // With all of it hidden (.bare), only this, in the corner.
+        var back = el('button', 'hud-bare-hint', 'U shows the scores and controls');
+        back.type = 'button';
+        back.dataset.wact = 'bare';
+        hud.append(back);
         if (w && v && v.nocount !== 'password') {
           if (v.sb.length || liveTeams(v).length) {
             var scores = el('div', 'hud-panel hud-scores');
@@ -10906,7 +10951,7 @@
           hud.append(kills);
         }
         var others = (list || []).filter(function(x) { return canWatch(x.g) && x.g.id !== watchLive.id; }).length;
-        hud.append(el('div', 'hud-keys', (others ? '← → other matches · ' : '') + 'Esc to leave'));
+        hud.append(el('div', 'hud-keys', (others ? '← → other matches · ' : '') + 'U hides all · Esc to leave'));
         return hud;
       }
 
@@ -10936,6 +10981,16 @@
         clearTimeout(watchIdleTimer);
         if (watchFullOn()) watchIdleTimer = setTimeout(function() { watchScreen.classList.add('idle'); }, 2500);
       }
+      // Hide all: on the whole screen, nothing over the match but the way
+      // back (.hud-bare-hint). U (here, or in the box's game: its page
+      // sends 'bare'), the HUD's Hide all, or the corner's hint; H brings
+      // it all back with the Controls. Over when Full screen is left; the
+      // box's class is all there is of it. No on: the other way.
+      function watchBareSet(on) {
+        if (on === undefined) on = !watchScreen.classList.contains('bare');
+        watchScreen.classList.toggle('bare', !!on);
+        watchAwake();
+      }
       // When Full screen was last left (Esc does that, not close the page).
       var watchFullLeft = 0;
       function watchFullChanged() {
@@ -10952,6 +11007,7 @@
           watchScreen.focus({ preventScroll: true });
         } else {
           watchFullLeft = Date.now();
+          watchScreen.classList.remove('bare');
           if (watchDlg.open && (document.activeElement === watchScreen || document.activeElement === document.body)) {
             b.focus({ preventScroll: true });
           }
@@ -10977,6 +11033,9 @@
           if (!watchBox.frame || watchBox.frame.parentNode !== watchScreen) return;
           ev.preventDefault();
           watchKeysToggle();
+        } else if (ev.code === 'KeyU' && watchFullOn()) {
+          ev.preventDefault();
+          watchBareSet();
         } else if (watchFullOn() && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
           ev.preventDefault();
           watchStep(ev.key === 'ArrowLeft' ? -1 : 1);
@@ -11346,6 +11405,7 @@
         }
         else if (act.dataset.wact === 'again') boxAgain();
         else if (act.dataset.wact === 'keys') watchKeysToggle();
+        else if (act.dataset.wact === 'bare') watchBareSet();
       });
 
       // Join from watching (the game watched, or the one with room id id):
@@ -11616,7 +11676,13 @@
       }
       var watchKeysOn = !watchKeysSeen();
       function watchKeysToggle() {
-        watchKeysOn = !watchKeysOn;
+        // All hidden (Hide all): back, with the Controls.
+        if (watchFullOn() && watchScreen.classList.contains('bare')) {
+          watchBareSet(false);
+          watchKeysOn = true;
+        } else {
+          watchKeysOn = !watchKeysOn;
+        }
         renderWatch();
       }
       // Once they've shown over a match being played.
@@ -11772,6 +11838,9 @@
         } else if (state === 'keys') {
           // H in the box (its page's own keydown).
           if (watchDlg.open && f.parentNode === watchScreen) watchKeysToggle();
+        } else if (state === 'bare') {
+          // U in the box, on the whole screen.
+          if (watchDlg.open && f.parentNode === watchScreen && watchFullOn()) watchBareSet();
         } else if (state === 'follow') {
           // Who its game follows now: in place, the page as it is.
           watchBox.follow = String(text || '').substring(0, 48);
