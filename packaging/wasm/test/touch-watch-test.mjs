@@ -172,4 +172,22 @@ test("a phone that watches isn't told it needs a keyboard and mouse", () => {
     assert.match(html, /var phone = phoneNote\(\) && pickerWant && pickerWant\.watch \?\n\s*'On a phone or tablet, you need the game files on it to watch in the game\.' : phoneNote\(\);/);
 });
 
+test("an iPhone's silent switch doesn't mute watching: its sound plays as a video's, and playing goes back", () => {
+    const code = cut('      function watchSoundAsVideo(on) {', '      function playWatched(id) {');
+    const set = (phone, nav) => new Function('phoneNote', 'navigator', code + '\nreturn watchSoundAsVideo;')(() => phone, nav);
+    const ios = { audioSession: { type: 'auto' } };
+    set('a phone', ios)(true);
+    assert.equal(ios.audioSession.type, 'playback');
+    set('a phone', ios)(false);
+    assert.equal(ios.audioSession.type, 'auto');
+    const mac = { audioSession: { type: 'auto' } };
+    set(null, mac)(true);
+    assert.equal(mac.audioSession.type, 'auto', 'not on a computer');
+    set('a phone', {})(true);  // Android: no audioSession, nothing to do
+    const odd = { get audioSession() { throw new Error('no'); } };
+    set('a phone', odd)(true);  // and nothing thrown
+    assert.match(html, /Module\.jkWatchRoom = w\.g\.id;\n\s*watchSoundAsVideo\(true\);/, 'asked in the tap that starts watching');
+    assert.match(html, /delete Module\.jkWatchPack;\n\s*watchSoundAsVideo\(false\);\n\s*room\.close\(\);/, 'playing: as before');
+});
+
 console.log('all ' + passed + ' passed');

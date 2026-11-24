@@ -10378,6 +10378,7 @@
         else delete Module.jkJoinImperial;
         delete Module.jkWatchRoom;
         delete Module.jkWatchPack;
+        watchSoundAsVideo(false);
         room.close();
         if (want.demo) startDemo(want);
         else openPicker(want);
@@ -11485,6 +11486,16 @@
       // id), as Join starts it joining (roomAction): Module.jkWatchRoom
       // tells the engine which. In a window of its own, the page that opened
       // it does it (jkPlayWatched), as for Join.
+      // An iPhone or iPad watching: the match's sound plays with the silent
+      // switch on, as a video's does, and pauses other sound (music) as a
+      // video does. Safari's game sound (Web Audio) follows the switch
+      // unless the page asks (WebKit bug 237322); navigator.audioSession is
+      // Safari 17's, on iOS and iPadOS. Asked in the tap that starts it.
+      function watchSoundAsVideo(on) {
+        try {
+          if (phoneNote() && navigator.audioSession) navigator.audioSession.type = on ? 'playback' : 'auto';
+        } catch (e) {}
+      }
       function playWatched(id) {
         var w = watchedGame(id);
         var can = watchInGame(w);
@@ -11510,6 +11521,7 @@
         delete Module.jkJoinRoom;
         delete Module.jkJoinImperial;
         Module.jkWatchRoom = w.g.id;
+        watchSoundAsVideo(true);
         // MotS: the game runs the player's Remastered pack only if the match
         // does (mods.js), as a joiner's does once it's restarted for it. The
         // lobby names a match with both "<mod>, Remastered pack". A match
