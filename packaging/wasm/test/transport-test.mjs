@@ -2689,6 +2689,58 @@ test('a spectator\'s message: the game watching sends it on its feed socket, the
     assert.equal(v.game.js.wsrelay_js_view_say(2000, 3000), 0, 'once the feed is closed');
 });
 
+test('who watches: a viewer tells its feed its name, and its scoreboard and a player\'s show who watches', async () => {
+    // What wsrelay_js_watchers wrote for the scoreboard: its entries, and how many watch.
+    const watchers = (g, viewer) => {
+        const n = g.js.wsrelay_js_watchers(viewer ? 1 : 0, 5000, 200);
+        const u = new Uint16Array(g.mem.buffer, 5000, 200), end = u.indexOf(0);
+        const text = String.fromCharCode(...u.slice(0, end));
+        return [n, text ? text.split('\t') : []];
+    };
+    const v = await viewer(makeWorld());
+    assert.deepEqual(v.feed.sent.filter(x => typeof x === 'string' && x.startsWith('name')), ['name '], 'no name yet: none');
+    const said = [];
+    v.game.Module.jkWatchersChanged = (n, names) => said.push([n, names]);
+    // Its player's name, once the engine has it (wsrelay_js_view_profile_name), then one typed.
+    new Uint16Array(v.game.mem.buffer, 2000, 8).set([...'Rogue'].map(c => c.charCodeAt(0)).concat(0));
+    v.game.js.wsrelay_js_view_profile_name(2000);
+    assert.equal(v.feed.sent.at(-1), 'name Rogue');
+    v.game.js.wsrelay_js_view_profile_name(2000);
+    assert.equal(v.feed.sent.filter(x => x === 'name Rogue').length, 1, 'once');
+    v.game.Module.jkWatchName = '  Kyleé  K ';
+    v.game.Module.jkView.sendName();
+    assert.equal(v.feed.sent.at(-1), 'name Kyle K');
+    // The feed says who watches: the page hears it, the scoreboard has it, its own first as "You".
+    v.feed.deliver('feed watching 4 Jan\tKyle K\tMara');
+    assert.deepEqual(said.at(-1), [4, ['Jan', 'Kyle K', 'Mara']]);
+    assert.deepEqual(watchers(v.game, true), [4, ['You', 'Jan', 'Mara', 'and 1 more']]);
+    v.feed.deliver('feed watching 2 Jan');
+    assert.deepEqual(watchers(v.game, true), [2, ['You', 'Jan']], 'it has no name there yet: one of those without');
+    v.feed.deliver('feed watching 12 ' + Array.from({ length: 12 }, (_, i) => 'P' + i).join('\t'));
+    assert.deepEqual(watchers(v.game, true), [12, ['P0', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'and 5 more']], 'at most 8');
+    v.feed.deliver('feed watching 0');
+    assert.deepEqual(watchers(v.game, true), [0, []]);
+    v.feed.deliver('feed watching nope');
+    assert.deepEqual(said.at(-1), [0, []], 'not a count: nothing');
+    v.feed.deliver('feed watching 1 Kyle K');
+    v.game.Module.jkView.close();
+    assert.deepEqual(said.at(-1), [0, []], 'gone once it stops watching');
+
+    // A player's game: the lobby's line, never the engine's to read; gone when it leaves.
+    const world = makeWorld();
+    const [host] = await room(world, [2]);
+    host.net.ws.deliver('watching 3 Kyle K\tRogue');
+    assert.deepEqual(host.net.watching, { n: 3, names: ['Kyle K', 'Rogue'] });
+    assert.deepEqual(watchers(host, false), [3, ['Kyle K', 'Rogue', 'and 1 more']]);
+    assert.deepEqual(watchers(host, true), [0, []], 'not watching itself');
+    host.net.ws.deliver('watching 0');
+    assert.deepEqual(watchers(host, false), [0, []]);
+    host.net.ws.deliver('watching 2 Rogue');
+    host.mem.set([...new TextEncoder().encode('leave'), 0], 3000);
+    host.js.wsrelay_js_send_text(3000);
+    assert.equal(host.net.watching, null);
+});
+
 test('the host\'s keyframe names the Mod Library\'s id for its mod, when it has one', async () => {
     const world = makeWorld();
     world.lobby.feed = true;

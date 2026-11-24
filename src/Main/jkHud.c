@@ -991,6 +991,49 @@ static int jkHud_SpectatorValues(jkHudValues* pOut)
 #endif
 }
 
+#ifdef PLATFORM_WSRELAY
+// Added: who watches the match, under the scores (stdComm_WSRelay_Watchers):
+// how many, then the names two to a row, where the players' rows have their
+// names and models (Antonio, 2026-11-24: no way to see who else was
+// watching; the players see it too). y: under the last row.
+static void jkHud_DrawWatchers(int y)
+{
+    char16_t aText[400];
+    char16_t aLine[64];
+    int n = stdComm_WSRelay_Watchers(aText, 400);
+    if (n <= 0)
+        return;
+    int lineH = HUD_SCALED(stdFont_GetHeight(jkHud_pMsgFontSft) + jkHud_pMsgFontSft->marginY);
+    y += HUD_SCALED(6);
+    jk_snwprintf(aLine, 64, u"Watching: %d", n);
+    stdFont_Draw1GPU(jkHud_pMsgFontSft, jkHud_rectViewScores.x + HUD_SCALED(10), y, jkHud_rectViewScores.width - HUD_SCALED(10), aLine, 1, jkPlayer_hudScale);
+    y += lineH;
+    const char16_t* p = aText;
+    int col = 0;
+    while (*p)
+    {
+        const char16_t* e = p;
+        while (*e && *e != u'\t')
+            e++;
+        int len = (int)(e - p);
+        if (len > 63)
+            len = 63;
+        memcpy(aLine, p, len * sizeof(char16_t));
+        aLine[len] = 0;
+        if (len)
+        {
+            int x = col ? HUD_SCALED(130) : HUD_SCALED(10);
+            int w = col ? jkHud_rectViewScores.width - HUD_SCALED(130) : HUD_SCALED(115);
+            stdFont_Draw1GPU(jkHud_pMsgFontSft, jkHud_rectViewScores.x + x, y, w, aLine, 1, jkPlayer_hudScale);
+            if (col)
+                y += lineH;
+            col = !col;
+        }
+        p = *e ? e + 1 : e;
+    }
+}
+#endif
+
 // MOTS altered
 void jkHud_DrawGPU()
 {
@@ -1556,6 +1599,9 @@ LABEL_116:
                 }
                 ++v54;
             }
+#ifdef PLATFORM_WSRELAY
+            jkHud_DrawWatchers(v53); // Added
+#endif
             jkHud_idk16 = 1;
         }
         else if ( jkHud_bViewScores == 2 )
@@ -1609,6 +1655,9 @@ LABEL_116:
                     v43 = jkHud_dword_553ED0;
                 }
             }
+#ifdef PLATFORM_WSRELAY
+            jkHud_DrawWatchers(v44); // Added
+#endif
             jkHud_idk16 = 2;
         }
     }

@@ -211,4 +211,25 @@ test("a finger held on Up or Down is no long press: no buzz, but Message and its
     assert.match(html, /b\.addEventListener\('pointerup', up\);/);
 });
 
+test("how many watch shows beside Leave, its names for a screen reader, and a tap shows the scores that name them", () => {
+    const code = cut('      function touchWatchWho(n, names) {', '      if (!watchEmbed) {');
+    const attrs = {}, n = { textContent: '' };
+    const b = { hidden: true, querySelector: (sel) => (assert.equal(sel, '.tw-eye-n'), n), setAttribute: (k, v) => { attrs[k] = v; } };
+    const touchWatch = { root: { querySelector: (sel) => (assert.equal(sel, '.tw-eye'), b) } };
+    const who = new Function('touchWatch', code + '\nreturn touchWatchWho;')(touchWatch);
+    who(3, ['Rogue', 'Kyle']);
+    assert.equal(b.hidden, false);
+    assert.equal(n.textContent, '3 watching');
+    assert.equal(attrs['aria-label'], '3 watching: Rogue, Kyle. Show the scores');
+    who(0, []);
+    assert.equal(b.hidden, true, 'nobody: not shown');
+    who(1, null);
+    assert.equal(attrs['aria-label'], '1 watching. Show the scores');
+    assert.match(html, /Module\.jkWatchersChanged = touchWatchWho;/);
+    assert.match(html, /class="tw-b tw-eye" data-tw="who" hidden>/);
+    assert.match(html, /else if \(name === 'scores' \|\| name === 'who'\) touchTap\('tally'\);/);
+    // A name typed in the message box is told at once, a message or not.
+    assert.match(cut('      function touchSaySend() {', '      touchWatch.form.addEventListener'), /Module\.jkView\.sendName\(\);/);
+});
+
 console.log('all ' + passed + ' passed');

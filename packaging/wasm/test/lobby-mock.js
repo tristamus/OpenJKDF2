@@ -257,8 +257,13 @@ window.jkLobbyMock = (function() {
             // And its host's game sends the feed a game watches it from.
             if (g.spect) g.feed = 1;
             var watching = g.spect ? (g.watchers || 0) + (spectating === g.id ? 1 : 0) : 0;
+            // The names of those watching from a game, as the lobby lists
+            // them: all but one of the made-up others (that one watches only
+            // the scores).
+            var named = g.spect && g.watchers > 1 ? crowd(g.watchers - 1, 20) : [];
             delete g.watchers;
             if (watching) g.watching = watching;
+            if (named.length) g.watchers = named;
             if (g.live) {
                 var v = g.live;
                 v.at = now - v.ago * 1000;
