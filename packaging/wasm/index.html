@@ -1817,6 +1817,9 @@
       .details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0; }
       .details dt { color: #808080; }
       .details dd { margin: 0; overflow-wrap: anywhere; }
+      .stage > .details { flex: none; width: auto; overflow: visible; }
+      .stage > .details section { padding: 0 0 10px; }
+      .stage > .details:empty { display: none; }
       /* The match's view, as big as the window lets it be while the clock
          still shows under it. */
       .watch-info { display: contents; }
@@ -1826,6 +1829,36 @@
         width: min(100%, max(320px, calc((min(760px, 100vh - 32px) - 210px) * 16 / 9)));
       }
       html.watch-window .stage .watch-screen { width: min(100%, max(320px, calc((100vh - 190px) * 16 / 9))); }
+      /* The theater layout, on a computer (Antonio, 2026-11-24): the match
+         as big as the window's height lets it be with its clock showing
+         under it, the list of matches beside it, and the scores, rules and
+         game under it, a scroll away. At 1366 x 768 the match was about
+         710 x 400 between the list and the details; now it's about
+         1010 x 570. The window is no wider than that needs. */
+      @media (min-width: 901px) {
+        #watch {
+          width: min(calc(100vw - 32px), calc(272px + (100vh - 200px) * 16 / 9));
+          height: calc(100vh - 32px);
+        }
+        .stage {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(240px, 36%);
+          align-content: start;
+          gap: 10px 24px;
+          border-right: 0;
+        }
+        .stage .watch-screen {
+          grid-column: 1 / -1;
+          justify-self: center;
+          width: min(100%, max(320px, calc((100vh - 200px) * 16 / 9)));
+        }
+        html.watch-window .stage .watch-screen { width: min(100%, max(320px, calc((100vh - 166px) * 16 / 9))); }
+        .watch-info { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+        /* Nothing beside it (no match, or one that ended): across, in the
+           middle. */
+        .stage:has(> .details:empty) { align-content: center; }
+        .stage:has(> .details:empty) .watch-info { grid-column: 1 / -1; }
+      }
       /* Full screen: the view fills the screen, with the match over it. */
       .watch-screen.full {
         position: fixed;
@@ -2111,16 +2144,14 @@
         /* The match comes first, then the list: a phone held sideways (or a
            tablet) showed only the list's "No games right now" lines above
            the fold (the audit of watching, 2026-11-24). */
-        .watch-body .stage, .watch-body .details { order: -1; }
-        .watch-body .details { border-bottom: 2px solid var(--win-dark); }
+        .watch-body .stage { order: -1; border-bottom: 2px solid var(--win-dark); }
       }
 
       @media (max-width: 700px) {
         #room, #watch { width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; box-shadow: none; }
         #watch [data-wact=pop] { display: none; }
         .pv { order: -1; width: auto; overflow: visible; border-bottom: 2px solid var(--win-dark); }
-        .watch-body .stage, .watch-body .details { order: -1; }
-        .watch-body .details { border-bottom: 2px solid var(--win-dark); }
+        .watch-body .stage { order: -1; border-bottom: 2px solid var(--win-dark); }
         .mlist { max-height: none; }
         .room-body { flex-direction: column; overflow-y: auto; }
         .room-games { flex: none; overflow: visible; border-right: 0; border-bottom: 2px solid var(--win-dark); padding: 12px 16px; --backdrop-x: -7px; }
@@ -3602,8 +3633,10 @@
                stay on the whole screen (Full screen). -->
           <div class="watch-screen" id="watch-screen" tabindex="-1" hidden></div>
           <div class="watch-info" id="watch-info"></div>
+          <!-- Scores, rules and the game: under the match, beside its clock
+               and kills (the theater layout), or after them on a phone. -->
+          <aside class="details" id="watch-details" aria-label="Match details"></aside>
         </section>
-        <aside class="details" id="watch-details" aria-label="Match details"></aside>
       </div>
       <div class="room-status">
         <span class="panel"><span class="live-dot" id="watch-live-dot"></span><span id="watch-live">Connecting</span></span>
