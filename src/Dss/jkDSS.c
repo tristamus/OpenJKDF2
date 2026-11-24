@@ -406,6 +406,11 @@ int jkDSS_ProcessSetSaberInfoMots(SithMessage *msg)
     }
     if (v5) // MOTS added
         sithThing_SetThingModel(v2, v5);
+#ifdef PLATFORM_WSRELAY
+    // Added: what a game watching the match puts each player in, for its log.
+    if ( v5 && stdComm_WSRelay_bViewer )
+        stdPlatform_Printf("OpenJKDF2: Watching: player thing %d is %s.\n", (int)v2->idx, model_3do_fname);
+#endif
     sithSoundClass* v6 = sithSoundClass_Load(v14);
     if ( v6 )
         sithSoundClass_SetThingClass(v2, v6);
@@ -499,6 +504,11 @@ int jkDSS_ProcessSetSaberInfo(SithMessage *msg)
     if ( !v5 )
         return 1; // MOTS removed
     sithThing_SetThingModel(v2, v5);
+#ifdef PLATFORM_WSRELAY
+    // Added: what a game watching the match puts each player in, for its log.
+    if ( stdComm_WSRelay_bViewer )
+        stdPlatform_Printf("OpenJKDF2: Watching: player thing %d is %s.\n", (int)v2->idx, model_3do_fname);
+#endif
     sithSoundClass* v6 = sithSoundClass_Load(v14);
     if ( v6 )
         sithSoundClass_SetThingClass(v2, v6);
