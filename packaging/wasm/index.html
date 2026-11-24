@@ -1922,15 +1922,16 @@
       .hud-keys { grid-column: 2; grid-row: 3; align-self: end; justify-self: end; color: #bbb; font-size: 0.75em; transition: opacity 0.3s; }
       .watch-screen.full.idle .hud-exit, .watch-screen.full.idle .hud-keys { opacity: 0; }
       /* Hide all (U, .bare): nothing over the match on the whole screen
-         but a small way back, in the corner (Antonio, 2026-11-24). */
+         but a small way back, in the top corner, clear of the game's own
+         gauges in the bottom ones (Antonio, 2026-11-24). */
       .hud-bare-hint { display: none; }
       .watch-screen.full.bare .watch-hud > :not(.hud-bare-hint), .watch-screen.full.bare .watch-keys,
       .watch-screen.full.bare .watch-follow { display: none; }
       .watch-screen.full.bare .hud-bare-hint {
         display: block;
         grid-column: 1 / -1;
-        grid-row: 3;
-        align-self: end;
+        grid-row: 1;
+        align-self: start;
         justify-self: end;
         pointer-events: auto;
         padding: 0.3em 0.7em;
