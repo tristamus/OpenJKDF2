@@ -295,8 +295,11 @@
       .touch-watch .tw-side { top: 50%; right: 10px; display: flex; flex-direction: column; gap: 10px; transform: translateY(-50%); }
       .touch-watch .tw-updown { top: 50%; right: 76px; display: flex; flex-direction: column; gap: 10px; transform: translateY(-50%); }
       .touch-watch:not(.tw-free) .tw-updown { display: none; }
+      /* At the bottom: the game writes its messages (players' chat, kills, the view
+         picked) and the scoreboard at the top middle, which this covered (beta,
+         2026-11-24). The bottom middle has nothing of the game's for a spectator. */
       .touch-watch .tw-pill {
-        top: 4px;
+        bottom: max(6px, env(safe-area-inset-bottom));
         left: 50%;
         display: flex;
         align-items: center;
@@ -394,7 +397,7 @@
       .touch-watch.tw-saying .tw-ui { display: none; }
       .touch-watch.tw-wait .tw-ui > :not(.tw-leave) { display: none; }
       @media (max-width: 600px) {
-        .touch-watch .tw-pill { top: 64px; max-width: calc(100% - 32px); }
+        .touch-watch .tw-pill { max-width: calc(100% - 32px); }
       }
       /* Over the top of the game in a tab that another tab's game took the
          saves from. It leaves the game playable underneath. */
@@ -12313,6 +12316,9 @@
         touchWatch.stick.classList.remove('tw-fast');
         touchWatch.knob.style.transform = '';
       }
+      function touchEventMs(ev) {
+        return ev.timeStamp > 0 ? ev.timeStamp : performance.now();
+      }
       function touchHas(kind) {
         var t = touchWatch;
         return Object.keys(t.pointers).some(function(id) { return t.pointers[id].kind === kind; });
@@ -12324,7 +12330,10 @@
         if (ev.pointerType === 'mouse' || Object.keys(t.pointers).length >= 2) return;
         var kind = !t.live ? 'tap' : !t.free ? 'swipe' : ev.clientX < innerWidth * 0.4 && !touchHas('stick') ? 'stick' : 'look';
         if (kind === 'look' && touchHas('look')) return;
-        var p = { kind: kind, x0: ev.clientX, y0: ev.clientY, x: ev.clientX, y: ev.clientY, at: performance.now(), moved: false, fast: false };
+        // When the finger touched, not when this ran: a slow frame of the game's holds
+        // the page's handlers back, and a tap would then pass for a long press (beta,
+        // 2026-11-24: a tap didn't bring the buttons back).
+        var p = { kind: kind, x0: ev.clientX, y0: ev.clientY, x: ev.clientX, y: ev.clientY, at: touchEventMs(ev), moved: false, fast: false };
         t.pointers[ev.pointerId] = p;
         try { t.pad.setPointerCapture(ev.pointerId); } catch (e) {}
         if (kind === 'stick') {
@@ -12357,10 +12366,14 @@
         delete t.pointers[ev.pointerId];
         if (p.kind === 'stick') touchStickEnd(p);
         if (ev.type !== 'pointerup') return;
-        var dx = p.x - p.x0, dy = p.y - p.y0, ms = performance.now() - p.at;
+        var dx = p.x - p.x0, dy = p.y - p.y0, ms = touchEventMs(ev) - p.at;
         if (!p.moved && ms < TOUCH_TAP_MS) touchWatchToggle();
-        else if (p.kind === 'swipe' && t.live && Math.abs(dx) >= TOUCH_SWIPE_PX && Math.abs(dx) > 1.5 * Math.abs(dy) &&
-                 ms < TOUCH_SWIPE_MS) touchTap(dx < 0 ? 'fire1' : 'fire2');
+        else {
+          if (p.kind === 'swipe' && t.live && Math.abs(dx) >= TOUCH_SWIPE_PX && Math.abs(dx) > 1.5 * Math.abs(dy) &&
+              ms < TOUCH_SWIPE_MS) touchTap(dx < 0 ? 'fire1' : 'fire2');
+          // The buttons stay for TOUCH_IDLE_MS from letting go, not from touching down.
+          if (!t.root.classList.contains('tw-faded')) touchWatchWake();
+        }
         touchWatchFullscreen();
       };
       touchWatch.pad.addEventListener('pointerup', touchPadUp);
