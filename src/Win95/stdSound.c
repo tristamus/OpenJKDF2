@@ -392,10 +392,19 @@ static void stdSound_SetSourceVolume(stdSound_buffer_t* sound, flex_t vol, int b
     if (bChanged)
         alSourcef(sound->source, AL_GAIN, sound->vol);
 
+    // Changed: only a sound that plays once is stopped at no volume. A
+    // looping one goes on, silent. The mixer still held a stopped loop as
+    // playing and never started it again, so when its volume came back (a
+    // fade back in, a sector's ambient sound) it stayed silent for the rest
+    // of the level: one way a level's wind could go for good (Antonio,
+    // 2026-11-24, on Canyon Oasis while watching). The mixer stops a loop
+    // itself when it's done with it (stdSound_BufferReset).
     if (vol == 0.0)
     {
-        alSourcei(sound->source, AL_LOOPING, AL_FALSE);
-        alSourceStop(sound->source);
+        ALint bLooping = AL_FALSE;
+        alGetSourcei(sound->source, AL_LOOPING, &bLooping);
+        if (!bLooping)
+            alSourceStop(sound->source);
     }
 }
 

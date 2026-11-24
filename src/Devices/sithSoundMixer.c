@@ -665,6 +665,27 @@ void sithSoundMixer_SetVolume(sithPlayingSound *hChannel, flex_t volume)
     }
 }
 
+// Added: the refid of the channel playing the sector's ambient sound
+// (sithSoundMixer_hCurAmbientChannel), as it was when it started.
+static int sithSoundMixer_curAmbientRefid = 0;
+
+// Added: when the view's sector last had its ambient sound started again
+// (sithSoundMixer_TickSectorSound), in real time.
+static uint32_t sithSoundMixer_msecAmbientRetry = 0;
+
+// Added: whether the channel kept for the view's sector's ambient sound
+// has stopped since it started: its slot freed, and maybe given to another
+// sound since (the refid differs then), or fading out to stop (another
+// game's stop for a sound of its own with the same refid,
+// sithDSSThing_ProcessStopSound). sithSoundMixer_TickSectorSound lets go of
+// a channel when it fades it out, so one still kept and fading is being
+// stopped from elsewhere.
+static int sithSoundMixer_AmbientGone(sithPlayingSound* pChannel)
+{
+    return !pChannel->sound || pChannel->refid != sithSoundMixer_curAmbientRefid
+        || (pChannel->flags & (SITHSOUNDFLAG_PLAYING | SITHSOUNDFLAG_FADING)) != SITHSOUNDFLAG_PLAYING;
+}
+
 sithPlayingSound* sithSoundMixer_StopSectorSound(sithSound* pSound)
 {
     if (!sithSoundMixer_bOpened) {
@@ -683,6 +704,7 @@ sithPlayingSound* sithSoundMixer_StopSectorSound(sithSound* pSound)
             stdSound_BufferSetPan(v28->pSoundBuf, 0.0);
             if ( sithSoundMixer_sub_4DD3F0(v28) )
             {
+                sithSoundMixer_curAmbientRefid = v28->refid; // Added: sithSoundMixer_AmbientGone
                 return v28;
             }
         }
@@ -709,6 +731,33 @@ void sithSoundMixer_TickSectorSound()
     flex_t v43; // [esp+4h] [ebp-10h]
 
     v1 = sithCamera_g_pCurCamera->sector;
+
+    // Added: the ambient sound of the sector in view (a level's wind, its
+    // machines' hum) was only looked at when the view went into another
+    // sector. A channel of it that stopped in the meantime, or never got
+    // to play, stayed silent until then, and with it gone the next sector
+    // with the same sound only had its volume set on the channel kept:
+    // another way a level's wind could go for good (Antonio, 2026-11-24, on
+    // Canyon Oasis while watching). Start it again then, and try again each
+    // second while it can't play.
+    if (sithSoundMixer_hCurAmbientChannel)
+    {
+        if (sithSoundMixer_AmbientGone(sithSoundMixer_hCurAmbientChannel))
+        {
+            sithSoundMixer_hCurAmbientChannel = NULL;
+            sithSoundMixer_pCurSector = NULL;
+        }
+    }
+    else if (v1 && v1 == sithSoundMixer_pCurSector && v1->hAmbientSound && v1->ambientSoundVolume != 0.0)
+    {
+        uint32_t msecNow = stdPlatform_GetTimeMsec();
+        if (msecNow - sithSoundMixer_msecAmbientRetry >= 1000)
+        {
+            sithSoundMixer_msecAmbientRetry = msecNow;
+            sithSoundMixer_pCurSector = NULL;
+        }
+    }
+
     if ( v1 == sithSoundMixer_pCurSector )
         return;
 
@@ -747,9 +796,12 @@ void sithSoundMixer_TickSectorSound()
         v4 = -sithSoundMixer_hCurAmbientChannel->vol_2;
         if (v4 == 0.0)
         {
-            sithSoundMixer_hCurAmbientChannel->flags |= SITHSOUNDFLAG_FADING;
+            // Changed: stopped, silent already. Marked as fading with no
+            // fade to go (sithSoundMixer_TickPlayingSound stops one only at
+            // the end of a fade out), it kept its channel for the rest of the
+            // level.
+            sithSoundMixer_StopSound(sithSoundMixer_hCurAmbientChannel);
             sithSoundMixer_hCurAmbientChannel = NULL;
-            
         }
         else
         {
@@ -807,7 +859,11 @@ void sithSoundMixer_TickSectorSound()
                 v3->flags |= SITHSOUNDFLAG_FADE_IN;
         }
         //printf("%s fade\n", v3->sound->sound_fname);
-        v3->flags |= SITHSOUNDFLAG_FADING;
+        // Changed: one silent already is stopped, as above.
+        if (v20 != 0.0)
+            v3->flags |= SITHSOUNDFLAG_FADING;
+        else
+            sithSoundMixer_StopSound(v3);
         v3 = sithSoundMixer_StopSectorSound(lastSectorFadingOutSound);
         sithSoundMixer_hCurAmbientChannel = v3;
         if (!v3)
