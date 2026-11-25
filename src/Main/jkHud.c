@@ -1377,6 +1377,9 @@ void jkHud_DrawGPU()
 
         flex_t line_len = v24 - v25 + 1;
         flex_t line_width = jkPlayer_crosshairLineWidth;
+#ifdef ARCH_WASM
+        line_width *= Window_hudPixelScale; // Added: as thick on screen at any Sharpness (Window.c)
+#endif
 
         rdRect rect1 = {(int)(v22 - v24), (int)(v23-(line_width/2)), (int)(line_len), (int)(line_width)}; // left
         rdRect rect2 = {(int)(v22 + v25), (int)(v23-(line_width/2)), (int)(line_len), (int)(line_width)}; // right

@@ -140,7 +140,7 @@ void jkGuiDisplay_Startup()
     jk_snwprintf(render_level, 255, u"%.2f", ftmp);
     ftmp = jkPlayer_gamma;
     jk_snwprintf(gamma_level, 255, u"%.2f", ftmp);
-    ftmp = jkPlayer_hudScale;
+    ftmp = JKPLAYER_HUDSCALE_SETTING;
     jk_snwprintf(hud_level, 255, u"%.2f", ftmp);
 }
 
@@ -225,7 +225,12 @@ int jkGuiDisplay_Show()
     jkGuiDisplay_aElements[10].selectedTextEntry = jkPlayer_fov - FOV_MIN;
     jkGuiDisplay_aElements[12].selectedTextEntry = jkPlayer_fovIsVertical;
     jkGuiDisplay_aElements[13].selectedTextEntry = Window_isFullscreen;
+#ifdef ARCH_WASM
+    // Added: in the browser, Enable HiDPI is the page's Sharpness: ticked = sharper than one canvas pixel per page pixel.
+    jkGuiDisplay_aElements[14].selectedTextEntry = Window_WasmSharpIsUp();
+#else
     jkGuiDisplay_aElements[14].selectedTextEntry = Window_isHiDpi;
+#endif
     jkGuiDisplay_aElements[15].selectedTextEntry = jkPlayer_enableTextureFilter;
     jkGuiDisplay_aElements[16].selectedTextEntry = jkPlayer_enableOrigAspect;
 
@@ -239,7 +244,7 @@ int jkGuiDisplay_Show()
     jk_snwprintf(render_level, 255, u"%.2f", ftmp);
     ftmp = jkPlayer_gamma;
     jk_snwprintf(gamma_level, 255, u"%.2f", ftmp);
-    ftmp = jkPlayer_hudScale;
+    ftmp = JKPLAYER_HUDSCALE_SETTING;
     jk_snwprintf(hud_level, 255, u"%.2f", ftmp);
 
 continue_menu:
@@ -254,7 +259,12 @@ continue_menu:
         jkPlayer_fov = FOV_MIN + jkGuiDisplay_aElements[10].selectedTextEntry;
         jkPlayer_fovIsVertical = jkGuiDisplay_aElements[12].selectedTextEntry;
         Window_SetFullscreen(jkGuiDisplay_aElements[13].selectedTextEntry);
+#ifdef ARCH_WASM
+        if (!!jkGuiDisplay_aElements[14].selectedTextEntry != Window_WasmSharpIsUp())
+            Window_WasmSetSharp(jkGuiDisplay_aElements[14].selectedTextEntry); // Added: ticked = Full, else Standard
+#else
         Window_SetHiDpi(jkGuiDisplay_aElements[14].selectedTextEntry);
+#endif
         jkPlayer_enableTextureFilter = jkGuiDisplay_aElements[15].selectedTextEntry;
         jkPlayer_enableOrigAspect = jkGuiDisplay_aElements[16].selectedTextEntry;
         jkPlayer_fpslimit = FPS_LIMIT_MIN + jkGuiDisplay_aElements[18].selectedTextEntry;
@@ -287,14 +297,14 @@ continue_menu:
 
         stdString_WcharToChar(tmp, hud_level, 255);
         if(_sscanf(tmp, "%f", &ftmp) != 1) {
-            jkPlayer_hudScale = 1.0;
+            JKPLAYER_HUDSCALE_SETTING = 1.0;
         }
         else {
-            jkPlayer_hudScale = ftmp;
+            JKPLAYER_HUDSCALE_SETTING = ftmp;
         }
 
-        if (jkPlayer_hudScale > 100.0) {
-            jkPlayer_hudScale = 100.0;
+        if (JKPLAYER_HUDSCALE_SETTING > 100.0) {
+            JKPLAYER_HUDSCALE_SETTING = 100.0;
         }
 
         jkPlayer_WriteConf(jkPlayer_playerShortName);
