@@ -149,6 +149,10 @@ jobs:
       # engine's commands, the message, and Watch going straight in.
       - name: Test the touch controls for watching
         run: node packaging/wasm/test/touch-watch-test.mjs
+      # Sharpness: canvas pixels per page pixel at each step, where a phone
+      # and a computer start, the step down when slow, Enable HiDPI.
+      - name: Test the sharpness
+        run: node packaging/wasm/test/sharpness-test.mjs
       # The files the page loads or opens by name beside itself: all in the
       # web folder collected below and in build_run_openjkdf2_wasm.sh's.
       - name: Test the web folder's files

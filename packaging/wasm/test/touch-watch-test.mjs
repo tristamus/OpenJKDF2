@@ -164,7 +164,8 @@ test('Back on a phone leaves watching for the viewing page, once the controls sh
     const code = cut('      function touchWatchBackArm() {', '      function touchWatchLeave() {');
     assert.match(code, /history\.pushState\(/);
     assert.match(code, /window\.addEventListener\('popstate'/);
-    assert.match(code, /if \(t\.saying\) \{\s*touchSayClose\(\);\s*return touchWatchBackArm\(\);\s*\}\s*touchWatchLeave\(\);/);
+    // With the message box or Graphics open, Back only closes it.
+    assert.match(code, /if \(t\.saying \|\| t\.gfx\) \{\s*if \(t\.saying\) touchSayClose\(\);\s*if \(t\.gfx\) touchGfxClose\(\);\s*return touchWatchBackArm\(\);\s*\}\s*touchWatchLeave\(\);/);
 });
 
 test("a phone that watches isn't told it needs a keyboard and mouse", () => {
@@ -206,6 +207,8 @@ test("a finger held on Up or Down is no long press: no buzz, but Message and its
     assert.equal(on(['[data-tw=msg]']), false, 'Message opens its box on its click');
     assert.equal(on(['.tw-say']), false, 'the box takes the keyboard');
     assert.equal(on(['.tw-turn']), false, 'the turn card goes by clicks');
+    assert.equal(on(['[data-tw=gfx]']), false, 'Graphics opens its panel on its click');
+    assert.equal(on(['.tw-gfx']), false, "the panel's steps go by clicks");
     assert.equal(on([], false), false, 'one already scrolling');
     // The controls go by pointer events, which turning the touch down leaves.
     assert.match(html, /b\.addEventListener\('pointerup', up\);/);

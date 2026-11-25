@@ -41,6 +41,11 @@ extern int Window_isHiDpi;
 extern int Window_isFullscreen;
 void Window_SetHiDpi(int val);
 void Window_KeepMinimumSize(void); // Added
+#ifdef ARCH_WASM
+// Added: Enable HiDPI in the browser is the page's Sharpness (index.html).
+int Window_WasmSharpIsUp(void);
+void Window_WasmSetSharp(int bUp);
+#endif
 void Window_SetFullscreen(int val);
 
 

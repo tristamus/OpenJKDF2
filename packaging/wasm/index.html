@@ -458,6 +458,59 @@
       .touch-watch .tw-turn .tw-turn-skip { border: 0; background: none; font-size: 13px; font-weight: 500; color: #bfe9ee; text-decoration: underline; padding: 4px 8px; }
       .touch-watch.tw-turning .tw-ui > :not(.tw-leave) { display: none; }
       .touch-watch.tw-saying .tw-ui { display: none; }
+      /* Graphics: how sharp the game draws (sharpness), over the top middle so
+         the picture under it shows each step as it's picked. */
+      .touch-watch .tw-gfx {
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        box-sizing: border-box;
+        width: min(440px, calc(100% - 32px));
+        padding: 8px 10px 10px;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 18px;
+        background: rgba(8, 22, 26, 0.92);
+        transform: translateX(-50%);
+        font-size: 12px;
+      }
+      .touch-watch .tw-gfx[hidden] { display: none; }
+      .touch-watch .tw-gfx-head { display: flex; align-items: center; gap: 8px; margin: 0 0 8px 4px; }
+      .touch-watch .tw-gfx-head b { font-size: 15px; color: var(--gold); }
+      .touch-watch .tw-gfx-fps { flex: 1; color: #bfe9ee; font-weight: 500; }
+      .touch-watch .tw-gfx button {
+        margin: 0;
+        border: 1.5px solid rgba(143, 219, 228, 0.75);
+        border-radius: 14px;
+        background: rgba(143, 219, 228, 0.16);
+        color: #e8f7f9;
+        font: 600 14px Roboto, Arial, sans-serif;
+        touch-action: manipulation;
+      }
+      .touch-watch .tw-gfx-done { padding: 6px 16px; }
+      .touch-watch .tw-gfx-steps { display: flex; gap: 6px; }
+      .touch-watch .tw-gfx-steps button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 7px 4px; }
+      .touch-watch .tw-gfx-steps button span { font-size: 11px; font-weight: 500; color: #bfe9ee; }
+      .touch-watch .tw-gfx-steps button[aria-checked="true"] { border-color: var(--gold); background: rgba(255, 204, 102, 0.28); color: var(--gold); }
+      .touch-watch .tw-gfx-say { margin: 8px 4px 0; color: #bfe9ee; font-weight: 500; }
+      .touch-watch.tw-gfxing .tw-ui { display: none; }
+      /* A word from the page over the picture (the sharpness stepping down),
+         shown even while the buttons are faded. */
+      .touch-watch .tw-note {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        max-width: min(420px, calc(100% - 180px));
+        margin: 0;
+        padding: 6px 12px;
+        border-radius: 12px;
+        background: rgba(8, 22, 26, 0.85);
+        transform: translate(-50%, -50%);
+        font-size: 12px;
+        text-align: center;
+        text-shadow: 0 1px 2px #000;
+        pointer-events: none;
+      }
+      .touch-watch .tw-note[hidden] { display: none; }
       .touch-watch.tw-wait .tw-ui > :not(.tw-leave) { display: none; }
       @media (max-width: 600px) {
         .touch-watch .tw-pill { max-width: calc(100% - 32px); }
@@ -2737,6 +2790,7 @@
           <button type="button" class="tw-b" data-tw="msg"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H10l-4.5 4v-4H4z" fill="none" stroke="#e8f7f9" stroke-width="2" stroke-linejoin="round"/></svg></i>Message</button>
           <button type="button" class="tw-b" data-tw="scores"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v4a5 5 0 01-10 0z" fill="none" stroke="#e8f7f9" stroke-width="2"/><path d="M7 6H4v1a3 3 0 003 3M17 6h3v1a3 3 0 01-3 3M12 13v4M8 20h8" fill="none" stroke="#e8f7f9" stroke-width="2" stroke-linecap="round"/></svg></i>Scores</button>
           <button type="button" class="tw-b" data-tw="map"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z M9 4v14 M15 6v14" fill="none" stroke="#e8f7f9" stroke-width="1.9" stroke-linejoin="round"/></svg></i>Map</button>
+          <button type="button" class="tw-b" data-tw="gfx"><i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="#e8f7f9" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="7" r="2.4" fill="#ffcc66"/><circle cx="15" cy="12" r="2.4" fill="#ffcc66"/><circle cx="7" cy="17" r="2.4" fill="#ffcc66"/></svg></i>Graphics</button>
         </div>
         <div class="tw-side">
           <button type="button" class="tw-b" data-tw="view"><i><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.2" fill="none" stroke="#e8f7f9" stroke-width="2"/><path d="M5.5 20c.5-4 3.2-6.5 6.5-6.5s6 2.5 6.5 6.5" fill="none" stroke="#e8f7f9" stroke-width="2" stroke-linecap="round"/><path d="M2 12h3M19 12h3" stroke="#ffcc66" stroke-width="2" stroke-linecap="round"/></svg></i>1st / 3rd</button>
@@ -2756,6 +2810,12 @@
         <button type="button" class="tw-turn-go" data-tw-turn="go">Tap to turn it</button>
         <button type="button" class="tw-turn-skip" data-tw-turn="skip">Keep watching upright</button>
       </div>
+      <div class="tw-gfx" role="dialog" aria-label="Graphics" hidden>
+        <div class="tw-gfx-head"><b>Sharpness</b><span class="tw-gfx-fps"></span><button type="button" class="tw-gfx-done" data-tw-gfx="done">Done</button></div>
+        <div class="tw-gfx-steps" role="radiogroup" aria-label="Sharpness"></div>
+        <p class="tw-gfx-say"></p>
+      </div>
+      <p class="tw-note" role="status" hidden></p>
       <form class="tw-say" hidden autocomplete="off">
         <input type="text" class="tw-say-name" maxlength="16" enterkeyhint="next" autocapitalize="words" spellcheck="false" placeholder="Your name" aria-label="Your name, as the players see it">
         <input type="text" class="tw-say-text" maxlength="96" enterkeyhint="send" autocapitalize="sentences" spellcheck="false" placeholder="Message the players" aria-label="Message the players">
@@ -3894,10 +3954,9 @@
         monitorRunDependencies: function(left) {
           this.totalDependencies = Math.max(this.totalDependencies, left);
           Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
-
-          if (!left) {
-            window.onresize();
-          }
+          // The canvas was sized to the window here too: SDL sizes it as it
+          // makes its window, at the canvas's page size times the sharpness
+          // (see Sharpness).
         }
       };
       Module.setStatus('Downloading...');
@@ -4326,14 +4385,10 @@
         ev.returnValue = true;  // Chrome and Edge before 119
       });
 
-      window.onresize = function()
-      {
-          var canvas = document.getElementById('canvas');
-          canvas.width = window.innerWidth;
-          canvas.style.width = window.innerWidth;
-          canvas.height = window.innerHeight;
-          canvas.style.height = window.innerHeight;
-      }
+      // The canvas's size is SDL's to set (Emscripten_HandleResize): its page
+      // size times the sharpness picked (Module.jkPixelRatio). This page set
+      // it to the window's size on a resize too, which only agreed with SDL
+      // at one canvas pixel per page pixel.
     </script>
     <script type='text/javascript'>
       // ---- Screenshots: F8 or F12 in a game, or the key set for them. The engine
@@ -12378,6 +12433,145 @@
         playFullscreen();
       }, true);
 
+      // ---- Sharpness (Antonio, 2026-11-24: the picture looked low-res on
+      // his phone). The game drew one canvas pixel for each of the page's
+      // (CSS) pixels: on a phone, whose screen has about three for each, a
+      // third of its pixels each way, which the browser stretched up. It
+      // draws as many as picked here now (Module.jkPixelRatio, which SDL asks
+      // through packaging/wasm/pixelratio.js): Standard, one per page pixel
+      // as before; Sharp, half way; Full, every pixel of the screen. The
+      // game's gauges, text and crosshair keep their size on screen
+      // (Window_hudPixelScale, Window.c). A phone or tablet starts at Full and
+      // steps down one at a time when it can't keep up (under SHARP_SLOW_FPS
+      // for SHARP_SLOW_MS; his pick, 2026-11-24); a step picked by hand
+      // stays. A computer starts at Standard; Setup > Display > Enable HiDPI
+      // picks Full there (Window_WasmSetSharp).
+      var SHARP_KEY = 'jkdf2mp-sharpness', SHARP_BY_KEY = 'jkdf2mp-sharpness-by';
+      var SHARP_STEPS = ['standard', 'sharp', 'full'];
+      var SHARP_NAMES = { standard: 'Standard', sharp: 'Sharp', full: 'Full' };
+      var SHARP_SLOW_FPS = 30, SHARP_SLOW_MS = 10000, SHARP_CHECK_MS = 1000;
+      // Sharp only on a screen with this many pixels per page pixel or more:
+      // below, it's too close to Standard or Full to show.
+      var SHARP_MIDDLE_FROM = 1.75;
+      // At most a 4K picture (3840x2160): the game's scene alone takes 16
+      // bytes a pixel (.notes/ssaa.md), and a tablet's or a big screen's
+      // Full could be more.
+      var SHARP_MAX_PIXELS = 3840 * 2160;
+      // by: 'hand' (picked in Graphics or with Enable HiDPI), 'auto' (stepped
+      // down here), '' (the start).
+      var sharpness = { level: 'standard', by: '' };
+      (function() {
+        var level = null, by = '';
+        try {
+          level = localStorage.getItem(SHARP_KEY);
+          by = localStorage.getItem(SHARP_BY_KEY) || '';
+        } catch (e) {}
+        if (SHARP_STEPS.indexOf(level) < 0) {
+          level = phoneNote() ? 'full' : 'standard';
+          by = '';
+        }
+        sharpness.level = level;
+        sharpness.by = by === 'hand' || by === 'auto' ? by : '';
+      })();
+      function sharpDpr() {
+        var d = Number(window.devicePixelRatio) || 1;
+        return d > 1 ? Math.min(d, 4) : 1;
+      }
+      // The steps this screen has.
+      function sharpSteps() {
+        var dpr = sharpDpr();
+        if (dpr < 1.1) return ['standard'];
+        return dpr >= SHARP_MIDDLE_FROM ? SHARP_STEPS.slice() : ['standard', 'full'];
+      }
+      // The step in use: one this screen has.
+      function sharpLevel() {
+        var steps = sharpSteps(), at = SHARP_STEPS.indexOf(sharpness.level);
+        while (at > 0 && steps.indexOf(SHARP_STEPS[at]) < 0) at--;
+        return SHARP_STEPS[Math.max(0, at)];
+      }
+      function sharpRatioOf(level) {
+        var dpr = sharpDpr();
+        if (level === 'full') return dpr;
+        if (level === 'sharp' && dpr >= SHARP_MIDDLE_FROM) return 1 + (dpr - 1) / 2;
+        return 1;
+      }
+      function sharpPageSize() {
+        var c = Module.canvas;
+        return { w: (c && c.clientWidth) || innerWidth, h: (c && c.clientHeight) || innerHeight };
+      }
+      // Canvas pixels per page pixel, for the game, kept to SHARP_MAX_PIXELS.
+      function sharpRatio() {
+        var r = sharpRatioOf(sharpLevel()), size = sharpPageSize();
+        if (size.w > 0 && size.h > 0 && size.w * size.h * r * r > SHARP_MAX_PIXELS)
+          r = Math.max(1, Math.sqrt(SHARP_MAX_PIXELS / (size.w * size.h)));
+        return r;
+      }
+      Module.jkPixelRatio = sharpRatio;
+      // "1080p": the picture's short side at a step, as screens are named.
+      function sharpLines(level) {
+        var size = sharpPageSize(), r = sharpRatioOf(level);
+        var max = size.w * size.h * r * r > SHARP_MAX_PIXELS ? Math.sqrt(SHARP_MAX_PIXELS / (size.w * size.h)) : r;
+        return Math.round(Math.min(size.w, size.h) * Math.max(1, Math.min(r, max))) + 'p';
+      }
+      // To the game, after the event that changed it: on a resize SDL sizes
+      // the canvas again, asking the ratio (Emscripten_HandleResize), and the
+      // game draws at the new size from its next frame.
+      function sharpSet(level, by) {
+        sharpness.level = level;
+        sharpness.by = by;
+        try {
+          localStorage.setItem(SHARP_KEY, level);
+          localStorage.setItem(SHARP_BY_KEY, by);
+        } catch (e) {}
+        setTimeout(function() {
+          try { window.dispatchEvent(new Event('resize')); } catch (e) {}
+        }, 0);
+        if (typeof touchGfxShow === 'function') touchGfxShow();
+      }
+      // Whether this page may still step down by itself.
+      function sharpCanStepDown() {
+        return sharpness.by !== 'hand' && sharpSteps().indexOf(sharpLevel()) > 0;
+      }
+      // Setup > Display > Enable HiDPI (jkGUIDisplay.c): ticked while the
+      // picture is sharper than Standard; ticking it picks Full.
+      Module.jkSharpness = {
+        isUp: function() { return sharpRatioOf(sharpLevel()) > 1; },
+        fromGame: function(up) { sharpSet(up ? 'full' : 'standard', 'hand'); }
+      };
+      // A step down when the game stays under SHARP_SLOW_FPS (frames drawn in a
+      // level, as Slow frames counts them) for SHARP_SLOW_MS, and a word that
+      // it did. Not past a step picked by hand, nor with the player's own FPS
+      // limit about that low.
+      (function() {
+        var seen = 0, slowMs = 0;
+        setInterval(function() {
+          var frames = Module.jkFrames;
+          if (!frames || typeof frameTimes !== 'function') return;
+          var t = frameTimes(frames, seen), stats = frameStats(t.times, t.work);
+          seen = frames.count;
+          if (document.hidden || !sharpCanStepDown() || document.documentElement.classList.contains('gl-lost')) {
+            slowMs = 0;
+            return;
+          }
+          // Mostly in a menu: no say either way.
+          if (!stats || stats.seconds < SHARP_CHECK_MS / 2000) return;
+          var settings = displaySettings();
+          var limited = settings && settings.fpsLimit && settings.fpsLimit <= SHARP_SLOW_FPS + 8;
+          if (stats.fps >= SHARP_SLOW_FPS || limited) {
+            slowMs = 0;
+            return;
+          }
+          slowMs += stats.seconds * 1000;
+          if (slowMs < SHARP_SLOW_MS) return;
+          slowMs = 0;
+          var steps = sharpSteps(), down = steps[steps.indexOf(sharpLevel()) - 1];
+          console.log('OpenJKDF2: ' + stats.fps.toFixed(1) + ' fps at ' + SHARP_NAMES[sharpLevel()] + ' sharpness, stepping down to ' + SHARP_NAMES[down]);
+          sharpSet(down, 'auto');
+          if (typeof touchWatchNote === 'function')
+            touchWatchNote('Sharpness lowered to ' + SHARP_NAMES[down] + ' to keep the picture smooth. Graphics changes it.');
+        }, SHARP_CHECK_MS);
+      })();
+
       // ---- Touch controls for watching a match in the game on a phone or
       // tablet (Antonio, 2026-11-24: a phone had no way to move the free
       // camera, look around, change player or view, see the scores or send a
@@ -12407,7 +12601,7 @@
       var touchWatch = {
         root: document.getElementById('touch-watch'), shown: false, live: false, on: false, kbd: false,
         free: true, name: '', saying: false, leaving: false, idleTimer: 0, hintTimer: 0, hinted: false,
-        pointers: {}, swallow: false, upright: false, uprightOk: false
+        pointers: {}, swallow: false, upright: false, uprightOk: false, gfx: false, gfxTimer: 0, noteTimer: 0
       };
       touchWatch.pad = touchWatch.root.querySelector('.tw-pad');
       touchWatch.stick = touchWatch.root.querySelector('.tw-stick');
@@ -12415,6 +12609,8 @@
       touchWatch.turn = touchWatch.root.querySelector('.tw-turn');
       touchWatch.hint = touchWatch.root.querySelector('.tw-hint');
       touchWatch.form = touchWatch.root.querySelector('.tw-say');
+      touchWatch.panel = touchWatch.root.querySelector('.tw-gfx');
+      touchWatch.note = touchWatch.root.querySelector('.tw-note');
       touchWatch.input = touchWatch.form.querySelector('.tw-say-text');
       touchWatch.input.maxLength = TOUCH_SAY_MAX;
       touchWatch.nameInput = touchWatch.form.querySelector('.tw-say-name');
@@ -12531,7 +12727,7 @@
         clearTimeout(t.idleTimer);
         if (!t.shown || !t.live) return;
         t.idleTimer = setTimeout(function() {
-          if (t.saying || Object.keys(t.pointers).length) return touchWatchWake();
+          if (t.saying || t.gfx || Object.keys(t.pointers).length) return touchWatchWake();
           t.root.classList.add('tw-faded');
           touchWatchHintOff();
         }, TOUCH_IDLE_MS);
@@ -12576,6 +12772,7 @@
           if (b.dataset.twHold) touchCall('Hold', TOUCH_FUNCS[b.dataset.twHold], 0);
         });
         if (t.saying) touchSayClose();
+        if (t.gfx) touchGfxClose();
       }
 
       // Held upright: first a card to turn the phone sideways, or to turn it with
@@ -12653,8 +12850,9 @@
         if (!t.backArmed) return;
         t.backArmed = false;
         if (!pickerWant || !pickerWant.watch || t.leaving) return;
-        if (t.saying) {
-          touchSayClose();
+        if (t.saying || t.gfx) {
+          if (t.saying) touchSayClose();
+          if (t.gfx) touchGfxClose();
           return touchWatchBackArm();
         }
         touchWatchLeave();
@@ -12722,6 +12920,7 @@
         b.addEventListener('click', function(ev) {
           ev.preventDefault();
           if (b.dataset.tw === 'msg' && touchWatch.live && !touchWatch.saying) touchSayOpen();
+          if (b.dataset.tw === 'gfx' && touchWatch.live && !touchWatch.gfx) touchGfxOpen();
         });
       });
 
@@ -12808,6 +13007,7 @@
         var dx = p.x - p.x0, dy = p.y - p.y0, ms = touchEventMs(ev) - p.at;
         // Upright, a tap on the picture turns the phone, where it lets a page.
         if (!p.moved && ms < TOUCH_TAP_MS && t.upright) return touchWatchFullscreen(true);
+        if (!p.moved && ms < TOUCH_TAP_MS && t.gfx) return touchGfxClose();
         if (!p.moved && ms < TOUCH_TAP_MS) touchWatchToggle();
         else {
           if (p.kind === 'swipe' && t.live && Math.abs(dx) >= TOUCH_SWIPE_PX && Math.abs(dx) > 1.5 * Math.abs(dy) &&
@@ -12829,7 +13029,7 @@
       // leaves the pointer events the controls go by; not on what goes by
       // its click (Message, the box for it, the turn card).
       touchWatch.root.addEventListener('touchstart', function(ev) {
-        if (ev.cancelable && !(ev.target.closest && ev.target.closest('[data-tw=msg], .tw-say, .tw-turn'))) ev.preventDefault();
+        if (ev.cancelable && !(ev.target.closest && ev.target.closest('[data-tw=msg], [data-tw=gfx], .tw-say, .tw-gfx, .tw-turn'))) ev.preventDefault();
       }, { passive: false });
       // Nothing of a touch on them reaches the game (its own touch and mouse
       // listeners), but typing a message.
@@ -12838,6 +13038,91 @@
           ev.stopPropagation();
         }, { passive: true });
       });
+
+      // Graphics: the sharpness steps this phone has, each with the picture's
+      // size at it, the frame rate now, and what happens next.
+      function touchGfxShow() {
+        var t = touchWatch;
+        if (!t.gfx) return;
+        var steps = t.panel.querySelector('.tw-gfx-steps'), level = sharpLevel();
+        var have = sharpSteps().join(' ');
+        if (steps.dataset.have !== have) {
+          steps.dataset.have = have;
+          steps.textContent = '';
+          sharpSteps().forEach(function(s) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.setAttribute('role', 'radio');
+            b.dataset.sharp = s;
+            var name = document.createElement('b');
+            name.textContent = SHARP_NAMES[s];
+            b.appendChild(name);
+            b.appendChild(document.createElement('span'));
+            steps.appendChild(b);
+          });
+        }
+        steps.querySelectorAll('[data-sharp]').forEach(function(b) {
+          b.setAttribute('aria-checked', String(b.dataset.sharp === level));
+          b.querySelector('span').textContent = sharpLines(b.dataset.sharp);
+        });
+        t.panel.querySelector('.tw-gfx-say').textContent =
+          sharpSteps().length < 2 ? 'This screen shows the game at its own sharpness already.' :
+          sharpness.by === 'hand' ? 'Kept as you picked it. Sharper uses more battery.' :
+          sharpness.by === 'auto' ? 'Lowered to keep the picture smooth. Pick again any time.' :
+          'If this phone can’t keep up, it steps down by itself.';
+      }
+      function touchGfxFps() {
+        var t = touchWatch, frames = Module.jkFrames, out = '';
+        if (frames && typeof frameTimes === 'function') {
+          var since = performance.now() - 2000, stats = frameStats(frameTimes(frames, 0, since).times, 0);
+          if (stats && stats.seconds > 0.5) out = Math.round(stats.fps) + ' fps';
+        }
+        t.panel.querySelector('.tw-gfx-fps').textContent = out;
+      }
+      function touchGfxOpen() {
+        var t = touchWatch;
+        t.gfx = true;
+        t.root.classList.add('tw-gfxing');
+        t.panel.hidden = false;
+        touchWatchHintOff();
+        touchGfxShow();
+        touchGfxFps();
+        clearInterval(t.gfxTimer);
+        t.gfxTimer = setInterval(touchGfxFps, 1000);
+        touchWatchWake();
+      }
+      function touchGfxClose() {
+        var t = touchWatch;
+        t.gfx = false;
+        t.root.classList.remove('tw-gfxing');
+        t.panel.hidden = true;
+        clearInterval(t.gfxTimer);
+        touchWatchWake();
+      }
+      touchWatch.panel.addEventListener('click', function(ev) {
+        var b = ev.target.closest('button');
+        if (!b) return;
+        if (b.dataset.twGfx === 'done') return touchGfxClose();
+        if (b.dataset.sharp && b.dataset.sharp !== sharpLevel()) sharpSet(b.dataset.sharp, 'hand');
+        else if (b.dataset.sharp) {
+          // The step it's on, picked: kept from now on.
+          sharpness.by = 'hand';
+          try { localStorage.setItem(SHARP_BY_KEY, 'hand'); } catch (e) {}
+          touchGfxShow();
+        }
+      });
+      ['pointerdown', 'pointerup'].forEach(function(type) {
+        touchWatch.panel.addEventListener(type, function(ev) { ev.stopPropagation(); });
+      });
+      // A word over the picture for a few seconds, the buttons shown or not.
+      function touchWatchNote(text) {
+        var t = touchWatch;
+        if (!t.shown) return;
+        t.note.textContent = text;
+        t.note.hidden = false;
+        clearTimeout(t.noteTimer);
+        t.noteTimer = setTimeout(function() { t.note.hidden = true; }, 7000);
+      }
 
       // Message: the phone's keyboard, the line sent as the game's chat
       // line sends one (the engine takes it from Module.jkTouchSay,
@@ -13755,7 +14040,7 @@
       }
 
       // How many times the window's size the game draws at, across: over 1
-      // with Enable HiDPI on a high-density screen.
+      // at a Sharpness above Standard on a high-density screen.
       function canvasScale() {
         return Module.canvas && window.innerWidth ? Module.canvas.width / window.innerWidth : 1;
       }
@@ -13786,7 +14071,7 @@
       // What may be slowing the game, most likely first, as HTML. env: kind
       // (browserKind()), ua, touch (navigator.maxTouchPoints), renderer (the
       // game's), battery (onBattery()), settings (displaySettings()), scale
-      // (canvasScale()).
+      // (canvasScale()), phone (a phone or tablet: its Sharpness is in Graphics).
       function slowCauses(env) {
         var causes = [];
         var how = GFX_HOW[env.kind];
@@ -13817,7 +14102,9 @@
         if (env.kind === 'operagx')
           causes.push("GX Control's <b>CPU limiter</b> holds the browser to part of the processor. Turn it off or raise it while you play.");
         var display = [];
-        if (env.scale > 1.25)
+        if (env.scale > 1.25 && env.phone)
+          causes.push('Pick a lower <b>Sharpness</b> in Graphics while watching (it draws ' + Math.round(env.scale * env.scale * 10) / 10 + ' times the pixels).');
+        else if (env.scale > 1.25)
           display.push('turn off <b>Enable HiDPI</b> (it draws ' + Math.round(env.scale * env.scale * 10) / 10 + ' times the pixels)');
         if (env.settings && env.settings.ssaa > 1)
           display.push('set <b>SSAA Multiplier</b> to 1 (' + env.settings.ssaa + ' draws ' +
@@ -13868,6 +14155,11 @@
           }
           // Mostly in a menu, or the tab was hidden: no say either way.
           if (!stats || stats.seconds < SLOW_CHECK_MS / 2000) return;
+          // The sharpness steps down first, where it still can (Sharpness).
+          if (sharpCanStepDown()) {
+            streak = 0;
+            return;
+          }
           var settings = displaySettings();
           var limited = settings && settings.fpsLimit && settings.fpsLimit <= SLOW_FPS + 8;
           if (stats.fps >= SLOW_FPS || limited) {
@@ -13880,7 +14172,7 @@
             showSlowNote(stats.fps, slowCauses({
               kind: browserKind(), ua: navigator.userAgent, touch: navigator.maxTouchPoints || 0,
               renderer: Module.ctx ? glRenderer(Module.ctx) : '', battery: battery,
-              settings: settings, scale: canvasScale() }));
+              settings: settings, scale: canvasScale(), phone: !!phoneNote() }));
           });
         }, SLOW_CHECK_MS);
       })();

@@ -61,6 +61,9 @@ macro(plat_initialize)
     set(CMAKE_EXECUTABLE_SUFFIX .js)
     # audio.js tunes the Web Audio graph Emscripten's OpenAL builds (k-rate panners).
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --pre-js ${PROJECT_SOURCE_DIR}/packaging/wasm/audio.js")
+    # pixelratio.js: how sharp the game draws, as the page picks (Sharpness), in
+    # place of Emscripten's emscripten_get_device_pixel_ratio.
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --js-library ${PROJECT_SOURCE_DIR}/packaging/wasm/pixelratio.js")
 
     # Added: jk.c's _wcslen(const char16_t*) is a plain `for(len=0;str[len];len++)` loop,
     # but LLVM's builtin-recognition pass pattern-matches that exact shape as the "wcslen
@@ -81,6 +84,7 @@ macro(plat_link_and_package)
     target_link_libraries(${BIN_NAME} PRIVATE -lm -lSDL3 -lGL -lGLEW -lopenal -lidbfs.js)
     set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/maps.js ${PROJECT_SOURCE_DIR}/packaging/wasm/mods.js ${PROJECT_SOURCE_DIR}/packaging/wasm/netstats.js ${PROJECT_SOURCE_DIR}/packaging/wasm/ladder.js ${PROJECT_SOURCE_DIR}/packaging/wasm/preview3d.js ${PROJECT_SOURCE_DIR}/packaging/wasm/library.js ${PROJECT_SOURCE_DIR}/packaging/wasm/modlibrary.js)
     set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/audio.js)
+    set_property(TARGET ${BIN_NAME} APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/packaging/wasm/pixelratio.js)
     target_link_libraries(sith_engine PRIVATE nlohmann_json::nlohmann_json)
     if(TARGET_CAN_JKGM)
         target_link_libraries(sith_engine PRIVATE PNG::PNG ZLIB::ZLIB)

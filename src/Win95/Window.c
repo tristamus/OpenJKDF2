@@ -90,25 +90,64 @@ int Window_bShouldPopSteamKeyboard = 0;
 // (std3D_UpdateWindowViewport). A window so long and thin that keeping its shape would
 // pass WINDOW_KEEP_SHAPE_MAX on a side gets the old 640x480 minimum instead.
 #define WINDOW_KEEP_SHAPE_MAX (4096)
-void Window_KeepMinimumSize(void)
+static void Window_KeepShape(int* pW, int* pH)
 {
-    if (Window_xSize > 0 && Window_ySize > 0 && (Window_xSize < 640 || Window_ySize < 480))
+    int w = *pW, h = *pH;
+    if (w > 0 && h > 0 && (w < 640 || h < 480))
     {
         double k = 1.0;
-        if (Window_xSize < 640 && 640.0 / Window_xSize > k)
-            k = 640.0 / Window_xSize;
-        if (Window_ySize < 480 && 480.0 / Window_ySize > k)
-            k = 480.0 / Window_ySize;
-        double w = Window_xSize * k + 0.5;
-        double h = Window_ySize * k + 0.5;
-        if (w <= WINDOW_KEEP_SHAPE_MAX && h <= WINDOW_KEEP_SHAPE_MAX)
+        if (w < 640 && 640.0 / w > k)
+            k = 640.0 / w;
+        if (h < 480 && 480.0 / h > k)
+            k = 480.0 / h;
+        double kw = w * k + 0.5;
+        double kh = h * k + 0.5;
+        if (kw <= WINDOW_KEEP_SHAPE_MAX && kh <= WINDOW_KEEP_SHAPE_MAX)
         {
-            Window_xSize = (int)w;
-            Window_ySize = (int)h;
+            w = (int)kw;
+            h = (int)kh;
         }
     }
-    if (Window_xSize < 640) Window_xSize = 640;
-    if (Window_ySize < 480) Window_ySize = 480;
+    if (w < 640) w = 640;
+    if (h < 480) h = 480;
+    *pW = w;
+    *pH = h;
+}
+
+#ifdef ARCH_WASM
+// Added: in the browser the page picks how many canvas pixels the game draws
+// for each of its own (Sharpness; emscripten_get_device_pixel_ratio in
+// packaging/wasm/pixelratio.js). The game lays its HUD out in pixels up to a
+// frame 960 tall, and stretches that layout over a taller one
+// (jkMain_FixRes); the gauges, their text and the crosshair are sized by
+// hud_scale in that layout. So they're drawn this many times bigger: the
+// layout's height now, against its height at one canvas pixel per page pixel.
+// Only the picture gets sharper; everything keeps the size it had (1 when the
+// page asks for nothing, as before).
+#define WINDOW_HUD_LAYOUT_MAX_H (480 * 2) // as jkMain_FixRes
+flex_t Window_hudPixelScale = 1.0;
+static void Window_UpdateHudPixelScale(void)
+{
+    int w = Window_screenXSize, h = Window_screenYSize;
+    if (w <= 0 || h <= 0 || Window_ySize <= 0)
+    {
+        Window_hudPixelScale = 1.0;
+        return;
+    }
+    Window_KeepShape(&w, &h);
+    int layoutNow = Window_ySize < WINDOW_HUD_LAYOUT_MAX_H ? Window_ySize : WINDOW_HUD_LAYOUT_MAX_H;
+    int layoutBase = h < WINDOW_HUD_LAYOUT_MAX_H ? h : WINDOW_HUD_LAYOUT_MAX_H;
+    flex_t k = (flex_t)layoutNow / (flex_t)layoutBase;
+    Window_hudPixelScale = (k > 1.0) ? k : 1.0;
+}
+#endif
+
+void Window_KeepMinimumSize(void)
+{
+    Window_KeepShape(&Window_xSize, &Window_ySize);
+#ifdef ARCH_WASM
+    Window_UpdateHudPixelScale();
+#endif
 }
 
 void Window_SetHiDpi(int val)
@@ -2237,6 +2276,17 @@ void Window_SdlVblank()
 // An automated rd*-struct-member rename pass (d84fc7328) mistakenly renamed
 // it to `pCanvas` along with the real C-side renames, breaking WASM at
 // runtime with "pCanvas is not defined" (SDL_CreateWindow's size args).
+// Added: Enable HiDPI (Setup > Display) is the page's Sharpness in the browser
+// (index.html, Module.jkSharpness): ticked while it's above Standard; ticking
+// it picks Full, clearing it Standard. The page applies it after this returns.
+EM_JS(int, Window_WasmSharpIsUp, (), {
+  return Module.jkSharpness && Module.jkSharpness.isUp() ? 1 : 0;
+});
+
+EM_JS(void, Window_WasmSetSharp, (int bUp), {
+  if (Module.jkSharpness) Module.jkSharpness.fromGame(!!bUp);
+});
+
 EM_JS(int, canvas_get_width, (), {
   return canvas.width;
 });
@@ -2251,6 +2301,10 @@ void Window_RecreateSDL2Window()
 #ifdef ARCH_WASM
     static int onlyOnce = 0;
     if (onlyOnce) {
+        // Added: there's one window in the browser. Fullscreen and HiDPI asked
+        // for this, and the flag stayed up, so the menus emptied the texture
+        // cache every frame after a change of either box.
+        Window_needsRecreate = 0;
         return;
     }
     onlyOnce = 1;
@@ -2293,6 +2347,14 @@ void Window_RecreateSDL2Window()
         flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
     else
         flags &= ~SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#ifdef ARCH_WASM
+    // Added: always, as the page says how sharp (packaging/wasm/pixelratio.js):
+    // SDL sizes the canvas at the page's size times that, now and on every
+    // resize. Before, the window was made before Enable HiDPI was read and
+    // never again, so the game drew one canvas pixel per page pixel: a third
+    // of a phone's pixels each way.
+    flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
 
     if (Window_isFullscreen) {
         //flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;

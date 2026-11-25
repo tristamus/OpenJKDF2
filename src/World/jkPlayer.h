@@ -156,7 +156,19 @@ extern int jkPlayer_enableVsync;
 extern flex_t jkPlayer_ssaaMultiple;
 extern int jkPlayer_enableSSAO;
 extern flex_t jkPlayer_gamma;
+#ifdef ARCH_WASM
+// Added: in the browser the page can ask for more canvas pixels per page pixel
+// (Sharpness, Window_hudPixelScale in Window.c). The HUD is sized in pixels, so
+// it's drawn that much bigger and keeps its size on screen. The setting itself
+// (Setup > Display, hud_scale, the saved settings) is JKPLAYER_HUDSCALE_SETTING.
+extern flex_t jkPlayer_hudScaleSetting;
+extern flex_t Window_hudPixelScale;
+#define jkPlayer_hudScale (jkPlayer_hudScaleSetting * Window_hudPixelScale)
+#define JKPLAYER_HUDSCALE_SETTING jkPlayer_hudScaleSetting
+#else
 extern flex_t jkPlayer_hudScale;
+#define JKPLAYER_HUDSCALE_SETTING jkPlayer_hudScale
+#endif
 extern flex_t jkPlayer_crosshairLineWidth;
 extern flex_t jkPlayer_crosshairScale;
 extern flex_t jkPlayer_canonicalCogTickrate;
