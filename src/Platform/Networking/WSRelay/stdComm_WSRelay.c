@@ -4158,10 +4158,39 @@ static uint8_t wsrelay_aViewLooks[WSRELAY_VIEW_LOOKS_MAX];
 static int wsrelay_viewLooksLen = 0;
 static int wsrelay_viewLooksAt = -1; // the next to play again, -1 until due
 
+// Full: the looping sounds stopped since go, to make room.
+static void wsrelay_ViewerPackLooks()
+{
+    int to = 0;
+    for (int at = 0; at + 8 <= wsrelay_viewLooksLen; )
+    {
+        uint16_t len16, dropped;
+        memcpy(&len16, wsrelay_aViewLooks + at, 2);
+        memcpy(&dropped, wsrelay_aViewLooks + at + 2, 2);
+        if (!dropped)
+        {
+            if (to != at)
+                memmove(wsrelay_aViewLooks + to, wsrelay_aViewLooks + at, 8 + len16);
+            to += 8 + len16;
+        }
+        at += 8 + len16;
+    }
+    wsrelay_viewLooksLen = to;
+}
+
 static void wsrelay_ViewerKeepLooks(const uint8_t* pMsg, int len, int from)
 {
-    if (wsrelay_viewLooksAt >= 0 || len <= 0 || len > 0xffff || wsrelay_viewLooksLen + 8 + len > WSRELAY_VIEW_LOOKS_MAX)
+    if (wsrelay_viewLooksAt >= 0 || len < 4 || len > 0xffff)
         return;
+    if (wsrelay_viewLooksLen + 8 + len > WSRELAY_VIEW_LOOKS_MAX)
+        wsrelay_ViewerPackLooks();
+    if (wsrelay_viewLooksLen + 8 + len > WSRELAY_VIEW_LOOKS_MAX)
+    {
+        uint16_t id;
+        memcpy(&id, pMsg, 2);
+        stdPlatform_Printf("OpenJKDF2: Watching room %d: no room to keep message %d for the level's start.\n", wsrelay_viewRoom, id);
+        return;
+    }
     uint8_t* p = wsrelay_aViewLooks + wsrelay_viewLooksLen;
     uint16_t len16 = (uint16_t)len, zero = 0;
     int32_t from32 = from;
@@ -4169,6 +4198,17 @@ static void wsrelay_ViewerKeepLooks(const uint8_t* pMsg, int len, int from)
     memcpy(p + 2, &zero, 2);
     memcpy(p + 4, &from32, 4);
     memcpy(p + 8, pMsg, len);
+    // Played again as a message not seen before. With its number (msgId,
+    // after cogMsgId) it was taken for a repeat of itself: it went through
+    // once while Synchronizing, too early to last (above), and
+    // sithMessage_ProcessMessages leaves out a sender's number it has among
+    // the last 128. A keyframe's messages go to no player and have no
+    // number, so those were played again, but not a look the players' games
+    // sent each other after it. A player who joined after the keyframe a
+    // viewer started from (they're a minute apart) stayed on the default
+    // model, Kyle, while one there before it had their own (Antonio, kit
+    // 199: two players as Mandalore, one of them shown as Kyle).
+    memset(p + 8 + 2, 0, 2);
     wsrelay_viewLooksLen += 8 + len;
 }
 
