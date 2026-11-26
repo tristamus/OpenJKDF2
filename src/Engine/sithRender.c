@@ -1777,6 +1777,8 @@ typedef struct sithRender_MeshLightBinding
 
 static sithRender_MeshLightBinding* sithRender_aMeshLightBindings = NULL;
 static size_t sithRender_numMeshLightBindingsAlloc = 0;
+static flex_t* sithRender_aZeroLights = NULL; // Added: an all-zero base light, read only
+static int sithRender_numZeroLights = 0;
 
 static int sithRender_DrawLevelGeometryThing(SithThing* pThing)
 {
@@ -1828,6 +1830,25 @@ static int sithRender_DrawLevelGeometryThing(SithThing* pThing)
     // JK mode only: MotS levels keep JKM.EXE's mono unless their render flags ask for color.
     int bForcedRGB = 0;
     if (!bRGB && pArch && !Main_bMotsCompat && LIKELY(rdroid_curAcceleration)) {
+        // In colour mode each channel is the ARCH colour plus the mesh's lit slot, and that slot starts
+        // from the mesh's own base light (rdLight_CalcVertexIntensities), which for these models is the
+        // mono copy of the same light: it would be counted twice. The base is bound to zeros for this
+        // draw, so the slot carries only the dynamic lights.
+        int maxVertices = 0;
+        for (uint32_t k = 0; k < pModel->numGeos; k++) {
+            for (uint32_t j = 0; j < pModel->aGeos[k].numMeshes; j++) {
+                if (pModel->aGeos[k].aMeshes[j].numVertices > maxVertices)
+                    maxVertices = pModel->aGeos[k].aMeshes[j].numVertices;
+            }
+        }
+        if (maxVertices > sithRender_numZeroLights) {
+            flex_t* pNew = (flex_t*)SITH_REALLOC(sithRender_aZeroLights, maxVertices * sizeof(flex_t));
+            if (!pNew)
+                return sithRender_RenderThing(pThing);
+            memset(pNew, 0, maxVertices * sizeof(flex_t));
+            sithRender_aZeroLights = pNew;
+            sithRender_numZeroLights = maxVertices;
+        }
         rdSetVertexColorMode(1);
         bRGB = 1;
         bForcedRGB = 1;
@@ -1860,6 +1881,8 @@ static int sithRender_DrawLevelGeometryThing(SithThing* pThing)
                 pMesh->paRedIntensities = pArch ? pArch->aMeshes[j].aRed : pMesh->vertices_i;
                 pMesh->paGreenIntensities = pArch ? pArch->aMeshes[j].aGreen : pMesh->vertices_i;
                 pMesh->paBlueIntensities = pArch ? pArch->aMeshes[j].aBlue : pMesh->vertices_i;
+                if (bForcedRGB)
+                    pMesh->vertices_i = sithRender_aZeroLights;
             }
         }
     }
