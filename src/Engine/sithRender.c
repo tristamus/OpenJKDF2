@@ -27,6 +27,7 @@
 #include "Gameplay/sithPlayer.h"
 #include "World/sithSector.h"
 #include "World/sithWorld.h"
+#include "World/sithArchLighting.h"
 #include "World/sithExplosion.h"
 #include "Main/Main.h"
 #include "Dw/dwLaser.h"
@@ -1777,6 +1778,8 @@ typedef struct sithRender_MeshLightBinding
 
 static sithRender_MeshLightBinding* sithRender_aMeshLightBindings = NULL;
 static size_t sithRender_numMeshLightBindingsAlloc = 0;
+static flex_t* sithRender_aZeroLights = NULL; // Added: an all-zero base light, read only
+static int sithRender_numZeroLights = 0;
 
 static int sithRender_DrawLevelGeometryThing(SithThing* pThing)
 {
@@ -1823,6 +1826,35 @@ static int sithRender_DrawLevelGeometryThing(SithThing* pThing)
     if (!numMeshes || (!pArch && !bRGB))
         return sithRender_RenderThing(pThing);
 
+    // Added: a JK level that ships its own colored light for its 3DO architecture (an ARCHLIGHTING
+    // section, as MotS levels have) is drawn in color too, not only in its mono fallback.
+    // JK mode only: MotS levels keep JKM.EXE's mono unless their render flags ask for color.
+    int bForcedRGB = 0;
+    if (!bRGB && pArch && !Main_bMotsCompat && LIKELY(rdroid_curAcceleration)) {
+        // In colour mode each channel is the ARCH colour plus the mesh's lit slot, and that slot starts
+        // from the mesh's own base light (rdLight_CalcVertexIntensities), which for these models is the
+        // mono copy of the same light: it would be counted twice. The base is bound to zeros for this
+        // draw, so the slot carries only the dynamic lights.
+        int maxVertices = 0;
+        for (uint32_t k = 0; k < pModel->numGeos; k++) {
+            for (uint32_t j = 0; j < pModel->aGeos[k].numMeshes; j++) {
+                if (pModel->aGeos[k].aMeshes[j].numVertices > maxVertices)
+                    maxVertices = pModel->aGeos[k].aMeshes[j].numVertices;
+            }
+        }
+        if (maxVertices > sithRender_numZeroLights) {
+            flex_t* pNew = (flex_t*)SITH_REALLOC(sithRender_aZeroLights, maxVertices * sizeof(flex_t));
+            if (!pNew)
+                return sithRender_RenderThing(pThing);
+            memset(pNew, 0, maxVertices * sizeof(flex_t));
+            sithRender_aZeroLights = pNew;
+            sithRender_numZeroLights = maxVertices;
+        }
+        rdSetVertexColorMode(1);
+        bRGB = 1;
+        bForcedRGB = 1;
+    }
+
     if (numMeshes > sithRender_numMeshLightBindingsAlloc) {
         sithRender_MeshLightBinding* pNew = (sithRender_MeshLightBinding*)SITH_REALLOC(sithRender_aMeshLightBindings, numMeshes * sizeof(sithRender_MeshLightBinding));
         if (!pNew)
@@ -1850,11 +1882,16 @@ static int sithRender_DrawLevelGeometryThing(SithThing* pThing)
                 pMesh->paRedIntensities = pArch ? pArch->aMeshes[j].aRed : pMesh->vertices_i;
                 pMesh->paGreenIntensities = pArch ? pArch->aMeshes[j].aGreen : pMesh->vertices_i;
                 pMesh->paBlueIntensities = pArch ? pArch->aMeshes[j].aBlue : pMesh->vertices_i;
+                if (bForcedRGB)
+                    pMesh->vertices_i = sithRender_aZeroLights;
             }
         }
     }
 
     int result = sithRender_RenderThing(pThing);
+
+    if (bForcedRGB)
+        rdSetVertexColorMode(0);
 
     for (size_t j = 0; j < slot; j++) {
         sithRender_MeshLightBinding* pSaved = &sithRender_aMeshLightBindings[j];
@@ -3000,15 +3037,23 @@ void sithRender_RenderThings()
                 {
                     // Allow aThings to peek their light around corners w/o screwing with frustums
 #ifdef QOL_IMPROVEMENTS
+                    // Added: in a level with baked light on its 3DO architecture, a thing that is not part
+                    // of it (a player, a pickup) takes the baked light of the floor where it stands
+                    // when that is more than its sector's flat ambient light.
+                    flex_t thingAmbient = a2;
+#ifdef JKM_LIGHTING
+                    if (!sithRender_lightingIRMode)
+                        thingAmbient = sithArchLighting_ThingAmbient(thingIter, a2);
+#endif
                     if ( (thingIter->flags & SITH_TF_EMITLIGHT) != 0
                       && thingIter->light > 0.0
-                      && a2 <= stdMath_Clamp(thingIter->light, 0.0, 1.0) )
+                      && thingAmbient <= stdMath_Clamp(thingIter->light, 0.0, 1.0) )
                     {
                         rdCamera_SetAmbientLight(rdCamera_g_pCurCamera, stdMath_Clamp(thingIter->light, 0.0, 1.0));
                     }
                     else
                     {
-                        rdCamera_SetAmbientLight(rdCamera_g_pCurCamera, a2);
+                        rdCamera_SetAmbientLight(rdCamera_g_pCurCamera, thingAmbient);
                     }
 
                     if (!v1->pClipFrustum) {
@@ -3200,6 +3245,15 @@ void sithRender_RenderThings()
                         continue;
                     }
 
+#ifdef JKM_LIGHTING
+                    // Added: in a JK level, a static world model drawn in this pass that the level gave
+                    // its own ARCHLIGHTING record (a JO/JA import drawn as an ordinary Thing) uses that light.
+                    if (!Main_bMotsCompat && thingIter->archlightIdx >= 0 && thingIter->renderData.type == RD_THING_MODEL3) {
+                        if (sithRender_DrawLevelGeometryThing(thingIter))
+                            ++sithRender_nongeoThingsDrawn;
+                    }
+                    else
+#endif
                     if (sithRender_RenderThing(thingIter) ) // MOTS added: flag check
                         ++sithRender_nongeoThingsDrawn;
                 }
