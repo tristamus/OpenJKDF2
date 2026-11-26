@@ -1823,6 +1823,16 @@ static int sithRender_DrawLevelGeometryThing(SithThing* pThing)
     if (!numMeshes || (!pArch && !bRGB))
         return sithRender_RenderThing(pThing);
 
+    // Added: a JK level that ships its own colored light for its 3DO architecture (an ARCHLIGHTING
+    // section, as MotS levels have) is drawn in color too, not only in its mono fallback.
+    // JK mode only: MotS levels keep JKM.EXE's mono unless their render flags ask for color.
+    int bForcedRGB = 0;
+    if (!bRGB && pArch && !Main_bMotsCompat && LIKELY(rdroid_curAcceleration)) {
+        rdSetVertexColorMode(1);
+        bRGB = 1;
+        bForcedRGB = 1;
+    }
+
     if (numMeshes > sithRender_numMeshLightBindingsAlloc) {
         sithRender_MeshLightBinding* pNew = (sithRender_MeshLightBinding*)SITH_REALLOC(sithRender_aMeshLightBindings, numMeshes * sizeof(sithRender_MeshLightBinding));
         if (!pNew)
@@ -1855,6 +1865,9 @@ static int sithRender_DrawLevelGeometryThing(SithThing* pThing)
     }
 
     int result = sithRender_RenderThing(pThing);
+
+    if (bForcedRGB)
+        rdSetVertexColorMode(0);
 
     for (size_t j = 0; j < slot; j++) {
         sithRender_MeshLightBinding* pSaved = &sithRender_aMeshLightBindings[j];
@@ -3200,6 +3213,15 @@ void sithRender_RenderThings()
                         continue;
                     }
 
+#ifdef JKM_LIGHTING
+                    // Added: in a JK level, a static world model drawn in this pass that the level gave
+                    // its own ARCHLIGHTING record (a JO/JA import drawn as an ordinary Thing) uses that light.
+                    if (!Main_bMotsCompat && thingIter->archlightIdx >= 0 && thingIter->renderData.type == RD_THING_MODEL3) {
+                        if (sithRender_DrawLevelGeometryThing(thingIter))
+                            ++sithRender_nongeoThingsDrawn;
+                    }
+                    else
+#endif
                     if (sithRender_RenderThing(thingIter) ) // MOTS added: flag check
                         ++sithRender_nongeoThingsDrawn;
                 }
