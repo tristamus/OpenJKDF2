@@ -1022,6 +1022,10 @@
       #picker {
         width: min(560px, calc(100vw - 32px));
         max-height: calc(100vh - 32px);
+        /* The screen as it is now, with the browser's own bars: 100vh is
+           the screen without them, and on a phone the prompt's bottom went
+           under them. */
+        max-height: calc(100dvh - 32px);
         padding: 0;
         border: 2px solid #000;
         background-color: var(--teal-dark);
@@ -1049,6 +1053,29 @@
         cursor: pointer;
       }
       #picker .body { padding: 14px 16px 16px; }
+      /* The prompt scrolls inside, under its title bar, which stays: on a
+         phone it's taller than the screen, and the folder prompt and the
+         start window (mods and options) couldn't be scrolled there (Antonio,
+         2026-11-27). Not in a box, which scrolls the prompt itself. */
+      html:not(.watch-embed) #picker[open] { display: flex; flex-direction: column; overflow: hidden; }
+      html:not(.watch-embed) #picker .titlebar { flex: none; }
+      html:not(.watch-embed) #picker .body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        /* Its room at the bottom comes after the last line instead, so
+           what sticks to the bottom (Start, what it's doing) sits right on
+           it in every browser. */
+        padding-bottom: 0;
+      }
+      html:not(.watch-embed) #picker .body::after { content: ""; display: block; height: 16px; }
+      @media (max-width: 600px), (max-height: 600px) {
+        #picker { width: calc(100vw - 16px); max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); }
+        html:not(.watch-embed) #picker .body { padding: 12px 12px 0; }
+        html:not(.watch-embed) #picker .body::after { height: 14px; }
+      }
       #picker p { margin: 0 0 12px; }
       #picker code { color: var(--gold); font: bold 15px 'Courier New', monospace; }
       #picker .promises { margin: 0 0 12px; padding: 0; list-style: none; }
@@ -1157,6 +1184,57 @@
       #picker-result { margin-top: 14px; white-space: pre-line; }
       #picker-result:empty { display: none; }
       #picker-result.error { color: var(--bad); font-weight: bold; }
+      /* Start stays in sight below the mods while they're scrolled through. */
+      html:not(.watch-embed) #mod-choice > .actions {
+        position: sticky;
+        bottom: 0;
+        z-index: 1;
+        margin: 0 -16px;
+        padding: 10px 16px 12px;
+        background-color: var(--teal-dark);
+        border-top: 1px solid var(--teal-light);
+      }
+      /* What the prompt is doing (showPickerProgress): at its bottom, in
+         sight while it scrolls, with a bar for how far it's got, or one that
+         sweeps for a step that can't tell. On a phone this was out of sight
+         below everything else, and choosing the folder seemed to do nothing
+         (Antonio, 2026-11-27). */
+      #picker-result.busy { color: var(--gold); font-weight: bold; }
+      html:not(.watch-embed) #picker-result.busy {
+        position: sticky;
+        bottom: 0;
+        z-index: 2;
+        margin: 14px -16px 0;
+        padding: 10px 16px 12px;
+        background-color: var(--teal-dark);
+        border-top: 1px solid var(--teal-light);
+      }
+      #picker-result .bar {
+        display: block;
+        height: 8px;
+        margin-top: 8px;
+        overflow: hidden;
+        background-color: var(--teal);
+        border: 1px solid var(--teal-light);
+      }
+      #picker-result .fine { display: block; margin-top: 6px; font-weight: normal; }
+      #picker-result .fine:empty { display: none; }
+      #picker-result .bar i { display: block; width: 0; height: 100%; background-color: var(--gold); transition: width 0.25s; }
+      #picker-result .bar.unknown i { width: 30%; transition: none; animation: picker-sweep 1.1s ease-in-out infinite alternate; }
+      @keyframes picker-sweep { from { margin-left: 0; } to { margin-left: 70%; } }
+      @media (prefers-reduced-motion: reduce) {
+        #picker-result .bar.unknown i { width: 100%; opacity: 0.5; animation: none; }
+      }
+      @media (max-width: 600px), (max-height: 600px) {
+        html:not(.watch-embed) #mod-choice > .actions { margin: 0 -12px; padding: 10px 12px 12px; }
+        html:not(.watch-embed) #picker-result.busy { margin: 14px -12px 0; padding: 10px 12px 12px; }
+      }
+      /* A phone held sideways: more mods in sight at once. */
+      @media (max-height: 480px) {
+        #mod-choice fieldset label { margin-bottom: 4px; padding: 4px 10px; }
+        html:not(.watch-embed) #mod-choice > .actions { padding-top: 6px; padding-bottom: 8px; }
+        #picker .titlebar { padding-top: 2px; padding-bottom: 2px; }
+      }
       #problem-reload { margin-top: 14px; }
       #picker #problem-reload[hidden] { display: none; }
 
@@ -2218,6 +2296,7 @@
       html.watch-embed #picker.embed-busy .titlebar { display: none; }
       html.watch-embed #picker.embed-busy .body { padding: 6px 12px; }
       html.watch-embed #picker.embed-busy #picker-result { margin: 0; color: var(--gold); font: bold 12px Verdana, sans-serif; }
+      html.watch-embed #picker-result .bar { height: 5px; margin-top: 5px; }
       @media (max-width: 900px) {
         .watch-body { flex-direction: column; overflow-y: auto; }
         .mlist, .details { width: auto; overflow: visible; border-right: 0; }
@@ -8174,14 +8253,23 @@
         // The prompt stays where it opened while the clash note comes and
         // goes, so the rows don't move under the pointer. Its scrollbar's
         // room is kept too: a scrollbar coming and going would rewrap rows.
+        // What scrolls is the prompt's body, or in a box the prompt.
+        var scroller = watchEmbed ? picker : picker.querySelector('.body');
         if (picker.open) {
           var openAt = picker.getBoundingClientRect().top;
+          var screenHigh = window.CSS && CSS.supports && CSS.supports('height', '100dvh') ? '100dvh' : '100vh';
           picker.style.margin = openAt + 'px auto auto';
-          picker.style.maxHeight = 'calc(100vh - ' + (openAt + 16) + 'px)';
-          picker.style.scrollbarGutter = 'stable';
+          picker.style.maxHeight = 'calc(' + screenHigh + ' - ' + (openAt + 16) + 'px)';
+          scroller.style.scrollbarGutter = 'stable';
         }
+        // From the top, the mods first: Start stays in sight below them.
         var start = modChoice.querySelector('button.play');
-        start.focus();
+        if (watchEmbed) {
+          start.focus();
+        } else {
+          scroller.scrollTop = 0;
+          start.focus({ preventScroll: true });
+        }
         return new Promise(function(resolve) {
           var keep = keepOffer.querySelector('button'), stop = keepOn.querySelector('button'), over = false;
           function done() {
@@ -8189,7 +8277,7 @@
             start.onclick = otherFolder.onclick = keep.onclick = stop.onclick = null;
             picker.removeEventListener('close', closed);
             modChoice.hidden = true;
-            picker.style.margin = picker.style.maxHeight = picker.style.scrollbarGutter = '';
+            picker.style.margin = picker.style.maxHeight = scroller.style.scrollbarGutter = '';
           }
           // Closed with its close button or Esc: nothing starts, and the
           // folder prompt works again next time.
@@ -8530,6 +8618,69 @@
         el.textContent = text;
         el.className = isError ? 'error' : '';
         embedLook();
+        // What went wrong is at the prompt's bottom, below the screen on a
+        // phone: it's scrolled to.
+        if (isError && text) pickerShowLine(el);
+      }
+
+      // Scrolls the prompt's body to el, if it's below what shows.
+      function pickerShowLine(el) {
+        if (watchEmbed || !picker.open) return;
+        var body = picker.querySelector('.body');
+        requestAnimationFrame(function() {
+          var r = el.getBoundingClientRect(), b = body.getBoundingClientRect();
+          if (r.bottom > b.bottom) body.scrollTop += Math.min(r.bottom - b.bottom + 16, r.top - b.top);
+        });
+      }
+
+      // What the prompt is doing, at its bottom, where it stays in sight
+      // while the prompt scrolls: text, and a bar for done, the share done so
+      // far (0 to 1), or one that sweeps for null, a step that can't tell.
+      // more: a line under the bar, in smaller type.
+      function showPickerProgress(text, done, more) {
+        var el = document.getElementById('picker-result');
+        var say = el.querySelector('.say'), bar = el.querySelector('.bar'), fine = el.querySelector('.fine');
+        if (el.className !== 'busy' || !say || !bar || !fine) {
+          el.textContent = '';
+          el.className = 'busy';
+          say = document.createElement('span');
+          say.className = 'say';
+          fine = document.createElement('span');
+          fine.className = 'fine';
+          bar = document.createElement('span');
+          bar.className = 'bar';
+          bar.setAttribute('aria-hidden', 'true');
+          bar.appendChild(document.createElement('i'));
+          el.appendChild(say);
+          el.appendChild(bar);
+          el.appendChild(fine);
+        }
+        say.textContent = text;
+        fine.textContent = more || '';
+        var known = typeof done === 'number' && isFinite(done);
+        bar.classList.toggle('unknown', !known);
+        bar.firstChild.style.width = known ? (Math.max(0, Math.min(1, done)) * 100).toFixed(1) + '%' : '';
+        embedLook();
+      }
+
+      // A file's bytes. A big one is read a piece at a time, so the bar moves
+      // while it's read; onBytes hears how many are read so far.
+      async function readFileBytes(file, onBytes) {
+        var size = file.size, PIECE = 8 * 1048576;
+        if (size <= 2 * PIECE) {
+          var whole = new Uint8Array(await file.arrayBuffer());
+          onBytes(whole.length);
+          return whole;
+        }
+        var data = new Uint8Array(size);
+        for (var at = 0; at < size; at += PIECE) {
+          var end = Math.min(size, at + PIECE);
+          var part = new Uint8Array(await file.slice(at, end).arrayBuffer());
+          if (part.length !== end - at) throw new Error((file.name || 'a file') + ' changed while it was read');
+          data.set(part, at);
+          onBytes(end);
+        }
+        return data;
       }
 
       // fileList is the picked folder's files, or the ones saved in the
@@ -8595,8 +8746,8 @@
         lap('listing');
         // Zipped mods are opened first, so they're found and loaded like the rest.
         if (Module['arguments'].indexOf('-path') < 0 && files.some(function(e) { return /\.zip$/i.test(e.path); })) {
-          showPickerResult('Opening zipped mods...');
-          files = await openZips(files, isMots, showPickerResult);
+          showPickerProgress('Opening zipped mods...', null);
+          files = await openZips(files, isMots, function(text) { showPickerProgress(text, null); });
           lap('opening zips');
         }
         // Windows folders ignore case but MEMFS doesn't, so "Episode/AODpc.gob" and
@@ -8642,7 +8793,7 @@
           lap('finding mods');
           // Only the start window shows clashes, and watching has none.
           if (folderMods.length > 1 && !(pickerWant && pickerWant.watch)) {
-            showPickerResult('Looking through your mods...');
+            showPickerProgress('Looking through your mods...', null);
             found = await findClashes(folderMods, files, ext);
             lap('comparing mods');
           }
@@ -8688,6 +8839,10 @@
         // The player went to choose a different folder, or closed the prompt.
         if (!picked) return;
         lap('start window');
+        var loadingText = fromBrowser ? 'Loading your ' + GAME_NAMES[game] + ' files saved in this browser' :
+                                        'Found your copy of ' + GAME_NAMES[game] + '. Loading it into this tab';
+        pickerTitle.textContent = 'Starting ' + GAME_NAMES[game];
+        showPickerProgress(loadingText + '...', 0);
         // The Mod Library's mods left unticked aren't read into the tab:
         // they stay saved in the browser, where mods.js finds one by its
         // fingerprint when a host plays it.
@@ -8722,13 +8877,24 @@
         var totalBytes = files.reduce((n, e) => n + e.file.size, 0);
         var gameRoot = isMots ? '/mots/' : '/jk1/';
         var loaded = [];
+        // How far it's got by bytes, not files: a few big GOBs are most of
+        // the game, and on a phone one takes a while.
+        var readBefore = 0, readSaid = '';
+        function sayReading(now) {
+          var at = readBefore + now;
+          var text = loadingText + ' (' + Math.floor(at * 100 / Math.max(totalBytes, 1)) + '%, ' +
+                     Math.floor(at / 1048576) + ' of ' + Math.round(totalBytes / 1048576) + ' MB)...';
+          if (text === readSaid) return;
+          readSaid = text;
+          showPickerProgress(text, totalBytes ? at / totalBytes : null);
+        }
         for (var i = 0; i < files.length; i++) {
-          showPickerResult((fromBrowser ? "Loading your " + GAME_NAMES[game] + " files saved in this browser (" :
-                            "Found your copy of " + GAME_NAMES[game] + ". Loading it into this tab (") +
-                           (i + 1) + " of " + files.length + " files, " + Math.round(totalBytes / 1048576) + " MB)...");
-          files[i].data = new Uint8Array(await files[i].file.arrayBuffer());
+          sayReading(0);
+          files[i].data = await readFileBytes(files[i].file, sayReading);
+          readBefore += files[i].file.size;
           loaded.push({ path: gameRoot + files[i].path, data: files[i].data });
         }
+        sayReading(0);
         if (isMots) loaded = keepFlashGlows(loaded, gameRoot);
         lap('reading');
         // One ticked mod runs from its own folder. Several are put together
@@ -8829,11 +8995,34 @@
         });
       }
 
-      document.getElementById('gamedir').addEventListener('change', function(ev) {
+      // While the browser's window for choosing the folder is open, and
+      // after it, until the page has the files: on a phone that's a while
+      // once the folder is chosen and allowed, as the phone gets every file
+      // ready before the page hears of any, and the prompt looked as if
+      // nothing was happening (Antonio, 2026-11-27). Closing that window
+      // without choosing (cancel) puts back what the prompt said.
+      var gameDir = document.getElementById('gamedir');
+      var beforeAsking = null;
+      gameDir.addEventListener('click', function() {
+        var el = document.getElementById('picker-result');
+        if (!beforeAsking) beforeAsking = { text: el.className === 'busy' ? '' : el.textContent, error: el.className === 'error' };
+        showPickerProgress('Waiting for the folder you choose...', null, phoneNote() ?
+          'Once you choose it and allow it, your phone gets its files ready for this page first. For a whole ' +
+          'game folder, that can take a minute or two.' : '');
+      });
+      gameDir.addEventListener('cancel', function() {
+        var was = beforeAsking;
+        beforeAsking = null;
+        if (was && !readingFolder) showPickerResult(was.text, was.error);
+      });
+      gameDir.addEventListener('change', function(ev) {
+        beforeAsking = null;
         // Copied so the input can be cleared, which lets the same folder be
         // picked again after fixing a problem.
         var fileList = Array.from(ev.target.files);
         ev.target.value = '';
+        showPickerProgress('Got ' + fileList.length.toLocaleString() + (fileList.length === 1 ? ' file' : ' files') +
+                           ' from your folder. Looking through them...', null);
         whilePicking(onFolderPicked(fileList), null);
       });
 
@@ -8970,7 +9159,7 @@
           if (err.name !== 'AbortError') showPickerResult("Couldn't open that folder: " + err.message, true);
           return false;
         }
-        showPickerResult('Looking in your folder "' + dir.name + '"...');
+        showPickerProgress('Looking in your folder "' + dir.name + '"...', null);
         try {
           var kind = await folderKind(dir, game);
           if (kind === 'other' || kind === 'some') {
@@ -9107,8 +9296,8 @@
         picker.querySelectorAll('.picker-intro').forEach(function(e) { e.hidden = true; });
         pickerTitle.textContent = 'Starting ' + GAME_NAMES[game];
         var keep = keptFolder[game];
-        showPickerResult(keep ? 'Checking your folder "' + keep.name + '"...' :
-                                'Opening your ' + GAME_NAMES[game] + ' files saved in this browser...');
+        showPickerProgress(keep ? 'Checking your folder "' + keep.name + '"...' :
+                                  'Opening your ' + GAME_NAMES[game] + ' files saved in this browser...', null);
         whilePicking((async function() {
           var listed = keep && await keptList(keep, true);
           if (listed && keep.kind === 'game') {
@@ -9234,8 +9423,8 @@
         var phone = want && want.watch ? null : phoneNote();
         var total = DEMO_FILES.reduce(function(n, f) { return n + f.size; }, 0), done = 0;
         function say(now) {
-          showPickerResult('Downloading the free demo (' + Math.floor((done + now) * 100 / total) + '%)...' +
-                           (phone ? '\n\n' + phone : ''));
+          showPickerProgress('Downloading the free demo (' + Math.floor((done + now) * 100 / total) + '%)...' +
+                             (phone ? '\n\n' + phone : ''), (done + now) / total);
         }
         say(0);
         var abort = demoDownloading = new AbortController();
