@@ -1219,8 +1219,10 @@
       }
       #picker-result .fine { display: block; margin-top: 6px; font-weight: normal; }
       #picker-result .fine:empty { display: none; }
-      #picker-result .bar i { display: block; width: 0; height: 100%; background-color: var(--gold); transition: width 0.25s; }
-      #picker-result .bar.unknown i { width: 30%; transition: none; animation: picker-sweep 1.1s ease-in-out infinite alternate; }
+      /* No easing: it's moved again before an easing could catch up, and on
+         a fast computer the bar stayed far behind the percentage. */
+      #picker-result .bar i { display: block; width: 0; height: 100%; background-color: var(--gold); }
+      #picker-result .bar.unknown i { width: 30%; animation: picker-sweep 1.1s ease-in-out infinite alternate; }
       @keyframes picker-sweep { from { margin-left: 0; } to { margin-left: 70%; } }
       @media (prefers-reduced-motion: reduce) {
         #picker-result .bar.unknown i { width: 100%; opacity: 0.5; animation: none; }
@@ -9009,6 +9011,15 @@
         showPickerProgress('Waiting for the folder you choose...', null, phoneNote() ?
           'Once you choose it and allow it, your phone gets its files ready for this page first. For a whole ' +
           'game folder, that can take a minute or two.' : '');
+        // On a phone held sideways the line covered Choose game folder:
+        // the button is scrolled up above it, to choose again.
+        if (!watchEmbed && chooseButton.offsetParent) {
+          var body = picker.querySelector('.body');
+          requestAnimationFrame(function() {
+            var b = chooseButton.getBoundingClientRect(), line = el.getBoundingClientRect(), top = body.getBoundingClientRect().top;
+            if (b.bottom > line.top - 8) body.scrollTop += Math.min(b.bottom - line.top + 8, b.top - top - 4);
+          });
+        }
       });
       gameDir.addEventListener('cancel', function() {
         var was = beforeAsking;

@@ -72,6 +72,8 @@ const PHONES = {
     'an upright Android phone': devices['Pixel 7'],
     'a sideways Android phone': { ...devices['Pixel 7'], viewport: { width: 803, height: 360 } },
     'an iPhone': devices['iPhone 13'],
+    // Antonio's phone (2026-11-27), as Chrome lays the page out held sideways.
+    'a Galaxy Z Flip 7 held sideways': { ...devices['Pixel 7'], viewport: { width: 915, height: 340 } },
 };
 
 const browser = await chromium.launch();
@@ -163,6 +165,15 @@ for (const [phone, device] of Object.entries(PHONES)) {
             assert.match(seen.fine, /your phone gets its files ready for this page first/);
             const l = await layout(p.page);
             assert.ok(inSight(l.result, l.body), 'the line is in sight: ' + JSON.stringify(l));
+            await p.page.waitForTimeout(100);
+            const choose = await p.page.evaluate(() => {
+                const b = document.querySelector('#picker label.play').getBoundingClientRect();
+                return { top: b.top, bottom: b.bottom,
+                         line: document.getElementById('picker-result').getBoundingClientRect().top,
+                         body: document.querySelector('#picker .body').getBoundingClientRect().top };
+            });
+            assert.ok(choose.bottom <= choose.line && choose.top >= choose.body,
+                      'Choose game folder is in sight above the line, to choose again: ' + JSON.stringify(choose));
             await p.page.evaluate(() => document.getElementById('gamedir').dispatchEvent(new Event('cancel')));
             assert.equal(await p.page.locator('#picker-result').textContent(), before);
             assert.equal(await p.page.locator('#picker-result').getAttribute('class'), '');
@@ -213,6 +224,8 @@ await test('an upright Android phone: after Start, the bar fills by bytes read, 
         assert.ok(bars.every((b, i) => i === 0 || b >= bars[i - 1]), 'the bar only grows: ' + bars);
         assert.ok(bars.filter(b => b > 0 && b < 100).length >= 3, 'a big file moves it on the way: ' + bars);
         assert.equal(bars.at(-1), 100);
+        // Drawn where it's set, with no easing to fall behind (a fast computer's bar was at 42% at 100%).
+        assert.equal(await p.page.evaluate(() => getComputedStyle(document.querySelector('#picker-result .bar i')).transitionDuration), '0s');
     } finally {
         await p.context.close();
     }
