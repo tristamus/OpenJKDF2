@@ -6118,7 +6118,8 @@
         return !isSkipped(lower + '/');
       }
 
-      async function listFolder(dir) {
+      // onCount: told how many files are listed so far, after each folder.
+      async function listFolder(dir, onCount) {
         var out = [];
         function byName(a, b) {
           var p = a.name.toUpperCase(), q = b.name.toUpperCase();
@@ -6130,6 +6131,7 @@
           files = files.sort(byName).filter(function(f) { return !isSkipped((prefix + f.name).toLowerCase()); });
           var got = await Promise.all(files.map(function(f) { return f.getFile(); }));
           got.forEach(function(file, i) { out.push({ path: prefix + files[i].name, file: file }); });
+          if (onCount) onCount(out.length);
           for (var d of dirs.sort(byName)) {
             var lower = (prefix + d.name).toLowerCase();
             if (depth < 8 && isOpened(lower)) await walk(d, prefix + d.name + '/', depth + 1);
@@ -9049,12 +9051,67 @@
       // without choosing (cancel) puts back what the prompt said.
       var gameDir = document.getElementById('gamedir');
       var beforeAsking = null;
-      gameDir.addEventListener('click', function() {
+      // On a phone whose browser lets the page open a folder itself
+      // (showDirectoryPicker: Chrome on Android), it does: the page looks
+      // only in the folders the game uses and counts the files as it goes.
+      // Through the file input the phone got every file in the folder ready
+      // first, with nothing to show how far it had got: Antonio's Mysteries
+      // of the Sith folder is 3.1 GB, 2.2 GB of it two installers the game
+      // never reads (2026-11-27). Once that fails other than by closing it,
+      // the file input is used.
+      var dirPickerFailed = false;
+      function pickWithDirPicker() {
+        return !!phoneNote() && typeof window.showDirectoryPicker === 'function' && !dirPickerFailed;
+      }
+      async function pickFolderItself() {
+        var was = beforeAsking;
+        var dir;
+        try {
+          dir = await window.showDirectoryPicker({ id: 'jkdf2mp-game-folder', mode: 'read' });
+        } catch (err) {
+          beforeAsking = null;
+          if (err && err.name === 'AbortError') {
+            if (was && !readingFolder) showPickerResult(was.text, was.error);
+            return;
+          }
+          dirPickerFailed = true;
+          console.warn('OpenJKDF2: could not open a folder with showDirectoryPicker (' + err + '), using the file input');
+          showPickerResult("Couldn't open that folder: " + (err && err.message || err) + ' Choose it again.', true);
+          return;
+        }
+        beforeAsking = null;
+        var name = dir.name;
+        showPickerProgress('Looking through your folder "' + name + '"...', null);
+        whilePicking((async function() {
+          var listed;
+          try {
+            listed = await listFolder(dir, function(n) {
+              showPickerProgress('Looking through your folder "' + name + '": ' + n.toLocaleString() +
+                                 (n === 1 ? ' file' : ' files') + ' so far...', null);
+            });
+          } catch (err) {
+            dirPickerFailed = true;
+            throw err;
+          }
+          var files = listed.map(function(e) {
+            Object.defineProperty(e.file, 'webkitRelativePath', { value: name + '/' + e.path });
+            return e.file;
+          });
+          console.log('OpenJKDF2: listed ' + files.length + ' files in the folder ' + name + ' with showDirectoryPicker');
+          showPickerProgress('Got ' + files.length.toLocaleString() + (files.length === 1 ? ' file' : ' files') +
+                             ' from your folder. Looking through them...', null);
+          return onFolderPicked(files);
+        })(), null);
+      }
+      gameDir.addEventListener('click', function(ev) {
         var el = document.getElementById('picker-result');
         if (!beforeAsking) beforeAsking = { text: el.className === 'busy' ? '' : el.textContent, error: el.className === 'error' };
-        showPickerProgress('Waiting for the folder you choose...', null, phoneNote() ?
+        var itself = pickWithDirPicker();
+        if (itself) ev.preventDefault();
+        showPickerProgress('Waiting for the folder you choose...', null, itself || !phoneNote() ? '' :
           'Once you choose it and allow it, your phone gets its files ready for this page first. For a whole ' +
-          'game folder, that can take a minute or two.' : '');
+          'game folder, that can take a minute or two.');
+        if (itself) pickFolderItself();
         // On a phone held sideways the line covered Choose game folder:
         // the button is scrolled up above it, to choose again.
         if (!watchEmbed && chooseButton.offsetParent) {

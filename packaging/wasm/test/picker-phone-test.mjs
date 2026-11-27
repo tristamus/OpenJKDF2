@@ -12,7 +12,7 @@
 // Input.dispatchTouchEvent), since a synthesized scroll gesture doesn't scroll
 // what's inside a page in headless Chromium, even where a finger does.
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -80,8 +80,14 @@ const browser = await chromium.launch();
 
 // A page at the given size with the folder prompt open, and what it shows in
 // the prompt's status line, as it changes.
-async function openPrompt(device) {
+// dirPicker: the browser lets the page open a folder itself
+// (showDirectoryPicker), as Chrome on Android does; without it, the file
+// input, as on an iPhone. (Chromium has it on every screen, so it's taken
+// away for the rest.)
+async function openPrompt(device, { dirPicker = false } = {}) {
     const context = await browser.newContext({ ...device, deviceScaleFactor: 1 });
+    if (!dirPicker)
+        await context.addInitScript(() => Object.defineProperty(window, 'showDirectoryPicker', { value: undefined, configurable: true }));
     const page = await context.newPage();
     await page.goto(ORIGIN + '/', { waitUntil: 'load' });
     await page.evaluate(() => {
@@ -230,6 +236,91 @@ await test('an upright Android phone: after Start, the bar fills by bytes read, 
         assert.equal(bars.at(-1), 100);
         // Drawn where it's set, with no easing to fall behind (a fast computer's bar was at 42% at 100%).
         assert.equal(await p.page.evaluate(() => getComputedStyle(document.querySelector('#picker-result .bar i')).transitionDuration), '0s');
+    } finally {
+        await p.context.close();
+    }
+});
+
+// The game folder as a folder the page opens itself: handles over the same
+// files, plus what the game never reads (an installer, the music).
+async function useDirPicker(page, { abort = false } = {}) {
+    const tree = {};
+    const add = (rel, bytes) => {
+        const parts = rel.split('/');
+        let at = tree;
+        for (const p of parts.slice(0, -1)) at = at[p] = at[p] || {};
+        at[parts.at(-1)] = Array.from(bytes);
+    };
+    const walk = (dir, prefix) => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+            if (e.isDirectory()) walk(join(dir, e.name), prefix + e.name + '/');
+            else if (e.name !== 'Res2.gob') add(prefix + e.name, readFileSync(join(dir, e.name)));
+        }
+    };
+    walk(game, '');
+    add('resource/Res2.gob', gob('misc\\x.txt', 'res2'));
+    add('Setup.exe', Buffer.from('an installer'));
+    add('music/Track02.ogg', Buffer.from('music'));
+    await page.evaluate(({ tree, abort }) => {
+        window.dirPickerAsked = 0;
+        const fileHandle = (name, bytes) => ({ kind: 'file', name, getFile: async () => new File([new Uint8Array(bytes)], name) });
+        const dirHandle = (name, t) => ({
+            kind: 'directory', name,
+            async *values() {
+                for (const [n, v] of Object.entries(t)) yield Array.isArray(v) ? fileHandle(n, v) : dirHandle(n, v);
+            },
+        });
+        window.showDirectoryPicker = async () => {
+            window.dirPickerAsked++;
+            if (abort) throw new DOMException('The user aborted a request.', 'AbortError');
+            return dirHandle('Jedi Knight', tree);
+        };
+    }, { tree, abort });
+}
+
+await test('an Android phone that lets the page open the folder: it counts the files as it goes, without the music or installers', async () => {
+    const p = await openPrompt(PHONES['an upright Android phone'], { dirPicker: true });
+    try {
+        await useDirPicker(p.page);
+        let chose = false;
+        p.page.on('filechooser', () => { chose = true; });
+        await p.page.locator('#picker label.play').tap();
+        await p.page.waitForFunction(() => !document.getElementById('mod-choice').hidden);
+        assert.equal(chose, false, "the file input's window didn't open");
+        assert.equal(await p.page.evaluate(() => window.dirPickerAsked), 1);
+        const seen = await p.page.evaluate(() => window.statusSeen.filter(s => s.busy).map(s => s.text));
+        assert.ok(seen.some(t => /^Looking through your folder "Jedi Knight": \d+ files? so far\.\.\.$/.test(t)), JSON.stringify(seen));
+        // The game's 6 files and the 12 mods, not the installer or the music.
+        assert.ok(seen.includes('Got 18 files from your folder. Looking through them...'), JSON.stringify(seen));
+        assert.equal(await p.page.locator('#picker-title').textContent(), 'Choose your mods');
+    } finally {
+        await p.context.close();
+    }
+});
+
+await test('an Android phone that lets the page open the folder: closing its window puts back what was said', async () => {
+    const p = await openPrompt(PHONES['an upright Android phone'], { dirPicker: true });
+    try {
+        await useDirPicker(p.page, { abort: true });
+        const before = await p.page.locator('#picker-result').textContent();
+        await p.page.locator('#picker label.play').tap();
+        await p.page.waitForFunction(() => window.dirPickerAsked === 1);
+        await p.page.waitForTimeout(100);
+        assert.equal(await p.page.locator('#picker-result').textContent(), before);
+        assert.equal(await p.page.locator('#picker-result').getAttribute('class'), '');
+    } finally {
+        await p.context.close();
+    }
+});
+
+await test("a computer keeps the browser's own window for the folder, also where the page could open it", async () => {
+    const p = await openPrompt({ viewport: { width: 1280, height: 800 } }, { dirPicker: true });
+    try {
+        await useDirPicker(p.page);
+        const chooser = p.page.waitForEvent('filechooser');
+        await p.page.locator('#picker label.play').click();
+        await chooser;
+        assert.equal(await p.page.evaluate(() => window.dirPickerAsked), 0);
     } finally {
         await p.context.close();
     }
