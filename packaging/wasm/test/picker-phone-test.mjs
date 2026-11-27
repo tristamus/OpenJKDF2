@@ -174,6 +174,10 @@ for (const [phone, device] of Object.entries(PHONES)) {
             });
             assert.ok(choose.bottom <= choose.line && choose.top >= choose.body,
                       'Choose game folder is in sight above the line, to choose again: ' + JSON.stringify(choose));
+            // A clock from the third second, as the phone may take a while.
+            assert.equal(await p.page.locator('#picker-result .clock').textContent(), '');
+            await p.page.waitForTimeout(3300);
+            assert.match(await p.page.locator('#picker-result .clock').textContent(), /^ 0:0[3-5]$/);
             await p.page.evaluate(() => document.getElementById('gamedir').dispatchEvent(new Event('cancel')));
             assert.equal(await p.page.locator('#picker-result').textContent(), before);
             assert.equal(await p.page.locator('#picker-result').getAttribute('class'), '');
@@ -226,6 +230,18 @@ await test('an upright Android phone: after Start, the bar fills by bytes read, 
         assert.equal(bars.at(-1), 100);
         // Drawn where it's set, with no easing to fall behind (a fast computer's bar was at 42% at 100%).
         assert.equal(await p.page.evaluate(() => getComputedStyle(document.querySelector('#picker-result .bar i')).transitionDuration), '0s');
+    } finally {
+        await p.context.close();
+    }
+});
+
+await test('the time left is only said once there is enough to go by, in words', async () => {
+    const p = await openPrompt({ viewport: { width: 1280, height: 800 } });
+    try {
+        const said = await p.page.evaluate(() => [timeLeft(0.5, 2), timeLeft(0.01, 30), timeLeft(1, 30), timeLeft(0.5, 12),
+                                                  timeLeft(0.9, 3), timeLeft(0.5, 70), timeLeft(0.25, 120)]);
+        assert.deepEqual(said, ['', '', '', 'about 15 seconds left', 'about 5 seconds left', 'about a minute left',
+                                'about 6 minutes left']);
     } finally {
         await p.context.close();
     }

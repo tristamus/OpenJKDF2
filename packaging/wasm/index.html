@@ -1218,6 +1218,7 @@
         border: 1px solid var(--teal-light);
       }
       #picker-result .fine { display: block; margin-top: 6px; font-weight: normal; }
+      #picker-result .clock { font-variant-numeric: tabular-nums; }
       #picker-result .fine:empty { display: none; }
       /* No easing: it's moved again before an easing could catch up, and on
          a fast computer the bar stayed far behind the percentage. */
@@ -8641,12 +8642,15 @@
       // more: a line under the bar, in smaller type.
       function showPickerProgress(text, done, more) {
         var el = document.getElementById('picker-result');
-        var say = el.querySelector('.say'), bar = el.querySelector('.bar'), fine = el.querySelector('.fine');
-        if (el.className !== 'busy' || !say || !bar || !fine) {
+        var say = el.querySelector('.say'), clock = el.querySelector('.clock'), bar = el.querySelector('.bar'),
+            fine = el.querySelector('.fine');
+        if (el.className !== 'busy' || !say || !clock || !bar || !fine) {
           el.textContent = '';
           el.className = 'busy';
           say = document.createElement('span');
           say.className = 'say';
+          clock = document.createElement('span');
+          clock.className = 'clock';
           fine = document.createElement('span');
           fine.className = 'fine';
           bar = document.createElement('span');
@@ -8654,6 +8658,7 @@
           bar.setAttribute('aria-hidden', 'true');
           bar.appendChild(document.createElement('i'));
           el.appendChild(say);
+          el.appendChild(clock);
           el.appendChild(bar);
           el.appendChild(fine);
         }
@@ -8662,7 +8667,44 @@
         var known = typeof done === 'number' && isFinite(done);
         bar.classList.toggle('unknown', !known);
         bar.firstChild.style.width = known ? (Math.max(0, Math.min(1, done)) * 100).toFixed(1) + '%' : '';
+        if (known) {
+          pickerClock.text = null;
+        } else {
+          if (pickerClock.text !== text) {
+            pickerClock.text = text;
+            pickerClock.at = Date.now();
+          }
+          if (!pickerClock.timer) pickerClock.timer = setInterval(pickerClockTick, 1000);
+        }
+        pickerClockTick();
         embedLook();
+      }
+
+      // How long a step that can't tell how far it's got has gone on, from
+      // its third second: on a phone, getting a whole folder ready for the
+      // page took a long while with nothing moving but the bar (Antonio,
+      // 2026-11-27, Mysteries of the Sith on his phone).
+      var pickerClock = { text: null, at: 0, timer: 0 };
+      function pickerClockTick() {
+        var el = document.getElementById('picker-result'), clock = el.querySelector('.clock');
+        var on = !!clock && el.className === 'busy' && pickerClock.text !== null && !!el.querySelector('.bar.unknown');
+        if (!on) {
+          clearInterval(pickerClock.timer);
+          pickerClock.timer = 0;
+          if (clock) clock.textContent = '';
+          return;
+        }
+        var s = Math.floor((Date.now() - pickerClock.at) / 1000);
+        clock.textContent = s < 3 ? '' : ' ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+      }
+
+      // About how long is left of something that has done done (0 to 1) in
+      // secs seconds, going on as it has: '' until there's enough to tell.
+      function timeLeft(done, secs) {
+        if (!(done > 0.02 && done < 1 && secs >= 3)) return '';
+        var rest = secs * (1 - done) / done;
+        return rest < 55 ? 'about ' + Math.max(5, Math.ceil(rest / 5) * 5) + ' seconds left' :
+               rest < 90 ? 'about a minute left' : 'about ' + Math.round(rest / 60) + ' minutes left';
       }
 
       // A file's bytes. A big one is read a piece at a time, so the bar moves
@@ -8881,11 +8923,13 @@
         var loaded = [];
         // How far it's got by bytes, not files: a few big GOBs are most of
         // the game, and on a phone one takes a while.
-        var readBefore = 0, readSaid = '';
+        var readBefore = 0, readSaid = '', readFrom = performance.now();
         function sayReading(now) {
           var at = readBefore + now;
+          var left = timeLeft(at / Math.max(totalBytes, 1), (performance.now() - readFrom) / 1000);
           var text = loadingText + ' (' + Math.floor(at * 100 / Math.max(totalBytes, 1)) + '%, ' +
-                     Math.floor(at / 1048576) + ' of ' + Math.round(totalBytes / 1048576) + ' MB)...';
+                     Math.floor(at / 1048576) + ' of ' + Math.round(totalBytes / 1048576) + ' MB' +
+                     (left ? ', ' + left : '') + ')...';
           if (text === readSaid) return;
           readSaid = text;
           showPickerProgress(text, totalBytes ? at / totalBytes : null);
