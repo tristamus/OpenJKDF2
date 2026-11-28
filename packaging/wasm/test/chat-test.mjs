@@ -240,6 +240,8 @@ await test('a name\'s menu: Ignore hides its lines on this browser (Undo, and ke
     const page = await open();
     await openRoom(page);
     await page.waitForSelector('#chat-log p.old');
+    // Nothing in force: no line under the box.
+    assert.equal(await page.isVisible('#chat-rule'), false);
     await page.click('#chat-log [data-chat-who="12"]');
     const items = await page.$$eval('.chat-menu button', bs => bs.map(b => b.textContent));
     assert.deepEqual(items, ['Ignore DarkJedi_7', 'Report this line', 'Cancel']);
@@ -251,7 +253,8 @@ await test('a name\'s menu: Ignore hides its lines on this browser (Undo, and ke
     await page.click('.chat-menu button:text("Ignore DarkJedi_7")');
     assert.equal(await page.$('#chat-log [data-chat-who="12"]'), null, 'hidden');
     assert.equal(await page.evaluate(() => localStorage.getItem('jkdf2mp-chat-ignore')), '["darkjedi_7"]');
-    assert.match(await page.textContent('#chat-rule'), /Ignoring 1 name on this browser/);
+    assert.equal(await page.isVisible('#chat-rule'), true);
+    assert.match(await page.textContent('#chat-rule'), /^Ignoring 1 name on this browser/);
     await page.click('#chat-log [data-chat-undo]');
     await page.waitForSelector('#chat-log [data-chat-who="12"]');
     // Esc closes the menu, not the room window.

@@ -3948,7 +3948,7 @@
           <span class="fine">Or start the game once, and its player name is used</span>
           <span class="why" id="chat-name-why" role="status"></span>
         </form>
-        <p class="chat-rule" id="chat-rule"></p>
+        <p class="chat-rule" id="chat-rule" hidden></p>
       </section>
       <p class="room-note" id="room-note" role="status" hidden></p>
       <div class="room-status">
@@ -13537,19 +13537,22 @@
         chatText.placeholder = why || (chatPhone() ? 'Talk to the room' :
           'Type here and press Enter to talk to the room (Shift+Enter for a second line)');
         if (!chatNameForm.hidden && !chatNameText.value) chatNameText.value = chatLive.taken;
-        // Not the rules on links and length (Antonio, 2026-11-28: not
-        // needed there): a line turned down says why, and the count shows
-        // the length.
-        var rule = ['Chat is kept 48 hours'];
-        if (chatLive.slow) rule.unshift('Slow mode: one line every 15 seconds');
-        if (chatLive.paused) rule.unshift('Paused by a moderator');
+        // Under the box only what's in force now: no rules on links or
+        // length, nor how long chat is kept (Antonio, 2026-11-28: not needed
+        // there; a line turned down says why, the count shows the length,
+        // and the log says how long it keeps).
+        var rule = [];
+        if (chatLive.paused) rule.push('Paused by a moderator');
+        if (chatLive.slow) rule.push('Slow mode: one line every 15 seconds');
         chatRule.replaceChildren(rule.join(' · '));
         if (chatLive.ignore.length) {
           var b = el('button', null, 'Stop ignoring');
           b.type = 'button';
           b.dataset.chatUnignore = '1';
-          chatRule.append(' · Ignoring ' + plural(chatLive.ignore.length, 'name', 'names') + ' on this browser (', b, ')');
+          chatRule.append((rule.length ? ' · ' : '') + 'Ignoring ' + plural(chatLive.ignore.length, 'name', 'names') +
+                          ' on this browser (', b, ')');
         }
+        chatRule.hidden = !rule.length && !chatLive.ignore.length;
         chatCountShow();
       }
 
