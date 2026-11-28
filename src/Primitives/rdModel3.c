@@ -36,6 +36,12 @@ static int rdModel3_bMeshColored = 0;
 static flex_t* rdModel3_paColoredLight = NULL;
 static int rdModel3_coloredLightSize = 0;
 
+// Added: model diagnostics (sithRender_ModelDiag). Faces the backface test kept or dropped,
+// and kept faces the clipper left nothing of, since the caller last zeroed them.
+uint32_t rdModel3_diagKept = 0;
+uint32_t rdModel3_diagDropped = 0;
+uint32_t rdModel3_diagClipped = 0;
+
 // Added: while set, rdModel3_LoadEntry reads a model's meshes and nodes but
 // loads none of its materials (for a look at a model that won't be drawn)
 int rdModel3_bSkipMaterials = 0;
@@ -1886,13 +1892,16 @@ void rdModel3_DrawMesh(rdMesh *pMesh, rdMatrix34 *orient)
             flags = 1;
             if ( !(face->type & 1) && (rdroid_g_curRenderOptions & 1) )
             {
+                ++rdModel3_diagDropped; // Added
                 ++face;
                 continue;
             }
         }
 
         // Everything except rdModel3_DrawFace: 2ms
-        rdModel3_DrawFace(face, flags);
+        ++rdModel3_diagKept; // Added
+        if (!rdModel3_DrawFace(face, flags))
+            ++rdModel3_diagClipped; // Added
         ++face;
     }
 

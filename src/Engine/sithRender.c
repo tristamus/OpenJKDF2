@@ -3382,6 +3382,76 @@ static void sithRender_InterpPop(SithThing *pThing, const sithRender_InterpSaved
 }
 #endif
 
+#ifdef QOL_IMPROVEMENTS
+// Added: model diagnostics. A joining player's own model was seen drawn as a few edge-on
+// slivers for some seconds, until they turned (2026-11-28). For 20 s after the local
+// player's thing is first drawn (a new thing, signature or world), four lines a second
+// record its orientation's determinant (-1 is mirrored) and axis lengths and angles, the
+// lowest and highest joint determinant, and how many of its faces the backface test kept
+// and dropped. Later, a line a second only while the orientation is off. All start with
+// "modeldiag:" and go to the engine log that Save network log saves.
+static SithThing* sithRender_diagThing = NULL;
+static uint32_t sithRender_diagSig = 0;
+static SithWorld* sithRender_diagWorld = NULL;
+static uint32_t sithRender_diagStartMs = 0;
+static uint32_t sithRender_diagLastMs = 0;
+
+static flex_t sithRender_DiagDet(const rdMatrix34* m)
+{
+    rdVector3 c;
+    rdVector_Cross3(&c, &m->lvec, &m->uvec);
+    return rdVector_Dot3(&m->rvec, &c);
+}
+
+static void sithRender_ModelDiag(SithThing* pThing)
+{
+    uint32_t now = stdPlatform_GetTimeMsec();
+    if (pThing != sithRender_diagThing || pThing->signature != sithRender_diagSig
+        || sithWorld_g_pCurrentWorld != sithRender_diagWorld)
+    {
+        sithRender_diagThing = pThing;
+        sithRender_diagSig = pThing->signature;
+        sithRender_diagWorld = sithWorld_g_pCurrentWorld;
+        sithRender_diagStartMs = now;
+        sithRender_diagLastMs = 0;
+        stdPlatform_Printf("modeldiag: start thing %d model %s\n", (int)pThing->idx,
+                           pThing->renderData.model3 ? pThing->renderData.model3->filename : "?");
+    }
+
+    const rdMatrix34* o = &pThing->orient;
+    flex_t det = sithRender_DiagDet(o);
+    flex_t lr = rdVector_Len3(&o->rvec), ll = rdVector_Len3(&o->lvec), lu = rdVector_Len3(&o->uvec);
+    int bOff = !(det > 0.95 && det < 1.05 && lr > 0.97 && lr < 1.03 && ll > 0.97 && ll < 1.03 && lu > 0.97 && lu < 1.03);
+
+    uint32_t elapsed = now - sithRender_diagStartMs;
+    uint32_t gap = (elapsed <= 20000) ? 250 : 1000;
+    if (elapsed > 20000 && !bOff)
+        return;
+    if (sithRender_diagLastMs && now - sithRender_diagLastMs < gap)
+        return;
+    sithRender_diagLastMs = now;
+
+    flex_t jMin = 0.0, jMax = 0.0;
+    rdThing* pRd = &pThing->renderData;
+    if (pRd->model3 && pRd->paJointMatrices && pRd->model3->numHNodes)
+    {
+        jMin = jMax = sithRender_DiagDet(&pRd->paJointMatrices[0]);
+        for (uint32_t i = 1; i < pRd->model3->numHNodes; i++)
+        {
+            flex_t d = sithRender_DiagDet(&pRd->paJointMatrices[i]);
+            if (d < jMin) jMin = d;
+            if (d > jMax) jMax = d;
+        }
+    }
+
+    stdPlatform_Printf("modeldiag: t=%u%s det=%.3f len=%.3f/%.3f/%.3f dots=%.3f/%.3f/%.3f joints=%.3f..%.3f kept=%u dropped=%u clipped=%u geo=%d cam=%x interp=%d\n",
+        (unsigned)elapsed, bOff ? " OFF" : "", (double)det, (double)lr, (double)ll, (double)lu,
+        (double)rdVector_Dot3(&o->rvec, &o->lvec), (double)rdVector_Dot3(&o->lvec, &o->uvec), (double)rdVector_Dot3(&o->uvec, &o->rvec),
+        (double)jMin, (double)jMax, (unsigned)rdModel3_diagKept, (unsigned)rdModel3_diagDropped, (unsigned)rdModel3_diagClipped,
+        (int)pRd->geosetSelect, sithCamera_g_pCurCamera ? (unsigned)sithCamera_g_pCurCamera->type : 0u, sithInterp_IsArmed());
+}
+#endif
+
 int sithRender_RenderThing(SithThing *pThing)
 {
     int ret;
@@ -3430,7 +3500,17 @@ int sithRender_RenderThing(SithThing *pThing)
     sithRender_InterpSaved interpSaved;
     int bInterpPushed = sithRender_InterpPush(pThing, &interpSaved);
 #endif
+#ifdef QOL_IMPROVEMENTS
+    // Added: model diagnostics, the local player's own model only
+    int bModelDiag = (pThing == sithPlayer_g_pLocalPlayerThing && pThing->renderData.type == RD_THING_MODEL3);
+    if (bModelDiag)
+        rdModel3_diagKept = rdModel3_diagDropped = rdModel3_diagClipped = 0;
+#endif
     ret = rdThing_Draw(&pThing->renderData, &pThing->orient);
+#ifdef QOL_IMPROVEMENTS
+    if (bModelDiag)
+        sithRender_ModelDiag(pThing);
+#endif
     rdVector_Zero3(&pThing->orient.scale);
     if (sithRender_pExtraThingRenderFunc && (pThing->flags & SITH_TF_RENDERWEAPON)) {
         sithRender_pExtraThingRenderFunc(pThing);

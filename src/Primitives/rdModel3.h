@@ -212,6 +212,7 @@ MATH_FUNC int rdModel3_Draw(rdThing *pThing, rdMatrix34 *pPlacement);
 MATH_FUNC void rdModel3_DrawHNode(rdHierarchyNode *pNode);
 extern int rdModel3_bAllowColoredLights; // Added: colored saber glow
 extern int rdModel3_bSkipMaterials; // Added
+extern uint32_t rdModel3_diagKept, rdModel3_diagDropped, rdModel3_diagClipped; // Added: model diagnostics
 int rdModel3_FitSkeleton(rdModel3* pModel, const rdModel3* pOther); // Added
 MATH_FUNC void rdModel3_DrawMesh(rdMesh *pMesh, rdMatrix34 *orient);
 MATH_FUNC FAST_FUNC int rdModel3_DrawFace(rdFace *pFace, int lightFlags);
