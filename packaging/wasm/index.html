@@ -1837,14 +1837,19 @@
       .mod-panel .mod-title b { font: bold 12px Verdana, sans-serif; }
       .mod-panel .mod-title button { width: 20px; height: 18px; padding: 0; border: 2px outset #fff; background: #ddd; color: #000; font: bold 10px/10px Verdana; }
       .mod-panel .body { padding: 8px 10px 10px; }
-      .mod-panel fieldset { margin: 0 0 8px; padding: 4px 8px 6px; border: 1px solid var(--win-dark); box-shadow: inset 1px 1px #fff; }
-      .mod-panel legend { padding: 0 3px; }
+      /* A Windows group box: a grey line with a white one beside it (inside
+         at the top and left, outside at the bottom and right). The legend
+         has the panel's grey behind it, or the white line ran through its
+         words (Antonio's screenshot, 2026-11-28). */
+      .mod-panel fieldset { margin: 0 0 8px; padding: 4px 8px 6px; border: 1px solid var(--win-dark); box-shadow: inset 1px 1px #fff, 1px 1px #fff; }
+      .mod-panel legend { padding: 0 4px; background: var(--win-grey); }
       .mod-panel label { display: flex; gap: 6px; align-items: baseline; margin: 2px 0; }
       .mod-panel .fine { margin: 4px 0 0; color: #555; font-size: 11px; }
       .mod-panel table { width: 100%; border-collapse: collapse; font-size: 11px; }
       .mod-panel td { padding: 2px 4px; border-bottom: 1px solid #bbb; vertical-align: middle; overflow-wrap: anywhere; }
       .mod-panel td:first-child { white-space: nowrap; }
       .mod-panel td:last-child { text-align: right; white-space: nowrap; }
+      .mod-panel tr:last-child td { border-bottom: 0; }
       .mod-panel button { padding: 1px 8px; border: 2px outset #fff; background: var(--win-grey); color: #000; font: 11px Verdana, sans-serif; cursor: pointer; }
       .mod-panel .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
       .mod-panel .none { color: #555; font-size: 11px; }
