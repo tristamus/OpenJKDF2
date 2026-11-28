@@ -13537,7 +13537,10 @@
         chatText.placeholder = why || (chatPhone() ? 'Talk to the room' :
           'Type here and press Enter to talk to the room (Shift+Enter for a second line)');
         if (!chatNameForm.hidden && !chatNameText.value) chatNameText.value = chatLive.taken;
-        var rule = ['No links of any kind', CHAT_MAX + ' characters, 2 lines', 'kept 48 hours'];
+        // Not the rules on links and length (Antonio, 2026-11-28: not
+        // needed there): a line turned down says why, and the count shows
+        // the length.
+        var rule = ['Chat is kept 48 hours'];
         if (chatLive.slow) rule.unshift('Slow mode: one line every 15 seconds');
         if (chatLive.paused) rule.unshift('Paused by a moderator');
         chatRule.replaceChildren(rule.join(' · '));
