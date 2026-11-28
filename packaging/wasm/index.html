@@ -1650,6 +1650,8 @@
       .roster li .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .roster li .where { flex: none; color: #808080; }
       .roster .none { padding-left: 26px; color: #808080; }
+      .roster li.me .who { color: var(--gold); font-weight: bold; }
+      .roster li.me .where { color: var(--gold); }
       /* Four bars, each 3px with a darker right edge, 1px apart. */
       .bars {
         flex: none;
@@ -9642,7 +9644,8 @@
       // game shows it (there once the host's game has reported the level to
       // the lobby's match record; levelTitle names the retail ones before
       // that), names start with the host's, online
-      // counts everyone with the game running, in a game or not, and net is
+      // counts everyone with the game running, in a game or not, and everyone
+      // with a room window open (look, below; by game in byGame), and net is
       // the netcode the game's host speaks. Names are typed by players, so
       // they only ever go into the page as text. A lobby that keeps a record
       // of every match also says which match is the latest (match: 12, or 0
@@ -9671,6 +9674,23 @@
       try {
         if (localStorage.getItem('jkdf2mp-room-view') === 'list') lobbyLive.view = 'list';
       } catch (e) {}
+      // Who's in a room (look in jkdf2mp-bb-server's lobby): while one of the
+      // room windows is open, or the folder prompt its Join or Host opened,
+      // the page tells the lobby, with its player's name, so it counts in
+      // Looking as a game that's running does, and everyone in the room sees
+      // it at once (Antonio, 2026-11-28: people in a room should see
+      // themselves, and those who come should see who's there). The lobby
+      // says looking once the status counts it, and the window shows that row
+      // first, as You. A tab hidden for LOOK_AWAY_MS stops counting until it
+      // shows again, so nobody waits on someone who has gone. The name is the
+      // one the game last said (hello, kept in PLAYER_NAME_KEY by game while
+      // it runs), else the one typed to chat while watching on a phone.
+      // can: the lobby takes look (its lobby line says so). sent: the line
+      // the lobby has. game and name: what the lobby said it counts this page
+      // as, from its looking.
+      var LOOK_AWAY_MS = 15 * 60 * 1000;
+      var PLAYER_NAME_KEY = 'jkdf2mp-player-name';  // {jk1, mots}: each game's name as its hello says it (base64 UTF-8)
+      var lookLive = { can: false, sent: 'look', game: '', name: '', hiddenAt: 0, awayTimer: 0, kept: '', keepTimer: 0 };
 
       function el(tag, cls, str) {
         var e = document.createElement(tag);
@@ -10561,7 +10581,8 @@
         var head = el('div', 'roster-head');
         head.append(el('span', null, 'Latency'), el('span', null, 'Name'));
         roster.replaceChildren(head);
-        // Rows are [name, game] or, for players without a name, [text, null, true].
+        // Rows are [name, game] or, for players without a name, [text, null, true],
+        // and this page's own [name or You, You or nothing, false, true].
         function section(title, count, rows, none) {
           var sec = el('section');
           var h = el('h2', null, title);
@@ -10570,7 +10591,7 @@
           if (rows) {
             var ul = el('ul');
             rows.forEach(function(r) {
-              var li = el('li', r[2] ? 'none' : null);
+              var li = el('li', r[2] ? 'none' : r[3] ? 'me' : null);
               if (!r[2]) {
                 var bars = el('span', 'bars');
                 bars.setAttribute('aria-hidden', 'true');
@@ -10604,9 +10625,17 @@
           inGames += g.players;
           g.names.forEach(function(n) { if (n) playing.push([n, gameNumber(i)]); });
         });
-        var inLobby = Math.max(0, s.online - inGames);
-        var lobbyRows = s.lobby.filter(Boolean).map(function(n) { return [n]; });
-        if (lobbyRows.length < inLobby) lobbyRows.push(['+' + (inLobby - lobbyRows.length) + ' without a name', null, true]);
+        // This page, once the lobby counts it in this room (lookTake): its row
+        // first, and one of the names (or of those without one) is its own.
+        var me = !!lookLive.game && lookLive.game === ROOMS[lobbyLive.room].game && !ROOMS[lobbyLive.room].demo;
+        var inLobby = Math.max(me ? 1 : 0, s.online - inGames);
+        var lobbyNames = s.lobby.filter(Boolean);
+        var mine = me && lookLive.name ? lobbyNames.indexOf(lookLive.name) : -1;
+        if (mine >= 0) lobbyNames.splice(mine, 1);
+        var lobbyRows = lobbyNames.map(function(n) { return [n]; });
+        var others = inLobby - (me ? 1 : 0);
+        if (lobbyRows.length < others) lobbyRows.push(['+' + (others - lobbyRows.length) + ' without a name', null, true]);
+        if (me) lobbyRows.unshift([lookLive.name || 'You', lookLive.name ? 'You' : null, false, true]);
         if (playing.length < inGames) playing.push(['+' + (inGames - playing.length) + ' without a name', null, true]);
         section('Total players', String(s.online));
         if (!ROOMS[lobbyLive.room].demo) section('Looking', String(inLobby), lobbyRows, 'Nobody');
@@ -10707,6 +10736,7 @@
         roomNote.hidden = true;
         if (!room.open) room.showModal();
         renderRoom();
+        lookSay();
       }
 
       var roomNoteTimer = null;
@@ -12486,6 +12516,7 @@
       // page on top of it.
       room.addEventListener('close', function() {
         if (!watchDlg.open && watchLive.id) watchGame(0);
+        lookSay();
       });
 
       // A link to #watch-<room>: the viewing page on that match, once the
@@ -12605,6 +12636,10 @@
             return;
           }
           ws.onopen = function() {
+            // A lobby that's new to this page counts it nowhere until it says look.
+            lookLive.can = false;
+            lookLive.sent = 'look';
+            lookLive.game = '';
             ws.send('watch');
             // The match this page watches, if any, to a lobby that's new to it;
             // and its kills again, for what came while it was away.
@@ -12615,6 +12650,16 @@
           };
           ws.onmessage = function(ev) {
             if (typeof ev.data !== 'string') return;
+            // What the lobby takes, which comes first: look, for this page's room.
+            if (/^lobby( |$)/.test(ev.data)) {
+              lookLive.can = /(^| )look( |$)/.test(ev.data);
+              lookSay();
+              return;
+            }
+            if (/^looking /.test(ev.data)) {
+              lookTake(ev.data);
+              return;
+            }
             var m = /^status ([A-Za-z0-9+\/]+={0,2})$/.exec(ev.data);
             var k = !m && /^kills (\d{1,9}) ([A-Za-z0-9+\/]+={0,2})$/.exec(ev.data);
             if (k) {
@@ -12642,6 +12687,8 @@
             clearInterval(w.keepalive);
             if (w.ws !== ws) return;
             w.ws = null;
+            lookLive.can = false;
+            lookLive.game = '';
             lobbyShow(null, 'down');
             if (!w.stopped) {
               w.retry = setTimeout(connect, w.delay);
@@ -12664,6 +12711,88 @@
           try { ws.close(); } catch (e) {}
         }
       }
+
+      // The room this page's player is in, for look: the room window's, or
+      // the one whose Join or Host opened the folder prompt. Not the Free
+      // Demo Room's, which lists no one Looking.
+      function lookRoom() {
+        var key = room.open ? lobbyLive.room :
+          picker.open && pickerWant && !pickerWant.watch ? pickerWant.lobbyRoom : '';
+        return key && Object.prototype.hasOwnProperty.call(ROOMS, key) && !ROOMS[key].demo ? key : '';
+      }
+
+      // The name to be listed by: the one the game last said for this game
+      // (or for the other), else the one typed to chat while watching.
+      // Base64 UTF-8, as hello has it; '' for none.
+      function lookName(game) {
+        var names = null;
+        try { names = JSON.parse(localStorage.getItem(PLAYER_NAME_KEY)); } catch (e) {}
+        if (names && typeof names === 'object') {
+          var b = names[game] || names[game === 'mots' ? 'jk1' : 'mots'];
+          if (typeof b === 'string' && /^[A-Za-z0-9+\/]{1,128}={0,2}$/.test(b)) return b;
+        }
+        var typed = '';
+        try { typed = touchNameClean(localStorage.getItem(TOUCH_NAME_KEY)); } catch (e) {}
+        return typed ? btoa(typed) : '';
+      }
+
+      // Tells the lobby which room this page's player is in, if that changed.
+      function lookSay() {
+        var key = lookRoom();
+        var away = !!lookLive.hiddenAt && Date.now() - lookLive.hiddenAt >= LOOK_AWAY_MS;
+        var game = key && !away ? ROOMS[key].game : '';
+        var name = game ? lookName(game) : '';
+        var line = game ? 'look ' + game + (name ? ' ' + name : '') : 'look';
+        if (!lookLive.can || line === lookLive.sent) return;
+        if (lobbySay(line)) lookLive.sent = line;
+      }
+
+      // The lobby's looking <game> [<name>], or looking off: the status just
+      // sent counts this page so, by that name.
+      function lookTake(text) {
+        var m = /^looking (jk1|mots)(?: ([A-Za-z0-9+\/]+={0,2}))?$/.exec(text);
+        lookLive.game = m ? m[1] : '';
+        lookLive.name = '';
+        if (m && m[2]) {
+          try {
+            lookLive.name = new TextDecoder().decode(Uint8Array.from(atob(m[2]), function(c) { return c.charCodeAt(0); }));
+          } catch (e) {}
+        }
+        if (room.open && lobbyLive.status) renderRoster();
+      }
+
+      // While the game runs, the name it says to the lobby (its hello), kept
+      // by game for the room windows next time.
+      function playerNameKeep() {
+        if (lookLive.keepTimer) return;
+        lookLive.keepTimer = setInterval(function() {
+          var net = Module.jkNet;
+          var m = /^hello (jk1|mots) ([A-Za-z0-9+\/]{1,128}={0,2})$/.exec((net && net.helloSent) || '');
+          if (!m || m[0] === lookLive.kept) return;
+          lookLive.kept = m[0];
+          var names = null;
+          try { names = JSON.parse(localStorage.getItem(PLAYER_NAME_KEY)); } catch (e) {}
+          if (!names || typeof names !== 'object') names = {};
+          names[m[1]] = m[2];
+          try { localStorage.setItem(PLAYER_NAME_KEY, JSON.stringify(names)); } catch (e) {}
+        }, 3000);
+      }
+
+      // A tab hidden for LOOK_AWAY_MS stops counting; shown again, it counts.
+      function lookVisibility() {
+        clearTimeout(lookLive.awayTimer);
+        lookLive.awayTimer = 0;
+        if (document.visibilityState === 'hidden') {
+          if (!lookLive.hiddenAt) lookLive.hiddenAt = Date.now();
+          lookLive.awayTimer = setTimeout(lookSay, LOOK_AWAY_MS - (Date.now() - lookLive.hiddenAt) + 1000);
+        } else {
+          lookLive.hiddenAt = 0;
+          lookSay();
+        }
+      }
+      document.addEventListener('visibilitychange', lookVisibility);
+      lookVisibility();
+      picker.addEventListener('close', lookSay);
 
       // Fullscreen. Browsers show their own "has control of your pointer"
       // notice each time the game locks the mouse, and no page can hide it.
@@ -14234,6 +14363,7 @@
           shotGameStart();
         }
         clearTimeout(matchesLive.retry);
+        if (!watchEmbed) playerNameKeep();
         stopLobbyWatch();
         stopImperialWatch();
         if (watchDlg.open) {
@@ -14247,7 +14377,8 @@
       if (document.documentElement.classList.contains('zone-open')) {
         renderRoomCount();
         if (window.jkLobbyMock) {
-          window.jkLobbyMock.attach(lobbyShow, imperialShow, killsTake);
+          window.jkLobbyMock.attach(lobbyShow, imperialShow, killsTake, lookTake);
+          lookLive.can = true;
         } else {
           startLobbyWatch();
           startImperialWatch();
