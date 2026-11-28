@@ -225,6 +225,8 @@ window.jkLobbyMock = (function() {
     var live = null;      // the status as players come and go
     var spectating = 0;   // the game this page says it watches (say)
     var showKills = null; // the page's, for its "kills" (say)
+    var looking = null;   // the room this page's player is in, {game, name} (say, "look")
+    var showLooking = null; // the page's, for the lobby's "looking" (say)
     var moving = null;    // the timer making them
     var nextId = 60;
     var controls = [];
@@ -238,8 +240,11 @@ window.jkLobbyMock = (function() {
         var byGame = {}, all = [], online = 0;
         Object.keys(s.lobby).forEach(function(k) {
             var playing = s.games.reduce(function(n, g) { return n + (g.game === k ? g.players : 0); }, 0);
-            byGame[k] = { online: s.lobby[k].length + playing, lobby: s.lobby[k].slice().sort() };
-            all = all.concat(s.lobby[k]);
+            // And this page, while its player has the room open (look).
+            var here = looking && looking.game === k ? 1 : 0;
+            var names = s.lobby[k].concat(here && looking.name ? [looking.name] : []);
+            byGame[k] = { online: s.lobby[k].length + here + playing, lobby: names.slice().sort() };
+            all = all.concat(names);
             online += byGame[k].online;
         });
         // Each game's netcode: the page's, or the next for a newer one.
@@ -385,9 +390,10 @@ window.jkLobbyMock = (function() {
     }
 
     return {
-        attach: function(showStatus, showRelay, killsShow) {
+        attach: function(showStatus, showRelay, killsShow, lookingShow) {
             show = showStatus;
             showKills = killsShow || null;
+            showLooking = lookingShow || null;
             showImperial = showRelay || null;
             addStyles();
             var bar = document.createElement('div');
@@ -439,6 +445,19 @@ window.jkLobbyMock = (function() {
                         all.push([names[i % 2], names[(i + 1) % 2], i % 3 ? 1 : 2, first - i * 20000]);
                 }
                 setTimeout(function() { showKills(Number(k[1]), { n: v ? v.nk || 0 : 0, kills: v ? all.concat(v.kills || []) : [] }); }, 50);
+                return;
+            }
+            // The room this page's player has open: in the status, then told
+            // so, as the lobby does.
+            var l = /^look(?: (jk1|mots)(?: ([A-Za-z0-9+\/]+={0,2}))?)?$/.exec(line);
+            if (l) {
+                var name = '';
+                try { name = l[2] ? new TextDecoder().decode(Uint8Array.from(atob(l[2]), function(c) { return c.charCodeAt(0); })) : ''; } catch (e) {}
+                looking = l[1] ? { game: l[1], name: name } : null;
+                setTimeout(function() {
+                    if (live) show(toStatus(live));
+                    if (showLooking) showLooking(l[1] ? 'looking ' + l[1] + (l[2] ? ' ' + l[2] : '') : 'looking off');
+                }, 50);
                 return;
             }
             var m = /^spectate ([0-9]+)$/.exec(line);
