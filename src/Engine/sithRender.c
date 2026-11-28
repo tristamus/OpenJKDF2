@@ -370,8 +370,15 @@ void sithRender_SetPalette(const void *palette)
     }
 }
 
+#ifdef QOL_IMPROVEMENTS
+static void sithRender_OrientDiag(void); // Added: model diagnostics
+#endif
+
 void sithRender_Draw()
 {
+#ifdef QOL_IMPROVEMENTS
+    sithRender_OrientDiag(); // Added: model diagnostics
+#endif
     SithSector *v2; // edi
     SithSector *v4; // eax
     flex_t a2; // [esp+0h] [ebp-28h]
@@ -3395,6 +3402,7 @@ static uint32_t sithRender_diagSig = 0;
 static SithWorld* sithRender_diagWorld = NULL;
 static uint32_t sithRender_diagStartMs = 0;
 static uint32_t sithRender_diagLastMs = 0;
+static rdModel3* sithRender_diagModel = NULL;
 
 static flex_t sithRender_DiagDet(const rdMatrix34* m)
 {
@@ -3414,8 +3422,17 @@ static void sithRender_ModelDiag(SithThing* pThing)
         sithRender_diagWorld = sithWorld_g_pCurrentWorld;
         sithRender_diagStartMs = now;
         sithRender_diagLastMs = 0;
+        sithRender_diagModel = pThing->renderData.model3;
         stdPlatform_Printf("modeldiag: start thing %d model %s\n", (int)pThing->idx,
                            pThing->renderData.model3 ? pThing->renderData.model3->filename : "?");
+    }
+    else if (pThing->renderData.model3 != sithRender_diagModel)
+    {
+        // The model changed under the same thing (a character's model put on it)
+        sithRender_diagModel = pThing->renderData.model3;
+        sithRender_diagLastMs = 0;
+        stdPlatform_Printf("modeldiag: model now %s at t=%u\n",
+                           pThing->renderData.model3 ? pThing->renderData.model3->filename : "?", (unsigned)(now - sithRender_diagStartMs));
     }
 
     const rdMatrix34* o = &pThing->orient;
@@ -3449,6 +3466,43 @@ static void sithRender_ModelDiag(SithThing* pThing)
         (double)rdVector_Dot3(&o->rvec, &o->lvec), (double)rdVector_Dot3(&o->lvec, &o->uvec), (double)rdVector_Dot3(&o->uvec, &o->rvec),
         (double)jMin, (double)jMax, (unsigned)rdModel3_diagKept, (unsigned)rdModel3_diagDropped, (unsigned)rdModel3_diagClipped,
         (int)pRd->geosetSelect, sithCamera_g_pCurCamera ? (unsigned)sithCamera_g_pCurCamera->type : 0u, sithInterp_IsArmed());
+}
+#endif
+
+#ifdef QOL_IMPROVEMENTS
+// Added: model diagnostics. Each frame for 20 s after the local player's thing
+// shows up (a new thing, signature or world), whether or not its model is drawn
+// (first person): a line when its orientation is off, at most 4 a second.
+static void sithRender_OrientDiag(void)
+{
+    static SithThing* pLast = NULL;
+    static uint32_t lastSig = 0, startMs = 0, lastMs = 0;
+    static SithWorld* pLastWorld = NULL;
+    SithThing* pThing = sithPlayer_g_pLocalPlayerThing;
+    if (!pThing || !sithWorld_g_pCurrentWorld)
+        return;
+    uint32_t now = stdPlatform_GetTimeMsec();
+    if (pThing != pLast || pThing->signature != lastSig || sithWorld_g_pCurrentWorld != pLastWorld)
+    {
+        pLast = pThing;
+        lastSig = pThing->signature;
+        pLastWorld = sithWorld_g_pCurrentWorld;
+        startMs = now;
+        lastMs = 0;
+        stdPlatform_Printf("modeldiag: orient watch thing %d\n", (int)pThing->idx);
+    }
+    if (now - startMs > 20000)
+        return;
+    const rdMatrix34* o = &pThing->orient;
+    flex_t det = sithRender_DiagDet(o);
+    flex_t lr = rdVector_Len3(&o->rvec), ll = rdVector_Len3(&o->lvec), lu = rdVector_Len3(&o->uvec);
+    if (det > 0.95 && det < 1.05 && lr > 0.97 && lr < 1.03 && ll > 0.97 && ll < 1.03 && lu > 0.97 && lu < 1.03)
+        return;
+    if (lastMs && now - lastMs < 250)
+        return;
+    lastMs = now;
+    stdPlatform_Printf("modeldiag: orient OFF t=%u det=%.3f len=%.3f/%.3f/%.3f cam=%x\n", (unsigned)(now - startMs),
+        (double)det, (double)lr, (double)ll, (double)lu, sithCamera_g_pCurCamera ? (unsigned)sithCamera_g_pCurCamera->type : 0u);
 }
 #endif
 
