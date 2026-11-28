@@ -13385,6 +13385,14 @@
           chatRenderBox();
           return;
         }
+        // A web address for a name (the game's too), or one that reads as
+        // the chat's own lines: the lobby took none.
+        if (why === 'badname') {
+          chatLive.taken = '';
+          chatNameWhy.textContent = "That name can't be used in chat: no web addresses. Pick another one to talk.";
+          chatRenderBox();
+          return;
+        }
         if (why === 'muted') {
           chatLive.you.muted = n;
           chatRenderBox();

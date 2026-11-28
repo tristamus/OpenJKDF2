@@ -68,10 +68,11 @@ function lobby({ chat = true } = {}) {
                 const was = lb.room;
                 lb.room = a[2];
                 lb.name = a[4] ? unb64(a[4]) : '';
-                if (lb.taken && lb.name === lb.taken) {
+                if ((lb.taken && lb.name === lb.taken) || /\.com$/.test(lb.name)) {
+                    const why = /\.com$/.test(lb.name) ? 'badname' : 'taken';
                     lb.name = '';
                     lb.send('log', { room: lb.room, lines: [], slow: false, paused: false, who: { names: [], n: 1 }, you: lb.you() });
-                    lb.send('no taken');
+                    lb.send('no ' + why);
                     return;
                 }
                 if (was !== lb.room) {
@@ -265,7 +266,7 @@ await test('a name\'s menu: Ignore hides its lines on this browser (Undo, and ke
     await page.ctx.close();
 });
 
-await test('without a name: the name box, then in by that name; a name someone has is turned down', async () => {
+await test('without a name: the name box, then in by that name; a name someone has, or a web address, is turned down', async () => {
     const page = await open({ noName: true });
     page.lb.taken = 'DarkJedi_7';
     await openRoom(page, 'bespin-demo');
@@ -277,6 +278,12 @@ await test('without a name: the name box, then in by that name; a name someone h
     await page.click('#chat-name button[type=submit]');
     await page.waitForFunction(() => document.getElementById('chat-name-why').textContent !== '');
     assert.match(await page.textContent('#chat-name-why'), /Someone else in this room is using that name/);
+    // A web address for a name (the lobby's linkish): turned down, and the
+    // box doesn't keep it.
+    await page.fill('#chat-name-text', 'jkcheats.com');
+    await page.click('#chat-name button[type=submit]');
+    await page.waitForFunction(() => /no web addresses/.test(document.getElementById('chat-name-why').textContent));
+    assert.equal(await page.isVisible('#chat-say'), false);
     await page.fill('#chat-name-text', 'Bespin Fan');
     await page.click('#chat-name button[type=submit]');
     await eventually(() => / /.test(page.lb.chats().at(-1)) && unb64(page.lb.chats().at(-1).split(' ')[4] || '') === 'Bespin Fan', 'in by the name');
