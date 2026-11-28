@@ -13712,7 +13712,16 @@
         if (chatLive.menu && !chatLive.menu.el.contains(ev.target) && ev.target !== chatLive.menu.btn) chatMenuClose();
         if (chatLive.panel && !chatLive.panel.contains(ev.target) && !modButton.contains(ev.target)) chatPanelClose();
       }, true);
-      // Esc closes a menu or the Moderate panel before the room window.
+      // Esc closes a menu or the Moderate panel before the room window. On
+      // the key itself: Chrome lets a page stop the window's own close
+      // (cancel, below) only once between clicks or keys, so a second menu
+      // closed with Esc took the room window with it.
+      room.addEventListener('keydown', function(ev) {
+        if (ev.key !== 'Escape' || ev.defaultPrevented || !(chatLive.menu || chatLive.panel)) return;
+        ev.preventDefault();
+        if (chatLive.menu) chatMenuClose(true);
+        else chatPanelClose(true);
+      });
       room.addEventListener('cancel', function(ev) {
         if (chatLive.menu) {
           ev.preventDefault();
