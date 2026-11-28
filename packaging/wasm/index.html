@@ -3019,9 +3019,12 @@
         --backdrop: url("rooms/sith-asteroid.b6474833.jpg");
       }
       /* The Free Demo Room's is a 720x321 WebP of a demo match on this
-         engine, its HUD cut off. */
+         engine, its HUD cut off, drawn as tall as Nar Shaddaa's (1009x450)
+         with Nar Shaddaa's cut, so it shows as much of the room window
+         (Antonio, 2026-11-28: it looked small beside the other two). */
       .room-games[data-room-key="bespin-demo"] {
-        --backdrop-cut: 560px 330px;
+        --backdrop-size: 1009px 450px;
+        --backdrop-cut: 668px 435px;
         --backdrop: url("rooms/bespin-demo.8b363cd3.webp");
       }
     </style>
