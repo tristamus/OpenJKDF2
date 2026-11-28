@@ -9684,7 +9684,8 @@
       // first, as You. A tab hidden for LOOK_AWAY_MS stops counting until it
       // shows again, so nobody waits on someone who has gone. The name is the
       // one the game last said (hello, kept in PLAYER_NAME_KEY by game while
-      // it runs), else the one typed to chat while watching on a phone.
+      // it runs), else the match record's for this browser, else the one
+      // typed to chat while watching on a phone.
       // can: the lobby takes look (its lobby line says so). sent: the line
       // the lobby has. game and name: what the lobby said it counts this page
       // as, from its looking.
@@ -12722,8 +12723,11 @@
       }
 
       // The name to be listed by: the one the game last said for this game
-      // (or for the other), else the one typed to chat while watching.
-      // Base64 UTF-8, as hello has it; '' for none.
+      // (or for the other); else this browser's name in the match record, as
+      // the lobby's latest matches say it (you, by the browser's cookie), so
+      // a player who hasn't started the game since this came still shows by
+      // name, unless they asked to be Anonymous on match pages; else the one
+      // typed to chat while watching. Base64 UTF-8, as hello has it; '' for none.
       function lookName(game) {
         var names = null;
         try { names = JSON.parse(localStorage.getItem(PLAYER_NAME_KEY)); } catch (e) {}
@@ -12731,9 +12735,20 @@
           var b = names[game] || names[game === 'mots' ? 'jk1' : 'mots'];
           if (typeof b === 'string' && /^[A-Za-z0-9+\/]{1,128}={0,2}$/.test(b)) return b;
         }
+        var anon = false;
+        try { anon = localStorage.getItem(MATCH_NAME_SETTING) === 'off'; } catch (e) {}
+        var you = matchesLive.top && matchesLive.top.you;
+        var record = !anon && you && typeof you.name === 'string' ? you.name.trim() : '';
+        if (record) return lookBase64(record);
         var typed = '';
         try { typed = touchNameClean(localStorage.getItem(TOUCH_NAME_KEY)); } catch (e) {}
         return typed ? btoa(typed) : '';
+      }
+
+      function lookBase64(text) {
+        var bytes = new TextEncoder().encode(text), bin = '';
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin);
       }
 
       // Tells the lobby which room this page's player is in, if that changed.
@@ -14168,6 +14183,7 @@
             matchesLive.top = cleanTop(mock);
           }
           renderMatches();
+          lookSay();
           return;
         }
         matchesLive.busy = true;
@@ -14185,6 +14201,8 @@
           matchesLive.recent = recent;
           matchesLive.top = cleanTop(a);
           renderMatches();
+          // The record's name for this browser, for a room's Looking (lookName).
+          lookSay();
           // Whether the lobby takes screenshots for its match pages.
           shotLobby(a.shots);
           if (matchesLive.again) {
