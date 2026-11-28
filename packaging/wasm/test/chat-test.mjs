@@ -404,6 +404,42 @@ await test('muted: the box says until when, and takes nothing', async () => {
     await page.ctx.close();
 });
 
+await test('on a big screen the room window grows as a whole; Moderate and a name\'s menu open by what opened them', async () => {
+    const page = await open({ hash: '#chatmod=' + KEY, device: { viewport: { width: 2560, height: 1310 } } });
+    await page.waitForSelector('#mod-button:not([hidden])');
+    const win = await page.evaluate(() => {
+        const r = document.getElementById('room'), b = r.getBoundingClientRect();
+        return { zoom: r.style.zoom, w: Math.round(b.width), h: Math.round(b.height) };
+    });
+    assert.equal(win.zoom, '1.42');
+    assert.ok(win.h <= 1310 - 32 && win.h > 1200 && win.w > 1800, JSON.stringify(win));
+    await page.click('#mod-button');
+    const panel = await page.evaluate(() => {
+        const b = document.getElementById('mod-button').getBoundingClientRect();
+        const p = document.querySelector('.mod-panel').getBoundingClientRect();
+        return { dx: p.left - b.left, dy: p.top - b.bottom };
+    });
+    assert.ok(Math.abs(panel.dx) < 6 && panel.dy >= 0 && panel.dy < 8, 'under its button: ' + JSON.stringify(panel));
+    await page.keyboard.press('Escape');
+    await page.click('#chat-log [data-chat-who="12"]');
+    const menu = await page.evaluate(() => {
+        const b = document.querySelector('#chat-log [data-chat-who="12"]').getBoundingClientRect();
+        const m = document.querySelector('.chat-menu').getBoundingClientRect();
+        return { dx: m.left - b.right, dy: m.top - b.top };
+    });
+    assert.ok(menu.dx > 0 && menu.dx < 20 && Math.abs(menu.dy) < 10, 'beside the name: ' + JSON.stringify(menu));
+    // Esc on a second menu closes the menu, not the room window (Chrome
+    // lets the window's own close be stopped only once between clicks).
+    await page.keyboard.press('Escape');
+    assert.deepEqual(await page.evaluate(() => [document.getElementById('room').open, !!document.querySelector('.chat-menu')]),
+                     [true, false]);
+    // A smaller browser window: back to its own size.
+    await page.setViewportSize({ width: 1366, height: 657 });
+    await page.waitForFunction(() => document.getElementById('room').style.zoom === '');
+    assert.equal(await page.evaluate(() => Math.round(document.getElementById('room').getBoundingClientRect().width)), 1284);
+    await page.ctx.close();
+});
+
 await test('on a phone the chat fits under the room, with the box in sight', async () => {
     const page = await open({ device: devices['Pixel 7'] });
     await openRoom(page);

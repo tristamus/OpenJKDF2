@@ -1310,9 +1310,13 @@
       .rooms .count.busy { color: var(--muted); }
       .main h2.ruled small b { color: var(--ink); font-variant-numeric: tabular-nums; }
 
+      /* The room window: 1280 x 900 at most (it was 1040 x 760, which
+         Antonio found a bit small, 2026-11-28), and smaller to fit. Players,
+         the watch preview and the chat take a share of it (below), so they
+         follow its size. */
       #room {
-        width: min(1040px, calc(100vw - 32px));
-        height: min(760px, calc(100vh - 32px));
+        width: min(1280px, calc(100vw - 32px));
+        height: min(900px, calc(100vh - 32px));
         padding: 0;
         border: 2px solid #000;
         background-color: var(--win-grey);
@@ -1615,7 +1619,7 @@
          so everyone gets all four. It looks the same in both page styles. */
       .roster {
         flex: none;
-        width: 210px;
+        width: clamp(210px, 19%, 290px);
         overflow-y: auto;
         background-color: #000;
         color: #e0e0e0;
@@ -1698,7 +1702,7 @@
       .room-toolbar [data-chat] path { fill: #336666; }
       .style-2001 .room-toolbar [data-chat] path { fill: var(--teal); }
       .room-toolbar #mod-button b { font-variant-numeric: tabular-nums; }
-      .room-chat { flex: none; display: flex; flex-direction: column; height: min(250px, 36vh); border-top: 2px solid var(--win-dark); }
+      .room-chat { flex: none; display: flex; flex-direction: column; height: clamp(170px, 31%, 400px); border-top: 2px solid var(--win-dark); }
       .room-chat[hidden], .room-chat form[hidden] { display: none; }
       .chat-log {
         flex: 1;
@@ -1898,7 +1902,7 @@
       /* The preview, beside the tables. */
       .pv {
         flex: none;
-        width: 340px;
+        width: clamp(340px, 33%, 560px);
         display: flex;
         flex-direction: column;
         overflow-y: auto;
@@ -9848,6 +9852,33 @@
       };
       var room = document.getElementById('room');
       var roomGames = document.getElementById('room-games');
+      // Big screens (Antonio, 2026-11-28): where the browser has room for
+      // more than the room window's 1280 x 900, the window grows as a whole,
+      // text, tables and chat too (up to 160%), instead of into empty space.
+      // A browser without CSS zoom keeps it at 1280 x 900, and a phone's
+      // full-screen window never gets here (it's narrower than 1312).
+      var ROOM_W = 1280, ROOM_H = 900;
+      function roomScale() {
+        var z = Math.min(1.6, (window.innerWidth - 32) / ROOM_W, (window.innerHeight - 32) / ROOM_H);
+        z = z >= 1.02 && 'zoom' in room.style ? Math.floor(z * 100) / 100 : 1;
+        var was = room.style.zoom;
+        room.style.zoom = z > 1 ? String(z) : '';
+        room.style.width = z > 1 ? ROOM_W + 'px' : '';
+        room.style.height = z > 1 ? ROOM_H + 'px' : '';
+        // A name's menu or the Moderate panel was placed for the old scale.
+        if (was !== room.style.zoom && typeof chatLive === 'object' && chatLive) {
+          if (chatLive.menu) chatMenuClose();
+          if (chatLive.panel) chatPanelClose();
+        }
+      }
+      // Screen pixels to one of the room window's own (roomScale): what's
+      // placed inside it from where things are on the screen is divided by
+      // this.
+      function roomUnit() {
+        return room.offsetWidth ? room.getBoundingClientRect().width / room.offsetWidth : 1;
+      }
+      roomScale();
+      window.addEventListener('resize', roomScale);
       var roster = document.getElementById('roster');
       var roomNote = document.getElementById('room-note');
       var lobbyLive = { state: 'connecting', status: null, updated: null, view: 'table', seen: {}, cols: 0,
@@ -13670,10 +13701,10 @@
         });
         room.append(menu);
         // Beside the name, upward where it would run past the window.
-        var r = btn.getBoundingClientRect(), rr = room.getBoundingClientRect();
-        menu.style.left = Math.max(8, Math.min(r.right - rr.left + 8, rr.width - menu.offsetWidth - 8)) + 'px';
-        var top = r.top - rr.top - 4;
-        if (top + menu.offsetHeight > rr.height - 40) top = r.bottom - rr.top - menu.offsetHeight + 4;
+        var r = btn.getBoundingClientRect(), rr = room.getBoundingClientRect(), u = roomUnit();
+        menu.style.left = Math.max(8, Math.min((r.right - rr.left) / u + 8, rr.width / u - menu.offsetWidth - 8)) + 'px';
+        var top = (r.top - rr.top) / u - 4;
+        if (top + menu.offsetHeight > rr.height / u - 40) top = (r.bottom - rr.top) / u - menu.offsetHeight + 4;
         menu.style.top = Math.max(8, top) + 'px';
         var first = menu.querySelector('button:not(:disabled)');
         if (first) first.focus();
@@ -13760,9 +13791,9 @@
         room.append(p);
         chatPanelRender();
         modButton.setAttribute('aria-pressed', 'true');
-        var r = modButton.getBoundingClientRect(), rr = room.getBoundingClientRect();
-        p.style.left = Math.max(8, Math.min(r.left - rr.left, rr.width - p.offsetWidth - 8)) + 'px';
-        p.style.top = (r.bottom - rr.top + 2) + 'px';
+        var r = modButton.getBoundingClientRect(), rr = room.getBoundingClientRect(), u = roomUnit();
+        p.style.left = Math.max(8, Math.min((r.left - rr.left) / u, rr.width / u - p.offsetWidth - 8)) + 'px';
+        p.style.top = ((r.bottom - rr.top) / u + 2) + 'px';
         var f = p.querySelector('input, button');
         if (f) f.focus();
       }
