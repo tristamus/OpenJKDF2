@@ -228,6 +228,72 @@ window.jkLobbyMock = (function() {
     var looking = null;   // the room this page's player is in, {game, name} (say, "look")
     var showLooking = null; // the page's, for the lobby's "looking" (say)
     var moving = null;    // the timer making them
+    // The room chat (Room chat in index.html): each room's sample lines, the
+    // room this page is in, and the page's, for the lobby's chat lines.
+    var showChat = null;
+    var chatIn = null;    // {room, name, mod}
+    var chatId = 1;
+    function chatSample(room) {
+        var now = Date.now(), H = 3600 * 1000;
+        var talk = {
+            'nar-shaddaa': [[-22 * H, 'Corran_H', 'GG last night, rematch Saturday?'],
+                            [-2 * H, 'Kyle_K', 'hosting no mods dueling on Boss 17 around 9'],
+                            [-40 * 60000, 'Qu_Rahn', 'gg everyone, that last round was close'],
+                            [-5 * 60000, 'DarkJedi_7', 'anyone want to play an add-on level? hosting Canyon Oasis CTF, 4v4\n' +
+                                                        'gold team is me and Tusken, red is whoever joins']],
+            'sith-asteroid': [[-3 * H, 'MaraJade', 'saber only on Altyr 5 tonight?']],
+            'bespin-demo': []
+        }[room] || [];
+        return talk.map(function(t) { return { id: chatId++, at: now + t[0], name: t[1], text: t[2] }; });
+    }
+    function chatB64(v) {
+        var bytes = new TextEncoder().encode(JSON.stringify(v)), bin = '';
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin);
+    }
+    function chatSend(op, v) {
+        if (showChat) setTimeout(function() { showChat('chat ' + op + (v === undefined ? '' : ' ' + chatB64(v))); }, 30);
+    }
+    function chatYou() { return { name: chatIn.name, muted: 0, mod: chatIn.mod ? 1 : 0 }; }
+    function chatWho() {
+        var names = { 'nar-shaddaa': ['Qu_Rahn', 'DarkJedi_7', 'Tusken_Raider'], 'sith-asteroid': ['MaraJade'],
+                      'bespin-demo': ['Dash_R'] }[chatIn.room].slice();
+        if (chatIn.name) names.push(chatIn.name);
+        return { names: names.sort(), n: names.length };
+    }
+    // A chat line the page sends: answered as the lobby would, without its
+    // checks (src/chat.js has those).
+    function chatSay(line) {
+        var a = line.split(' ');
+        var text = function(b) {
+            try { return new TextDecoder().decode(Uint8Array.from(atob(b), function(c) { return c.charCodeAt(0); })); } catch (e) { return ''; }
+        };
+        if (a[1] === 'in') {
+            var was = chatIn;
+            chatIn = { room: a[2], name: a[4] ? text(a[4]).substring(0, 15) : '', mod: !!(was && was.mod) };
+            if (!was || was.room !== chatIn.room)
+                chatSend('log', { room: chatIn.room, lines: chatSample(chatIn.room), slow: false, paused: false, who: chatWho(), you: chatYou() });
+            else chatSend('you', chatYou());
+            chatSend('who', chatWho());
+        } else if (a[1] === 'out') {
+            chatIn = null;
+        } else if (!chatIn) {
+            return;
+        } else if (a[1] === 'say') {
+            var t = text(a[2]).trim();
+            if (/\.(com|net|org|gg)\b|https?:|www\./i.test(t)) return chatSend('no link');
+            chatSend('ok');
+            chatSend('line', { id: chatId++, at: Date.now(), name: chatIn.name, text: t, mod: chatIn.mod ? 1 : undefined });
+        } else if (a[1] === 'report') {
+            if (showChat) setTimeout(function() { showChat('chat reported ' + a[2]); }, 30);
+        } else if (a[1] === 'mod') {
+            chatIn.mod = true;
+            chatSend('you', chatYou());
+            chatSend('mods', { mutes: [{ id: 5, name: 'Spam_Bot_9', until: Date.now() + 6 * 86400000, by: 'mod' }],
+                               reports: [{ id: 6, at: Date.now() - 600000, room: 'nar-shaddaa', line: 3, name: 'DarkJedi_7',
+                                           text: 'red team is trash lol', by: 'Qu_Rahn' }] });
+        }
+    }
     var nextId = 60;
     var controls = [];
 
@@ -390,8 +456,11 @@ window.jkLobbyMock = (function() {
     }
 
     return {
-        attach: function(showStatus, showRelay, killsShow, lookingShow) {
+        // The mock-up answers the room chat's lines too.
+        chat: true,
+        attach: function(showStatus, showRelay, killsShow, lookingShow, chatShow) {
             show = showStatus;
+            showChat = chatShow || null;
             showKills = killsShow || null;
             showLooking = lookingShow || null;
             showImperial = showRelay || null;
@@ -433,6 +502,7 @@ window.jkLobbyMock = (function() {
         },
         // A line the page sends the lobby: which game it watches.
         say: function(line) {
+            if (/^chat /.test(line)) return chatSay(line);
             var k = /^kills ([0-9]+)$/.exec(line);
             if (k && showKills && live) {
                 // All of a game's kills, as the lobby answers: the status's
