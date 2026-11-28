@@ -1,7 +1,8 @@
 // Checks who's in a room on the page (index.html, look): while a room
 // window is open, or the folder prompt its Join or Host opened, the page
 // tells the lobby (look <game> [<name>]), with the name the game last said
-// (kept while it runs) or the one typed to chat while watching; never for
+// (kept while it runs), the match record's, or the one typed to chat while
+// watching; never for
 // the Free Demo Room, nor from a tab hidden for LOOK_AWAY_MS; and the room
 // window lists the page's own row first, as You, once the lobby says it
 // counts it (looking). The lobby's side is jkdf2mp-bb-server's test/look.mjs.
@@ -47,11 +48,12 @@ function page({ store = {}, roomOpen = false, roomKey = 'nar-shaddaa', pickerOpe
         },
         lobbySay: line => { said.push(line); return true; },
         renderRoster: () => { env.rendered = (env.rendered || 0) + 1; },
-        Module: {}, rendered: 0,
+        Module: {}, rendered: 0, matchesLive: { top: null },
     };
     const api = new Function('env', 'ROOMS', 'TOUCH_NAME_KEY', 'TOUCH_NAME_MAX', `
         var room = env.room, picker = env.picker, pickerWant = env.pickerWant, lobbyLive = env.lobbyLive;
         var localStorage = env.localStorage, lobbySay = env.lobbySay, renderRoster = env.renderRoster, Module = env.Module;
+        var matchesLive = env.matchesLive, MATCH_NAME_SETTING = 'jkdf2mp-match-name';
         ${state}
         ${nameClean}
         ${funcs}
@@ -59,6 +61,19 @@ function page({ store = {}, roomOpen = false, roomKey = 'nar-shaddaa', pickerOpe
                  setWant: function(w) { pickerWant = w; } };`)(env, ROOMS, 'jkdf2mp-watch-name', 16);
     return { ...api, said, env, store };
 }
+
+test("without a game's name, the match record's for this browser, unless it's Anonymous on match pages", () => {
+    const store = { 'jkdf2mp-watch-name': 'Typed' };
+    const p = page({ store });
+    assert.equal(p.lookName('jk1'), b64('Typed'), 'before the latest matches come');
+    p.env.matchesLive.top = { you: { id: 7, name: 'Kyle_K\u00e9', last: 41 } };
+    assert.equal(p.lookName('jk1'), b64('Kyle_K\u00e9'), "the record's, in UTF-8");
+    store['jkdf2mp-match-name'] = 'off';
+    assert.equal(p.lookName('jk1'), b64('Typed'), 'not for a player recorded as Anonymous');
+    delete store['jkdf2mp-match-name'];
+    store['jkdf2mp-player-name'] = JSON.stringify({ mots: b64('Dash') });
+    assert.equal(p.lookName('jk1'), b64('Dash'), "the game's own name comes first");
+});
 
 test('nothing is said until the lobby takes look, then the room window says its game and name', () => {
     const p = page({ roomOpen: true, store: { 'jkdf2mp-player-name': JSON.stringify({ jk1: b64('Rogue Nine') }) } });
