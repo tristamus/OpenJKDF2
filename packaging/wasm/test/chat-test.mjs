@@ -283,6 +283,70 @@ await test('without a name: the name box, then in by that name; a name someone h
     await page.ctx.close();
 });
 
+// Characters as the game keeps them (mountSaves: IDBFS, a database for each
+// game's player/ and persist/ folders): [name, ms ago]; picked: the
+// registry's playerShortName.
+function saveCharacters(page, chars, picked) {
+    return page.evaluate(([chars, picked]) => {
+        function put(dbName, files) {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(dbName, 21);
+                req.onupgradeneeded = () => req.result.createObjectStore('FILE_DATA').createIndex('timestamp', 'timestamp', { unique: false });
+                req.onsuccess = () => {
+                    const tx = req.result.transaction('FILE_DATA', 'readwrite');
+                    for (const [path, v] of files) tx.objectStore('FILE_DATA').put(v, path);
+                    tx.oncomplete = () => { req.result.close(); resolve(); };
+                    tx.onerror = () => reject(tx.error);
+                };
+                req.onerror = () => reject(req.error);
+            });
+        }
+        const files = [];
+        for (const [name, ago] of chars) {
+            const at = new Date(Date.now() - ago);
+            files.push(['/jk1/player/' + name, { timestamp: at, mode: 16895 }],
+                       ['/jk1/player/' + name + '/' + name + '.plr', { timestamp: at, mode: 33206, contents: new Uint8Array(4) }]);
+        }
+        const reg = new TextEncoder().encode(JSON.stringify({ playerShortName: picked, fullscreen: 0 }));
+        return put('/jk1/player', files).then(() => picked === undefined ? null :
+            put('/jk1/persist', [['/jk1/persist', { timestamp: new Date(), mode: 16895 }],
+                                 ['/jk1/persist/registry.json', { timestamp: new Date(), mode: 33206, contents: reg }]]));
+    }, [chars, picked]);
+}
+async function nameSaid(page) {
+    await page.reload();
+    await page.waitForFunction(() => document.documentElement.classList.contains('zone-open'));
+    page.lb.said.length = 0;
+    await openRoom(page);
+    await eventually(() => page.lb.chats().some(l => /^chat in nar-shaddaa [0-9a-f]{32} /.test(l)), 'chat in with a name');
+    return unb64(page.lb.chats().find(l => /^chat in nar-shaddaa [0-9a-f]{32} /.test(l)).split(' ')[4]);
+}
+
+await test('the game\'s character picked last in this browser is the name, before any box', async () => {
+    const page = await open({ noName: true });
+    await saveCharacters(page, [['Antonio', 0], ['OldGuy', 86400000]], 'oldguy');
+    assert.equal(await nameSaid(page), 'OldGuy');
+    await page.waitForSelector('#chat-say:not([hidden]) textarea:not([disabled])');
+    assert.equal(await page.isVisible('#chat-name'), false, 'never asked');
+    await page.ctx.close();
+});
+
+await test('without the game\'s pick, the character whose file was written last', async () => {
+    const page = await open({ noName: true });
+    await saveCharacters(page, [['Antonio', 0], ['OldGuy', 86400000]]);
+    assert.equal(await nameSaid(page), 'Antonio');
+    await page.ctx.close();
+});
+
+await test('a page without saved characters doesn\'t make their database', async () => {
+    const page = await open({ noName: true });
+    await openRoom(page);
+    await page.waitForSelector('#chat-name:not([hidden])');
+    const dbs = await page.evaluate(async () => (await indexedDB.databases()).map(d => d.name));
+    assert.deepEqual(dbs.filter(n => /player/.test(n)), []);
+    await page.ctx.close();
+});
+
 await test('a moderator\'s link: kept, out of the address, given in the room; Moderate and the menu\'s tools', async () => {
     const page = await open({ hash: '#chatmod=' + KEY });
     assert.equal(await page.evaluate(() => location.hash), '');

@@ -9873,6 +9873,9 @@
       var LOOK_AWAY_MS = 15 * 60 * 1000;
       var PLAYER_NAME_KEY = 'jkdf2mp-player-name';  // {jk1, mots}: each game's name as its hello says it (base64 UTF-8)
       var lookLive = { can: false, sent: 'look', game: '', name: '', hiddenAt: 0, awayTimer: 0, kept: '', keepTimer: 0 };
+      // The character last played in this browser, by game (readSavedPlayers),
+      // for a player whose game hasn't said its name to the page yet.
+      var savedPlayer = { jk1: '', mots: '' };
 
       function el(tag, cls, str) {
         var e = document.createElement(tag);
@@ -12932,11 +12935,13 @@
       }
 
       // The name to be listed by: the one the game last said for this game
-      // (or for the other); else this browser's name in the match record, as
-      // the lobby's latest matches say it (you, by the browser's cookie), so
-      // a player who hasn't started the game since this came still shows by
-      // name, unless they asked to be Anonymous on match pages; else the one
-      // typed to chat while watching. Base64 UTF-8, as hello has it; '' for none.
+      // (or for the other); else the character last played in this browser
+      // (savedPlayer), which is the name the game says; else this browser's
+      // name in the match record, as the lobby's latest matches say it (you,
+      // by the browser's cookie), so a player who hasn't started the game
+      // since this came still shows by name, unless they asked to be
+      // Anonymous on match pages; else the one typed to chat while watching.
+      // Base64 UTF-8, as hello has it; '' for none.
       function lookName(game) {
         var names = null;
         try { names = JSON.parse(localStorage.getItem(PLAYER_NAME_KEY)); } catch (e) {}
@@ -12944,6 +12949,8 @@
           var b = names[game] || names[game === 'mots' ? 'jk1' : 'mots'];
           if (typeof b === 'string' && /^[A-Za-z0-9+\/]{1,128}={0,2}$/.test(b)) return b;
         }
+        var played = savedPlayer[game] || savedPlayer[game === 'mots' ? 'jk1' : 'mots'];
+        if (played) return lookBase64(played);
         var anon = false;
         try { anon = localStorage.getItem(MATCH_NAME_SETTING) === 'off'; } catch (e) {}
         var you = matchesLive.top && matchesLive.top.you;
@@ -12960,10 +12967,77 @@
         return btoa(bin);
       }
 
+      // The characters saved in this browser (mountSaves: an IDBFS database
+      // for each game's player/ and persist/ folders, files by path in
+      // FILE_DATA). The name the game says is its character's (its folder's
+      // name): the one the game last had picked (playerShortName in
+      // persist/registry.json, as the game keeps it), else the one whose .plr
+      // was written last (Antonio, 2026-11-28: the room chat should use the
+      // player name there is before asking for one). Read once as the page
+      // loads, without making a database that isn't there; then the rooms go
+      // by it (lookSay).
+      function readSavedPlayers() {
+        if (typeof indexedDB === 'undefined') return;
+        // Each file stored for one of a game's folders: fn(path, value); then
+        // done(), also when the database isn't there.
+        function eachFile(dbName, fn, done) {
+          var req;
+          try { req = indexedDB.open(dbName); } catch (e) { return done(); }
+          req.onupgradeneeded = function() { req.transaction.abort(); };
+          req.onerror = function(ev) { ev.preventDefault(); done(); };
+          req.onsuccess = function() {
+            var db = req.result, cur;
+            try { cur = db.transaction('FILE_DATA').objectStore('FILE_DATA').openCursor(); } catch (e) {
+              db.close();
+              return done();
+            }
+            cur.onsuccess = function() {
+              var c = cur.result;
+              if (c) {
+                fn(String(c.key), c.value);
+                c.continue();
+                return;
+              }
+              db.close();
+              done();
+            };
+            cur.onerror = function() { db.close(); done(); };
+          };
+        }
+        ['jk1', 'mots'].forEach(function(game) {
+          var chars = {}, latest = '', latestAt = -1, picked = '';
+          eachFile('/' + game + '/player', function(path, v) {
+            var m = /^\/(?:jk1|mots)\/player\/([^\/]{1,31})\/[^\/]+\.plr$/i.exec(path);
+            if (!m || !m[1].trim()) return;
+            var name = m[1].trim(), at = v && v.timestamp ? Number(new Date(v.timestamp)) || 0 : 0;
+            chars[name.toLowerCase()] = name;
+            if (at > latestAt) {
+              latest = name;
+              latestAt = at;
+            }
+          }, function() {
+            if (!latest) return;
+            eachFile('/' + game + '/persist', function(path, v) {
+              if (!/\/persist\/registry\.json$/i.test(path) || !v || !v.contents) return;
+              try {
+                var r = JSON.parse(new TextDecoder().decode(v.contents));
+                if (r && typeof r.playerShortName === 'string') picked = r.playerShortName.trim();
+              } catch (e) {}
+            }, function() {
+              savedPlayer[game] = chars[picked.toLowerCase()] || latest;
+              lookSay();
+            });
+          });
+        });
+      }
+
       // Tells the lobby which room this page's player is in, if that changed.
       function lookSay() {
         // And the room's chat, which goes by the same name and room (chatSay).
-        if (typeof chatLive === 'object' && chatLive) chatSay();
+        if (typeof chatLive === 'object' && chatLive) {
+          chatSay();
+          chatRenderBox();
+        }
         var key = lookRoom();
         var away = !!lookLive.hiddenAt && Date.now() - lookLive.hiddenAt >= LOOK_AWAY_MS;
         var game = key && !away ? ROOMS[key].game : '';
@@ -13412,11 +13486,19 @@
         document.getElementById('mod-count').textContent = reports ? ' (' + reports + ')' : '';
         if (!show) return;
         var named = !!chatLive.you.name;
-        chatNameForm.hidden = !here || named;
-        chatForm.hidden = here && !named;
         var now = Date.now();
+        // Without a name yet, the name box waits a moment for the match
+        // record's (lookName), so it doesn't flash up for someone who has one.
+        var settling = here && !named && !chatLive.typed && !matchesLive.recent && !matchesLive.failures &&
+                       now - chatLive.came < 3000;
+        if (settling) {
+          clearTimeout(chatLive.settleTimer);
+          chatLive.settleTimer = setTimeout(chatRenderBox, 3000 - (now - chatLive.came) + 50);
+        }
+        chatNameForm.hidden = !here || named || settling;
+        chatForm.hidden = here && !named && !settling;
         var why = !chatLive.can ? 'Not connected to the lobby. Trying again…' :
-          !here ? 'Connecting to the room\'s chat…' :
+          !here || settling ? 'Connecting to the room\'s chat…' :
           chatLive.you.muted > now ? "You're muted in room chat until " + chatWhen(chatLive.you.muted) + '.' :
           chatLive.paused && !chatLive.you.mod ? 'A moderator paused the chat. Only moderators can talk for now.' : '';
         chatText.disabled = !!why;
@@ -15401,6 +15483,7 @@
           startLobbyWatch();
           startImperialWatch();
         }
+        readSavedPlayers();
         // A moderator's link opens Nar Shaddaa's window, where the tools show.
         if (chatModFromLink()) openRoom('nar-shaddaa');
         else if (!watchFromLink()) openRoom(location.hash.substring(1));
