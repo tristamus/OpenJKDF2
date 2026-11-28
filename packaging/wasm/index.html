@@ -1690,6 +1690,161 @@
       .live-dot.on { background-color: var(--live); box-shadow: 0 0 0 1px #116633; }
       #room-status-extra { margin-left: auto; }
 
+      /* The room's chat (Room chat, below), after the Zone's: along the
+         bottom of the room window, the log black like the Players list, with
+         "name> text", (Enter)> and (Exit)> in grey, the page's own name in
+         gold, and the box to type in under it. */
+      .room-toolbar [hidden] { display: none; }
+      .room-toolbar [data-chat] path { fill: #336666; }
+      .style-2001 .room-toolbar [data-chat] path { fill: var(--teal); }
+      .room-toolbar #mod-button b { font-variant-numeric: tabular-nums; }
+      .room-chat { flex: none; display: flex; flex-direction: column; height: min(250px, 36vh); border-top: 2px solid var(--win-dark); }
+      .room-chat[hidden], .room-chat form[hidden] { display: none; }
+      .chat-log {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        margin: 0;
+        padding: 4px 8px 6px;
+        background-color: #000;
+        color: #e0e0e0;
+        font: 12px/17px Verdana, Geneva, sans-serif;
+        overflow-wrap: anywhere;
+      }
+      .chat-log p { margin: 0; padding-left: 16px; text-indent: -16px; white-space: pre-line; }
+      .chat-log .who {
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--muted);
+        font: inherit;
+        text-indent: 0;
+        cursor: pointer;
+      }
+      .chat-log .who:hover { text-decoration: underline; }
+      .chat-log .me .who { color: var(--gold); font-weight: bold; cursor: default; text-decoration: none; }
+      .chat-log .came, .chat-log .came .who { color: #808080; }
+      .chat-log .old { color: #b8b8b8; }
+      .chat-log .old .who { color: #7fa8a8; }
+      .chat-log .old.me .who { color: var(--gold); }
+      .chat-log time { margin-right: 6px; color: #808080; font-variant-numeric: tabular-nums; }
+      .chat-log .mark {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 3px 0;
+        padding: 0;
+        text-indent: 0;
+        color: #808080;
+        font-size: 11px;
+      }
+      .chat-log .mark::before, .chat-log .mark::after { content: ''; flex: 1; border-top: 1px solid #444; }
+      .chat-log .note { color: var(--gold); }
+      .chat-log .note .only { color: #808080; }
+      .chat-log .note button { padding: 0; border: 0; background: none; color: var(--gold); font: inherit; text-decoration: underline; cursor: pointer; }
+      .chat-log .modline { color: var(--gold); font-style: italic; }
+      .chat-log .picked { background-color: #1f3f3f; }
+      .chat-tag {
+        display: inline-block;
+        margin-right: 5px;
+        padding: 0 3px;
+        border: 1px solid var(--gold);
+        color: var(--gold);
+        font: bold 9px/12px Verdana, Geneva, sans-serif;
+        letter-spacing: 0.04em;
+        text-indent: 0;
+        vertical-align: 1px;
+      }
+      .chat-say, .chat-name { display: flex; gap: 6px; align-items: stretch; padding: 4px 6px; background-color: var(--win-grey); }
+      .chat-say textarea {
+        flex: 1;
+        min-width: 0;
+        height: 38px;
+        box-sizing: border-box;
+        padding: 2px 5px;
+        resize: none;
+        border: 2px inset #fff;
+        border-color: var(--win-dark) #fff #fff var(--win-dark);
+        background: #fff;
+        color: #000;
+        font: 12px/16px Verdana, Geneva, sans-serif;
+      }
+      .chat-say textarea::placeholder { color: #808080; }
+      .chat-say textarea:disabled { background: #e4e1db; }
+      .chat-say textarea:disabled::placeholder { color: #333; }
+      .chat-say .side { display: flex; flex-direction: column; justify-content: space-between; align-items: stretch; gap: 2px; }
+      .chat-say .zone-button, .chat-name .zone-button { padding: 1px 14px; font-size: 12px; }
+      .chat-say .count { color: #444; font: 10px Verdana, sans-serif; text-align: center; font-variant-numeric: tabular-nums; }
+      .chat-say .count.full { color: #a00; font-weight: bold; }
+      .chat-name { flex-wrap: wrap; align-items: center; min-height: 38px; font: 12px Verdana, Geneva, sans-serif; }
+      .chat-name input {
+        width: 150px;
+        padding: 2px 5px;
+        border: 2px inset #fff;
+        border-color: var(--win-dark) #fff #fff var(--win-dark);
+        font: 12px Verdana, Geneva, sans-serif;
+      }
+      .chat-name .why { flex-basis: 100%; color: #a00; }
+      .chat-name .why:empty { display: none; }
+      .chat-name .fine, .chat-rule { color: #444; font: 11px Verdana, sans-serif; }
+      .chat-rule { margin: 0; padding: 0 6px 3px; background: var(--win-grey); }
+      .chat-rule button { padding: 0; border: 0; background: none; color: #000; font: inherit; text-decoration: underline; cursor: pointer; }
+      .chat-menu {
+        position: absolute;
+        z-index: 5;
+        min-width: 190px;
+        padding: 2px;
+        background: var(--win-grey);
+        border: 2px outset #fff;
+        box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.5);
+        color: #000;
+        font: 12px Verdana, Geneva, sans-serif;
+      }
+      .chat-menu button {
+        display: block;
+        width: 100%;
+        padding: 3px 14px;
+        border: 0;
+        background: none;
+        color: #000;
+        font: inherit;
+        text-align: left;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .chat-menu button:hover, .chat-menu button:focus { background: var(--teal); color: #fff; outline: none; }
+      .chat-menu button:disabled { color: #808080; background: none; cursor: default; }
+      .chat-menu .head { padding: 2px 14px; color: #555; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+      .chat-menu .name { padding: 2px 14px; font-weight: bold; }
+      .chat-menu hr { margin: 2px 1px; border: 0; border-top: 1px solid var(--win-dark); border-bottom: 1px solid #fff; }
+      .mod-panel {
+        position: absolute;
+        z-index: 5;
+        width: 430px;
+        max-height: calc(100% - 80px);
+        overflow-y: auto;
+        background: var(--win-grey);
+        border: 2px outset #fff;
+        box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.5);
+        color: #000;
+        font: 12px/1.4 Verdana, Geneva, sans-serif;
+      }
+      .mod-panel .mod-title { display: flex; justify-content: space-between; align-items: center; padding: 3px 4px 3px 8px; background: var(--gold); }
+      .mod-panel .mod-title b { font: bold 12px Verdana, sans-serif; }
+      .mod-panel .mod-title button { width: 20px; height: 18px; padding: 0; border: 2px outset #fff; background: #ddd; color: #000; font: bold 10px/10px Verdana; }
+      .mod-panel .body { padding: 8px 10px 10px; }
+      .mod-panel fieldset { margin: 0 0 8px; padding: 4px 8px 6px; border: 1px solid var(--win-dark); box-shadow: inset 1px 1px #fff; }
+      .mod-panel legend { padding: 0 3px; }
+      .mod-panel label { display: flex; gap: 6px; align-items: baseline; margin: 2px 0; }
+      .mod-panel .fine { margin: 4px 0 0; color: #555; font-size: 11px; }
+      .mod-panel table { width: 100%; border-collapse: collapse; font-size: 11px; }
+      .mod-panel td { padding: 2px 4px; border-bottom: 1px solid #bbb; vertical-align: middle; overflow-wrap: anywhere; }
+      .mod-panel td:first-child { white-space: nowrap; }
+      .mod-panel td:last-child { text-align: right; white-space: nowrap; }
+      .mod-panel button { padding: 1px 8px; border: 2px outset #fff; background: var(--win-grey); color: #000; font: 11px Verdana, sans-serif; cursor: pointer; }
+      .mod-panel .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+      .mod-panel .none { color: #555; font-size: 11px; }
+
       /* Watching a match: the Watch tag on a game, the preview that takes
          the place of who's on while one is watched, and the viewing page
          (#watch). A match's live view is the lobby's (its clock, scores and
@@ -2324,6 +2479,14 @@
         .room-games { flex: none; overflow: visible; border-right: 0; border-bottom: 2px solid var(--win-dark); padding: 12px 16px; --backdrop-x: -7px; }
         .roster { width: auto; overflow: visible; }
         .tables { grid-template-columns: repeat(auto-fill, minmax(min(208px, 100%), 1fr)); }
+        .room-chat { height: 38dvh; }
+        .chat-say textarea { height: 52px; font-size: 16px; line-height: 20px; }
+        .chat-say .zone-button, .chat-name .zone-button { padding: 5px 12px; font-size: 14px; }
+        .chat-name input { font-size: 16px; }
+        .chat-log { font-size: 13px; line-height: 18px; }
+        .chat-menu button { padding: 8px 14px; font-size: 14px; }
+        .chat-rule { display: none; }
+        .mod-panel { left: 8px !important; right: 8px; width: auto; }
       }
       @media (prefers-reduced-motion: reduce) {
         .table-seats.changed { animation: none; }
@@ -3760,11 +3923,29 @@
         <span class="sep" aria-hidden="true"></span>
         <button type="button" data-view="table" aria-pressed="true"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1h5v5H1zM8 1h5v5H8zM1 8h5v5H1zM8 8h5v5H8z" fill="#336666"/></svg>Table View</button>
         <button type="button" data-view="list" aria-pressed="false"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 2h12v2H1zM1 6h12v2H1zM1 10h12v2H1z" fill="#336666"/></svg>List View</button>
+        <span class="sep" aria-hidden="true" data-chat-sep hidden></span>
+        <button type="button" data-chat aria-pressed="true" hidden><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 2h12v8H6l-3 3v-3H1z"/></svg>Chat</button>
+        <button type="button" id="mod-button" aria-pressed="false" aria-haspopup="dialog" hidden><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1l5 2v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V3z" fill="#ffcc66" stroke="#7a5200"/></svg>Moderate<b id="mod-count"></b></button>
       </div>
       <div class="room-body">
         <div class="room-games" id="room-games"></div>
         <aside class="roster" id="roster" aria-label="Players online"></aside>
       </div>
+      <section class="room-chat" id="room-chat" aria-label="Room chat" hidden>
+        <div class="chat-log" id="chat-log" role="log" tabindex="0"></div>
+        <form class="chat-say" id="chat-say">
+          <textarea id="chat-text" rows="2" maxlength="400" aria-label="Say to the room" enterkeyhint="send" autocomplete="off"></textarea>
+          <div class="side"><button class="zone-button" type="submit">Send</button><span class="count" id="chat-count" aria-hidden="true">0/400</span></div>
+        </form>
+        <form class="chat-name" id="chat-name" hidden>
+          <label for="chat-name-text">To talk here, pick a name:</label>
+          <input id="chat-name-text" maxlength="15" autocomplete="nickname" spellcheck="false">
+          <button class="zone-button" type="submit">Start chatting</button>
+          <span class="fine">Or start the game once, and its player name is used</span>
+          <span class="why" id="chat-name-why" role="status"></span>
+        </form>
+        <p class="chat-rule" id="chat-rule"></p>
+      </section>
       <p class="room-note" id="room-note" role="status" hidden></p>
       <div class="room-status">
         <span class="panel"><span class="live-dot" id="room-live-dot"></span><span id="room-live">Connecting</span></span>
@@ -10640,6 +10821,18 @@
         if (playing.length < inGames) playing.push(['+' + (inGames - playing.length) + ' without a name', null, true]);
         section('Total players', String(s.online));
         if (!ROOMS[lobbyLive.room].demo) section('Looking', String(inLobby), lobbyRows, 'Nobody');
+        else if (chatLive && chatLive.on && chatLive.who && chatLive.whoRoom === lobbyLive.room) {
+          // The demo's games aren't in the lobby's Looking: who's in its
+          // chat instead (Room chat).
+          var chatRows = [], names = Array.isArray(chatLive.who.names) ? chatLive.who.names : [];
+          names.forEach(function(n) {
+            if (chatSame(n, chatLive.you.name)) chatRows.unshift([n, 'You', false, true]);
+            else chatRows.push([n]);
+          });
+          var unnamed = (Number(chatLive.who.n) || 0) - names.length;
+          if (unnamed > 0) chatRows.push(['+' + unnamed + ' without a name', null, true]);
+          section('Looking', String(Number(chatLive.who.n) || 0), chatRows, 'Nobody');
+        }
         section('Playing', String(inGames), playing, 'Nobody');
         relaySection();
       }
@@ -10738,6 +10931,7 @@
         if (!room.open) room.showModal();
         renderRoom();
         lookSay();
+        chatRenderBox();
       }
 
       var roomNoteTimer = null;
@@ -12641,6 +12835,8 @@
             lookLive.can = false;
             lookLive.sent = 'look';
             lookLive.game = '';
+            chatLive.can = false;
+            chatLive.sent = '';
             ws.send('watch');
             // The match this page watches, if any, to a lobby that's new to it;
             // and its kills again, for what came while it was away.
@@ -12654,11 +12850,18 @@
             // What the lobby takes, which comes first: look, for this page's room.
             if (/^lobby( |$)/.test(ev.data)) {
               lookLive.can = /(^| )look( |$)/.test(ev.data);
+              chatLive.can = /(^| )chat( |$)/.test(ev.data);
+              if (chatLive.can) chatLive.seen = true;
               lookSay();
+              chatRenderBox();
               return;
             }
             if (/^looking /.test(ev.data)) {
               lookTake(ev.data);
+              return;
+            }
+            if (/^chat /.test(ev.data)) {
+              chatTake(ev.data);
               return;
             }
             var m = /^status ([A-Za-z0-9+\/]+={0,2})$/.exec(ev.data);
@@ -12690,6 +12893,12 @@
             w.ws = null;
             lookLive.can = false;
             lookLive.game = '';
+            chatLive.can = false;
+            chatLive.sent = '';
+            chatLive.room = '';
+            chatMenuClose();
+            chatPanelClose();
+            chatRenderBox();
             lobbyShow(null, 'down');
             if (!w.stopped) {
               w.retry = setTimeout(connect, w.delay);
@@ -12753,6 +12962,8 @@
 
       // Tells the lobby which room this page's player is in, if that changed.
       function lookSay() {
+        // And the room's chat, which goes by the same name and room (chatSay).
+        if (typeof chatLive === 'object' && chatLive) chatSay();
         var key = lookRoom();
         var away = !!lookLive.hiddenAt && Date.now() - lookLive.hiddenAt >= LOOK_AWAY_MS;
         var game = key && !away ? ROOMS[key].game : '';
@@ -12808,6 +13019,794 @@
       document.addEventListener('visibilitychange', lookVisibility);
       lookVisibility();
       picker.addEventListener('close', lookSay);
+
+      // ---- Room chat (chat in jkdf2mp-bb-server's lobby, src/chat.js), after
+      // the Zone's room windows (Antonio, 2026-11-28): the room's talk along
+      // the bottom of its window, "name> text", with (Enter)> and (Exit)> as
+      // people come and go. One chat for each room window: Nar Shaddaa (its
+      // Altyr 5, Cantina and the rest are the same window), Sith and the Free
+      // Demo Room. The lobby keeps a room's last 100 lines for 48 hours,
+      // turns down web addresses however they're written and lines that come
+      // too fast, and has no other filter. Only where the lobby says it takes
+      // chat (its lobby line): beta, for now. The page is in a room's chat
+      // while its window is open and the toolbar's Chat is on (chat in <room>
+      // <browser id> [<name>]), by the name Looking lists it by (lookName),
+      // or one typed here. Ignore is this browser's own. A moderator's private
+      // link (#chatmod=<key>) keeps the key in this browser, and the page
+      // gives it to the lobby in each room; the lobby checks it (its
+      // CHAT_MOD_KEY) and the page shows Moderate.
+      var CHAT_MAX = 400;
+      var CHAT_NAME_MAX = 15;
+      var CHAT_ID_KEY = 'jkdf2mp-chat-id';          // this browser's id for the chat (32 hex)
+      var CHAT_IGNORE_KEY = 'jkdf2mp-chat-ignore';  // [names], lowercase
+      var CHAT_SETTING = 'jkdf2mp-room-chat';       // 'off': Chat turned off in the room windows
+      var CHAT_MOD_KEY = 'jkdf2mp-chat-mod';        // a moderator's key, from their link
+      var CHAT_KEEP = 300;                          // lines a room's log keeps on the page
+      var chatPanel = document.getElementById('room-chat');
+      var chatLog = document.getElementById('chat-log');
+      var chatForm = document.getElementById('chat-say');
+      var chatText = document.getElementById('chat-text');
+      var chatCount = document.getElementById('chat-count');
+      var chatNameForm = document.getElementById('chat-name');
+      var chatNameText = document.getElementById('chat-name-text');
+      var chatNameWhy = document.getElementById('chat-name-why');
+      var chatRule = document.getElementById('chat-rule');
+      var chatToggle = room.querySelector('[data-chat]');
+      var chatSep = room.querySelector('[data-chat-sep]');
+      var modButton = document.getElementById('mod-button');
+      // seen: the lobby has said it takes chat (the panel stays while it
+      // reconnects); can: the connection it's on does. sent: the line the
+      // lobby has, chat in ... or chat out ('' for none yet). room: the room
+      // whose log came; lines: what the log shows, oldest first ({id, at,
+      // kind, name, text, mod}, old for those from before this page came in,
+      // and this page's own notes with kind 'mine'); came: when this page
+      // came in. you, who, slow, paused: as the lobby says. mods: the
+      // moderators' lists. sending: the line on its way. typed: a name typed
+      // here (this page only). modKey: a moderator's key.
+      var chatLive = { seen: false, can: false, sent: '', bid: '', room: '', lines: [], came: 0,
+                       you: { name: '', muted: 0, mod: 0 }, who: null, whoRoom: '', slow: false, paused: false,
+                       mods: null, sending: '', sendTimer: 0, typed: '', taken: '', on: true, ignore: [], mine: 0,
+                       mutedTimer: 0, menu: null, panel: null, clearing: false, modKey: '', modSaid: false,
+                       reported: {} };
+      try {
+        chatLive.on = localStorage.getItem(CHAT_SETTING) !== 'off';
+        var chatIgnored0 = JSON.parse(localStorage.getItem(CHAT_IGNORE_KEY) || '[]');
+        if (Array.isArray(chatIgnored0)) chatLive.ignore = chatIgnored0.filter(function(n) { return typeof n === 'string'; }).slice(0, 200);
+        chatLive.modKey = localStorage.getItem(CHAT_MOD_KEY) || '';
+      } catch (e) {}
+
+      function chatBid() {
+        if (chatLive.bid) return chatLive.bid;
+        var id = '';
+        try { id = localStorage.getItem(CHAT_ID_KEY) || ''; } catch (e) {}
+        if (!/^[0-9a-f]{32}$/.test(id)) {
+          var b = new Uint8Array(16);
+          crypto.getRandomValues(b);
+          id = Array.from(b, function(x) { return (x < 16 ? '0' : '') + x.toString(16); }).join('');
+          try { localStorage.setItem(CHAT_ID_KEY, id); } catch (e) {}
+        }
+        return chatLive.bid = id;
+      }
+
+      function chatUnb64(text) {
+        return new TextDecoder().decode(Uint8Array.from(atob(text), function(c) { return c.charCodeAt(0); }));
+      }
+      function chatSame(a, b) { return !!a && !!b && a.toLowerCase() === b.toLowerCase(); }
+      function chatIgnored(name) { return !!name && chatLive.ignore.indexOf(name.toLowerCase()) >= 0; }
+      function chatPhone() { return !!window.matchMedia && matchMedia('(max-width: 700px)').matches; }
+
+      // The name this page talks by: one typed here, else Looking's (base64).
+      function chatName(key) {
+        if (chatLive.typed) return lookBase64(chatLive.typed);
+        return lookName(ROOMS[key].game);
+      }
+
+      // The room this page is in the chat of, '' for none: the room window's,
+      // while it's open and Chat is on, and the tab hasn't been away long.
+      function chatRoomNow() {
+        if (!room.open || !chatLive.on) return '';
+        var away = !!lookLive.hiddenAt && Date.now() - lookLive.hiddenAt >= LOOK_AWAY_MS;
+        return away ? '' : lobbyLive.room;
+      }
+
+      // Tells the lobby which room's chat this page is in, if that changed.
+      function chatSay() {
+        if (!chatLive || !chatLive.can) return;
+        var key = chatRoomNow();
+        var name = key ? chatName(key) : '';
+        var line = key ? 'chat in ' + key + ' ' + chatBid() + (name ? ' ' + name : '') : 'chat out';
+        if (line === chatLive.sent || (!key && !/^chat in /.test(chatLive.sent))) return;
+        if (!lobbySay(line)) return;
+        chatLive.sent = line;
+        if (!key || key !== chatLive.room) {
+          chatLive.room = '';
+          chatLive.lines = [];
+          chatLive.who = null;
+          chatLive.you = { name: '', muted: 0, mod: 0 };
+          chatLive.sending = '';
+          chatMenuClose();
+          chatPanelClose();
+          chatRenderLog();
+        }
+        chatRenderBox();
+      }
+
+      // The lobby's line about the chat.
+      function chatTake(text) {
+        var m = /^chat (log|line|state|who|you|mods) ([A-Za-z0-9+\/]+={0,2})$/.exec(text);
+        if (m) {
+          var v;
+          try { v = JSON.parse(chatUnb64(m[2])); } catch (e) { return; }
+          if (!v || typeof v !== 'object') return;
+          if (m[1] === 'log') chatTakeLog(v);
+          else if (m[1] === 'line') chatTakeLine(v);
+          else if (m[1] === 'state') {
+            chatLive.slow = !!v.slow;
+            chatLive.paused = !!v.paused;
+            chatRenderBox();
+            chatPanelRender();
+          } else if (m[1] === 'who') {
+            chatLive.who = v;
+            chatLive.whoRoom = chatLive.room;
+            if (room.open && ROOMS[lobbyLive.room].demo && lobbyLive.status) renderRoster();
+          } else if (m[1] === 'you') chatTakeYou(v);
+          else if (m[1] === 'mods') {
+            chatLive.mods = v;
+            chatRenderBox();
+            chatPanelRender();
+          }
+          return;
+        }
+        var d = /^chat del ([0-9]{1,16})$/.exec(text);
+        if (d) {
+          chatLive.lines = chatLive.lines.filter(function(l) { return l.id !== Number(d[1]); });
+          var p = chatLog.querySelector('p[data-id="' + d[1] + '"]');
+          if (p) p.remove();
+          return;
+        }
+        if (text === 'chat clear') {
+          chatLive.lines = chatLive.lines.filter(function(l) { return l.kind === 'mine'; });
+          chatRenderLog();
+          return;
+        }
+        if (text === 'chat ok') {
+          if (chatLive.sending && chatText.value.replace(/^\s+|\s+$/g, '') === chatLive.sending) chatText.value = '';
+          chatSent();
+          chatCountShow();
+          return;
+        }
+        var r = /^chat reported ([0-9]{1,16})$/.exec(text);
+        if (r) {
+          if (!chatLive.reported[r[1]]) chatNote('Reported. A moderator will look at it.');
+          chatLive.reported[r[1]] = true;
+          return;
+        }
+        var no = /^chat no ([a-z]{1,12})(?: ([0-9]{1,16}))?$/.exec(text);
+        if (no) chatTakeNo(no[1], no[2] ? Number(no[2]) : 0);
+      }
+
+      function chatTakeLog(v) {
+        if (typeof v.room !== 'string' || !Array.isArray(v.lines)) return;
+        chatLive.room = v.room;
+        chatLive.lines = v.lines.filter(function(l) { return l && typeof l === 'object'; })
+          .map(function(l) { l.old = true; return l; });
+        chatLive.came = Date.now();
+        chatLive.slow = !!v.slow;
+        chatLive.paused = !!v.paused;
+        chatLive.who = v.who || null;
+        chatLive.whoRoom = v.room;
+        chatLive.sending = '';
+        chatLive.reported = {};
+        chatTakeYou(v.you || {}, true);
+        // A moderator's key, once the lobby has this page in the room.
+        if (chatLive.modKey && !chatLive.you.mod) lobbySay('chat mod ' + lookBase64(chatLive.modKey));
+        chatRenderLog();
+        chatRenderBox();
+        if (room.open && ROOMS[lobbyLive.room].demo && lobbyLive.status) renderRoster();
+      }
+
+      function chatTakeLine(l) {
+        if (!chatLive.room) return;
+        // This page's own coming in shows as "You came in"; its going, not at all.
+        if ((l.kind === 'enter' || l.kind === 'exit') && chatSame(l.name, chatLive.you.name)) return;
+        chatLive.lines.push(l);
+        chatAppend(l);
+      }
+
+      function chatTakeYou(v, quiet) {
+        var was = chatLive.you;
+        chatLive.you = { name: typeof v.name === 'string' ? v.name : '', muted: Number(v.muted) || 0, mod: v.mod ? 1 : 0 };
+        if (chatLive.you.name) {
+          chatLive.taken = '';
+          chatNameWhy.textContent = '';
+        }
+        // A name typed here that the lobby took is kept as the one typed to
+        // chat while watching, which Looking goes by too, unless the game's
+        // or the match record's is there.
+        if (chatLive.typed && chatLive.you.name === chatLive.typed) {
+          var kept = '';
+          try { kept = touchNameClean(localStorage.getItem(TOUCH_NAME_KEY)); } catch (e) {}
+          var looks = lookName(ROOMS[lobbyLive.room].game);
+          if (kept !== chatLive.typed && (!looks || (kept && looks === lookBase64(kept)))) {
+            try { localStorage.setItem(TOUCH_NAME_KEY, chatLive.typed); } catch (e) {}
+            Module.jkWatchName = chatLive.typed;
+            lookSay();
+          }
+        }
+        if (chatLive.you.mod && !was.mod && !chatLive.modSaid) {
+          chatLive.modSaid = true;
+          chatNote("You're a moderator on this browser: your lines show MOD, a name's menu can mute or delete, and " +
+                   'Moderate in the toolbar has the room\'s settings, who\'s muted and reports.');
+        }
+        if (!chatLive.you.mod) chatPanelClose();
+        clearTimeout(chatLive.mutedTimer);
+        if (chatLive.you.muted > Date.now())
+          chatLive.mutedTimer = setTimeout(chatRenderBox, Math.min(chatLive.you.muted - Date.now() + 500, 0x7fffffff));
+        if (!quiet) {
+          if (!chatSame(was.name, chatLive.you.name)) chatRenderLog();
+          chatRenderBox();
+        }
+      }
+
+      var CHAT_NO = {
+        link: "Links can't be posted in room chat, in any form.",
+        long: 'That is over ' + CHAT_MAX + ' characters.',
+        same: 'You just said that.',
+        paused: 'A moderator paused the chat. Only moderators can talk for now.',
+        name: 'Pick a name to talk.',
+        room: "This room doesn't have a chat."
+      };
+      function chatTakeNo(why, n) {
+        chatSent();
+        if (why === 'empty') return;
+        if (why === 'mod') {
+          if (!chatLive.modKey) return;
+          chatLive.modKey = '';
+          try { localStorage.removeItem(CHAT_MOD_KEY); } catch (e) {}
+          chatNote("That moderator link didn't work, so this browser forgot it.");
+          return;
+        }
+        if (why === 'taken') {
+          chatLive.taken = chatLive.typed || '';
+          chatNameWhy.textContent = 'Someone else in this room is using that name. Pick another one to talk.';
+          chatRenderBox();
+          return;
+        }
+        if (why === 'muted') {
+          chatLive.you.muted = n;
+          chatRenderBox();
+          chatNote("You're muted in room chat until " + chatWhen(n) + '.');
+          return;
+        }
+        if (why === 'fast') {
+          chatNote(n > 60 ? 'Too many lines too fast. You can talk again in ' + Math.ceil(n / 60) + ' minutes.' :
+                   chatLive.slow ? 'Slow mode is on: one line every 15 seconds. You can talk again in ' + (n || 1) + ' s.' :
+                   'Slow down a little. You can talk again in ' + (n || 1) + ' s.');
+          return;
+        }
+        chatNote(CHAT_NO[why] || 'The lobby turned that down.');
+      }
+
+      // The line on its way has its answer (or none came).
+      function chatSent() {
+        chatLive.sending = '';
+        clearTimeout(chatLive.sendTimer);
+      }
+
+      // A note only this page sees, in gold.
+      function chatNote(text) {
+        var l = { id: 'm' + (++chatLive.mine), kind: 'mine', text: text };
+        chatLive.lines.push(l);
+        chatAppend(l);
+        return l;
+      }
+
+      // When a line was said: its time today, "Yesterday" and the time, or the day.
+      function chatWhen(at) {
+        var d = new Date(at), now = new Date();
+        var t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        if (d.toDateString() === now.toDateString()) return t;
+        var y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        if (d.toDateString() === y.toDateString()) return 'Yesterday ' + t;
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + t;
+      }
+
+      function chatShows(l) {
+        return l.kind === 'mine' || l.kind === 'note' || !chatIgnored(l.name);
+      }
+
+      function chatWho(l, gt) {
+        var b = el('button', 'who', l.name + (gt ? '>' : ''));
+        b.type = 'button';
+        b.dataset.chatWho = String(l.id);
+        if (chatSame(l.name, chatLive.you.name)) b.tabIndex = -1;
+        return b;
+      }
+
+      function chatLineEl(l) {
+        var p = el('p');
+        p.dataset.id = String(l.id);
+        if (l.kind === 'enter' || l.kind === 'exit') {
+          p.className = 'came';
+          p.append(l.kind === 'enter' ? '(Enter)> ' : '(Exit)> ', chatWho(l, false));
+        } else if (l.kind === 'note') {
+          p.className = 'modline';
+          p.textContent = '* ' + l.text;
+        } else if (l.kind === 'mine') {
+          p.className = 'note';
+          p.append('* ' + l.text + ' ', el('span', 'only', '(only you see this)'));
+          if (l.undo) {
+            var u = el('button', null, l.undo);
+            u.type = 'button';
+            u.dataset.chatUndo = l.name;
+            p.append(' ', u);
+          }
+        } else {
+          var mine = chatSame(l.name, chatLive.you.name);
+          p.className = (l.old ? 'old' : '') + (mine ? ' me' : '');
+          if (l.old) {
+            var t = el('time', null, chatWhen(l.at));
+            t.dateTime = new Date(l.at).toISOString();
+            p.append(t);
+          }
+          if (l.mod) p.append(el('span', 'chat-tag', 'MOD'));
+          p.append(chatWho(l, true), ' ', String(l.text || ''));
+        }
+        if (l.at && !l.old) p.title = chatWhen(l.at);
+        return p;
+      }
+
+      function chatAtEnd() {
+        return chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 24;
+      }
+
+      // The whole log again: what came before this page did, then the rest.
+      function chatRenderLog() {
+        var end = chatAtEnd();
+        chatLog.replaceChildren();
+        if (!chatLive.room) return;
+        var lines = chatLive.lines.filter(chatShows);
+        var old = lines.filter(function(l) { return l.old; });
+        if (old.length) chatLog.append(el('p', 'mark', 'Before you came in (chat is kept 48 hours)'));
+        var marked = false;
+        lines.forEach(function(l) {
+          if (!l.old && !marked) {
+            chatLog.append(chatCameMark());
+            marked = true;
+          }
+          chatLog.append(chatLineEl(l));
+        });
+        if (!marked) chatLog.append(chatCameMark());
+        if (end) chatLog.scrollTop = chatLog.scrollHeight;
+      }
+      function chatCameMark() {
+        var p = el('p', 'mark', 'You came in at ' + chatWhen(chatLive.came));
+        p.dataset.came = '1';
+        return p;
+      }
+
+      function chatAppend(l) {
+        if (!chatLive.room || !chatShows(l)) return;
+        var end = chatAtEnd();
+        chatLog.append(chatLineEl(l));
+        if (chatLive.lines.length > CHAT_KEEP) {
+          var gone = chatLive.lines.splice(0, chatLive.lines.length - CHAT_KEEP);
+          gone.forEach(function(g) {
+            var p = chatLog.querySelector('p[data-id="' + g.id + '"]');
+            if (p) p.remove();
+          });
+        }
+        if (end || l.kind === 'mine' || chatSame(l.name, chatLive.you.name)) chatLog.scrollTop = chatLog.scrollHeight;
+      }
+
+      // The panel, the box and the toolbar, as things are.
+      function chatRenderBox() {
+        if (!chatLive) return;
+        var show = chatLive.seen && chatLive.on;
+        chatToggle.hidden = chatSep.hidden = !chatLive.seen;
+        chatToggle.setAttribute('aria-pressed', String(chatLive.on));
+        chatPanel.hidden = !show;
+        var here = show && chatLive.can && !!chatLive.room && chatLive.room === lobbyLive.room;
+        modButton.hidden = !(here && chatLive.you.mod);
+        var reports = chatLive.mods && Array.isArray(chatLive.mods.reports) ? chatLive.mods.reports.length : 0;
+        document.getElementById('mod-count').textContent = reports ? ' (' + reports + ')' : '';
+        if (!show) return;
+        var named = !!chatLive.you.name;
+        chatNameForm.hidden = !here || named;
+        chatForm.hidden = here && !named;
+        var now = Date.now();
+        var why = !chatLive.can ? 'Not connected to the lobby. Trying again…' :
+          !here ? 'Connecting to the room\'s chat…' :
+          chatLive.you.muted > now ? "You're muted in room chat until " + chatWhen(chatLive.you.muted) + '.' :
+          chatLive.paused && !chatLive.you.mod ? 'A moderator paused the chat. Only moderators can talk for now.' : '';
+        chatText.disabled = !!why;
+        chatForm.querySelector('[type=submit]').disabled = !!why;
+        chatText.placeholder = why || (chatPhone() ? 'Talk to the room' :
+          'Type here and press Enter to talk to the room (Shift+Enter for a second line)');
+        if (!chatNameForm.hidden && !chatNameText.value) chatNameText.value = chatLive.taken;
+        var rule = ['No links of any kind', CHAT_MAX + ' characters, 2 lines', 'kept 48 hours'];
+        if (chatLive.slow) rule.unshift('Slow mode: one line every 15 seconds');
+        if (chatLive.paused) rule.unshift('Paused by a moderator');
+        chatRule.replaceChildren(rule.join(' · '));
+        if (chatLive.ignore.length) {
+          var b = el('button', null, 'Stop ignoring');
+          b.type = 'button';
+          b.dataset.chatUnignore = '1';
+          chatRule.append(' · Ignoring ' + plural(chatLive.ignore.length, 'name', 'names') + ' on this browser (', b, ')');
+        }
+        chatCountShow();
+      }
+
+      function chatCountShow() {
+        var n = chatText.value.length;
+        chatCount.textContent = n + '/' + CHAT_MAX;
+        chatCount.classList.toggle('full', n >= CHAT_MAX);
+        // On a phone the box grows with what's typed, up to 4 lines.
+        if (chatPhone()) {
+          chatText.style.height = '';
+          if (chatText.value) chatText.style.height = Math.min(chatText.scrollHeight + 4, 90) + 'px';
+        } else chatText.style.height = '';
+      }
+
+      function chatSend() {
+        var text = chatText.value.replace(/^\s+|\s+$/g, '');
+        if (!text || chatLive.sending || chatText.disabled) return;
+        if (!lobbySay('chat say ' + lookBase64(text))) {
+          chatNote("Not connected to the lobby, so that didn't go. It's still in the box.");
+          return;
+        }
+        chatLive.sending = text;
+        clearTimeout(chatLive.sendTimer);
+        chatLive.sendTimer = setTimeout(chatSent, 8000);
+      }
+
+      chatText.addEventListener('keydown', function(ev) {
+        if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229) return;
+        if (ev.shiftKey) {
+          // Two lines at most.
+          if (chatText.value.indexOf('\n') >= 0) ev.preventDefault();
+          return;
+        }
+        ev.preventDefault();
+        chatSend();
+      });
+      chatText.addEventListener('input', function() {
+        var v = chatText.value, i = v.indexOf('\n');
+        if (i >= 0 && v.indexOf('\n', i + 1) >= 0) {
+          var at = chatText.selectionStart;
+          chatText.value = v.substring(0, i + 1) + v.substring(i + 1).replace(/\n+/g, ' ');
+          chatText.selectionStart = chatText.selectionEnd = Math.min(at, chatText.value.length);
+        }
+        chatCountShow();
+      });
+      chatForm.addEventListener('submit', function(ev) {
+        ev.preventDefault();
+        chatSend();
+        chatText.focus();
+      });
+      chatNameForm.addEventListener('submit', function(ev) {
+        ev.preventDefault();
+        var name = touchNameClean(chatNameText.value).substring(0, CHAT_NAME_MAX).trim();
+        if (!name) {
+          chatNameWhy.textContent = 'Type a name first: letters, numbers and the usual symbols.';
+          return;
+        }
+        chatNameWhy.textContent = '';
+        chatLive.typed = name;
+        chatLive.taken = '';
+        chatSay();
+        setTimeout(function() { if (!chatForm.hidden && !chatText.disabled) chatText.focus(); }, 300);
+      });
+      chatToggle.addEventListener('click', function() {
+        chatLive.on = !chatLive.on;
+        try { localStorage.setItem(CHAT_SETTING, chatLive.on ? 'on' : 'off'); } catch (e) {}
+        chatSay();
+        chatRenderBox();
+        if (room.open && ROOMS[lobbyLive.room].demo && lobbyLive.status) renderRoster();
+      });
+      chatRule.addEventListener('click', function(ev) {
+        if (!ev.target.closest('[data-chat-unignore]')) return;
+        chatLive.ignore = [];
+        chatIgnoreKeep();
+        chatRenderLog();
+        chatRenderBox();
+      });
+
+      function chatIgnoreKeep() {
+        try { localStorage.setItem(CHAT_IGNORE_KEY, JSON.stringify(chatLive.ignore)); } catch (e) {}
+      }
+      function chatIgnore(name, on) {
+        var n = name.toLowerCase();
+        chatLive.ignore = chatLive.ignore.filter(function(x) { return x !== n; });
+        if (on) chatLive.ignore.push(n);
+        chatIgnoreKeep();
+        chatRenderLog();
+        chatRenderBox();
+        if (on) {
+          var l = chatNote("You're ignoring " + name + ' on this browser: their lines are hidden.');
+          l.undo = 'Undo';
+          l.name = name;
+          var p = chatLog.querySelector('p[data-id="' + l.id + '"]');
+          if (p) p.replaceWith(chatLineEl(l));
+        }
+      }
+
+      function chatFind(id) {
+        for (var i = 0; i < chatLive.lines.length; i++) if (String(chatLive.lines[i].id) === id) return chatLive.lines[i];
+        return null;
+      }
+
+      // A name's menu: Ignore, Report this line, and for a moderator Mute and Delete.
+      function chatMenuOpen(btn) {
+        chatMenuClose();
+        var l = chatFind(btn.dataset.chatWho);
+        if (!l || !l.name || chatSame(l.name, chatLive.you.name)) return;
+        var said = !l.kind && typeof l.id === 'number';
+        var mod = !!chatLive.you.mod;
+        var menu = el('div', 'chat-menu');
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', l.name);
+        function item(act, text, off) {
+          var b = el('button', null, text);
+          b.type = 'button';
+          b.setAttribute('role', 'menuitem');
+          b.dataset.act = act;
+          if (off) b.disabled = true;
+          menu.append(b);
+        }
+        if (mod) menu.append(el('div', 'name', l.name));
+        item('ignore', (chatIgnored(l.name) ? 'Stop ignoring' : 'Ignore') + (mod ? '' : ' ' + l.name));
+        if (said && !l.mod) item('report', chatLive.reported[l.id] ? 'Reported' : 'Report this line', chatLive.reported[l.id]);
+        if (mod) {
+          menu.append(el('hr'), el('div', 'head', 'Moderator'));
+          if (!l.mod) {
+            item('mute-3600', 'Mute for 1 hour');
+            item('mute-86400', 'Mute for 24 hours');
+            item('mute-604800', 'Mute for 7 days');
+          }
+          if (said) item('del', 'Delete this line');
+        }
+        menu.append(el('hr'));
+        item('cancel', 'Cancel');
+        var p = btn.closest('p');
+        if (p) p.classList.add('picked');
+        chatLive.menu = { el: menu, line: l, btn: btn, p: p };
+        menu.addEventListener('click', function(ev) {
+          var b = ev.target.closest('button[data-act]');
+          if (!b || b.disabled) return;
+          chatMenuDo(b.dataset.act, l);
+        });
+        menu.addEventListener('keydown', function(ev) {
+          var items = Array.from(menu.querySelectorAll('button:not(:disabled)'));
+          var at = items.indexOf(document.activeElement);
+          if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+            ev.preventDefault();
+            items[(at + (ev.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+          } else if (ev.key === 'Tab') {
+            chatMenuClose();
+          }
+        });
+        room.append(menu);
+        // Beside the name, upward where it would run past the window.
+        var r = btn.getBoundingClientRect(), rr = room.getBoundingClientRect();
+        menu.style.left = Math.max(8, Math.min(r.right - rr.left + 8, rr.width - menu.offsetWidth - 8)) + 'px';
+        var top = r.top - rr.top - 4;
+        if (top + menu.offsetHeight > rr.height - 40) top = r.bottom - rr.top - menu.offsetHeight + 4;
+        menu.style.top = Math.max(8, top) + 'px';
+        var first = menu.querySelector('button:not(:disabled)');
+        if (first) first.focus();
+      }
+
+      function chatMenuClose(refocus) {
+        var m = chatLive && chatLive.menu;
+        if (!m) return;
+        chatLive.menu = null;
+        m.el.remove();
+        if (m.p) m.p.classList.remove('picked');
+        if (refocus && m.btn.isConnected) m.btn.focus();
+      }
+
+      function chatMenuDo(act, l) {
+        chatMenuClose(true);
+        var said = !l.kind && typeof l.id === 'number';
+        if (act === 'ignore') chatIgnore(l.name, !chatIgnored(l.name));
+        else if (act === 'report' && said) lobbySay('chat report ' + l.id);
+        else if (act === 'del' && said) lobbySay('chat del ' + l.id);
+        else if (/^mute-/.test(act)) lobbySay('chat mute ' + act.substring(5) + ' ' + (said ? l.id : 'n' + lookBase64(l.name)));
+      }
+
+      chatLog.addEventListener('click', function(ev) {
+        var u = ev.target.closest('[data-chat-undo]');
+        if (u) {
+          chatIgnore(u.dataset.chatUndo, false);
+          return;
+        }
+        var w = ev.target.closest('[data-chat-who]');
+        if (!w) return;
+        if (chatLive.menu && chatLive.menu.btn === w) chatMenuClose();
+        else chatMenuOpen(w);
+      });
+      document.addEventListener('pointerdown', function(ev) {
+        if (chatLive.menu && !chatLive.menu.el.contains(ev.target) && ev.target !== chatLive.menu.btn) chatMenuClose();
+        if (chatLive.panel && !chatLive.panel.contains(ev.target) && !modButton.contains(ev.target)) chatPanelClose();
+      }, true);
+      // Esc closes a menu or the Moderate panel before the room window.
+      room.addEventListener('cancel', function(ev) {
+        if (chatLive.menu) {
+          ev.preventDefault();
+          chatMenuClose(true);
+        } else if (chatLive.panel) {
+          ev.preventDefault();
+          chatPanelClose(true);
+        }
+      });
+      room.addEventListener('close', function() {
+        chatMenuClose();
+        chatPanelClose();
+        chatSay();
+      });
+
+      // ---- Moderate: the room's slow mode and pause, clearing it, who's
+      // muted (in all three rooms) and the players' reports.
+      var MOD_SPANS = { 3600: '1 hour', 86400: '24 hours', 604800: '7 days' };
+      modButton.addEventListener('click', function() {
+        if (chatLive.panel) chatPanelClose();
+        else chatPanelOpen();
+      });
+      function chatPanelOpen() {
+        if (!chatLive.you.mod) return;
+        chatMenuClose();
+        var p = el('div', 'mod-panel');
+        p.setAttribute('role', 'dialog');
+        p.setAttribute('aria-label', 'Moderate');
+        chatLive.panel = p;
+        chatLive.clearing = false;
+        p.addEventListener('click', chatPanelClick);
+        p.addEventListener('change', function(ev) {
+          var c = ev.target.closest('input[data-mod]');
+          if (c) lobbySay('chat ' + c.dataset.mod + ' ' + (c.checked ? 'on' : 'off'));
+        });
+        room.append(p);
+        chatPanelRender();
+        modButton.setAttribute('aria-pressed', 'true');
+        var r = modButton.getBoundingClientRect(), rr = room.getBoundingClientRect();
+        p.style.left = Math.max(8, Math.min(r.left - rr.left, rr.width - p.offsetWidth - 8)) + 'px';
+        p.style.top = (r.bottom - rr.top + 2) + 'px';
+        var f = p.querySelector('input, button');
+        if (f) f.focus();
+      }
+      function chatPanelClose(refocus) {
+        if (!chatLive || !chatLive.panel) return;
+        chatLive.panel.remove();
+        chatLive.panel = null;
+        modButton.setAttribute('aria-pressed', 'false');
+        if (refocus && !modButton.hidden) modButton.focus();
+      }
+      function chatPanelRender() {
+        var p = chatLive && chatLive.panel;
+        if (!p) return;
+        var a = document.activeElement, focus = a && p.contains(a) ? a.dataset.focus : '';
+        var mods = chatLive.mods || {};
+        var mutes = Array.isArray(mods.mutes) ? mods.mutes : [];
+        var reports = Array.isArray(mods.reports) ? mods.reports : [];
+        function button(text, act, id) {
+          var b = el('button', null, text);
+          b.type = 'button';
+          b.dataset.act = act;
+          if (id !== undefined) b.dataset.id = String(id);
+          b.dataset.focus = act + (id !== undefined ? ' ' + id : '');
+          return b;
+        }
+        function check(what, text, on) {
+          var label = el('label');
+          var c = el('input');
+          c.type = 'checkbox';
+          c.checked = on;
+          c.dataset.mod = what;
+          c.dataset.focus = what;
+          label.append(c, el('span', null, text));
+          return label;
+        }
+        var title = el('div', 'mod-title');
+        title.append(el('b', null, 'Moderate: ' + ROOMS[lobbyLive.room].name + ' chat'));
+        var x = button('✕', 'close');
+        x.setAttribute('aria-label', 'Close');
+        title.append(x);
+        var body = el('div', 'body');
+        var here = el('fieldset');
+        here.append(el('legend', null, 'This room'),
+          check('slow', 'Slow mode: everyone 1 line per 15 seconds', chatLive.slow),
+          check('pause', 'Pause chat: only moderators can talk', chatLive.paused));
+        var row = el('div', 'row');
+        if (chatLive.clearing) {
+          row.append(button('Clear it for everyone', 'clear-yes'), button('Cancel', 'clear-no'));
+        } else {
+          row.append(button("Clear this room's chat…", 'clear'), el('span', 'fine', 'Removes every line, for everyone'));
+        }
+        here.append(row);
+        var muted = el('fieldset');
+        muted.append(el('legend', null, 'Muted (' + mutes.length + ')'));
+        if (mutes.length) {
+          var t = el('table');
+          mutes.forEach(function(m) {
+            var tr = el('tr');
+            var td1 = el('td');
+            td1.append(el('b', null, String(m.name || '')));
+            var td3 = el('td');
+            td3.append(button('Unmute', 'unmute', m.id));
+            tr.append(td1, el('td', null, 'until ' + chatWhen(m.until) + (m.by === 'reports' ? ' (after reports)' : '')), td3);
+            t.append(tr);
+          });
+          muted.append(t);
+        } else muted.append(el('p', 'none', 'Nobody'));
+        muted.append(el('p', 'fine', 'A mute covers the name, the browser and the internet address it came from, in all three rooms.'));
+        var rep = el('fieldset');
+        rep.append(el('legend', null, 'Reports (' + reports.length + ')'));
+        if (reports.length) {
+          var rt = el('table');
+          reports.forEach(function(r) {
+            var tr = el('tr');
+            var td2 = el('td');
+            td2.append(el('b', null, String(r.name || '')), ': "' + String(r.text || '') + '"', el('br'),
+              el('span', 'fine', 'reported by ' + r.by + (r.room !== lobbyLive.room && ROOMS[r.room] ? ', in ' + ROOMS[r.room].name : '')));
+            var td3 = el('td');
+            td3.append(button('Mute 24 h', 'mute-report', r.id), ' ', button('Dismiss', 'dismiss', r.id));
+            tr.append(el('td', null, chatWhen(r.at)), td2, td3);
+            rt.append(tr);
+          });
+          rep.append(rt);
+        } else rep.append(el('p', 'none', 'None'));
+        var stop = el('div', 'row');
+        stop.append(button('Stop moderating on this browser', 'stop'));
+        body.append(here, muted, rep, stop);
+        p.replaceChildren(title, body);
+        if (focus) {
+          var f = p.querySelector('[data-focus="' + focus + '"]');
+          if (f) f.focus();
+        }
+      }
+      function chatPanelClick(ev) {
+        var b = ev.target.closest('button[data-act]');
+        if (!b) return;
+        var act = b.dataset.act, id = b.dataset.id;
+        if (act === 'close') chatPanelClose(true);
+        else if (act === 'clear') { chatLive.clearing = true; chatPanelRender(); }
+        else if (act === 'clear-no') { chatLive.clearing = false; chatPanelRender(); }
+        else if (act === 'clear-yes') {
+          chatLive.clearing = false;
+          lobbySay('chat clear');
+          chatPanelRender();
+        }
+        else if (act === 'unmute') lobbySay('chat unmute ' + id);
+        else if (act === 'dismiss') lobbySay('chat dismiss ' + id);
+        else if (act === 'mute-report') {
+          lobbySay('chat mute 86400 r' + id);
+          lobbySay('chat dismiss ' + id);
+        } else if (act === 'stop') {
+          chatLive.modKey = '';
+          chatLive.modSaid = false;
+          try { localStorage.removeItem(CHAT_MOD_KEY); } catch (e) {}
+          chatPanelClose();
+          // Out and in again: the lobby forgets the key with the room.
+          if (/^chat in /.test(chatLive.sent) && lobbySay('chat out')) {
+            chatLive.sent = 'chat out';
+            chatSay();
+          }
+        }
+      }
+
+      // A moderator's private link, #chatmod=<key>: kept in this browser, and
+      // taken out of the address at once.
+      function chatModFromLink() {
+        var m = /^#chatmod=([A-Za-z0-9_-]{16,128})$/.exec(location.hash);
+        if (!m) return false;
+        chatLive.modKey = m[1];
+        chatLive.modSaid = false;
+        try { localStorage.setItem(CHAT_MOD_KEY, m[1]); } catch (e) {}
+        history.replaceState(history.state, '', location.pathname + location.search);
+        if (chatLive.room && !chatLive.you.mod) lobbySay('chat mod ' + lookBase64(m[1]));
+        return true;
+      }
 
       // Fullscreen. Browsers show their own "has control of your pointer"
       // notice each time the game locks the mouse, and no page can hide it.
@@ -14395,18 +15394,23 @@
       if (document.documentElement.classList.contains('zone-open')) {
         renderRoomCount();
         if (window.jkLobbyMock) {
-          window.jkLobbyMock.attach(lobbyShow, imperialShow, killsTake, lookTake);
+          window.jkLobbyMock.attach(lobbyShow, imperialShow, killsTake, lookTake, chatTake);
           lookLive.can = true;
+          chatLive.can = chatLive.seen = !!window.jkLobbyMock.chat;
         } else {
           startLobbyWatch();
           startImperialWatch();
         }
-        if (!watchFromLink()) openRoom(location.hash.substring(1));
+        // A moderator's link opens Nar Shaddaa's window, where the tools show.
+        if (chatModFromLink()) openRoom('nar-shaddaa');
+        else if (!watchFromLink()) openRoom(location.hash.substring(1));
       } else if (watchEmbed) {
         startWatchEmbed();
       }
       window.addEventListener('hashchange', function() {
-        if (document.documentElement.classList.contains('zone-open') && !watchFromLink()) openRoom(location.hash.substring(1));
+        if (!document.documentElement.classList.contains('zone-open')) return;
+        if (chatModFromLink()) openRoom(room.open ? lobbyLive.room : 'nar-shaddaa');
+        else if (!watchFromLink()) openRoom(location.hash.substring(1));
       });
     </script>
     <script type='text/javascript'>
